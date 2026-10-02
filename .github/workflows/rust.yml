@@ -166,6 +166,33 @@ jobs:
           test "$(psql "postgres://invqa-owner:ci-owner@$U" -XAtc "$HEAD")" = "$before"
           $B verify
 
+      # The unattended \password step of deploy/linux/README.txt (GH#450): empty input exits 0 and clears the password,
+      # so the documented guard and check must catch it. Same commands as the README, with the role renamed.
+      - name: "Unattended \\password: an empty password variable is refused, a set one passes the check"
+        env:
+          ADMIN_URL: postgres://ci:ci-only-password@127.0.0.1:5432/postgres
+        run: |
+          psql "$ADMIN_URL" -X -v ON_ERROR_STOP=1 -v owner_role=gh450_owner -v app_role=gh450_app \
+            -v maintenance_role=gh450_maint -v db_name=gh450 -f ../sql/bootstrap/00_create_role_and_database.sql
+          documented() {
+            : "${OWNER_PW:?OWNER_PW is unset or empty}"
+            printf '%s\n%s\n' "$OWNER_PW" "$OWNER_PW" | setsid -w psql "$ADMIN_URL" -X \
+                 -v ON_ERROR_STOP=1 -c '\password gh450_owner'
+            test "$(psql "$ADMIN_URL" -XAtc "SELECT rolpassword LIKE 'SCRAM-SHA-256\$%' \
+                 FROM pg_authid WHERE rolname = 'gh450_owner'")" = t
+          }
+          # Empty and unset variables: the sequence must fail, and the role must still have no password.
+          if (OWNER_PW= documented); then echo "empty OWNER_PW was accepted"; exit 1; fi
+          if (unset OWNER_PW; documented); then echo "unset OWNER_PW was accepted"; exit 1; fi
+          # Why the guard exists: without it psql exits 0 on empty input; only the check catches it.
+          setsid -w psql "$ADMIN_URL" -X -v ON_ERROR_STOP=1 -c '\password gh450_owner' </dev/null
+          if test "$(psql "$ADMIN_URL" -XAtc "SELECT rolpassword IS NULL FROM pg_authid WHERE rolname = 'gh450_owner'")" != t; then
+            echo "expected the role to have no password"; exit 1
+          fi
+          # A set variable passes, and the role logs in with it (the non-superuser check).
+          (OWNER_PW=ci-owner-450 documented)
+          PGPASSWORD=ci-owner-450 psql "postgres://gh450_owner@127.0.0.1:5432/gh450" -X -c 'SELECT 1'
+
       # LDAP/AD sign-in against a real directory (tools/ldap-it/README.md): OpenLDAP, LDAPS only,
       # with a CA made in this step. Started here rather than as a service container, which would
       # start before the certificates exist; the test also stops and starts it.

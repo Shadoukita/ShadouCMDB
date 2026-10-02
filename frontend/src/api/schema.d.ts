@@ -2459,7 +2459,7 @@ export interface paths {
         post?: never;
         /**
          * Revoke an API token (it stays listed as revoked; revoking twice is a no-op)
-         * @description Requires `users.manage`. 403 when the owner holds permissions you do not (your own tokens are always revocable). Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `users.manage`. 404, as for a missing token, when the owner holds permissions you do not (your own tokens are always revocable). Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         delete: operations["revokeApiToken"];
         options?: never;
@@ -2548,7 +2548,7 @@ export interface paths {
         };
         /**
          * Download the whole configuration as one JSON file
-         * @description Requires `config.export_import`. Data model (classes, attributes, relationship types and rules), lookup lists and their values, permission profiles (not the built-in one), UI settings including the logo and favicon, and saved import mappings. Never contains users, user groups, passwords, sessions, CIs, relationships, business service members or owners, import jobs or the import switch. Everything refers to everything else by key, so the file imports into another install. Answers with `Content-Disposition: attachment`. The `permissionProfiles` key is only present when the caller also holds `profiles.manage` or `users.manage` (the permissions that read profiles on `/api/v1/admin/profiles`); for other callers it is left out, and importing that file leaves the target's profiles untouched. Likewise `importMappings` is only present when the caller holds `cis.import`, and holds only the mappings of classes the caller can view. Every export is recorded in the audit log as one `export` entry (entity type `config`) naming the sections included and the number of import mappings, never their content.
+         * @description Requires `config.export_import`. Data model (classes, attributes, relationship types and rules), lookup lists and their values, permission profiles (not the built-in one), UI settings including the logo and favicon, and saved import mappings. Never contains users, user groups, passwords, sessions, CIs, relationships, business service members or owners, import jobs or the import switch. Everything refers to everything else by key, so the file imports into another install. Answers with `Content-Disposition: attachment`. The `permissionProfiles` key is only present when the caller also holds `profiles.manage` or `users.manage` (the permissions that read profiles on `/api/v1/admin/profiles`); for other callers it is left out, and importing that file leaves the target's profiles untouched. Likewise `importMappings` is only present when the caller holds `cis.import`, and holds only the mappings of classes the caller can view. Every export is recorded in the audit log as one `export` entry (entity type `config`) naming the sections included and the number of import mappings, never their content. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         get: operations["exportConfig"];
         put?: never;

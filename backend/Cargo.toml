@@ -45,6 +45,9 @@ percent-encoding = "2"
 # Bulk import: the XLSX preflight reads every XML part as events and refuses a DOCTYPE (no DTD, no entities).
 quick-xml = "0.41"
 regex = "1"
+# The engine under `regex`, so validation patterns can manage their own matching caches
+# (GH#430). The engines `regex` uses are listed so the choice holds without it.
+regex-automata = { version = "0.4", default-features = false, features = ["std", "syntax", "meta", "nfa-pikevm", "nfa-backtrack", "hybrid", "dfa-onepass", "perf", "unicode"] }
 # OIDC discovery, JWKS and token requests. rustls with the ring provider we configure
 # ourselves (the same one sqlx uses), so no second crypto library enters the build.
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json", "form"] }

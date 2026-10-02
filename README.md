@@ -31,6 +31,10 @@ External PostgreSQL  ->  Backend API (backend/)  ->  Web frontend (frontend/)
   release, or Docker. Node.js 22.18+ is only needed for the frontend tooling and the smoke test.
 - A reachable PostgreSQL **14 or newer**, anywhere: a managed service (RDS,
   Cloud SQL, Azure), another host on your network, or a local install.
+- Memory: the compiled attribute validation patterns (`validation.pattern`) use at most about 96 MiB
+  in total (64 MiB of compiled patterns, 32 MiB of reusable matching caches), plus about 1 MiB for
+  each thread validating a value at that moment. The 96 MiB does not grow with the number of stored
+  patterns or CPU cores.
 
 ## Pointing the app at an external PostgreSQL
 
@@ -160,7 +164,9 @@ the same flow for a source checkout.
    shadoucmdb create-admin --username admin --display-name "Jane Admin"   # prompts for the password
    ```
 
-   Further users and their permission profiles are managed under Administration. Behind a TLS proxy, let it
+   Further users and their permission profiles are managed under Administration. The server speaks plain
+   HTTP: in production put a TLS reverse proxy in front of it, bind the API to `127.0.0.1` (`API_HOST`, or
+   publish the Docker port on `127.0.0.1`) when the proxy runs on the same host, and let the proxy
    send `X-Forwarded-Proto` so session cookies are marked `Secure`. For single sign-on through an
    OIDC provider or LDAP/AD, set `PUBLIC_URL` and add the identity provider under Administration.
 

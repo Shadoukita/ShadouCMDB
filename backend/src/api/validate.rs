@@ -12,9 +12,13 @@
 use std::any::TypeId;
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, Ipv6Addr};
-use std::sync::{Arc, LazyLock, RwLock};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, LazyLock, Mutex, RwLock};
 
-use regex::{Regex, RegexBuilder};
+use regex::Regex;
+use regex_automata::nfa::thompson::WhichCaptures;
+use regex_automata::util::syntax;
+use regex_automata::{Input, MatchKind, meta};
 use serde_json::{Map, Value};
 
 use crate::http::error::{FieldError, FieldLocation};
@@ -39,16 +43,23 @@ pub fn pattern_message(pattern: &str) -> Option<&'static str> {
     })
 }
 
-/// Upper bound on a compiled pattern (and on its lazy-DFA cache). The regex
-/// crate's default is 10 MiB, so 500 characters such as `\w{200}` used to
-/// cost about 10 MiB of memory each (GH#412). 1 MiB still fits `\w{20}`,
-/// `.{0,500}` and every built-in template pattern.
+/// Upper bound on a compiled pattern. The regex crate's default is 10 MiB, so
+/// 500 characters such as `\w{200}` used to cost about 10 MiB of memory each
+/// (GH#412). 1 MiB still fits `\w{20}`, `.{0,500}` and every built-in template
+/// pattern.
 pub const PATTERN_SIZE_LIMIT: usize = 1 << 20;
-/// Patterns that compile within this size count as light in the cache budget.
-const LIGHT_PATTERN_SIZE: usize = 64 * 1024;
-/// Memory budget of [`REGEX_CACHE`], counted in compile-size tiers.
+/// Capacity of each lazy-DFA cache (forward and reverse) a match uses. When it
+/// is full the DFA starts over, or the search falls back to a slower engine.
+const MATCH_DFA_LIMIT: usize = 256 * 1024;
+/// Memory of the compiled programs in [`REGEX_CACHE`], as measured by the regex crate.
 const REGEX_CACHE_BUDGET: usize = 64 << 20;
 const REGEX_CACHE_ENTRIES: usize = 1000;
+/// Memory of the idle matching caches kept for reuse, across all patterns and
+/// threads (GH#430). The regex crate keeps one cache per pattern for each
+/// thread that ever matched it, so its own pool grows with the thread count.
+const IDLE_MATCH_CACHE_BUDGET: usize = 32 << 20;
+/// Idle matching caches kept per pattern.
+const IDLE_MATCH_CACHES: usize = 4;
 
 /// Why an attribute validation pattern is refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,11 +70,25 @@ pub enum PatternError {
     TooBig,
 }
 
-fn compile_pattern(pattern: &str, size_limit: usize) -> Result<Regex, PatternError> {
-    RegexBuilder::new(pattern).size_limit(size_limit).dfa_size_limit(size_limit).build().map_err(|e| match e {
-        regex::Error::CompiledTooBig(_) => PatternError::TooBig,
-        _ => PatternError::Syntax,
-    })
+fn regex_config() -> meta::Config {
+    // The same engine settings as `regex::Regex`, with our limits. Validation
+    // only asks match or no match, so no capture slots are built: with many
+    // groups the slow engine's slot table grew to tens of MiB per match
+    // (GH#430). `WhichCaptures::None` would make every search miss.
+    meta::Config::new()
+        .match_kind(MatchKind::LeftmostFirst)
+        .utf8_empty(true)
+        .which_captures(WhichCaptures::Implicit)
+        .nfa_size_limit(Some(PATTERN_SIZE_LIMIT))
+        .hybrid_cache_capacity(MATCH_DFA_LIMIT)
+}
+
+fn compile_pattern(pattern: &str) -> Result<meta::Regex, PatternError> {
+    meta::Builder::new()
+        .configure(regex_config())
+        .syntax(syntax::Config::new().utf8(true))
+        .build(pattern)
+        .map_err(|e| if e.size_limit().is_some() { PatternError::TooBig } else { PatternError::Syntax })
 }
 
 /// Checks a pattern a request wants to store, without caching it: a rejected
@@ -72,43 +97,123 @@ pub fn check_pattern(pattern: &str) -> Result<(), PatternError> {
     if REGEX_CACHE.read().is_ok_and(|c| matches!(c.entries.get(pattern), Some(Some(_)))) {
         return Ok(());
     }
-    compile_pattern(pattern, PATTERN_SIZE_LIMIT).map(drop)
+    compile_pattern(pattern).map(drop)
+}
+
+/// Total size of the idle matching caches of every [`CachedRegex`].
+static IDLE_MATCH_CACHE_BYTES: AtomicUsize = AtomicUsize::new(0);
+
+/// A compiled validation pattern with its own bounded pool of matching caches,
+/// so that the memory it holds does not grow with the number of threads.
+pub struct CachedRegex {
+    re: meta::Regex,
+    idle: Mutex<Vec<(meta::Cache, usize)>>,
+    last_used: AtomicU64,
+}
+
+impl CachedRegex {
+    pub fn is_match(&self, haystack: &str) -> bool {
+        let pooled = self.idle.lock().ok().and_then(|mut idle| idle.pop());
+        let mut cache = match pooled {
+            Some((cache, bytes)) => {
+                IDLE_MATCH_CACHE_BYTES.fetch_sub(bytes, Ordering::Relaxed);
+                cache
+            }
+            None => self.re.create_cache(),
+        };
+        let found = self.re.search_half_with(&mut cache, &Input::new(haystack).earliest(true)).is_some();
+        self.keep_idle(cache);
+        found
+    }
+
+    /// Keeps a cache for the next match if the pattern's pool and the global
+    /// budget have room; otherwise it is freed.
+    fn keep_idle(&self, cache: meta::Cache) {
+        let bytes = cache.memory_usage() + size_of::<meta::Cache>();
+        let Ok(mut idle) = self.idle.lock() else { return };
+        if idle.len() >= IDLE_MATCH_CACHES {
+            return;
+        }
+        // Reserve, then give the bytes back if that overshot the budget. The
+        // counter may read high for a moment, but no cache is kept over budget.
+        let used = IDLE_MATCH_CACHE_BYTES.fetch_add(bytes, Ordering::Relaxed) + bytes;
+        if used <= IDLE_MATCH_CACHE_BUDGET {
+            idle.push((cache, bytes));
+        } else {
+            IDLE_MATCH_CACHE_BYTES.fetch_sub(bytes, Ordering::Relaxed);
+        }
+    }
+}
+
+impl Drop for CachedRegex {
+    fn drop(&mut self) {
+        let idle = self.idle.get_mut().map(|v| v.iter().map(|(_, b)| b).sum()).unwrap_or(0);
+        IDLE_MATCH_CACHE_BYTES.fetch_sub(idle, Ordering::Relaxed);
+    }
 }
 
 #[derive(Default)]
 struct RegexCache {
-    entries: HashMap<String, Option<Arc<Regex>>>,
-    /// Sum of the tier sizes of the cached programs.
+    entries: HashMap<String, Option<Arc<CachedRegex>>>,
+    /// Sum of the measured sizes of the cached programs.
     weight: usize,
 }
 
+impl RegexCache {
+    fn weight_of(pattern: &str, compiled: Option<&Arc<CachedRegex>>) -> usize {
+        pattern.len() + compiled.map_or(0, |c| c.re.memory_usage())
+    }
+
+    /// Evicts the least recently used entries until `incoming` more bytes fit.
+    fn make_room(&mut self, incoming: usize) {
+        if self.entries.len() < REGEX_CACHE_ENTRIES && self.weight + incoming <= REGEX_CACHE_BUDGET {
+            return;
+        }
+        let mut by_age: Vec<(u64, String)> = self
+            .entries
+            .iter()
+            .map(|(p, c)| (c.as_ref().map_or(0, |c| c.last_used.load(Ordering::Relaxed)), p.clone()))
+            .collect();
+        by_age.sort_unstable();
+        for (_, pattern) in by_age {
+            if self.entries.len() < REGEX_CACHE_ENTRIES && self.weight + incoming <= REGEX_CACHE_BUDGET {
+                break;
+            }
+            if let Some(gone) = self.entries.remove(&pattern) {
+                self.weight -= Self::weight_of(&pattern, gone.as_ref());
+            }
+        }
+    }
+}
+
 static REGEX_CACHE: LazyLock<RwLock<RegexCache>> = LazyLock::new(Default::default);
+static REGEX_CACHE_TICK: AtomicU64 = AtomicU64::new(1);
 
 /// Compiled within [`PATTERN_SIZE_LIMIT`] and cached; `None` when the pattern is
 /// not a valid regular expression or is too big. Use it for the API's own
 /// patterns and for patterns already stored; validate new ones with
 /// [`check_pattern`].
-pub fn cached_regex(pattern: &str) -> Option<Arc<Regex>> {
+pub fn cached_regex(pattern: &str) -> Option<Arc<CachedRegex>> {
+    let tick = REGEX_CACHE_TICK.fetch_add(1, Ordering::Relaxed);
     if let Some(hit) = REGEX_CACHE.read().ok().and_then(|c| c.entries.get(pattern).cloned()) {
+        if let Some(re) = &hit {
+            re.last_used.store(tick, Ordering::Relaxed);
+        }
         return hit;
     }
-    let (compiled, weight) = match compile_pattern(pattern, LIGHT_PATTERN_SIZE) {
-        Ok(re) => (Ok(re), LIGHT_PATTERN_SIZE),
-        Err(PatternError::TooBig) => (compile_pattern(pattern, PATTERN_SIZE_LIMIT), PATTERN_SIZE_LIMIT),
-        Err(e) => (Err(e), 0),
-    };
+    let compiled = compile_pattern(pattern);
     if matches!(compiled, Err(PatternError::TooBig)) {
         // Stored before the limit existed: the value is no longer checked against it.
         tracing::warn!(pattern, limit = PATTERN_SIZE_LIMIT, "validation pattern exceeds the size limit and is ignored");
     }
-    let compiled = compiled.ok().map(Arc::new);
-    let weight = if compiled.is_some() { weight } else { 0 };
+    let compiled =
+        compiled.ok().map(|re| Arc::new(CachedRegex { re, idle: Mutex::default(), last_used: AtomicU64::new(tick) }));
+    let weight = RegexCache::weight_of(pattern, compiled.as_ref());
     if let Ok(mut c) = REGEX_CACHE.write() {
         // Attribute patterns come from user data; keep the cache bounded in count and size.
-        if c.entries.len() >= REGEX_CACHE_ENTRIES || c.weight + weight > REGEX_CACHE_BUDGET {
-            *c = RegexCache::default();
-        }
-        if c.entries.insert(pattern.to_owned(), compiled.clone()).is_none() {
+        if !c.entries.contains_key(pattern) {
+            c.make_room(weight);
+            c.entries.insert(pattern.to_owned(), compiled.clone());
             c.weight += weight;
         }
     }
@@ -760,8 +865,101 @@ mod tests {
         assert_eq!(check_pattern("(unclosed"), Err(PatternError::Syntax));
         for ok in [r"\w{20}", ".{0,500}", r"^[A-Za-z0-9]([A-Za-z0-9._-]{0,252})$", r"^\S+$"] {
             assert_eq!(check_pattern(ok), Ok(()), "{ok}");
-            assert!(cached_regex(ok).is_some_and(|re| !re.as_str().is_empty()), "{ok}");
+            assert!(cached_regex(ok).is_some(), "{ok}");
         }
+    }
+
+    #[test]
+    fn regex_limits_match_the_budget() {
+        // GH#430: the documented worst case is computed from these.
+        let config = regex_config();
+        assert_eq!(config.get_nfa_size_limit(), Some(PATTERN_SIZE_LIMIT));
+        assert_eq!(config.get_hybrid_cache_capacity(), MATCH_DFA_LIMIT);
+        assert_eq!((PATTERN_SIZE_LIMIT, MATCH_DFA_LIMIT), (1 << 20, 256 << 10));
+        assert_eq!((REGEX_CACHE_BUDGET, IDLE_MATCH_CACHE_BUDGET, IDLE_MATCH_CACHES), (64 << 20, 32 << 20, 4));
+        // A match on a long non-ASCII value with the largest kind of pattern
+        // that compiles stays within the documented 1 MiB per matching thread.
+        let re = compile_pattern(r"\w{20}gh430").unwrap();
+        let mut cache = re.create_cache();
+        for value in ["ä".repeat(4000), "aé1".repeat(1400)] {
+            re.search_half_with(&mut cache, &Input::new(&value).earliest(true));
+        }
+        assert!(cache.memory_usage() < 1 << 20, "{}", cache.memory_usage());
+        // Capture groups do not grow the matching cache (27 MiB with slots).
+        let re = compile_pattern(&format!("(?:{}){{80}}", "(a)".repeat(60))).unwrap();
+        assert!(matches!(config.get_which_captures(), WhichCaptures::Implicit));
+        let mut cache = re.create_cache();
+        let value = "a".repeat(10_000);
+        assert!(re.search_half_with(&mut cache, &Input::new(&value).earliest(true)).is_some());
+        assert!(cache.memory_usage() < 1 << 20, "{}", cache.memory_usage());
+        let c = REGEX_CACHE.read().unwrap();
+        assert_eq!(c.weight, c.entries.iter().map(|(p, re)| RegexCache::weight_of(p, re.as_ref())).sum::<usize>());
+    }
+
+    #[test]
+    fn concurrent_matching_stays_within_the_cache_budget() {
+        // GH#430: the regex crate kept a lazy-DFA cache per pattern and thread.
+        let patterns: Vec<String> = (0..100).map(|i| format!(r"\wgh430z{i}")).collect();
+        let value = "ä".repeat(4000);
+        std::thread::scope(|s| {
+            for _ in 0..16 {
+                s.spawn(|| {
+                    for p in &patterns {
+                        let re = cached_regex(p).unwrap();
+                        assert!(!re.is_match(&value));
+                        assert!(re.is_match(&format!("{value}ä{}", &p[2..])));
+                    }
+                });
+            }
+        });
+        assert!(IDLE_MATCH_CACHE_BYTES.load(Ordering::Relaxed) <= IDLE_MATCH_CACHE_BUDGET);
+        let c = REGEX_CACHE.read().unwrap();
+        assert!(c.weight <= REGEX_CACHE_BUDGET);
+        let mut idle = 0;
+        for re in c.entries.values().flatten() {
+            let pool = re.idle.lock().unwrap();
+            assert!(pool.len() <= IDLE_MATCH_CACHES);
+            for (cache, bytes) in pool.iter() {
+                assert!(cache.memory_usage() < *bytes);
+                idle += bytes;
+            }
+        }
+        assert!(idle <= IDLE_MATCH_CACHE_BUDGET, "{idle}");
+    }
+
+    #[test]
+    fn ordinary_patterns_stay_cached() {
+        // GH#430: these counted as 1 MiB each, so about 64 of them reset the cache.
+        let patterns: Vec<String> = (0..100).map(|i| format!(r"^[\w.-]+@[\w.-]+\.gh430n{i}$")).collect();
+        for round in 0..3 {
+            for p in &patterns {
+                assert!(cached_regex(p).is_some_and(|re| re.is_match("a.b@example.gh430n0") == p.ends_with("n0$")));
+                if round > 0 {
+                    assert!(cached(p), "{p} was evicted");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn least_recently_used_patterns_are_evicted_first() {
+        let mut c = RegexCache::default();
+        let entry = |p: &str, tick| {
+            Some(Arc::new(CachedRegex {
+                re: compile_pattern(p).unwrap(),
+                idle: Mutex::default(),
+                last_used: AtomicU64::new(tick),
+            }))
+        };
+        for (p, tick) in [("gh430a", 3), ("gh430b", 1), ("gh430c", 2)] {
+            let re = entry(p, tick);
+            c.weight += RegexCache::weight_of(p, re.as_ref());
+            c.entries.insert(p.into(), re);
+        }
+        c.make_room(REGEX_CACHE_BUDGET - c.weight + 1);
+        assert_eq!(c.entries.len(), 2);
+        assert!(!c.entries.contains_key("gh430b"));
+        assert_eq!(c.weight, c.entries.iter().map(|(p, re)| RegexCache::weight_of(p, re.as_ref())).sum::<usize>());
     }
 
     #[test]

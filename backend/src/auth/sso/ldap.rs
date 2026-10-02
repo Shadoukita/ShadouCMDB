@@ -13,7 +13,9 @@
 //!   membership; for Active Directory nested groups use a filter with
 //!   LDAP_MATCHING_RULE_IN_CHAIN in the directory, or map each group).
 //! - The account's stable id is the entry's objectGUID (AD) or entryUUID
-//!   (OpenLDAP, 389-DS), else its DN in lower case.
+//!   (OpenLDAP, 389-DS). An entry with neither is refused: a DN is reused when
+//!   a departed user's name is given to someone new, who would then inherit
+//!   the old ShadouCMDB account and its API tokens (GH#445).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -151,28 +153,35 @@ fn all(entry: &SearchEntry, attribute: &str) -> Vec<String> {
     entry.attrs.iter().find(|(k, _)| k.eq_ignore_ascii_case(attribute)).map(|(_, v)| v.clone()).unwrap_or_default()
 }
 
-fn external_id(entry: &SearchEntry) -> String {
+/// What a sign-in or the connection test reports for an entry without a
+/// stable id; the directory answered, so the administrator sees it.
+const NO_STABLE_ID: &str = "the directory returned neither objectGUID nor entryUUID for the entry; ShadouCMDB needs one \
+                            of them as the account's stable identity (a DN is reused when a name is given to someone \
+                            else). Allow the service account to read objectGUID (Active Directory) or entryUUID \
+                            (OpenLDAP, 389 Directory Server)";
+
+fn external_id(entry: &SearchEntry) -> Option<String> {
     let binary = |name: &str| {
         entry.bin_attrs.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).and_then(|(_, v)| v.first().cloned())
     };
     if let Some(guid) = binary("objectGUID").filter(|g| g.len() == 16) {
-        return format!("objectGUID:{}", hex::encode(guid));
+        return Some(format!("objectGUID:{}", hex::encode(guid)));
     }
-    if let Some(uuid) = first(entry, "entryUUID") {
-        return format!("entryUUID:{}", uuid.to_ascii_lowercase());
-    }
-    format!("dn:{}", entry.dn.to_lowercase())
+    first(entry, "entryUUID").map(|uuid| format!("entryUUID:{}", uuid.to_ascii_lowercase()))
 }
 
-fn describe(entry: SearchEntry, s: &Settings) -> DirectoryUser {
-    DirectoryUser {
-        external_id: external_id(&entry),
+fn describe(entry: SearchEntry, s: &Settings) -> Result<DirectoryUser, DirectoryError> {
+    let Some(external_id) = external_id(&entry) else {
+        return Err(DirectoryError::new(format!("user search: {NO_STABLE_ID} ({})", entry.dn)));
+    };
+    Ok(DirectoryUser {
+        external_id,
         username: first(&entry, &s.username_attribute),
         display_name: first(&entry, &s.display_name_attribute),
         email: first(&entry, &s.email_attribute),
         groups: all(&entry, &s.group_attribute),
         dn: entry.dn,
-    }
+    })
 }
 
 /// Searches the user; `Ok(Err(n))` when `n` != 1 entries match.
@@ -199,7 +208,7 @@ async fn find(ldap: &mut Ldap, s: &Settings, username: &str) -> Result<Result<Di
     if users.len() != 1 {
         return Ok(Err(users.len()));
     }
-    Ok(Ok(describe(users.remove(0), s)))
+    describe(users.remove(0), s).map(Ok)
 }
 
 /// Checks `username` and `password` against the directory. `admit` sees the
@@ -322,7 +331,7 @@ mod tests {
             ],
             &[("objectGUID", vec![0xab; 16])],
         );
-        let u = describe(e, &settings());
+        let u = describe(e, &settings()).unwrap();
         assert_eq!(u.username.as_deref(), Some("alice"));
         assert_eq!(u.display_name.as_deref(), Some("Alice A."));
         assert_eq!(u.email, None);
@@ -330,8 +339,22 @@ mod tests {
         assert_eq!(u.external_id, format!("objectGUID:{}", "ab".repeat(16)));
 
         let e = entry(&[("entryUUID", &["3F2504E0-4F89-11D3-9A0C-0305E82C3301"])], &[]);
-        assert_eq!(external_id(&e), "entryUUID:3f2504e0-4f89-11d3-9a0c-0305e82c3301");
-        assert_eq!(external_id(&entry(&[], &[])), "dn:cn=alice,ou=staff,dc=example,dc=test");
+        assert_eq!(external_id(&e).unwrap(), "entryUUID:3f2504e0-4f89-11d3-9a0c-0305e82c3301");
+    }
+
+    /// GH#445: a DN is no identity. An entry with neither objectGUID nor
+    /// entryUUID (or an objectGUID that is not 16 bytes) is refused, and the
+    /// error is the directory's answer, so the connection test shows it.
+    #[test]
+    fn an_entry_without_a_stable_id_is_refused() {
+        for e in [
+            entry(&[("sAMAccountName", &["alice"])], &[]),
+            entry(&[("entryUUID", &["  "])], &[("objectGUID", vec![1, 2, 3])]),
+        ] {
+            let err = describe(e, &settings()).unwrap_err();
+            assert!(err.summary().contains("neither objectGUID nor entryUUID"), "{err}");
+            assert!(err.summary().contains("CN=Alice,OU=Staff,DC=Example,DC=Test"), "{err}");
+        }
     }
 
     #[tokio::test]

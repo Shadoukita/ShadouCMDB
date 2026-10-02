@@ -1847,6 +1847,7 @@ pub fn routes() -> Vec<Route> {
                  included and the number of import mappings, never their content.",
             )
             .requires(GlobalPermission::ConfigExportImport)
+            .session_only()
             .handle(|api, In(NoPath, NoQuery, NoBody): In<NoPath, NoQuery, NoBody>| async move {
                 let file = export(&api.pool, &api.ctx).await?;
                 let name = format!(

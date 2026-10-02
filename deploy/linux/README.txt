@@ -47,13 +47,37 @@ hex passwords need none.
 Unattended setup (configuration management, CI): when psql has no terminal,
 \password reads the password and its confirmation as two lines from standard
 input. printf is a shell builtin, so the password stays out of the process
-list:
+list. Guard the variable and check the result:
 
+  : "${OWNER_PW:?OWNER_PW is unset or empty}"
   printf '%s\n%s\n' "$OWNER_PW" "$OWNER_PW" | setsid -w psql "$ADMIN_URL" -X \
        -v ON_ERROR_STOP=1 -c '\password shadoucmdb_owner'
+  test "$(psql "$ADMIN_URL" -XAtc "SELECT rolpassword LIKE 'SCRAM-SHA-256\$%' \
+       FROM pg_authid WHERE rolname = 'shadoucmdb_owner'")" = t
 
 setsid detaches psql from the terminal, if there is one, so that it reads
 standard input instead of prompting.
+
+Why the guard and the check: when standard input is empty or runs out, psql
+reads empty strings, the server answers "NOTICE: empty string is not a valid
+password, clearing password", and psql still exits 0, even with
+ON_ERROR_STOP. The role is left without a password and cannot log in, but the
+step reports success and the installation fails later, when the server cannot
+connect. A confirmation that differs from the password does exit non-zero;
+only empty input does not. An unset or empty variable is the usual cause, so
+the first line stops the script before psql runs. The last command checks the
+outcome. It reads pg_authid, which needs a superuser administrator. Without
+one, log in as the role instead; this works when pg_hba.conf requires a
+password for the connection (PGPASSWORD is an environment variable of that
+one command, not part of the command line):
+
+  PGPASSWORD="$OWNER_PW" psql "postgres://shadoucmdb_owner@<db-host>:5432/shadoucmdb" \
+       -X -c 'SELECT 1'
+
+With several roles, give psql one password and one confirmation line for each
+\password command, in the same order (six lines for three roles), or run one
+psql per role. Too few lines leave the later roles without a password. Check
+every role. Run the guard for every password variable.
 
 This creates the database shadoucmdb and three roles, none of them superuser:
 
@@ -97,6 +121,20 @@ Install as a systemd service
   sudo systemctl daemon-reload && sudo systemctl enable --now shadoucmdb
   curl -s http://127.0.0.1:3000/readyz
   journalctl -u shadoucmdb -f
+
+The server speaks plain HTTP only. Sign-in passwords, session cookies and API
+tokens cross the network unencrypted unless a TLS front end terminates HTTPS
+for it. For anything beyond a quick evaluation:
+
+  1. Put a TLS reverse proxy in front (nginx, Apache httpd, HAProxy or your
+     load balancer), forwarding to http://127.0.0.1:3000/ and sending
+     X-Forwarded-Proto so session cookies are marked Secure.
+  2. When the proxy runs on this machine, set API_HOST=127.0.0.1 in
+     shadoucmdb.env so port 3000 is not reachable from the network. When it
+     runs elsewhere, let only the proxy's address reach port 3000 in the host
+     firewall.
+  3. Add the proxy's address to TRUSTED_PROXIES and set PUBLIC_URL to the
+     https:// address users open.
 
 
 Upgrade

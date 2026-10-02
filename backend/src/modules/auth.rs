@@ -497,11 +497,13 @@ fn admit_entry<'a>(throttle: &'a LoginThrottle, net: Net, provider: Uuid, extern
     throttle.begin(&entry_key(provider, external_id), net, false).ok()
 }
 
-/// Whether a name may be looked up in a directory: one a ShadouCMDB account
-/// could have (`USERNAME_PATTERN`, so no control, format or non-ASCII
-/// characters). Other spellings a directory might match to an entry (GH#406)
-/// are refused like an unknown name, before any search.
-fn directory_name(typed: &str) -> Option<&str> {
+/// Whether a name may be looked up, locally or in a directory: one a
+/// ShadouCMDB account could have (`USERNAME_PATTERN`, so no control, format or
+/// non-ASCII characters). Other spellings a directory (GH#406) or PostgreSQL's
+/// `lower()` (GH#438: `admİn` finds `admin`) might match to an account would
+/// each get their own throttle budget, so they are refused like an unknown
+/// name, before any lookup.
+fn account_name(typed: &str) -> Option<&str> {
     let name = typed.trim();
     crate::api::validate::cached_regex(schemas::USERNAME_PATTERN).filter(|re| re.is_match(name)).map(|_| name)
 }
@@ -575,7 +577,11 @@ async fn check_login(
     attempt: Attempt<'_>,
     b: LoginBody,
 ) -> Result<LoginAnswer, AppError> {
-    let row = data::find_for_login(pool, &b.username).await?;
+    // A name no account could have finds none, as for an unknown name (GH#438).
+    let row = match account_name(&b.username) {
+        Some(_) => data::find_for_login(pool, &b.username).await?,
+        None => None,
+    };
     // Directory accounts, and names no account has while a directory is enabled, go to LDAP.
     let directory = match &row {
         Some(r) => r.provider.as_ref().filter(|(_, kind)| kind == sso::LDAP).map(|(id, _)| Some(*id)),
@@ -684,7 +690,7 @@ async fn directory_login(
     linked: Option<Uuid>,
 ) -> Result<LoginAnswer, AppError> {
     let mut entry = None;
-    let answer = match directory_name(&b.username) {
+    let answer = match account_name(&b.username) {
         Some(name) => {
             let mut admit = |provider: Uuid, external_id: &str| {
                 entry = admit_entry(&auth.directory_throttle, ctx.client.net, provider, external_id);
@@ -1596,6 +1602,37 @@ pub(crate) mod tests {
         db.drop().await;
     }
 
+    /// GH#438: a spelling PostgreSQL's `lower()` folds onto a locked account
+    /// (`admİn` for `admin` under glibc collations) does not get a fresh
+    /// throttle budget for it: it is refused like an unknown name, and the
+    /// account's password is not checked, even when right.
+    #[tokio::test]
+    async fn a_non_ascii_spelling_does_not_reach_a_locked_account() {
+        let Some(db) = scratch::database("a_non_ascii_spelling_does_not_reach_a_locked_account").await else {
+            return;
+        };
+        let (pool, auth, headers) = (&db.pool, auth_state(), HeaderMap::new());
+        setup(pool, &auth, &headers, &from("192.0.2.1"), body("admin")).await.unwrap();
+        let (right, wrong) = (OWNER_PASSWORD.as_str(), OWNER_PASSWORD.to_uppercase());
+        auth.throttle.freeze();
+        let guesser = from("198.51.100.7");
+        for _ in 0..crate::auth::throttle::FREE_FAILURES {
+            let e = login(pool, &auth, &headers, &guesser, login_body("admin", &wrong)).await.err();
+            assert_eq!(e.map(|e| e.code), Some(ErrorCode::Unauthenticated));
+        }
+        let e = login(pool, &auth, &headers, &guesser, login_body("admin", right)).await.err();
+        assert_eq!(e.map(|e| e.code), Some(ErrorCode::RateLimited), "admin is locked for the guessing /24");
+        for spelling in ["adm\u{130}n", "adm\u{131}n", "\u{212a}admin", "ADM\u{130}N"] {
+            let before = password::DUMMY_VERIFIES.with(|n| n.get());
+            let e = login(pool, &auth, &headers, &guesser, login_body(spelling, right)).await.err();
+            let e = e.unwrap_or_else(|| panic!("{spelling:?} signed in to admin"));
+            assert_eq!(e.code, ErrorCode::Unauthenticated, "{spelling:?}");
+            assert_eq!(e.message, invalid_credentials().message, "{spelling:?}: the unknown-name answer");
+            assert_eq!(password::DUMMY_VERIFIES.with(|n| n.get()), before + 1, "{spelling:?}: only the dummy hash");
+        }
+        db.drop().await;
+    }
+
     /// GH#190: a name the directory does not match costs an argon2 verify,
     /// like a local account's wrong password, so timing does not tell them apart.
     #[tokio::test]
@@ -1629,10 +1666,10 @@ pub(crate) mod tests {
     /// (full-width, zero-width, soft hyphen, control characters) are not.
     #[test]
     fn only_account_names_reach_the_directory() {
-        assert_eq!(directory_name(" Bob\t"), Some("Bob"));
-        assert_eq!(directory_name("bob@corp.example"), Some("bob@corp.example"));
+        assert_eq!(account_name(" Bob\t"), Some("Bob"));
+        assert_eq!(account_name("bob@corp.example"), Some("bob@corp.example"));
         for name in ["ｂｏｂ", "bob\u{200b}", "bo\u{ad}b", "b\u{0}ob", "bob\nbob", "bob smith", "", "j\u{fc}rgen"] {
-            assert_eq!(directory_name(name), None, "{name:?}");
+            assert_eq!(account_name(name), None, "{name:?}");
         }
     }
 
@@ -1650,7 +1687,7 @@ pub(crate) mod tests {
         let (provider, user_id) = bob;
         let attempt = throttle_gate(&auth.throttle, name, ctx.client.net, "sign-ins for this username").await?;
         let mut entry = None;
-        let answer = match directory_name(name).map(str::to_lowercase).as_deref() {
+        let answer = match account_name(name).map(str::to_lowercase).as_deref() {
             Some("bob" | "bob@corp.example") => {
                 entry = admit_entry(&auth.directory_throttle, ctx.client.net, provider, "entryUUID:b0b");
                 match entry {

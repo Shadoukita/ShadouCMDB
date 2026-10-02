@@ -37,6 +37,12 @@ x-shadoucmdb: &shadoucmdb
 services:
   api:
     <<: *shadoucmdb
+    # Published on every interface of the host, over plain HTTP: fine for a
+    # local evaluation. For real use, terminate TLS in a reverse proxy in front
+    # (it sends X-Forwarded-Proto; list it in TRUSTED_PROXIES) and, when the
+    # proxy runs on this host, publish on loopback only:
+    #   - "127.0.0.1:${API_PORT:-3000}:${API_PORT:-3000}"
+    # Keep API_HOST=0.0.0.0 in .env: that is the interface inside the container.
     ports:
       - "${API_PORT:-3000}:${API_PORT:-3000}"
     # The key that encrypts the authenticator secrets, mounted as a file; it

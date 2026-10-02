@@ -400,11 +400,16 @@ pub async fn create(pool: &PgPool, ctx: &RequestContext, b: &ApiTokenCreate) -> 
 }
 
 /// Revokes the token; revoking it again changes nothing.
+/// 404, like [`get`], for a token whose owner the caller does not cover, even
+/// once it is revoked: a 403 would tell that it exists (GH#458).
 pub async fn revoke(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<(), AppError> {
     let mut tx = pool.begin().await?;
     let before = load(&mut tx, id, true).await?;
-    if ctx.principal().is_none_or(|me| me.user_id != before.user_id) {
-        must_cover_user(&mut tx, ctx, before.user_id).await?;
+    if let Some(me) = ctx.principal()
+        && me.user_id != before.user_id
+        && !me.permissions.covers(&auth_data::load_permissions(&mut tx, before.user_id).await?)
+    {
+        return Err(AppError::missing("API token", id));
     }
     if before.revoked_at.is_some() {
         return Ok(());
@@ -546,7 +551,7 @@ pub fn routes() -> Vec<Route> {
         route(Method::DELETE, BY_ID, "revokeApiToken")
             .tag(TAG)
             .summary("Revoke an API token (it stays listed as revoked; revoking twice is a no-op)")
-            .description("403 when the owner holds permissions you do not (your own tokens are always revocable).")
+            .description("404, as for a missing token, when the owner holds permissions you do not (your own tokens are always revocable).")
             .requires(manage)
             .session_only()
             .errors(&[ErrorCode::NotFound])
@@ -1501,6 +1506,35 @@ pub(crate) mod tests {
             assert_eq!(status, 200, "{v}");
         }
 
+        // Revoking it answers the same 404 and changes nothing (GH#458).
+        let (status, v, _) = call(&app, "DELETE", &format!("{}/{admins}", super::BASE), &alice, None).await;
+        assert_eq!((status, code(&v)), (404, "NOT_FOUND"), "{v}");
+        let unknown = uuid::Uuid::new_v4().to_string();
+        let (status, missing, _) = call(&app, "DELETE", &format!("{}/{unknown}", super::BASE), &alice, None).await;
+        assert_eq!(status, 404, "{missing}");
+        let shape = |mut v: Value, id: &str| {
+            v["error"]["requestId"].take();
+            v.to_string().replace(id, "ID")
+        };
+        assert_eq!(shape(v.clone(), &admins), shape(missing, &unknown));
+        let revoked: Option<chrono::DateTime<chrono::Utc>> =
+            sqlx::query_scalar("SELECT revoked_at FROM api_tokens WHERE id = $1::uuid")
+                .bind(&admins)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        assert_eq!(revoked, None);
+        let audited: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM audit_log WHERE entity_id = $1::uuid AND action = 'update'")
+                .bind(&admins)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        assert_eq!(audited, 0);
+        // Bob's, whom she covers, she revokes.
+        let (status, v, _) = call(&app, "DELETE", &format!("{}/{bobs}", super::BASE), &alice, None).await;
+        assert_eq!(status, 204, "{v}");
+
         // The administrator sees everything.
         let (status, v, _) = call(&app, "GET", super::BASE, &admin, None).await;
         assert_eq!((status, v["page"]["total"].as_i64()), (200, Some(3)), "{v}");
@@ -1516,6 +1550,9 @@ pub(crate) mod tests {
         assert_eq!(names(&v), ["alice's own"], "{v}");
         assert_eq!(v["page"]["total"], 1, "{v}");
         let (status, v, _) = call(&app, "GET", &format!("{}/{bobs}", super::BASE), &alice, None).await;
+        assert_eq!((status, code(&v)), (404, "NOT_FOUND"), "{v}");
+        // Revoked already, but hidden first: 404, not the no-op 204.
+        let (status, v, _) = call(&app, "DELETE", &format!("{}/{bobs}", super::BASE), &alice, None).await;
         assert_eq!((status, code(&v)), (404, "NOT_FOUND"), "{v}");
 
         db.drop().await;
@@ -1798,7 +1835,8 @@ pub(crate) mod tests {
 
     /// GitHub #154: a token must not widen or weaken a permission profile
     /// (including `requireMfa` on the built-in one) or import profiles, since
-    /// the change would outlive the token's revocation.
+    /// the change would outlive the token's revocation. Nor export the
+    /// configuration (GitHub #445).
     #[tokio::test]
     async fn permission_profile_administration_needs_a_session() {
         let Some(db) = scratch::database("permission_profile_administration_needs_a_session").await else { return };
@@ -1833,12 +1871,16 @@ pub(crate) mod tests {
         assert_eq!(status, 201, "{created}");
         let tok = Creds { bearer: created["secret"].as_str().map(str::to_owned), ..Creds::default() };
 
-        // Reading profiles and exporting the configuration stay open to the token.
+        // Reading profiles stays open to the token.
         let (status, v, _) = call(&app, "GET", "/api/v1/admin/profiles", &tok, None).await;
         assert_eq!(status, 200, "{v}");
         let (status, v, _) = call(&app, "GET", &admin_path, &tok, None).await;
         assert_eq!(status, 200, "{v}");
-        let (status, mut file, _) = call(&app, "GET", "/api/v1/admin/config/export", &tok, None).await;
+        // The configuration export is not (GitHub #445): a leaked token would
+        // otherwise pull the data model, profiles and mappings in one call.
+        let (status, v, _) = call(&app, "GET", "/api/v1/admin/config/export", &tok, None).await;
+        assert_eq!((status, code(&v)), (403, "FORBIDDEN"), "{v}");
+        let (status, mut file, _) = call(&app, "GET", "/api/v1/admin/config/export", &session, None).await;
         assert_eq!(status, 200, "{file}");
         file["permissionProfiles"][0]["globalPermissions"] = json!(["audit.view", "users.manage"]);
 
@@ -1871,8 +1913,8 @@ pub(crate) mod tests {
                 .fetch_all(pool)
                 .await
                 .unwrap();
-        assert_eq!(outcomes[..3], ["accepted", "accepted", "accepted"]);
-        assert_eq!(outcomes[3..], ["session_only"; 7]);
+        assert_eq!(outcomes[..2], ["accepted", "accepted"]);
+        assert_eq!(outcomes[2..], ["session_only"; 8]);
 
         // A session still administers profiles and imports.
         let (status, v, _) = call(&app, "POST", "/api/v1/admin/config/import?mode=apply", &session, Some(file)).await;

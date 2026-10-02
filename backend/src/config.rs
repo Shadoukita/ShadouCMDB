@@ -475,7 +475,12 @@ impl Reader<'_> {
 /// upper-case host would otherwise be accepted here and silently match nothing.
 /// (A literal `*` could not be honoured anyway: the session cookie makes these
 /// credentialed requests, and browsers refuse `*` for those.)
-fn parse_cors_origins(raw: &str) -> Result<Vec<String>, String> {
+///
+/// A plain `http://` origin is refused unless it is loopback or `allow_http`
+/// (`CORS_ALLOW_HTTP_ORIGINS=true`) says so (GH#445): whoever can tamper with
+/// that origin's unencrypted traffic could inject script into its page and make
+/// signed-in API calls through the user's browser.
+fn parse_cors_origins(raw: &str, allow_http: bool) -> Result<Vec<String>, String> {
     let mut origins = Vec::new();
     for entry in raw.split(',').map(str::trim).filter(|o| !o.is_empty()) {
         // The URL parser accepts `*` in a host name, so wildcards are caught here.
@@ -485,12 +490,23 @@ fn parse_cors_origins(raw: &str) -> Result<Vec<String>, String> {
                  explicitly, e.g. CORS_ORIGINS=https://cmdb.example.com,http://localhost:5173"
             ));
         }
-        let origin = url::Url::parse(entry)
+        let url = url::Url::parse(entry)
             .ok()
-            .filter(|u| matches!(u.scheme(), "http" | "https") && u.username().is_empty() && u.password().is_none())
-            .map(|u| u.origin().ascii_serialization());
+            .filter(|u| matches!(u.scheme(), "http" | "https") && u.username().is_empty() && u.password().is_none());
+        let origin = url.as_ref().map(|u| u.origin().ascii_serialization());
         match origin {
-            Some(o) if o == entry => origins.push(o),
+            Some(o) if o == entry => {
+                if url.as_ref().is_some_and(|u| u.scheme() == "http" && !crate::auth::sso::oidc::is_loopback(u))
+                    && !allow_http
+                {
+                    return Err(format!(
+                        "\"{entry}\" is a plain-HTTP origin: anyone who can intercept its traffic could make signed-in \
+                         API calls. Serve the web UI over https, or set CORS_ALLOW_HTTP_ORIGINS=true to accept http:// \
+                         origins (loopback ones such as http://localhost:5173 are always accepted)"
+                    ));
+                }
+                origins.push(o);
+            }
             Some(o) => {
                 return Err(format!("\"{entry}\" is not an origin as a browser sends it; did you mean \"{o}\"?"));
             }
@@ -663,7 +679,8 @@ impl Config {
         let statement_timeout_ms = r.int::<u64>("DATABASE_STATEMENT_TIMEOUT_MS", 0, u64::MAX).unwrap_or(30_000);
         let connect_timeout_ms = r.int::<u64>("DATABASE_CONNECT_TIMEOUT_MS", 100, u64::MAX).unwrap_or(5_000);
 
-        let cors_origins = match r.raw("CORS_ORIGINS").map(|s| parse_cors_origins(&s)) {
+        let cors_allow_http = r.bool("CORS_ALLOW_HTTP_ORIGINS", false);
+        let cors_origins = match r.raw("CORS_ORIGINS").map(|s| parse_cors_origins(&s, cors_allow_http)) {
             Some(Ok(origins)) => origins,
             Some(Err(e)) => {
                 r.errors.push(format!("CORS_ORIGINS: {e}"));
@@ -890,15 +907,35 @@ mod tests {
     #[test]
     fn cors_origins_accept_browser_origins() {
         assert_eq!(
-            parse_cors_origins(" https://cmdb.example.com , http://localhost:5173,,http://10.0.0.5:8080").unwrap(),
-            ["https://cmdb.example.com", "http://localhost:5173", "http://10.0.0.5:8080"]
+            parse_cors_origins(
+                " https://cmdb.example.com , http://localhost:5173,,http://127.0.0.1:8080,http://[::1]:3000",
+                false
+            )
+            .unwrap(),
+            ["https://cmdb.example.com", "http://localhost:5173", "http://127.0.0.1:8080", "http://[::1]:3000"]
         );
-        assert_eq!(parse_cors_origins("").unwrap(), Vec::<String>::new());
+        assert_eq!(parse_cors_origins("", false).unwrap(), Vec::<String>::new());
+    }
+
+    /// GH#445: a non-loopback http:// origin needs CORS_ALLOW_HTTP_ORIGINS=true.
+    #[test]
+    fn cors_origins_refuse_plain_http_unless_allowed() {
+        for bad in ["http://10.0.0.5:8080", "http://cmdb.example.com"] {
+            let err = parse_cors_origins(&format!("https://cmdb.example.com,{bad}"), false).unwrap_err();
+            assert!(err.contains(bad) && err.contains("CORS_ALLOW_HTTP_ORIGINS=true"), "{err}");
+            assert_eq!(parse_cors_origins(bad, true).unwrap(), [bad]);
+        }
+
+        let err = load_with(&[("CORS_ORIGINS", "http://10.0.0.5:8080")]).unwrap_err().to_string();
+        assert!(err.contains("CORS_ORIGINS") && err.contains("plain-HTTP"), "{err}");
+        let cfg = load_with(&[("CORS_ORIGINS", "http://10.0.0.5:8080"), ("CORS_ALLOW_HTTP_ORIGINS", "true")]).unwrap();
+        assert_eq!(cfg.cors_origins, ["http://10.0.0.5:8080"]);
+        assert!(load_with(&[("CORS_ALLOW_HTTP_ORIGINS", "yes")]).is_err());
     }
 
     #[test]
     fn cors_origins_reject_wildcards_and_non_origins() {
-        let err = parse_cors_origins("https://a.example.com,*").unwrap_err();
+        let err = parse_cors_origins("https://a.example.com,*", false).unwrap_err();
         assert!(err.contains("\"*\" is not supported"), "{err}");
         assert!(err.contains("explicitly"), "{err}");
         for bad in [
@@ -908,19 +945,23 @@ mod tests {
             "null",
             "https://*.example.com",
         ] {
-            assert!(parse_cors_origins(bad).is_err(), "{bad} should be rejected");
+            assert!(parse_cors_origins(bad, true).is_err(), "{bad} should be rejected");
         }
         // Would never match a browser's Origin header byte for byte; the error names the right spelling.
         assert!(
-            parse_cors_origins("https://cmdb.example.com/")
+            parse_cors_origins("https://cmdb.example.com/", false)
                 .unwrap_err()
                 .contains("did you mean \"https://cmdb.example.com\"")
         );
-        assert!(parse_cors_origins("https://CMDB.example.com").unwrap_err().contains("\"https://cmdb.example.com\""));
         assert!(
-            parse_cors_origins("https://cmdb.example.com:443").unwrap_err().contains("\"https://cmdb.example.com\"")
+            parse_cors_origins("https://CMDB.example.com", false).unwrap_err().contains("\"https://cmdb.example.com\"")
         );
-        assert!(parse_cors_origins("https://cmdb.example.com/app").is_err());
+        assert!(
+            parse_cors_origins("https://cmdb.example.com:443", false)
+                .unwrap_err()
+                .contains("\"https://cmdb.example.com\"")
+        );
+        assert!(parse_cors_origins("https://cmdb.example.com/app", false).is_err());
     }
 
     fn load(csp_report_uri: &str) -> anyhow::Result<Config> {
