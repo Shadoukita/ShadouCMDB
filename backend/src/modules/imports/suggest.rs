@@ -84,7 +84,8 @@ pub struct ColumnMatch {
     /// Null when the column is left unmapped
     pub via: Option<MatchVia>,
     /// Why an unmapped column was left out: `ambiguous_label` (several targets have that label),
-    /// `duplicate_target` (an earlier column took the target) or `ident_admin_only`
+    /// `duplicate_target` (an earlier column took the target), `ident_admin_only` or `system_relationship_type`
+    /// (the saved mapping maps it to business service members, which are added on the service; see its `problems`)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
 }
@@ -229,6 +230,7 @@ pub async fn suggest(
         }
     }
 
+    let system = saved::system_type_keys(&mut conn).await?;
     let definition: Option<&MappingDefinition> = saved.as_ref().map(|(m, _)| &m.definition);
     let mode = definition.map(|d| d.mode).unwrap_or(ImportMode::CreateOrUpdate);
     let mut used: HashSet<String> = HashSet::new();
@@ -239,6 +241,12 @@ pub async fn suggest(
         let n = normalise(header);
         let from_saved = definition.and_then(|d| d.target_for(header));
         let found: Option<(Candidate, MatchVia, Option<EmptyCells>, _)> = if let Some(c) = from_saved {
+            // Saved before the member type was refused (GH#516): `problems` on the mapping says what to fix.
+            if matches!(&c.target, ColumnTarget::Relationship { type_key, .. } if system.contains(type_key)) {
+                m.hint = Some("system_relationship_type".into());
+                matched_by.push(m);
+                continue;
+            }
             let id = target_id(&c.target);
             Some((Candidate { id, target: c.target.clone() }, MatchVia::SavedMapping, c.empty_cells, c.options.clone()))
         } else if n.is_empty() {

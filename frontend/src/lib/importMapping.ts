@@ -424,6 +424,8 @@ export function matchedText(via: Schemas["ImportMatchVia"] | null | undefined, h
       return "Not mapped: an earlier column has this field";
     case "ident_admin_only":
       return "Not mapped: only administrators can set the ident of new CIs";
+    case "system_relationship_type":
+      return "Not mapped: business service members are added on the business service. Set this column to ignore in the saved mapping";
   }
   return "Not mapped";
 }

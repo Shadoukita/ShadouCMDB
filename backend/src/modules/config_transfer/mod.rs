@@ -2400,6 +2400,56 @@ mod tests {
         db.drop().await;
     }
 
+    /// GH#516: a mapping saved before the member type was refused (GH#410)
+    /// imports with that column ignored, and says so in a warning.
+    #[tokio::test]
+    async fn an_import_mapping_on_the_member_type_imports_with_the_column_ignored() {
+        let Some(src) = scratch::database("config_mapping_member_src").await else { return };
+        let Some(dst) = scratch::database("config_mapping_member_dst").await else { return };
+        let system = RequestContext::system("test", "test");
+        crate::seed::install_template(&src.pool, "it_infrastructure").await.unwrap();
+        let (class, attr): (String, String) = sqlx::query_as(
+            "SELECT c.key, d.key FROM cmdb.ci_attribute_definitions d JOIN cmdb.ci_classes c ON c.id = d.class_id
+             WHERE NOT c.is_abstract ORDER BY c.key, d.key LIMIT 1",
+        )
+        .fetch_one(&src.pool)
+        .await
+        .unwrap();
+        let member: String =
+            sqlx::query_scalar("SELECT key FROM cmdb.relationship_types WHERE system_role = 'business_service_member'")
+                .fetch_one(&src.pool)
+                .await
+                .unwrap();
+        let definition: saved::MappingDefinition = serde_json::from_value(serde_json::json!({
+            "mode": "create_only",
+            "columns": [
+                { "header": "Name", "target": { "kind": "attribute", "key": attr } },
+                { "header": "Service", "target": {
+                    "kind": "relationship", "typeKey": member, "direction": "incoming", "match": { "by": "label" } } },
+            ],
+        }))
+        .unwrap();
+        let mut conn = src.pool.acquire().await.unwrap();
+        saved::config_write(&mut conn, &system, None, "Old layout", None, &class, &definition).await.unwrap();
+        drop(conn);
+        let file = export(&src.pool, &system).await.unwrap();
+
+        let res = import(&dst.pool, &system, &file, ImportMode::Apply).await.unwrap();
+        let warning = res.warnings.iter().find(|w| w.path == "importMappings.0.definition.columns.1.target");
+        assert!(
+            warning.is_some_and(|w| w.message.contains("\"Service\"") && w.message.contains("\"Old layout\"")),
+            "{:?}",
+            res.warnings
+        );
+        let back = export(&dst.pool, &system).await.unwrap().import_mappings.unwrap();
+        assert_eq!(back.len(), 1, "{back:?}");
+        assert_eq!(back[0].definition.columns[0].target, definition.columns[0].target);
+        assert_eq!(back[0].definition.columns[1].header, "Service");
+        assert_eq!(back[0].definition.columns[1].target, ColumnTarget::Ignore);
+        src.drop().await;
+        dst.drop().await;
+    }
+
     /// SHAA-714 §6.2, AC10: saved import mappings round-trip through format
     /// version 4, merge by class key and name, need `cis.import`, stay within
     /// the classes the caller can view, and are audited with `actor_type = import`.

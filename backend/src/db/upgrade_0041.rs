@@ -1,9 +1,12 @@
 //! Migration 0041 (GH#410, SHAA-1389) against an install with business
 //! services: the rules on the member type are removed and no others, members
-//! and services are kept, and afterwards the database refuses a rule on the
+//! and services are kept, each removed rule leaves a `delete` row in the
+//! audit chain (GH#515), and afterwards the database refuses a rule on the
 //! member type and a CI moving into the business service type.
 
+use serde_json::{Value, json};
 use sqlx::{Executor, PgPool};
+use uuid::Uuid;
 
 use super::upgrade_0033::v02x;
 use crate::db::MIGRATOR;
@@ -47,12 +50,43 @@ async fn member_rules_are_removed_and_no_ci_becomes_a_service() {
     pool.execute(BEFORE).await.expect("data before the upgrade");
     let (rules, edges, classes) = (rows(pool, RULES).await, rows(pool, EDGES).await, rows(pool, CLASSES).await);
     assert_eq!(rules.len(), 2, "{rules:?}");
+    let member_rule_id: Uuid = sqlx::query_scalar(
+        "SELECT r.id FROM relationship_type_rules r JOIN relationship_types t ON t.id = r.relationship_type_id
+         WHERE t.system_role = 'business_service_member'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
     MIGRATOR.run_to(41, pool).await.expect("migration 0041");
 
     let kept: Vec<String> = rules.into_iter().filter(|r| r.starts_with("depends_on:")).collect();
     assert_eq!(rows(pool, RULES).await, kept, "only the member type's rule is removed");
     assert_eq!(rows(pool, EDGES).await, edges, "members are kept");
     assert_eq!(rows(pool, CLASSES).await, classes);
+
+    // The removed rule's history ends in a system `delete` naming the reason;
+    // the kept rule has none, and the chain verifies through the new row.
+    let audit: Vec<(String, Option<String>, String, Uuid, Value, Value)> = sqlx::query_as(
+        "SELECT actor_type, actor_name, action, entity_id, old_value, new_value FROM audit_log
+         WHERE entity_type = 'relationship_type_rules' ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    assert_eq!(audit.len(), 1, "{audit:?}");
+    let (actor_type, actor_name, action, entity_id, old, new) = &audit[0];
+    assert_eq!(
+        (actor_type.as_str(), actor_name.as_deref(), action.as_str(), *entity_id),
+        ("system", Some("migration 0041"), "delete", member_rule_id)
+    );
+    assert_eq!(old["id"], json!(member_rule_id));
+    assert_eq!(old["sourceClassId"], "00000000-0000-4000-8000-0000000000c2");
+    assert_eq!(old["targetClassId"], "00000000-0000-4000-8000-0000000000c1");
+    assert!(old["createdAt"].is_string() && old["relationshipTypeId"].is_string(), "{old}");
+    assert_eq!(new["migration"], "0041");
+    assert!(new["reason"].as_str().is_some_and(|r| r.contains("takes no rules")), "{new}");
+    let problems: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_log_verify()").fetch_one(pool).await.unwrap();
+    assert_eq!(problems, 0, "the audit chain verifies");
 
     let member_rule = sqlx::query(
         "INSERT INTO relationship_type_rules (relationship_type_id, source_class_id, target_class_id)
@@ -79,5 +113,10 @@ async fn member_rules_are_removed_and_no_ci_becomes_a_service() {
     // Running the migrations again is a no-op.
     MIGRATOR.run(pool).await.expect("re-run");
     assert_eq!(rows(pool, RULES).await, kept);
+    let deletes: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_log WHERE actor_name = 'migration 0041'")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(deletes, 1, "no second audit row");
     db.drop().await;
 }
