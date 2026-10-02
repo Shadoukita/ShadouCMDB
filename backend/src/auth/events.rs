@@ -17,6 +17,7 @@
 
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 use sqlx::PgConnection;
 use uuid::Uuid;
@@ -297,6 +298,31 @@ pub async fn token_use(
         f.insert("unrecordedRefusals".into(), json!(unrecorded));
     }
     write_for(conn, ctx, AuditAction::TokenUse, TOKEN_ENTITY, token.id, details(ctx, f)).await
+}
+
+/// `unrecorded` uses of this dead token, refused with `outcome` between
+/// `start` and `end`, that no request row counted (GH#213): no request, so no
+/// method, path or client.
+pub async fn token_refusals(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    token: &PresentedToken,
+    outcome: &str,
+    unrecorded: u64,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+) -> sqlx::Result<()> {
+    let v = json!({
+        "tokenName": token.name,
+        "tokenPrefix": token.token_prefix,
+        "userId": token.user_id,
+        "username": token.username,
+        "outcome": outcome,
+        "unrecordedRefusals": unrecorded,
+        "windowStart": start,
+        "windowEnd": end,
+    });
+    write_for(conn, ctx, AuditAction::TokenUse, TOKEN_ENTITY, token.id, v).await
 }
 
 /// A two-factor event for this user (`mfa.*`): `extra` adds the event's own details.

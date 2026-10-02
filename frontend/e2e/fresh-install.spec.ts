@@ -70,7 +70,9 @@ test.describe("a bare install", () => {
     const nav = page.getByRole("navigation", { name: "Main" });
     await expect(page.getByRole("heading", { name: "No CI classes are defined yet" })).toBeVisible();
     await expect(nav.getByText("No classes yet.")).toBeVisible();
-    await expect(nav.getByRole("link", { name: /^Business service/ })).toBeVisible();
+    // The class link carries its CI count; "Business services" is the services page next to it.
+    await expect(nav.getByRole("link", { name: /^Business service \d+$/ })).toBeVisible();
+    await expect(nav.getByRole("link", { name: "Business services", exact: true })).toBeVisible();
     await expect(page.getByRole("link", { name: "+ New CI" })).toHaveCount(0);
     await snap(page, "50-bare-install");
     await page.getByRole("link", { name: "Install a starter template" }).click();

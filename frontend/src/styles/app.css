@@ -2305,6 +2305,195 @@ ol.impact-path li + li::before {
   background: var(--c-surface-alt);
 }
 
+/* ---------- Business services ---------- */
+/* A filter that picks several values: a summary that looks like a select, opening a checkbox list. */
+.multi-select {
+  position: relative;
+}
+.multi-select summary {
+  display: flex;
+  flex-direction: column;
+  cursor: pointer;
+  list-style: none;
+}
+.multi-select summary::-webkit-details-marker {
+  display: none;
+}
+.multi-select .select-like {
+  display: inline-block;
+  min-width: 150px;
+  min-height: var(--row-h);
+  padding: 3px 26px 3px var(--sp-3);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius);
+  background: var(--c-surface);
+  color: var(--c-text);
+  position: relative;
+}
+.multi-select .select-like::after {
+  content: "▾";
+  position: absolute;
+  right: 8px;
+  color: var(--c-text-muted);
+}
+.multi-select summary:focus-visible .select-like {
+  outline: 2px solid var(--c-focus);
+}
+.multi-select fieldset.popover {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  width: 240px;
+  margin: 0;
+}
+/* The owner picker: an input with its listbox of users and groups below. */
+.combobox {
+  position: relative;
+}
+.combobox input {
+  width: 260px;
+}
+.toolbar .field.combobox input {
+  width: 220px;
+}
+.listbox {
+  position: absolute;
+  left: 0;
+  top: calc(var(--control-h) + 22px);
+  z-index: 30;
+  min-width: 100%;
+  max-width: 420px;
+  max-height: 280px;
+  overflow-y: auto;
+  margin: 0;
+  padding: var(--sp-1) 0;
+  list-style: none;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
+}
+.listbox [role="option"],
+.listbox-empty {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 28px;
+  padding: 2px var(--sp-3);
+  white-space: nowrap;
+}
+.listbox [role="option"] {
+  cursor: pointer;
+}
+.listbox [role="option"].active {
+  background: var(--c-row-hover);
+  outline: 2px solid var(--c-focus);
+  outline-offset: -2px;
+}
+.listbox [role="option"].excluded {
+  cursor: default;
+  color: var(--c-text-muted);
+}
+.listbox .option-name {
+  font-weight: 600;
+}
+.owner-roles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--sp-4);
+}
+.owner-role h3,
+.owner-role legend {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--fs-md);
+}
+fieldset.owner-role {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.owner-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.owner-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: var(--row-h);
+}
+.note {
+  margin: 0 0 var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border-left: 3px solid var(--c-warn-border);
+  background: var(--c-warn-bg);
+}
+.token-list {
+  margin: 0 0 var(--sp-3);
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius);
+}
+.token {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2px var(--sp-3);
+  padding: 2px var(--sp-3);
+  min-height: 32px;
+}
+.token + .token {
+  border-top: 1px solid var(--c-divider);
+}
+.token.invalid {
+  background: var(--c-danger-bg);
+}
+.token-text {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.token-actions {
+  display: flex;
+  gap: var(--sp-1);
+}
+/* Targets of at least 24 × 24 CSS px (WCAG 2.5.8). */
+.token-actions .btn {
+  height: 24px;
+  min-width: 24px;
+  padding: 0 var(--sp-2);
+}
+.token-note,
+.token-error {
+  flex-basis: 100%;
+  font-size: var(--fs-sm);
+}
+.token-error {
+  color: var(--c-danger-text);
+  font-weight: 600;
+}
+.owners-actions {
+  margin-top: var(--sp-4);
+}
+.owner-cell {
+  white-space: normal;
+}
+.owner-cell .more {
+  color: var(--c-text-muted);
+}
+.filter-token {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: var(--control-h);
+}
+
 /* ---------- Business services: members, member picker, "part of", impact pin (SHAA-934) ---------- */
 table.data th.select-col,
 table.data td.select-col {

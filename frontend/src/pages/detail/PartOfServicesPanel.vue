@@ -50,7 +50,7 @@ const ownerText = (o: PrincipalRef) => (o.active ? o.displayName : `${o.displayN
           </thead>
           <tbody>
             <tr v-for="e in entries" :key="e.service.id">
-              <td><CiLink :id="e.service.id" :from="self" :trail="trail">{{ e.service.name }}</CiLink></td>
+              <td><CiLink :id="e.service.id" service :from="self" :trail="trail">{{ e.service.name }}</CiLink></td>
               <td><CriticalityBadge :value="e.service.criticality" show-unset /></td>
               <td>
                 <template v-if="e.service.owners.technical.length > 0">
@@ -61,7 +61,7 @@ const ownerText = (o: PrincipalRef) => (o.active ? o.displayName : `${o.displayN
               <td>
                 <template v-if="e.direct">{{ t("services.partOf.direct") }}</template>
                 <span v-else class="part-of-chain">
-                  {{ viaParts.before }}<template v-for="(id, i) in e.viaServiceIds" :key="id"><span v-if="i > 0" aria-hidden="true"> › </span><CiLink :id="id" :from="self" :trail="trail">{{ nameOf.get(id) ?? id }}</CiLink></template>{{ viaParts.after }}
+                  {{ viaParts.before }}<template v-for="(id, i) in e.viaServiceIds" :key="id"><span v-if="i > 0" aria-hidden="true"> › </span><CiLink :id="id" service :from="self" :trail="trail">{{ nameOf.get(id) ?? id }}</CiLink></template>{{ viaParts.after }}
                 </span>
               </td>
             </tr>

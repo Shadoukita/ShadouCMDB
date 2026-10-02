@@ -3,6 +3,7 @@ import { computed } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useAreas } from "../api/datamodel";
 import { useCiClasses, useClassAttributes } from "../api/queries";
+import { t } from "../i18n";
 import { dataModelEmpty } from "../lib/dataModel";
 import Breadcrumbs, { type Crumb } from "../components/Breadcrumbs.vue";
 import DataModelEmpty from "../components/DataModelEmpty.vue";
@@ -32,12 +33,17 @@ const area = computed(() => areas.data.value?.find((a) => a.id === cls.value?.ar
 const denied = computed(() => !!cls.value && !session.canOnClass(cls.value.id, "create"));
 /** Archived classes accept no new CIs; abstract ones hold none. */
 const closed = computed(() => !!cls.value && (!cls.value.isActive || cls.value.isAbstract));
-const crumbs = computed<Crumb[]>(() => [
-  { label: "Inventory", to: "/cis" },
-  ...(area.value ? [{ label: area.value.name }] : []),
-  ...(cls.value ? [{ label: cls.value.name, to: `/cis?classId=${cls.value.id}` }] : []),
-  { label: "New" },
-]);
+const fromServices = computed(() => route.query.return === "services");
+const crumbs = computed<Crumb[]>(() =>
+  fromServices.value
+    ? [{ label: t("services.title"), to: "/services" }, { label: t("services.new") }]
+    : [
+        { label: "Inventory", to: "/cis" },
+        ...(area.value ? [{ label: area.value.name }] : []),
+        ...(cls.value ? [{ label: cls.value.name, to: `/cis?classId=${cls.value.id}` }] : []),
+        { label: "New" },
+      ],
+);
 
 // Edit layout (the layout-editor route, in its own window): the form's layout edited on an empty form of the class,
 // also where the designer's "Open on a CI" leads for a class without CIs.
