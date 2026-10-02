@@ -85,16 +85,20 @@ export function ciCountQuery(query: CiListQuery) {
   };
 }
 
+const ciQuery = (ciId: string) => ({
+  queryKey: keys.ci(ciId),
+  queryFn: ({ signal }: { signal: AbortSignal }) => unwrap(api.GET("/api/v1/configuration-items/{id}", { params: { path: { id: ciId } }, signal })),
+});
+
 export function useCi(id: MaybeRefOrGetter<string | undefined>) {
   return useQuery(() => {
     const ciId = toValue(id) ?? "";
-    return {
-      queryKey: keys.ci(ciId),
-      enabled: !!ciId,
-      queryFn: ({ signal }: { signal: AbortSignal }) => unwrap(api.GET("/api/v1/configuration-items/{id}", { params: { path: { id: ciId } }, signal })),
-    };
+    return { ...ciQuery(ciId), enabled: !!ciId };
   });
 }
+
+/** One CI, outside a component (from the cache when fresh). */
+export const fetchCi = (qc: QueryClient, id: string) => qc.fetchQuery({ ...ciQuery(id), staleTime: 10_000 });
 
 export function useCreateCi() {
   const qc = useQueryClient();

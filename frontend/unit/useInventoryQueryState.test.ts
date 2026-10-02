@@ -83,6 +83,19 @@ describe("useInventoryQueryState", () => {
     t.stop();
   });
 
+  test("the layout filters from Customization › Layouts reach the list request and count as filters (SHAA-1514)", () => {
+    const t = setup({ classId: SERVER.id, includeSubclasses: "false", ownLayout: "true", layoutTemplate: "hosts", sort: "label", limit: "50" });
+    const q = t.state.listQuery.value;
+    assert.equal(q.includeSubclasses, "false");
+    assert.equal(q.ownLayout, "true");
+    assert.equal(q.layoutTemplate, "hosts");
+    assert.deepEqual([...t.state.activeFilters.value], ["classId", "ownLayout", "layoutTemplate"]);
+    t.stop();
+    const bad = setup({ ownLayout: "maybe", sort: "label", limit: "50" });
+    assert.equal(bad.state.listQuery.value.ownLayout, undefined);
+    bad.stop();
+  });
+
   test("the URL wins over the list view, which wins over the defaults", async () => {
     const t = setup({ classId: SERVER.id, columns: "ident,attributes.cpu" });
     t.classes.value = [SERVER];

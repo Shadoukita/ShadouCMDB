@@ -145,12 +145,19 @@ export function useInventoryQueryState(options: QueryStateOptions) {
     deleted: deleted.value,
   }));
   /** Parameters of the list request (GET /configuration-items). */
-  const listQuery = computed(() => ({ ...filters.value, sort: sort.value, limit: limit.value, offset: offset.value }));
+  const listQuery = computed(() => ({
+    ...filters.value,
+    ownLayout: get("ownLayout") === "true" || get("ownLayout") === "false" ? (get("ownLayout") as "true" | "false") : undefined,
+    layoutTemplate: get("layoutTemplate") || undefined,
+    sort: sort.value,
+    limit: limit.value,
+    offset: offset.value,
+  }));
   /** Parameters of the search request (GET /search), without the term. */
   const searchFilters = computed(() => ({ ...filters.value, limit: limit.value, offset: offset.value }));
 
   /** The filters set (on the search page the term is the search itself, not a filter). */
-  const activeFilters = computed(() => FILTER_KEYS.filter((k) => get(k) && !(options.context === "search" && k === "q")));
+  const activeFilters = computed(() => FILTER_KEYS.filter((k) => get(k) && !(options.context === "search" && (k === "q" || k === "ownLayout" || k === "layoutTemplate"))));
 
   function update(patch: Record<string, string | undefined>, resetPage = true) {
     const to = { path, query: patchQuery(route.query, patch, resetPage) };

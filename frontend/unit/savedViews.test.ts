@@ -112,6 +112,8 @@ describe("saving what the URL shows", () => {
   test("an unknown id is refused, never dropped (that would save a wider list)", () => {
     assert.equal(definitionFromUrl({ lookupValueId: "gone" }, "inventory", CAT, { sort: "label", limit: 50 }).ok, false);
     assert.equal(definitionFromUrl({ classId: "gone" }, "inventory", CAT, { sort: "label", limit: 50 }).ok, false);
+    assert.equal(definitionFromUrl({ ownLayout: "true" }, "inventory", CAT, { sort: "label", limit: 50 }).ok, false, "a filter a view cannot hold is refused, not dropped");
+    assert.equal(definitionFromUrl({ layoutTemplate: "hosts" }, "inventory", CAT, { sort: "label", limit: 50 }).ok, false);
   });
 });
 
