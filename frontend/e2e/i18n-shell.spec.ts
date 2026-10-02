@@ -1,0 +1,78 @@
+import type { Locator, Page } from "@playwright/test";
+import { de } from "../src/i18n/de";
+import { en, type MessageKey } from "../src/i18n/en";
+import { checkA11y, expect, resetUiSettings, test } from "./support";
+
+// The app shell, the dashboard and the shared components take every text from the message catalog
+// (SHAA-1460). With the test-only German locale forced, none of their English texts may show: a
+// leftover hard-coded string or a missing `t()` would. The UI itself stays English; there is no setting.
+
+const SLICE = /^(shell|nav|userMenu|globalSearch|notFound|pagination|dashboard|error|formError|time|dataModel)\./;
+
+/** This slice's English texts that read differently in German (messages with parameters are checked by the assertions). */
+const ENGLISH = (Object.keys(en) as MessageKey[])
+  .filter((k) => SLICE.test(k) && en[k] !== de[k] && !en[k].includes("{") && en[k].length >= 4)
+  .map((k) => en[k]);
+
+async function forceGerman(page: Page) {
+  await page.addInitScript(() => ((window as unknown as { __shadoucmdbTestLocale: string }).__shadoucmdbTestLocale = "de"));
+}
+
+/** Whole words only, so a CI or class name that merely contains an English word does not count. */
+const asWords = (s: string) => new RegExp(`(?<![\\p{L}\\d])${s.replace(/[.*+?^$()|[\]\\]/g, "\\$&")}(?![\\p{L}\\d])`, "u");
+
+async function expectNoEnglish(region: Locator) {
+  const text = await region.innerText();
+  expect(ENGLISH.filter((s) => asWords(s).test(text))).toEqual([]);
+}
+
+test("the shell and the dashboard are German with the German catalog", async ({ page, request }, testInfo) => {
+  await resetUiSettings(request); // the built-in panels, not a customized dashboard
+  await forceGerman(page);
+  await page.goto("/");
+  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page).toHaveTitle(/^Dashboard · /);
+  await expect(page.getByRole("heading", { name: "Nach Klasse", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Zuletzt geändert", exact: true })).toBeVisible();
+  await expect(page.locator(".kpi .label")).toHaveText("Configuration Items");
+  await expect(page.getByRole("columnheader", { name: "Bezeichnung" })).toBeVisible();
+  await expect(page.locator("table.data td.num .spinner")).toHaveCount(0); // every count has loaded
+
+  const nav = page.getByRole("navigation", { name: "Hauptmenü" });
+  await expect(nav.getByRole("link", { name: "Alle Configuration Items" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Navigationspfad" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Neues CI" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Abmelden" })).toBeVisible();
+  await expect(page.getByLabel("Configuration Items durchsuchen")).toHaveAttribute("placeholder", /^CIs nach Bezeichnung/);
+  await expectNoEnglish(page.locator("body"));
+  await checkA11y(page, testInfo, "dashboard-de");
+
+  // The search's type-ahead note.
+  await page.getByLabel("Configuration Items durchsuchen").fill("zz-no-such-ci");
+  await expect(page.locator("#global-search-list")).toHaveText("Kein CI passt zu „zz-no-such-ci“");
+});
+
+test("not found, the pagination bar and the error alert are German with the German catalog", async ({ page }) => {
+  await forceGerman(page);
+  await page.goto("/no/such/screen");
+  await expect(page.getByRole("heading", { name: "Seite nicht gefunden" })).toBeVisible();
+  await expect(page).toHaveTitle(/^Nicht gefunden · /);
+  await expect(page.getByRole("link", { name: "Zum Dashboard" })).toBeVisible();
+  await expectNoEnglish(page.locator("main"));
+
+  await page.goto("/cis");
+  const pagination = page.locator(".pagination");
+  await expect(pagination).toContainText(/^1–\d+ von [\d.]+/);
+  await expect(pagination).toContainText(/Seite 1 \/ \d+/);
+  await expect(pagination.getByLabel("Zeilen")).toBeVisible();
+  await expect(pagination.getByRole("button", { name: "Weiter ›" })).toBeVisible();
+  await expectNoEnglish(pagination);
+
+  await page.route("**/api/v1/**", (route) => route.abort("connectionrefused"));
+  await page.reload();
+  const alert = page.getByRole("alert").first();
+  await expect(alert).toContainText("API nicht erreichbar", { timeout: 15_000 });
+  await expect(alert).toContainText("Die ShadouCMDB-API unter");
+  await expect(alert.getByRole("button", { name: "Erneut versuchen" })).toBeVisible();
+  await expectNoEnglish(alert);
+});
