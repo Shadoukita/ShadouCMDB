@@ -9,7 +9,7 @@ use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
 use crate::auth::permissions::{ClassRights, GlobalPermission, Permissions};
-use crate::data::auth::MFA_REQUIRED;
+use crate::data::auth::{MFA_REQUIRED, PERSON_LINKED};
 
 /// Lets [`MFA_REQUIRED`] read the token's `mfa_verified` as the session's.
 const TOKEN_AS_SESSION: &str = "CROSS JOIN LATERAL (SELECT t.mfa_verified) AS s(mfa_verified)";
@@ -45,6 +45,11 @@ pub struct PresentedToken {
     /// The owner must use two-factor authentication and the token was not
     /// created from a session that proved it.
     pub mfa_required: bool,
+    /// The owner has an e-mail but no linked Person: they cannot sign in
+    /// either (see [`PERSON_LINKED`], SHAA-1505).
+    pub account_incomplete: bool,
+    /// The owner has no e-mail yet and must enter one in a session first.
+    pub email_missing: bool,
 }
 
 pub async fn find_by_hash(pool: &PgPool, token_hash: &[u8]) -> sqlx::Result<Option<PresentedToken>> {
@@ -53,7 +58,7 @@ pub async fn find_by_hash(pool: &PgPool, token_hash: &[u8]) -> sqlx::Result<Opti
                 coalesce(ip.is_enabled, true) AS provider_enabled, t.profile_id,
                 t.created_by_user_id, coalesce(c.is_active, false) AS creator_active,
                 t.revoked_at IS NOT NULL AS revoked, t.expires_at <= now() AS expired,
-                {} AS mfa_required
+                {} AS mfa_required, NOT {PERSON_LINKED} AS account_incomplete, u.email IS NULL AS email_missing
          FROM api_tokens t JOIN users u ON u.id = t.user_id LEFT JOIN users c ON c.id = t.created_by_user_id
               LEFT JOIN identity_providers ip ON ip.id = u.identity_provider_id
               {TOKEN_AS_SESSION}

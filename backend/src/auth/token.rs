@@ -77,6 +77,11 @@ pub enum Refusal {
     /// The owner must use two-factor authentication and the token was not
     /// created from a session that proved it (GH#200).
     MfaRequired,
+    /// The owner has an e-mail but no linked Person, so cannot sign in (SHAA-1505).
+    AccountIncomplete,
+    /// The owner has no e-mail yet: until they enter one in a session, their
+    /// tokens are refused as their sessions are gated (SHAA-1505).
+    EmailRequired,
     /// Its permission profile was deleted.
     NoScope,
     /// The route needs a browser session (sign-out, password, token, user, identity provider and permission profile
@@ -93,6 +98,8 @@ impl Refusal {
             Refusal::OwnerDisabled => "owner_disabled",
             Refusal::ProviderDisabled => "provider_disabled",
             Refusal::MfaRequired => "mfa_required",
+            Refusal::AccountIncomplete => "account_incomplete",
+            Refusal::EmailRequired => "email_required",
             Refusal::NoScope => "no_scope",
             Refusal::SessionOnly => "session_only",
             Refusal::Forbidden(_) => "forbidden",
@@ -108,6 +115,8 @@ impl Refusal {
                 | Refusal::OwnerDisabled
                 | Refusal::ProviderDisabled
                 | Refusal::MfaRequired
+                | Refusal::AccountIncomplete
+                | Refusal::EmailRequired
                 | Refusal::NoScope
         )
     }
@@ -125,6 +134,14 @@ impl Refusal {
                 "The owner of this API token must use two-factor authentication, and this token was not created from \
                  a session signed in with a second factor. Create a new token after signing in with two-factor \
                  authentication.",
+            ),
+            Refusal::AccountIncomplete => unauthenticated(
+                "The owner of this API token has no linked person and cannot sign in; an administrator must fix the \
+                 account",
+            ),
+            Refusal::EmailRequired => AppError::new(
+                ErrorCode::EmailRequired,
+                "The owner of this API token has no e-mail address yet: they must sign in and enter it first",
             ),
             Refusal::NoScope => unauthenticated("The permission profile of this API token was deleted"),
             Refusal::SessionOnly => forbidden("This endpoint needs a signed-in session; API tokens cannot call it"),
@@ -317,6 +334,10 @@ pub async fn authenticate(
         Some(Refusal::ProviderDisabled)
     } else if t.mfa_required {
         Some(Refusal::MfaRequired)
+    } else if t.account_incomplete {
+        Some(Refusal::AccountIncomplete)
+    } else if t.email_missing {
+        Some(Refusal::EmailRequired)
     } else if session_only {
         Some(Refusal::SessionOnly)
     } else {
@@ -401,6 +422,8 @@ mod tests {
             revoked: true,
             expired: false,
             mfa_required: false,
+            account_incomplete: false,
+            email_missing: false,
         }
     }
 

@@ -498,6 +498,31 @@ mod tests {
         let (_, v, _) = call(&app, "GET", "/api/v1/admin/users?signInStatus=email_required", &admin, None).await;
         assert_eq!(v["data"].as_array().unwrap().len(), 1, "{v}");
         assert_eq!(v["data"][0]["username"], "legacy");
+        // API tokens are held to the same rules as sessions (GH#529).
+        let builtin: Uuid =
+            sqlx::query_scalar("SELECT id FROM permission_profiles WHERE is_builtin").fetch_one(pool).await.unwrap();
+        let expires = (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339();
+        let mut tokens = Vec::new();
+        for owner in [legacy, erin["id"].as_str().unwrap().parse().unwrap()] {
+            let body = json!({ "name": "script", "userId": owner, "profileId": builtin, "expiresAt": expires });
+            let (status, v, _) = call(&app, "POST", "/api/v1/admin/api-tokens", &admin, Some(body)).await;
+            assert_eq!(status, 201, "{v}");
+            tokens.push(Creds { bearer: v["secret"].as_str().map(str::to_owned), ..Creds::default() });
+        }
+        let (legacy_token, erin_token) = (&tokens[0], &tokens[1]);
+        let last_outcome = async || -> Option<String> {
+            sqlx::query_scalar(
+                "SELECT new_value ->> 'outcome' FROM audit_log WHERE action = 'token.use' ORDER BY chain_seq DESC LIMIT 1",
+            )
+            .fetch_one(pool)
+            .await
+            .unwrap()
+        };
+        let (status, v, _) = call(&app, "GET", "/api/v1/configuration-items", legacy_token, None).await;
+        assert_eq!((status, code(&v)), (403, "EMAIL_REQUIRED"), "{v}");
+        assert_eq!(last_outcome().await.as_deref(), Some("email_required"));
+        let (status, _, _) = call(&app, "GET", "/api/v1/configuration-items", erin_token, None).await;
+        assert_eq!(status, 200);
 
         let (status, me, creds) = login(&app, "legacy").await;
         assert_eq!((status, &me["emailRequired"]), (200, &json!(true)), "{me}");
@@ -519,6 +544,8 @@ mod tests {
         assert_eq!(person(pool, person_id(&me["user"])).await.0, "Legacy User");
         let (status, _, _) = call(&app, "GET", "/api/v1/admin/users", &creds, None).await;
         assert_eq!(status, 200, "the session goes on");
+        let (status, _, _) = call(&app, "GET", "/api/v1/configuration-items", legacy_token, None).await;
+        assert_eq!(status, 200, "and the token works");
         let (status, v, _) =
             call(&app, "PUT", "/api/v1/auth/email", &creds, Some(json!({ "email": "other@example.test" }))).await;
         assert_eq!((status, code(&v)), (409, "CONFLICT"), "set once; an administrator changes it: {v}");
@@ -543,11 +570,16 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(reason.as_deref(), Some(crate::modules::auth::ACCOUNT_INCOMPLETE));
+        let (status, v, _) = call(&app, "GET", "/api/v1/configuration-items", erin_token, None).await;
+        assert_eq!((status, code(&v)), (401, "UNAUTHENTICATED"), "{v}");
+        assert_eq!(last_outcome().await.as_deref(), Some("account_incomplete"));
         // Saving its e-mail again links it.
         let patch = json!({ "email": "erin@example.test" });
         let (status, v, _) = call(&app, "PATCH", &format!("/api/v1/admin/users/{erin_id}"), &admin, Some(patch)).await;
         assert_eq!((status, &v["signInStatus"]), (200, &json!("ready")), "{v}");
         let (status, _, _) = login(&app, "erin").await;
+        assert_eq!(status, 200);
+        let (status, _, _) = call(&app, "GET", "/api/v1/configuration-items", erin_token, None).await;
         assert_eq!(status, 200);
 
         db.drop().await;

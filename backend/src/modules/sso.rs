@@ -161,8 +161,6 @@ pub enum Refusal {
     MfaNotEnforced,
     /// The provider was disabled or deleted while the sign-in was checked (GH#250).
     ProviderDisabled,
-    /// A new account's e-mail is another account's (e-mails are unique, SHAA-1505).
-    EmailConflict,
     /// The account has an e-mail but no linked Person (SHAA-1505 decision 8).
     AccountIncomplete,
 }
@@ -178,7 +176,6 @@ impl Refusal {
             Refusal::LastAdministrator => "last_administrator",
             Refusal::MfaNotEnforced => "mfa_not_enforced",
             Refusal::ProviderDisabled => "unavailable",
-            Refusal::EmailConflict => "email_conflict",
             Refusal::AccountIncomplete => "account_incomplete",
         }
     }
@@ -243,13 +240,17 @@ pub async fn link_account(
         if data::username_taken(&mut tx, &username, None).await? {
             return Ok(Err(Refusal::AccountConflict));
         }
-        let email = usable_email(identity.email.as_deref());
-        // E-mails are unique (SHAA-1505): another account's address is refused.
+        // E-mails are unique (SHAA-1505). An address another account or person
+        // has does not stop the account: whoever took it first must not lock
+        // the provider's user out (GH#530). The account is created without
+        // one, enters it after signing in, and the conflict is on its audit row.
+        let mut email = usable_email(identity.email.as_deref());
+        let mut conflict = None;
         if let Some(e) = &email
             && !people::email_usable(&mut tx, None, e).await?
         {
-            tracing::warn!(user = %username, provider = %provider.name, "identity provider sent an e-mail address another account or person has; account not created");
-            return Ok(Err(Refusal::EmailConflict));
+            tracing::warn!(user = %username, provider = %provider.name, "identity provider sent an e-mail address another account or person has; account created without an e-mail");
+            conflict = email.take();
         }
         let new = data::NewLinkedUser {
             provider_id: provider.id,
@@ -269,7 +270,11 @@ pub async fn link_account(
         // account is asked for one after signing in.
         people::link_user(&mut tx, &actor, id).await?;
         let dto = users::load(&mut tx, id).await?;
-        crud::write_audit(&mut tx, &actor, vec![user_audit(AuditAction::Create, id, None, Some(&dto))]).await?;
+        let mut entry = user_audit(AuditAction::Create, id, None, Some(&dto));
+        if let (Some(e), Some(Value::Object(v))) = (conflict, entry.new_value.as_mut()) {
+            v.insert("providerEmailConflict".into(), Value::String(e));
+        }
+        crud::write_audit(&mut tx, &actor, vec![entry]).await?;
         tx.commit().await?;
         tracing::info!(user = %username, provider = %provider.name, "account created by an identity provider");
         return Ok(Ok((id, username)));
@@ -307,8 +312,8 @@ pub async fn link_account(
     let email = match usable_email(identity.email.as_deref()) {
         Some(e) if Some(&e) == account.email.as_ref() => Some(e),
         Some(e) if people::email_usable(&mut tx, Some(account.id), &e).await? => Some(e),
-        Some(e) => {
-            tracing::warn!(user = %account.username, new_email = %e, "identity provider changed the user's e-mail to an address another account or person has; keeping the old one");
+        Some(_) => {
+            tracing::warn!(user = %account.username, "identity provider changed the user's e-mail to an address another account or person has; keeping the old one");
             account.email.clone()
         }
         None => account.email.clone(),
@@ -639,8 +644,19 @@ fn oidc_identity(claims: &Map<String, Value>, s: &oidc::Settings) -> ExternalIde
         external_id: text("sub").unwrap_or_default(),
         username: text(&s.username_claim),
         display_name: text("name"),
-        email: text("email"),
+        // Only an address the provider verified: an unverified one could be
+        // anyone's, and would take the address from its owner (GH#530).
+        email: text("email").filter(|_| email_verified(claims)),
         groups: oidc::groups(claims, &s.groups_claim),
+    }
+}
+
+/// `email_verified` is true (a JSON boolean, or the string some providers send).
+fn email_verified(claims: &Map<String, Value>) -> bool {
+    match claims.get("email_verified") {
+        Some(Value::Bool(b)) => *b,
+        Some(Value::String(s)) => s.eq_ignore_ascii_case("true"),
+        _ => false,
     }
 }
 
@@ -820,7 +836,7 @@ async fn sign_in_options(pool: &PgPool, auth: &AuthState) -> Result<SignInOption
 
 const TAG: &str = "Authentication";
 
-pub const SSO_ERRORS: &str = "`expired` (no pending sign-in for this browser, or older than 10 minutes), `cancelled` (the user declined at the provider), `failed` (the provider refused, or its answer did not pass the checks; see the server log), `unavailable` (provider disabled, unknown or unreachable), `not_configured` (PUBLIC_URL is not set), `not_authorised` (none of the user's groups maps to a permission profile), `account_conflict` (another account has the username), `account_disabled`, `invalid_username` (the username claim is missing or not a valid username), `last_administrator`, `email_conflict` (the provider's e-mail address belongs to another account or person), `account_incomplete` (the account has no linked person; ask an administrator), `mfa_not_enforced` (a permission profile of the user requires MFA and the provider, set to verify MFA, did not prove a second factor in the ID token: `amr`, or `acr` against `requiredAcr`)";
+pub const SSO_ERRORS: &str = "`expired` (no pending sign-in for this browser, or older than 10 minutes), `cancelled` (the user declined at the provider), `failed` (the provider refused, or its answer did not pass the checks; see the server log), `unavailable` (provider disabled, unknown or unreachable), `not_configured` (PUBLIC_URL is not set), `not_authorised` (none of the user's groups maps to a permission profile), `account_conflict` (another account has the username), `account_disabled`, `invalid_username` (the username claim is missing or not a valid username), `last_administrator`, `account_incomplete` (the account has no linked person; ask an administrator), `mfa_not_enforced` (a permission profile of the user requires MFA and the provider, set to verify MFA, did not prove a second factor in the ID token: `amr`, or `acr` against `requiredAcr`)";
 
 pub fn routes() -> Vec<Route> {
     vec![
@@ -881,6 +897,10 @@ mod tests {
         assert_eq!(usable_email(Some("a@b.test")).as_deref(), Some("a@b.test"));
         assert_eq!(usable_email(Some("not an email")), None);
         assert_eq!(usable_email(Some("a@b@c")), None);
+        let verified = |v: Value| email_verified(json!({ "email_verified": v }).as_object().unwrap());
+        assert!(verified(json!(true)) && verified(json!("true")) && verified(json!("TRUE")));
+        assert!(!verified(json!(false)) && !verified(json!("false")) && !verified(json!(1)) && !verified(Value::Null));
+        assert!(!email_verified(&Map::new()), "absent: not verified");
     }
 
     // -----------------------------------------------------------------------
@@ -1306,6 +1326,53 @@ mod tests {
         let refused = audit_rows(pool, "login.failure").await;
         assert_eq!(refused.len(), 2, "{refused:?}");
         assert!(refused.iter().all(|v| v["reason"] == "provider_disabled"), "{refused:?}");
+        db.drop().await;
+    }
+
+    /// GH#530: the provider's address is taken only when it is verified, and
+    /// an address someone else claimed first does not lock its owner out: the
+    /// account is created without it and enters one after signing in.
+    #[tokio::test]
+    async fn a_taken_or_unverified_email_does_not_stop_the_account() {
+        let Some(db) = scratch::database("a_taken_or_unverified_email_does_not_stop_the_account").await else {
+            return;
+        };
+        let (app, pool) = (app(db.pool.clone()), &db.pool);
+        let f = mfa_fixture(pool, "trust_provider", &[]).await;
+        let email_of = async |name: &str| -> Option<String> {
+            sqlx::query_scalar("SELECT email FROM users WHERE username = $1").bind(name).fetch_one(pool).await.unwrap()
+        };
+        let mail = |address: &str, verified: Value| json!({ "email": address, "email_verified": verified });
+
+        // Unverified (false, or no claim at all): not taken.
+        for (name, verified) in [("victor", json!(false)), ("wanda", Value::Null)] {
+            let claims = id_token(name, READERS, mail(&format!("{name}@example.test"), verified));
+            let creds = oidc_sign_in(pool, &f, &claims).await.expect("signed in");
+            assert_eq!(email_of(name).await, None, "{name}");
+            let (status, me, _) = call(&app, "GET", "/api/v1/auth/me", &creds, None).await;
+            assert_eq!((status, &me["emailRequired"]), (200, &json!(true)), "{me}");
+        }
+
+        // Someone claims Olga's address first, with a verified claim.
+        let claims = id_token("mallory", READERS, mail("olga@example.test", json!(true)));
+        oidc_sign_in(pool, &f, &claims).await.expect("signed in");
+        assert_eq!(email_of("mallory").await.as_deref(), Some("olga@example.test"));
+        // Olga still gets her account, without the address, and is asked for one.
+        let claims = id_token("olga", READERS, mail("OLGA@example.test", json!(true)));
+        let creds = oidc_sign_in(pool, &f, &claims).await.expect("not locked out");
+        assert_eq!(email_of("olga").await, None);
+        let (status, v, _) = call(&app, "GET", "/api/v1/admin/users", &creds, None).await;
+        assert_eq!((status, code(&v)), (403, "EMAIL_REQUIRED"), "{v}");
+        let created: Value = sqlx::query_scalar(
+            "SELECT new_value FROM audit_log WHERE action = 'create' AND entity_type = 'users'
+               AND new_value ->> 'username' = 'olga'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(created["providerEmailConflict"], "OLGA@example.test", "{created}");
+        assert_eq!(created["email"], Value::Null, "{created}");
+        assert!(audit_rows(pool, "login.failure").await.is_empty(), "nothing was refused");
         db.drop().await;
     }
 
