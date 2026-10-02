@@ -18,6 +18,7 @@ pub mod lookups;
 pub mod mfa;
 pub mod profiles;
 pub mod relationships;
+pub mod saved_views;
 pub mod schema_changes;
 pub mod simple_resource;
 pub mod sso;

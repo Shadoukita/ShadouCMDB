@@ -48,6 +48,7 @@ const ENTITY_LABELS: Record<EntityType, string> = {
   import_settings: "Bulk import settings",
   import_mappings: "Import mapping",
   user_groups: "User group",
+  saved_views: "Shared view",
   config: "Configuration file",
 };
 const ENTITY_TYPES = (Object.keys(ENTITY_LABELS) as EntityType[]).map((value) => ({ value, label: ENTITY_LABELS[value] }));

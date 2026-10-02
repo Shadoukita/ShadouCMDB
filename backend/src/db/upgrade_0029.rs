@@ -1,14 +1,12 @@
 //! Migration 0029 (bulk import, SHAA-799) against an install with profiles
 //! holding every right and a varied audit log: nobody gains `cis.import`,
 //! import starts switched off, every existing audit row still satisfies the
-//! new constraints, and the permission constraint accepts exactly
-//! `GlobalPermission::ALL` (T8).
+//! new constraints, and the permission constraint gains `cis.import`.
 
 use std::collections::BTreeSet;
 
 use sqlx::{Executor, PgPool};
 
-use crate::auth::permissions::GlobalPermission;
 use crate::db::{MIGRATOR, scratch};
 
 const BEFORE: &str = "
@@ -41,11 +39,11 @@ INSERT INTO audit_log (actor_type, actor_id, actor_name, action, entity_type, en
 ";
 
 /// The quoted values of a `CHECK (col IN ('a', 'b', …))` constraint definition.
-fn literals(def: &str) -> BTreeSet<String> {
+pub(crate) fn literals(def: &str) -> BTreeSet<String> {
     def.split('\'').skip(1).step_by(2).map(str::to_owned).collect()
 }
 
-async fn constraint_def(pool: &PgPool, table: &str, name: &str) -> String {
+pub(crate) async fn constraint_def(pool: &PgPool, table: &str, name: &str) -> String {
     sqlx::query_scalar(
         "SELECT pg_get_constraintdef(c.oid) FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid
          JOIN pg_namespace n ON n.oid = t.relnamespace
@@ -56,36 +54,6 @@ async fn constraint_def(pool: &PgPool, table: &str, name: &str) -> String {
     .fetch_one(pool)
     .await
     .unwrap()
-}
-
-/// T8: the database accepts exactly the rights the server knows. Kept in the
-/// test of the latest migration that changes the list.
-pub(crate) async fn assert_permissions_match(pool: &PgPool) {
-    let known: BTreeSet<String> = GlobalPermission::ALL.iter().map(|p| p.as_str().to_owned()).collect();
-    let def =
-        constraint_def(pool, "permission_profile_global_permissions", "permission_profile_global_permissions_valid")
-            .await;
-    assert_eq!(literals(&def), known, "{def}");
-    let scratch: uuid::Uuid =
-        sqlx::query_scalar("INSERT INTO permission_profiles (name) VALUES ('T8 scratch') RETURNING id")
-            .fetch_one(pool)
-            .await
-            .unwrap();
-    for p in GlobalPermission::ALL {
-        sqlx::query("INSERT INTO permission_profile_global_permissions (profile_id, permission) VALUES ($1, $2)")
-            .bind(scratch)
-            .bind(p.as_str())
-            .execute(pool)
-            .await
-            .unwrap_or_else(|e| panic!("{}: {e}", p.as_str()));
-    }
-    let bogus =
-        sqlx::query("INSERT INTO permission_profile_global_permissions (profile_id, permission) VALUES ($1, 'x.y')")
-            .bind(scratch)
-            .execute(pool)
-            .await;
-    assert!(bogus.is_err());
-    sqlx::query("DELETE FROM permission_profiles WHERE id = $1").bind(scratch).execute(pool).await.unwrap();
 }
 
 #[tokio::test]
@@ -159,6 +127,19 @@ async fn import_starts_off_nobody_gains_the_right_and_old_audit_rows_stay_valid(
     assert!(job("queued", 10, Some(&sha)).await.is_ok());
     assert!(job("queued", 10, Some("xyz")).await.is_err());
 
-    assert_permissions_match(pool).await;
+    // The list of 0029; 0039 adds views.share (its test checks the full list, T8).
+    let rights =
+        constraint_def(pool, "permission_profile_global_permissions", "permission_profile_global_permissions_valid")
+            .await;
+    let expected = [
+        "users.manage",
+        "profiles.manage",
+        "datamodel.manage",
+        "customization.manage",
+        "config.export_import",
+        "audit.view",
+        "cis.import",
+    ];
+    assert_eq!(literals(&rights), expected.into_iter().map(str::to_owned).collect::<BTreeSet<_>>());
     db.drop().await;
 }
