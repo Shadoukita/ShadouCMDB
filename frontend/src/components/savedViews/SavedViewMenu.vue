@@ -181,12 +181,12 @@ function onMenuKey(e: KeyboardEvent) {
   } else if (e.key === "Tab") {
     hide(false);
   } else if (e.key.length === 1 && /\S/.test(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey) {
-    // Type-ahead: the next item starting with the letter.
+    // Type-ahead: the next item whose name starts with the letter (not its text: the checked view starts with ✓).
     const k = e.key.toLocaleLowerCase();
     const n = all.length;
     for (let i = 1; i <= n; i++) {
       const el = all[(at + i) % n];
-      if (el.textContent?.trim().toLocaleLowerCase().startsWith(k)) {
+      if ((el.dataset.label ?? el.textContent ?? "").trim().toLocaleLowerCase().startsWith(k)) {
         e.preventDefault();
         return el.focus();
       }
@@ -480,6 +480,7 @@ const dropped = computed(() => {
                   role="menuitemradio"
                   tabindex="-1"
                   :aria-checked="v.id === current?.id"
+                  :data-label="v.name"
                   :aria-disabled="v.resolved.state === 'unavailable' ? 'true' : undefined"
                   :aria-describedby="v.resolved.state === 'unavailable' ? `${menuId}-unavailable` : undefined"
                   :title="v.resolved.state === 'unavailable' ? 'This view refers to a filter that no longer exists.' : (v.description ?? undefined)"

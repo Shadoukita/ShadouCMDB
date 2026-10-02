@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { effectScope, nextTick, reactive, ref } from "vue";
+import { effectScope, nextTick, reactive, ref, watch } from "vue";
 import type { LocationQueryRaw } from "vue-router";
 import type { SavedView } from "../src/api/savedViews";
+import type { UiListView } from "../src/api/uiSettings";
 import { definitionFromUrl, droppedSummary, groupViews, sameState, urlState, viewState, viewUrlQuery } from "../src/lib/savedViews";
+import { useInventoryQueryState } from "../src/lib/useInventoryQueryState";
 import { useSavedViewSelection } from "../src/lib/useSavedViewSelection";
 
 function view(over: Partial<SavedView> & { query?: SavedView["resolved"]["query"]; columns?: string[] } = {}): SavedView {
@@ -237,6 +239,105 @@ describe("useSavedViewSelection (§1.3)", () => {
     t.failed.value = true;
     await tick();
     assert.equal(t.s.pending.value, false);
+    t.stop();
+  });
+});
+
+const LIST_VIEW: UiListView = {
+  classKey: "server",
+  columns: ["label", "ident"],
+  defaultSort: { field: "ident", direction: "asc" },
+  pageSize: 25,
+  defaultFilters: { q: null, lookups: { environment: ["production"] } },
+};
+
+/** The selection and the query state of /cis together, counting the list requests the page would send. */
+function inventory(query: LocationQueryRaw) {
+  const route = reactive({ query: { ...query } as Record<string, string>, fullPath: "" });
+  route.fullPath = JSON.stringify(route.query);
+  const calls: LocationQueryRaw[] = [];
+  const go = async (to: unknown) => {
+    const q = (to as { query: LocationQueryRaw }).query;
+    calls.push(q);
+    await Promise.resolve();
+    route.query = { ...(q as Record<string, string>) };
+    route.fullPath = JSON.stringify(route.query);
+    return undefined;
+  };
+  const router = { push: go, replace: go } as never;
+  const views = ref<SavedView[] | undefined>(undefined);
+  const scope = effectScope();
+  const [s, state] = scope.run(() => {
+    const s = useSavedViewSelection({
+      context: "inventory",
+      views: () => views.value,
+      failed: false,
+      classes: () => CAT.classes,
+      route,
+      router,
+      historyNavigation: () => false,
+    });
+    const state = useInventoryQueryState({
+      context: "inventory",
+      classes: () => CAT.classes,
+      settingsLoaded: true,
+      listViewFor: (key) => (key === "server" ? LIST_VIEW : undefined),
+      lookupValueIds: () => "lv1",
+      holdOff: () => s.pending.value,
+      route,
+      router,
+      inAppNavigation: () => true,
+    });
+    return [s, state] as const;
+  })!;
+  const requests: string[] = [];
+  scope.run(() =>
+    watch(
+      () => (state.settled.value ? JSON.stringify(state.listQuery.value) : null),
+      (q) => {
+        if (q && requests.at(-1) !== q) requests.push(q);
+      },
+      { immediate: true, flush: "sync" },
+    ),
+  );
+  return { s, state, route, calls, views, requests, stop: () => scope.stop() };
+}
+
+describe("the saved view and the query state together: one list request (GH#167)", () => {
+  test("a class list with a default view is queried once, with the view's state", async () => {
+    const t = inventory({ classId: "c-server" });
+    await tick();
+    assert.deepEqual(t.requests, [], "waits for the views");
+    t.views.value = [view({ isDefault: true })];
+    await tick();
+    assert.deepEqual(t.calls, [viewUrlQuery(view(), "inventory")]);
+    assert.equal(t.requests.length, 1, t.requests.join("\n"));
+    assert.deepEqual(JSON.parse(t.requests[0]), { classId: "c-server", lookupValueId: "lv1", sort: "-attributes.os", limit: 25, offset: 0 });
+    t.stop();
+  });
+
+  test("without a default the class's list view filters apply, also queried once", async () => {
+    const t = inventory({ classId: "c-server" });
+    t.views.value = [view()];
+    await tick();
+    assert.deepEqual(t.calls, [{ classId: "c-server", lookupValueId: "lv1" }]);
+    assert.equal(t.requests.length, 1, t.requests.join("\n"));
+    assert.equal(JSON.parse(t.requests[0]).sort, "ident", "the list view's sort");
+    t.stop();
+  });
+
+  test("a view=<id> link is queried once; Clear filters keeps the view named and applies no default", async () => {
+    const t = inventory({ view: "v1" });
+    t.views.value = [view(), view({ id: "d", home: null, isDefault: true })];
+    await tick();
+    assert.equal(t.requests.length, 1, t.requests.join("\n"));
+    t.s.skipNextDefault();
+    await t.state.clearFilters();
+    await tick();
+    // The attribute sort and column need the class, so they go with it.
+    assert.deepEqual(t.route.query, { view: "v1", limit: "25", columns: "label" });
+    assert.equal(t.s.current.value?.id, "v1");
+    assert.equal(t.requests.length, 2, t.requests.join("\n"));
     t.stop();
   });
 });

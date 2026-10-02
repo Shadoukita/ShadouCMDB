@@ -12,6 +12,7 @@ link and Manage views.
 - **Defaults:** opening a class list, or the whole inventory, applies your default view for it. The
   list is requested once, with the view's state. Search views cannot be a default.
 - A **Modified** marker with **Save** and **Revert** appears when the list differs from the view.
+  **Clear filters** keeps the view named, so Revert brings its filters back.
 - A view whose classes, attributes or lookup values changed says what was left out (readers of a
   shared view see only a count) and offers **Save to fix** to whoever may change it. A view whose
   filter no longer exists is shown disabled and is never applied.

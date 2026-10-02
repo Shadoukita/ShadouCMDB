@@ -162,7 +162,7 @@ export function useInventoryQueryState(options: QueryStateOptions) {
   const toggle = (field: string) => setColumns(toggleColumn(columns.value, field));
   const resetColumns = () => update({ columns: undefined }, false);
 
-  const clearFilters = () => router.push({ path, query: clearedQuery(route.query, options.context === "search" ? ["q"] : []) });
+  const clearFilters = () => router.push({ path, query: clearedQuery(route.query, options.context === "search" ? ["q"] : [], options.context) });
 
   function onPage(p: { limit: number; offset: number }) {
     update({ limit: p.limit === defaultLimit.value ? undefined : String(p.limit), offset: p.offset ? String(p.offset) : undefined }, false);
