@@ -130,3 +130,13 @@ onto the core Criticality of each CI (where that is empty and the value matches 
 list), audits each copy, and archives the field. Nothing is deleted: the column and its values stay.
 The field's audit entry (actor `migration 0036`) counts what moved and lists the values that did
 not map. See [`changelog.d/GH-354.md`](../changelog.d/GH-354.md).
+
+## Upgrading: layout templates (migration 0042)
+
+Migration 0042 moves each class's detail page and form layout out of `settings.layouts[]` into a named
+template in `settings.layoutTemplates[]` ("<class name> layout", keyed by the class key), and sets it as
+the class's default (`layouts[].templateKey`); a class layout without tabs or fields uses the built-in
+Standard template, which the migration adds. Every tab, section, field, hidden and read-only field
+arrives unchanged, so pages look as before. The converted document is saved as a new settings version
+and audited as `migration 0042`. It also creates `cmdb.ci_layout_overrides` (a CI's own layout: a
+template key or a layout). See [`changelog.d/SHAA-1472.md`](../changelog.d/SHAA-1472.md).

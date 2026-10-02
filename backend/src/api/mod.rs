@@ -39,6 +39,7 @@ pub fn routes() -> Vec<Route> {
         modules::lookups::routes(),
         modules::templates::routes(),
         modules::ui_settings::routes(),
+        modules::ui_settings::layouts::routes(),
         modules::saved_views::routes(),
         modules::audit::routes(),
         modules::users::routes(),

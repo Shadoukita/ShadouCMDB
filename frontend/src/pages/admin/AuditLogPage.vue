@@ -50,6 +50,7 @@ const ENTITY_LABELS: Record<EntityType, string> = {
   user_groups: "User group",
   saved_views: "Shared view",
   config: "Configuration file",
+  ci_layout_overrides: "CI layout",
 };
 const ENTITY_TYPES = (Object.keys(ENTITY_LABELS) as EntityType[]).map((value) => ({ value, label: ENTITY_LABELS[value] }));
 const ACTION_SET: Record<Action, true> = {

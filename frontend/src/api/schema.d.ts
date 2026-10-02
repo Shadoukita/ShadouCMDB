@@ -2179,6 +2179,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/ui-settings/layout-templates/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Which layout template each class uses, and who uses each template
+         * @description Requires `customization.manage`. Per template: the classes that use it as their default and the number of live CIs that show it instead of their class's default (null when some of those CIs are in classes you may not view). Per class: its default template. Templates are edited in the settings document (`layoutTemplates`, PUT /api/v1/ui-settings); one that a class or a live CI uses cannot be removed (409 CONFLICT).
+         */
+        get: operations["getLayoutTemplateUsage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ui-settings/class-layouts/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set a class's default layout template (saved as a new UI settings version)
+         * @description Requires `customization.manage`. Every CI of the class shows the template, except CIs with a layout of their own. The same as changing `layouts[].templateKey` with PUT /api/v1/ui-settings; no template's layout changes. 404 for a class that does not exist, 400 for a template that does not.
+         */
+        put: operations["setClassLayoutTemplate"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/configuration-items/{id}/layout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The layout a CI's detail page and form show, and where it comes from
+         * @description One call gives the page its layout: the CI's own (`custom`), another template chosen for it (`template`) or its class's default template (`class_default`), with attribute fields the class does not have left out. Needs view on the CI's class (404 otherwise, as for the CI). Deleted CIs keep their layout.
+         */
+        get: operations["getConfigurationItemLayout"];
+        /**
+         * Give a CI another template or a layout of its own
+         * @description Requires `customization.manage`. Send `templateKey` (a template of the UI settings) or `layout` (for this CI only), not both. Needs `customization.manage` and edit on the CI's class (403 otherwise; 404 for a CI that is missing, deleted or in a class you may not view). Audited (entity type ci_layout_overrides, the CI's id). Saving what the CI already has changes nothing.
+         */
+        put: operations["setConfigurationItemLayout"];
+        post?: never;
+        /**
+         * Reset a CI to its class's default layout template
+         * @description Requires `customization.manage`. Removes the CI's own layout (audited); 204 also when it had none. Needs `customization.manage` and edit on the CI's class.
+         */
+        delete: operations["resetConfigurationItemLayout"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/saved-views": {
         parameters: {
             query?: never;
@@ -3026,6 +3094,37 @@ export interface components {
             data: components["schemas"]["CiClass"][];
             page: components["schemas"]["PageMeta"];
         };
+        /** @description The layout a CI's detail page and form show, and where it comes from */
+        CiLayout: {
+            /** Format: uuid */
+            ciId: string;
+            classKey: string;
+            /**
+             * @description Where the layout a CI shows comes from
+             * @enum {string}
+             */
+            source: "class_default" | "template" | "custom";
+            /** @description The template shown (the class default or the one chosen for the CI); null for a custom layout */
+            templateKey: string | null;
+            templateName: string | null;
+            /** @description The class's default template: what the CI shows after DELETE */
+            classTemplateKey: string;
+            /** @description The layout to render. Attribute fields the class does not have are left out (see `issues`). */
+            layout: components["schemas"]["UiLayout"];
+            /** @description What the layout leaves out or flags, with paths below "layout" */
+            issues: components["schemas"]["Issue"][];
+            /**
+             * Format: int32
+             * @description Version of the CI's own layout, to send back in PUT; null when the CI uses its class's default
+             */
+            version: number | null;
+            /**
+             * Format: date-time
+             * @description When the CI's own layout was last saved; null without one
+             */
+            updatedAt: string | null;
+            updatedBy: string | null;
+        };
         /** @description A CI as a member list shows it. */
         CiRef: {
             /** Format: uuid */
@@ -3060,6 +3159,14 @@ export interface components {
             edit: boolean;
             delete: boolean;
         };
+        /** @description The default template of a class */
+        ClassTemplate: {
+            classKey: string;
+            className: string;
+            templateKey: string;
+            /** @description Whether the class has a layout entry (false: it uses Standard because it has none) */
+            explicit: boolean;
+        };
         /** @description A whole configuration: data model, lookups, permission profiles, UI settings, saved import mappings and shared saved views (no users, passwords, CIs or personal views) */
         ConfigFile: {
             /**
@@ -3069,7 +3176,7 @@ export interface components {
             format: "shadoucmdb.config";
             /**
              * Format: int32
-             * @description File format version; this server writes version 6 and reads 1 to 6
+             * @description File format version; this server writes version 7 and reads 1 to 7
              */
             formatVersion: number;
             exportedAt?: string | null;
@@ -4234,8 +4341,28 @@ export interface components {
             /** @description Path in the stored document, e.g. "listViews.2.columns.3" */
             path: string;
             /** @enum {string} */
-            code: "unknown_class" | "unknown_attribute" | "unknown_lookup_list" | "unknown_lookup_value" | "required_field_not_editable" | "core_field_hidden";
+            code: "unknown_class" | "unknown_attribute" | "unknown_lookup_list" | "unknown_lookup_value" | "required_field_not_editable" | "core_field_hidden" | "unknown_template";
             message: string;
+        };
+        /** @description Who uses a template */
+        LayoutTemplateUsage: {
+            key: string;
+            name: string;
+            /** @description Classes that use it as their default, by key */
+            classKeys: string[];
+            /**
+             * Format: int64
+             * @description Live CIs that show it instead of their class's default; null when some of them are in classes you
+             *     may not view
+             */
+            overrideCount: number | null;
+        };
+        /** @description Which template each class uses, and who uses each template */
+        LayoutTemplateUsages: {
+            /** @description Every template, in the order of the settings */
+            templates: components["schemas"]["LayoutTemplateUsage"][];
+            /** @description Every class, by name */
+            classes: components["schemas"]["ClassTemplate"][];
         };
         LdapConfig: {
             /** @description ldaps://host[:port] or ldap://host[:port] (then with StartTLS) */
@@ -5293,10 +5420,19 @@ export interface components {
          *     sections, each a grid of fields with a width. Fields the tabs do not place
          *     (and that are not hidden) follow at the end of the first tab, grouped by
          *     attribute group; so do attributes added to the class later.
+         *
+         *     The layout itself lives in a template (`layoutTemplates`): `templateKey` is the class's default
+         *     template, which its CIs use unless they have their own layout. The settings the API returns carry the
+         *     template's tabs, hidden and read-only fields here as well. Tabs or fields sent here with a
+         *     `templateKey` replace that template's layout (every class using it changes); sent without one, they
+         *     become a new template "<class name> layout" that the class then uses, as migration 0042 did with the
+         *     layouts stored before templates. A class without an entry uses the Standard template.
          */
         UiClassLayout: {
             /** @description Stable machine key, lower_snake_case */
             classKey: string;
+            /** @description The class's default layout template (`layoutTemplates[].key`). Always set in stored settings. */
+            templateKey?: string;
             tabs?: components["schemas"]["UiLayoutTab"][];
             /** @description Fields not shown on the detail page or the form. Presentation only: the API still returns them; restrict access with permission profiles */
             hiddenFields?: string[];
@@ -5313,6 +5449,19 @@ export interface components {
         UiDashboard: {
             /** @default null */
             widgets: components["schemas"]["UiWidget"][] | null;
+        };
+        /**
+         * @description A detail page and form layout on its own, without a class: the body of a template and of a CI's own
+         *     layout. The same tabs, hidden and read-only fields as a class layout; attribute fields are resolved
+         *     against the class of the CI that shows it, and ones the class does not have are left out.
+         */
+        UiLayout: {
+            /** @default [] */
+            tabs: components["schemas"]["UiLayoutTab"][];
+            /** @description Fields not shown on the detail page or the form. Presentation only: the API still returns them; restrict access with permission profiles */
+            hiddenFields?: string[];
+            /** @description Fields shown but not editable on the form. Presentation only: the API still accepts writes to them; restrict access with permission profiles */
+            readOnlyFields?: string[];
         };
         /** @description A field on a section's grid. Fields fill the grid row by row in the order given. */
         UiLayoutField: {
@@ -5394,6 +5543,20 @@ export interface components {
              */
             placement?: "grid" | "free";
             sections?: components["schemas"]["UiLayoutSection"][];
+        };
+        /**
+         * @description A named detail page and form layout. Each class has one as its default (`layouts[].templateKey`,
+         *     Standard when the class has no entry); a CI can use another one or a layout of its own
+         *     (`/api/v1/configuration-items/{id}/layout`). A template that a class or a live CI uses cannot be
+         *     removed (409 CONFLICT naming them); renaming is always allowed.
+         */
+        UiLayoutTemplate: {
+            /** @description Stable machine key, lower_snake_case */
+            key: string;
+            /** @description Unique among the templates, ignoring case */
+            name: string;
+            description?: string;
+            layout?: components["schemas"]["UiLayout"];
         };
         /** @description Inventory filters, by key */
         UiListFilters: {
@@ -5579,10 +5742,16 @@ export interface components {
              */
             listViews: components["schemas"]["UiListView"][];
             /**
-             * @description At most one per class
+             * @description At most one per class: the class's default template (see `UiClassLayout`)
              * @default []
              */
             layouts: components["schemas"]["UiClassLayout"][];
+            /**
+             * @description Named layouts that classes and CIs use. Stored settings always hold the Standard template
+             *     (key "standard"); settings without templates (older exports and versions) are converted on save.
+             * @default []
+             */
+            layoutTemplates: components["schemas"]["UiLayoutTemplate"][];
         };
         /**
          * @description The UI settings document with the logo and favicon. Importing it replaces
@@ -19752,6 +19921,491 @@ export interface operations {
             };
         };
     };
+    getLayoutTemplateUsage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LayoutTemplateUsages"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    setClassLayoutTemplate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description The template (`layoutTemplates[].key`) */
+                    templateKey: string;
+                    /**
+                     * Format: int32
+                     * @description The UI settings version you loaded (409 VERSION_CONFLICT when they were saved in between); leave it
+                     *     out to apply the change to whatever is current
+                     */
+                    version?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UiSettings"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getConfigurationItemLayout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CiLayout"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    setConfigurationItemLayout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Show this template (`layoutTemplates[].key`) instead of the class's default */
+                    templateKey?: string;
+                    /** @description Show this layout, for this CI only */
+                    layout?: components["schemas"]["UiLayout"];
+                    /**
+                     * Format: int32
+                     * @description The `version` you loaded, if the CI has its own layout: when it was saved in between, the request
+                     *     fails with 409 VERSION_CONFLICT. Leave it out to overwrite.
+                     */
+                    version?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CiLayout"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    resetConfigurationItemLayout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success, no content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     listSavedViews: {
         parameters: {
             query?: {
@@ -20497,7 +21151,7 @@ export interface operations {
                 offset?: number;
                 /** @description Sort field; prefix with "-" for descending. One of: occurredAt */
                 sort?: "occurredAt" | "-occurredAt";
-                entityType?: "configuration_items" | "ci_relationships" | "ci_classes" | "ci_attribute_definitions" | "relationship_types" | "relationship_type_rules" | "statuses" | "environments" | "locations" | "owners" | "users" | "permission_profiles" | "ui_settings" | "ui_assets" | "sessions" | "audit_log" | "areas" | "schema_changes" | "api_tokens" | "identity_providers" | "lookup_lists" | "lookup_list_values" | "import_jobs" | "import_settings" | "import_mappings" | "user_groups" | "saved_views" | "config";
+                entityType?: "configuration_items" | "ci_relationships" | "ci_classes" | "ci_attribute_definitions" | "relationship_types" | "relationship_type_rules" | "statuses" | "environments" | "locations" | "owners" | "users" | "permission_profiles" | "ui_settings" | "ui_assets" | "sessions" | "audit_log" | "areas" | "schema_changes" | "api_tokens" | "identity_providers" | "lookup_lists" | "lookup_list_values" | "import_jobs" | "import_settings" | "import_mappings" | "user_groups" | "saved_views" | "config" | "ci_layout_overrides";
                 /** @description History of these entities */
                 entityId?: string;
                 action?: "create" | "update" | "delete" | "restore" | "login.success" | "login.failure" | "login.locked" | "logout" | "session.revoke" | "audit.purge" | "token.use" | "mfa.enrol" | "mfa.disable" | "mfa.failure" | "mfa.recovery_code_used" | "mfa.recovery_codes" | "schema_change.refused" | "export" | "import.commit" | "import.report_read";
@@ -23685,7 +24339,7 @@ export interface operations {
                     format: "shadoucmdb.config";
                     /**
                      * Format: int32
-                     * @description File format version; this server writes version 6 and reads 1 to 6
+                     * @description File format version; this server writes version 7 and reads 1 to 7
                      */
                     formatVersion: number;
                     exportedAt?: string | null;
