@@ -11,9 +11,21 @@
 -- psql variables (-v): those show up in the process list, and the statement
 -- would carry them in plain text into the server log (log_statement = ddl).
 -- Without a terminal (automation), \password reads the password and its
--- confirmation as two lines from standard input, e.g. from bash:
---   printf '%s\n%s\n' "$PW" "$PW" | psql "<admin URL>" -X -v ON_ERROR_STOP=1 \
+-- confirmation as two lines from standard input. Guard the variable and check
+-- the result, e.g. from bash:
+--   : "${PW:?PW is unset or empty}"
+--   printf '%s\n%s\n' "$PW" "$PW" | setsid -w psql "<admin URL>" -X -v ON_ERROR_STOP=1 \
 --        -c '\password shadoucmdb_owner'
+--   test "$(psql "<admin URL>" -XAtc "SELECT rolpassword LIKE 'SCRAM-SHA-256\$%' \
+--        FROM pg_authid WHERE rolname = 'shadoucmdb_owner'")" = t
+-- The guard and the check are needed because empty input (an unset or empty
+-- variable, or fewer lines than \password commands) makes the server answer
+-- "empty string is not a valid password, clearing password" while psql exits 0:
+-- the role ends up without a password and the step still reports success.
+-- With several roles, supply one password and one confirmation line per
+-- \password command, in order, and check every role. Without a superuser
+-- administrator, pg_authid is unreadable; test by logging in as the role instead
+-- (PGPASSWORD="$PW" psql "postgres://<role>@<db-host>:5432/<db>" -X -c 'SELECT 1').
 --
 -- The role and database names below are the defaults. To use your own naming
 -- scheme, add any of -v owner_role=... -v app_role=... -v maintenance_role=...
