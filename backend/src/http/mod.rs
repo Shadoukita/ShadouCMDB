@@ -621,6 +621,7 @@ pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'sta
     let exporter =
         cfg.audit.export.clone().map(|export| crate::audit_export::spawn(pool.clone(), export)).transpose()?;
     let import_workers = crate::modules::imports::worker::spawn(pool.clone(), state.imports.clone());
+    let refusals = crate::auth::token::RefusalFlush::spawn(pool.clone());
 
     let listener = TcpListener::bind((cfg.api_host.as_str(), cfg.api_port))
         .await
@@ -647,6 +648,8 @@ pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'sta
         }
     };
     accept_loop(listener, app, &cfg.http, stop).await;
+    // Before the exporter's last pass, so the summary rows leave too.
+    refusals.stop().await;
     if let Some(exporter) = exporter {
         exporter.stop().await;
     }

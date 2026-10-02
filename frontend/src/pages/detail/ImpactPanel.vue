@@ -37,7 +37,7 @@ import ImpactServicesSection from "./ImpactServicesSection.vue";
  * in the URL (lib/impact), so a view can be bookmarked, shared and walked back with Back; a
  * changed control re-runs the analysis after 300 ms, with no Run button.
  */
-const props = defineProps<{ ci: Ci; self: TrailStep; trail: TrailStep[] }>();
+const props = defineProps<{ ci: Ci; self: TrailStep; trail: TrailStep[]; defaultDirection?: ImpactState["direction"] }>();
 const route = useRoute();
 const router = useRouter();
 const session = useSessionStore();
@@ -45,7 +45,9 @@ const settings = useImpactSettings();
 const relTypes = useRelTypeList();
 
 const maxDepth = computed(() => settings.data.value?.maxDepth);
-const parsed = computed(() => parseImpactQuery(route.query, maxDepth.value));
+/** The defaults a plain link means: Downstream, or Upstream on a business service ("what can take it down"). */
+const defaults = computed<ImpactState>(() => ({ ...DEFAULT_STATE, direction: props.defaultDirection ?? DEFAULT_STATE.direction }));
+const parsed = computed(() => parseImpactQuery(route.query, maxDepth.value, defaults.value));
 const state = computed(() => parsed.value.state);
 const notice = ref<string | null>(null);
 // "Analyse impact" on another CI reuses this panel: a notice about the previous link does not carry over.
@@ -56,7 +58,7 @@ watch(
 
 function setState(patch: Partial<ImpactState>, replace = false) {
   const next = { ...state.value, ...patch };
-  const to = { path: route.path, query: impactQuery(next) };
+  const to = { path: route.path, query: impactQuery(next, defaults.value) };
   return replace ? router.replace(to) : router.push(to);
 }
 const resetNotice = (keys: (keyof ImpactState)[]) =>
@@ -133,8 +135,8 @@ watch(apiError, (e) => {
   if (!e || (e.code !== "VALIDATION_ERROR" && e.code !== "VALIDATION_FAILED")) return;
   const keys = [...new Set(e.details.map((d) => PARAM_KEYS[d.field]).filter((k): k is keyof ImpactState => !!k))];
   if (keys.length === 0) return;
-  const patch: Partial<ImpactState> = Object.fromEntries(keys.map((k) => [k, DEFAULT_STATE[k]]));
-  if (JSON.stringify(impactQuery({ ...state.value, ...patch })) === JSON.stringify(impactQuery(state.value))) return;
+  const patch: Partial<ImpactState> = Object.fromEntries(keys.map((k) => [k, defaults.value[k]]));
+  if (JSON.stringify(impactQuery({ ...state.value, ...patch }, defaults.value)) === JSON.stringify(impactQuery(state.value, defaults.value))) return;
   notice.value = resetNotice(keys);
   void setState(patch, true);
 });

@@ -317,7 +317,7 @@ const kindLabel = (m: ServiceMember) => (m.isService ? t("services.badge") : t("
                 />
               </td>
               <td>
-                <CiLink :id="m.ci.id" :from="self" :trail="trail">{{ m.ci.name }}</CiLink>
+                <CiLink :id="m.ci.id" :service="m.isService" :from="self" :trail="trail">{{ m.ci.name }}</CiLink>
                 <span class="mono muted impact-ident">{{ m.ci.ident }}</span>
               </td>
               <td><bdi>{{ m.ci.className }}</bdi></td>

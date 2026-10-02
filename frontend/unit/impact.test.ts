@@ -52,6 +52,13 @@ const analysis = (items: ImpactItem[], direction: "downstream" | "upstream" | "b
   >;
 
 describe("URL state", () => {
+  test("a business service's tab defaults to Upstream: a plain link means Upstream, a named direction wins", () => {
+    const upstream = { ...DEFAULT_STATE, direction: "upstream" as const };
+    assert.deepEqual(parseImpactQuery({}, 10, upstream).state, upstream);
+    assert.deepEqual(impactQuery(upstream, upstream), {});
+    assert.deepEqual(impactQuery(DEFAULT_STATE, upstream), { direction: "downstream" });
+    assert.equal(parseImpactQuery({ direction: "downstream" }, 10, upstream).state.direction, "downstream");
+  });
   test("a plain link is the defaults, and the defaults write no query", () => {
     assert.deepEqual(parseImpactQuery({}), { state: DEFAULT_STATE, invalid: [] });
     assert.deepEqual(impactQuery(DEFAULT_STATE), {});

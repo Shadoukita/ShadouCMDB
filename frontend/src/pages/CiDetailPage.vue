@@ -4,6 +4,7 @@ import { RouterLink, useRoute, useRouter } from "vue-router";
 import { ApiError } from "../api/client";
 import { useAreas } from "../api/datamodel";
 import { useCi, useCiClasses, useClassAttributes } from "../api/queries";
+import { useServiceSettings } from "../api/services";
 import Breadcrumbs, { type Crumb } from "../components/Breadcrumbs.vue";
 import EmptyState from "../components/EmptyState.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
@@ -30,9 +31,6 @@ import LayoutPanels from "./detail/LayoutPanels.vue";
 import PartOfServicesPanel from "./detail/PartOfServicesPanel.vue";
 import RelationshipGraphPanel from "./detail/RelationshipGraphPanel.vue";
 import RelationshipsPanel from "./detail/RelationshipsPanel.vue";
-import ServiceMembersPanel from "./services/ServiceMembersPanel.vue";
-import { useService, useServiceSettings } from "../api/services";
-import { t } from "../i18n";
 
 /**
  * The class layout's tabs (`layout:<key>`; a single one is "overview"), then the relationship map, the
@@ -63,6 +61,20 @@ const notFound = computed(() => {
 // The API refuses a CI of a class the user may not view; that is a permission limit, not a missing record.
 const forbidden = computed(() => ci.error.value instanceof ApiError && ci.error.value.code === "FORBIDDEN");
 const c = computed(() => ci.data.value);
+
+// A business service has its own page (/services/:id): its CI URL redirects there, the Impact tab to the
+// service's (which defaults to Upstream). A deleted service stays here, read-only, and the layout editor
+// edits the class's layout on this page.
+const serviceSettings = useServiceSettings();
+const isService = computed(() => !!c.value && !c.value.deletedAt && c.value.classId === serviceSettings.data.value?.classId);
+const redirecting = computed(() => isService.value && !route.meta.layoutEditor);
+watch(
+  redirecting,
+  (go) => {
+    if (go) void router.replace({ path: `/services/${id.value}${onImpactRoute.value ? "/impact" : ""}`, query: route.query, hash: route.hash });
+  },
+  { immediate: true },
+);
 
 // The class's layout from Customization, if it has one; otherwise the built-in one: General (core fields and
 // ungrouped attributes), the attribute groups, then the record's class and timestamps.
@@ -105,16 +117,8 @@ const usualPlaces = computed(() => {
   return `The record details come last on the first tab; ${rest.join(", ")}. + Panel places the relationships, the history or the audit trail in any tab.`;
 });
 
-// A business service (the built-in class) has a Members tab, its place in the URL (`?tab=members`, with the
-// tab's filters) so it can be bookmarked. Until the service pages (/services/:id) take over, it lives here.
-const serviceSettings = useServiceSettings();
-const isService = computed(() => !!c.value && !c.value.deletedAt && c.value.classId === serviceSettings.data.value?.classId);
-const service = useService(() => (isService.value ? id.value : ""));
-const membersLabel = computed(() => t("services.tab.members", { n: (service.data.value?.memberCount ?? 0).toLocaleString() }));
-
 const TABS = computed<[Tab, string][]>(() => [
   ...(layoutTabs.value.length > 1 ? layoutTabs.value.map((t): [Tab, string] => [`layout:${t.key}`, t.label]) : [["overview", "Overview"] as [Tab, string]]),
-  ...(isService.value ? [["members", membersLabel.value] as [Tab, string]] : []),
   ["graph", "Relationship map"],
   // A deleted CI has no live relationships to analyse.
   ...(c.value?.deletedAt ? [] : [["impact", "Impact"] as [Tab, string]]),
@@ -122,19 +126,16 @@ const TABS = computed<[Tab, string][]>(() => [
   ...(session.can("audit.view") && !placed.value.has("history") ? [["history", "History"] as [Tab, string]] : []),
 ]);
 /** The tab shown: Impact on its URL, else the chosen one while it exists (a layout can change under the page), else the first. */
-const onMembersUrl = computed(() => !onImpactRoute.value && route.query.tab === "members");
 const current = computed<Tab>(() => {
   if (onImpactRoute.value && TABS.value.some(([k]) => k === "impact")) return "impact";
-  if (onMembersUrl.value && TABS.value.some(([k]) => k === "members")) return "members";
-  const chosen = tab.value === "impact" || tab.value === "members" ? "" : tab.value;
+  const chosen = tab.value === "impact" ? "" : tab.value;
   return TABS.value.some(([k]) => k === chosen) ? chosen : TABS.value[0][0];
 });
 /** Shows a tab: Impact by its URL, the others on the CI's own URL. */
 function selectTab(key: Tab) {
   tab.value = key;
   if (key === "impact" && !onImpactRoute.value) void router.push(`/cis/${id.value}/impact`);
-  else if (key === "members" && !onMembersUrl.value) void router.push({ path: `/cis/${id.value}`, query: { tab: "members" } });
-  else if (key !== "impact" && key !== "members" && (onImpactRoute.value || onMembersUrl.value)) void router.push(`/cis/${id.value}`);
+  else if (key !== "impact" && onImpactRoute.value) void router.push(`/cis/${id.value}`);
 }
 /** Which layout tab is shown (they come first in TABS), or -1. */
 const layoutIndex = computed(() => (current.value === "overview" || current.value.startsWith("layout:") ? TABS.value.findIndex(([k]) => k === current.value) : -1));
@@ -167,7 +168,7 @@ const crumbs = computed<Crumb[]>(() => {
 </script>
 
 <template>
-  <LoadingState v-if="ci.isLoading.value" label="Loading configuration item…" />
+  <LoadingState v-if="ci.isLoading.value || serviceSettings.isLoading.value || redirecting" label="Loading configuration item…" />
   <template v-else-if="ci.isError.value">
     <Breadcrumbs :items="[{ label: 'Inventory', to: '/cis' }, { label: forbidden ? 'Permission denied' : notFound ? 'Not found' : 'Error' }]" />
     <EmptyState v-if="forbidden" title="Permission denied">
@@ -261,14 +262,6 @@ const crumbs = computed<Crumb[]>(() => {
           <RelationshipsPanel :ci="c" :self="self" :trail="trail" />
         </template>
       </template>
-      <ServiceMembersPanel
-        v-else-if="current === 'members'"
-        :service="{ id: c.id, ident: c.ident, name: c.label }"
-        :can-edit="!!serviceSettings.data.value?.canEdit"
-        :limits="service.data.value?.limits ?? serviceSettings.data.value?.limits"
-        :self="self"
-        :trail="trail"
-      />
       <RelationshipGraphPanel v-else-if="current === 'graph'" :ci="c" :self="self" :trail="trail" />
       <ImpactPanel v-else-if="current === 'impact'" :ci="c" :self="self" :trail="trail" />
       <HistoryPanel v-else :ci="c" />
