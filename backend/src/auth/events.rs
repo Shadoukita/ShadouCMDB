@@ -11,9 +11,13 @@
 //!
 //! A failed sign-in stores the username as typed (truncated) and nothing about
 //! whether it exists, so the audit log is not an enumeration oracle for those
-//! who can read it. Answers refused while a username is locked (429) are not
-//! recorded: they cost no password check, and recording them would let an
-//! anonymous client grow the table at will. The lock itself is.
+//! who can read it. That name may be a password typed into the wrong field
+//! (GH#415): it is kept here, where reading needs the audit permission and the
+//! retention period removes it, because brute-force forensics need it. The
+//! server log names only existing accounts. Answers refused while a username
+//! is locked (429) are not recorded: they cost no password check, and
+//! recording them would let an anonymous client grow the table at will. The
+//! lock itself is.
 
 use std::time::Duration;
 
