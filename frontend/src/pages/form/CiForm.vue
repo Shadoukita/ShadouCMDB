@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
-import { RouterLink, useRouter } from "vue-router";
+import { RouterLink, useRoute, useRouter } from "vue-router";
 import { ApiError } from "../../api/client";
 import {
   useCiClasses,
@@ -76,6 +76,9 @@ type CoreField = "ident" | "validFrom" | "validUntil";
 type CoreValues = Record<CoreField, string>;
 
 const router = useRouter();
+const route = useRoute();
+/** Created from the business service list: back there on Cancel, on to the service (Owners open) on save. */
+const fromServices = computed(() => props.mode === "create" && route.query.return === "services");
 const flash = useFlashStore();
 const session = useSessionStore();
 /** Only administrators choose or change an ident; everyone else gets a generated one. */
@@ -237,7 +240,7 @@ async function onSubmit() {
       const body = { classId: props.classId, ...given, ...(criticalityId.value ? { criticalityValueId: criticalityId.value } : {}), attributes } as CiCreateBody;
       const created = await create.mutateAsync(body);
       flash.show(created.id, `Created ${created.label}.`);
-      await router.push(`/cis/${created.id}`);
+      await router.push(fromServices.value ? { path: `/services/${created.id}`, query: { edit: "owners" } } : `/cis/${created.id}`);
     } else if (props.ci) {
       const initial = coreToApi(initialCore);
       const changed: Record<string, unknown> = {};
@@ -425,7 +428,7 @@ function referenceNames(ci: Ci | undefined): Record<string, string> {
       <button type="submit" class="btn btn-primary" :disabled="pending || attrs.isLoading.value || attrs.isError.value">
         {{ pending ? "Saving…" : mode === "create" ? `Create ${className}` : "Save changes" }}
       </button>
-      <RouterLink class="btn" :to="ci ? `/cis/${ci.id}` : '/cis'">Cancel</RouterLink>
+      <RouterLink class="btn" :to="ci ? `/cis/${ci.id}` : fromServices ? '/services' : '/cis'">Cancel</RouterLink>
     </div>
   </form>
 </template>

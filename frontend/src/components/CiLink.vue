@@ -6,11 +6,15 @@ import { extendTrail, type TrailStep } from "../lib/trail";
 /**
  * Link to a CI detail page. Pass `from` + `trail` to carry the walk trail into the breadcrumb.
  * `dir="auto"` isolates the label for bidi (GH#289): its own direction, and a stored override
- * character cannot reorder the text around the link.
+ * character cannot reorder the text around the link. A business service (`service`) links to its own page.
  */
-const props = withDefaults(defineProps<{ id: string; from?: TrailStep; trail?: TrailStep[] }>(), { from: undefined, trail: () => [] });
+const props = withDefaults(defineProps<{ id: string; from?: TrailStep; trail?: TrailStep[]; service?: boolean }>(), {
+  from: undefined,
+  trail: () => [],
+  service: false,
+});
 const to = computed(() => ({
-  path: `/cis/${props.id}`,
+  path: `${props.service ? "/services" : "/cis"}/${props.id}`,
   state: props.from ? { trail: extendTrail(props.trail, props.from, props.id) } : undefined,
 }));
 </script>

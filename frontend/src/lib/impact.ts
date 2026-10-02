@@ -65,9 +65,13 @@ const one = (q: LocationQuery | LocationQueryRaw, k: string): string => {
  * The state the URL asks for, and the state keys of the parameters it names that cannot be used (they fall back to
  * their default, and the tab says so). `maxDepth` is the server's limit; unknown until the settings load.
  */
-export function parseImpactQuery(query: LocationQuery | LocationQueryRaw, maxDepth?: number): { state: ImpactState; invalid: string[] } {
+export function parseImpactQuery(
+  query: LocationQuery | LocationQueryRaw,
+  maxDepth?: number,
+  defaults: ImpactState = DEFAULT_STATE,
+): { state: ImpactState; invalid: string[] } {
   const invalid: string[] = [];
-  const s: ImpactState = { ...DEFAULT_STATE };
+  const s: ImpactState = { ...defaults };
   const direction = one(query, "direction");
   if (direction) {
     if (direction === "downstream" || direction === "upstream" || direction === "both") s.direction = direction;
@@ -110,10 +114,14 @@ export function parseImpactQuery(query: LocationQuery | LocationQueryRaw, maxDep
   return { state: s, invalid };
 }
 
-/** The URL query for a state: only what differs from the defaults, so a plain link stays plain. */
-export function impactQuery(s: ImpactState): Record<string, string> {
+/**
+ * The URL query for a state: only what differs from the defaults, so a plain link stays plain. A business
+ * service's tab defaults to Upstream (`defaults`), so its plain link means Upstream; a link naming the
+ * direction still wins.
+ */
+export function impactQuery(s: ImpactState, defaults: ImpactState = DEFAULT_STATE): Record<string, string> {
   const q: Record<string, string> = {};
-  if (s.direction !== DEFAULT_STATE.direction) q.direction = s.direction;
+  if (s.direction !== defaults.direction) q.direction = s.direction;
   if (s.depth !== DEFAULT_STATE.depth) q.depth = String(s.depth);
   if (s.types) q.types = s.types.length > 0 ? s.types.join(",") : NO_TYPES;
   if (s.includeInactive !== DEFAULT_STATE.includeInactive) q.inactive = s.includeInactive ? "1" : "0";

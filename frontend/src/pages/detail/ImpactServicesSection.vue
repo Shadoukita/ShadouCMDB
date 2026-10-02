@@ -55,7 +55,7 @@ const bodyId = `impact-services-${useId()}`;
         <tbody>
           <tr v-for="s in services" :key="s.id">
             <td>
-              <CiLink :id="s.id" :from="self" :trail="trail">{{ s.name }}</CiLink>
+              <CiLink :id="s.id" service :from="self" :trail="trail">{{ s.name }}</CiLink>
               <span class="mono muted impact-ident">{{ s.ident }}</span>
             </td>
             <td><CriticalityBadge :value="s.criticality" show-unset /></td>
@@ -71,7 +71,7 @@ const bodyId = `impact-services-${useId()}`;
             <td class="num">{{ s.hops }}</td>
             <td>
               <span class="muted"><bdi>{{ edgeLabel(s.via, s.id) }}</bdi></span>{{ " " }}
-              <CiLink :id="s.via.parentId" :from="self" :trail="trail">{{ parentName(s.via.parentId) }}</CiLink>
+              <CiLink :id="s.via.parentId" service :from="self" :trail="trail">{{ parentName(s.via.parentId) }}</CiLink>
             </td>
           </tr>
         </tbody>
