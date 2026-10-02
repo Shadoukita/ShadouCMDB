@@ -180,9 +180,10 @@ test("a member's Overview shows the services it is part of, directly and through
   const nested = rows.nth(1);
   await expect(nested.locator("td").first()).toHaveText(N("outer"));
   await expect(nested).toContainText(`via ${N("inner")}`);
+  // Scanned here: the link below leaves for the service page, which has no "Part of" panel.
+  await checkA11y(page, testInfo, "part-of", { include: "section.part-of-services" });
   await nested.locator("td").last().getByRole("link", { name: N("inner") }).click();
   await expect(page).toHaveURL(new RegExp(`/services/${ids.inner}$`));
-  await checkA11y(page, testInfo, "part-of", { include: "section.part-of-services" });
 
   // A CI that is part of none shows nothing at all.
   await page.goto(`/cis/${ids["srv-3"]}`);
