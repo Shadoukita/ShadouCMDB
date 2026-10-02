@@ -62,9 +62,10 @@ Credentials never go into this folder or anywhere else in git; they belong in `.
   exception is 0016, which moves the fixed CI columns into type tables; it runs as the schema owner,
   a member of `shadoucmdb_app`, so the tables keep their owner.
 - On a three-role install `shadoucmdb_app` owns the area schemas, so whatever runs when a row is
-  written there (triggers, rules, defaults, checks, domains) or a view is read there is code the API
-  role controls. A migration that writes rows in an area schema, or reads an area view, therefore
-  switches to the API role first, for the rest of its transaction:
+  written there (triggers, rules, defaults, checks, domains) or a relation is read there is code the
+  API role controls: the API role can replace a type table with a view of the same name (GH#469). A
+  migration that reads or writes any relation in an area schema therefore switches to the API role
+  first, for the rest of its transaction:
 
   ```sql
   DO $$
@@ -77,10 +78,12 @@ Credentials never go into this folder or anywhere else in git; they belong in `.
   END $$;
   ```
 
-  `RESET ROLE` switches back. Reading area tables (as 0036 does) needs no switch. `migrate` also refuses to start while the API
-  role's objects carry triggers, rules, row-level security, functions, or defaults, checks or domains
-  that call anything but the engine's enum checks do (`refuse_planted_code` in `backend/src/db.rs`);
-  that check is the second line, not a reason to skip the switch.
+  `RESET ROLE` switches back. `migrate` also refuses to start while the API role's objects carry
+  triggers, rules, row-level security, functions, or defaults, checks or domains that call anything
+  but the engine's enum checks do, or while a registered type table is no longer a plain table
+  (`refuse_planted_code` in `backend/src/db.rs`). That check is the second line, not a reason to
+  skip the switch: it does not cover the views the engine itself creates in area schemas. 0036
+  predates this rule and reads type tables as the owner; the type-table check covers it on upgrade.
 - Bulk import stores classes, attributes and relationship types **by key** in `import_mappings.definition`
   and `import_jobs.mapping`/`class_key` (0029). A migration that renames keys or field references (as
   0020 did for UI settings) must rewrite those too.

@@ -256,16 +256,18 @@ pub const PLANTED_CODE_ALLOWED_FUNCTIONS: &[&str] = &["pg_catalog.texteq(text,te
 /// policies on tables in the API role's schemas or owned by it, and functions
 /// in those schemas or owned by it. Column defaults, check constraints and
 /// domains run built-in functions too (GH#464), so their expressions may call
-/// only [`PLANTED_CODE_ALLOWED_FUNCTIONS`] (the engine's enum checks). Views in
-/// those schemas are the API role's code as well; this check does not cover
-/// them, so a migration never reads them as the owner. A migration that writes
-/// rows in an area schema first switches to the API role (`SET LOCAL ROLE`, as
+/// only [`PLANTED_CODE_ALLOWED_FUNCTIONS`] (the engine's enum checks). A
+/// registered type table that is no longer a plain table, such as a view put
+/// in its place, is refused too (GH#469). The engine's own views in those
+/// schemas are the API role's code as well; this check does not cover them,
+/// so a migration never reads them as the owner. A migration that reads or
+/// writes any relation in an area schema first switches to the API role (`SET LOCAL ROLE`, as
 /// [`act_as_api_role`] does; see `sql/README.md`), and this check is the
 /// second line. `restore` and `factory-reset` check too, after dropping the
 /// application's objects. Nothing to check on a single-role install, where the
 /// API already runs as the owner.
 pub async fn refuse_planted_code(conn: &mut sqlx::PgConnection) -> anyhow::Result<()> {
-    let found: Vec<(String, String, String)> = sqlx::query_as(
+    let mut found: Vec<(String, String, String)> = sqlx::query_as(
         "WITH api AS (
            SELECT oid, rolname FROM pg_roles
            WHERE rolname = COALESCE(NULLIF(current_setting('shadoucmdb.app_role', true), ''), 'shadoucmdb_app')
@@ -321,8 +323,39 @@ pub async fn refuse_planted_code(conn: &mut sqlx::PgConnection) -> anyhow::Resul
          ORDER BY 2, 3",
     )
     .bind(PLANTED_CODE_ALLOWED_FUNCTIONS)
-    .fetch_all(conn)
+    .fetch_all(&mut *conn)
     .await?;
+    // GH#469: the API role can drop a type table and create a view (or another
+    // kind of relation) under its name; migrations name type tables by area
+    // and class key, so they would read it as the owner. The relation's
+    // comment proves nothing, the API role can set it. A type table not built
+    // yet is not refused: nothing runs when it is missing. Before 0008 there is
+    // no registry to check.
+    let registry: bool = sqlx::query_scalar(
+        "SELECT to_regclass('cmdb.ci_classes') IS NOT NULL AND to_regclass('cmdb.areas') IS NOT NULL",
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    if registry {
+        found.extend(
+            sqlx::query_as::<_, (String, String, String)>(
+                "SELECT api.rolname::text,
+                        CASE r.relkind WHEN 'v' THEN 'view' WHEN 'm' THEN 'materialized view'
+                          WHEN 'f' THEN 'foreign table' WHEN 'p' THEN 'partitioned table'
+                          ELSE 'relation' END || ' in place of the type table',
+                        format('%I.%I', a.key, k.key)
+                 FROM cmdb.ci_classes k JOIN cmdb.areas a ON a.id = k.area_id
+                 JOIN pg_namespace n ON n.nspname = a.key
+                 JOIN pg_class r ON r.relnamespace = n.oid AND r.relname = k.key,
+                 pg_roles api
+                 WHERE api.rolname = COALESCE(NULLIF(current_setting('shadoucmdb.app_role', true), ''), 'shadoucmdb_app')
+                   AND api.rolname <> current_user AND r.relkind <> 'r'
+                 ORDER BY 3",
+            )
+            .fetch_all(&mut *conn)
+            .await?,
+        );
+    }
     let Some((role, _, _)) = found.first() else { return Ok(()) };
     let list: Vec<String> = found.iter().map(|(_, kind, name)| format!("  {kind} {name}")).collect();
     bail!(
@@ -765,6 +798,25 @@ mod tests {
         }
         assert!(!err.contains("planted_constant"), "a constant default calls nothing: {err}");
         assert!(!err.contains("constraint ck_"), "the engine's enum checks pass: {err}");
+
+        // GH#469: a view put in place of a type table runs its functions as
+        // whoever reads it, e.g. migration 0036 as the owner.
+        let application: String =
+            sqlx::query_scalar("SELECT cmdb.type_table(id) FROM cmdb.ci_classes WHERE key = 'application'")
+                .fetch_one(&mut *c)
+                .await
+                .unwrap();
+        let mut tx = c.begin().await.unwrap();
+        tx.execute(sqlx::AssertSqlSafe(format!("DROP TABLE {application} CASCADE"))).await.unwrap();
+        tx.execute(sqlx::AssertSqlSafe(format!(
+            "CREATE VIEW {application} AS SELECT gen_random_uuid() AS id, set_config('search_path', 'x', false) AS criticality"
+        )))
+        .await
+        .unwrap();
+        let err = super::refuse_planted_code(&mut tx).await.unwrap_err().to_string();
+        tx.rollback().await.unwrap();
+        let expected = format!("  view in place of the type table {application}");
+        assert!(err.contains(&expected), "{expected:?} missing from: {err}");
         drop(c);
         db.drop().await;
     }
