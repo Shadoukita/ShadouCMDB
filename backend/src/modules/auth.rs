@@ -590,13 +590,14 @@ async fn check_login(
     }
     let Some(user) = row else { return Err(invalid_credentials()) };
     if !user.is_active {
-        // Treated exactly like a wrong password: same throttle, same rows, same
-        // lock. Otherwise the right password for a disabled account would be
-        // an unthrottled way to grow audit_log, and its rows would stand out.
+        // Treated exactly like a wrong password: same throttle, same lock, same
+        // answer. Otherwise the right password for a disabled account would be
+        // an unthrottled way to grow audit_log, and the answer would confirm
+        // the password (GH#437). The reason is in the log and the audit row.
         let locked = attempt.failure();
         tracing::warn!(username = %user.username, ip = ?ctx.client.ip, locked_secs = locked.map(|d| d.as_secs()), "sign-in to a disabled account");
-        record_failure(pool, ctx, &b.username, None, locked).await?;
-        return Err(AppError::new(ErrorCode::Unauthenticated, "This account is disabled"));
+        record_failure(pool, ctx, &b.username, Some(ACCOUNT_DISABLED), locked).await?;
+        return Err(invalid_credentials());
     }
     let verified = Some(user.password_changed_at);
     let attempt = attempt.into();
@@ -721,11 +722,14 @@ async fn directory_answer(
             password::verify(&b.password, None).await?;
             Err(wrong_credentials(pool, attempt, ctx, &b.username, Some(DIRECTORY_ENTRY_LOCKED)).await?)
         }
-        // A right password that is still refused counts like a disabled account's.
+        // A right password that is still refused counts like a disabled
+        // account's, and gets a wrong password's answer: the refusal's own
+        // text would confirm the directory password (GH#437).
         sso::DirectoryAnswer::Refused(refusal) => {
             let locked = attempt.failure();
+            tracing::warn!(username = %b.username, ip = ?ctx.client.ip, locked_secs = locked.map(|d| d.as_secs()), reason = refusal.code(), "directory sign-in refused");
             record_failure(pool, ctx, &b.username, Some(refusal.code()), locked).await?;
-            Err(AppError::new(ErrorCode::Unauthenticated, refusal.message()))
+            Err(invalid_credentials())
         }
         sso::DirectoryAnswer::Unavailable => Err(AppError::new(
             ErrorCode::IdentityProviderUnavailable,
@@ -733,6 +737,9 @@ async fn directory_answer(
         )),
     }
 }
+
+/// `login.failure` reason: the right password for a disabled local account.
+const ACCOUNT_DISABLED: &str = "account_disabled";
 
 /// `login.failure` reason: the name found a directory entry whose sign-ins
 /// are locked, so the password was not checked (GH#406).
@@ -1494,7 +1501,7 @@ pub(crate) mod tests {
         assert_eq!(failures.len() as u32, crate::auth::throttle::FREE_FAILURES);
         assert_eq!(
             failures[0].3,
-            serde_json::json!({ "attemptedUsername": "gone", "ipAddress": "198.51.100.8", "userAgent": "audit-test" })
+            serde_json::json!({ "attemptedUsername": "gone", "ipAddress": "198.51.100.8", "userAgent": "audit-test", "reason": "account_disabled" })
         );
         let e = login(pool, &auth, &headers, &from("198.51.100.8"), login_body("gone", "gone correct horse"))
             .await
@@ -1502,6 +1509,67 @@ pub(crate) mod tests {
             .expect("locked");
         assert_eq!(e.code, ErrorCode::RateLimited);
         assert_eq!(auth_rows(pool, "login.failure").await.len(), failures.len(), "a 429 writes no row");
+        db.drop().await;
+    }
+
+    /// The response body a refusal is sent as.
+    async fn answer_bytes(e: AppError) -> (axum::http::StatusCode, axum::body::Bytes) {
+        let res = axum::response::IntoResponse::into_response(e);
+        (res.status(), axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap())
+    }
+
+    /// GH#437: a right password that is refused all the same (a disabled
+    /// account, a directory's refusal) gets the body a wrong password gets,
+    /// byte for byte; only the audit row tells why.
+    #[tokio::test]
+    async fn a_refused_right_password_answers_like_a_wrong_one() {
+        let Some(db) = scratch::database("a_refused_right_password_answers_like_a_wrong_one").await else { return };
+        let (pool, auth, headers) = (&db.pool, auth_state(), HeaderMap::new());
+        setup(pool, &auth, &headers, &from("192.0.2.1"), body("owner")).await.unwrap();
+        let input = UserCreate {
+            username: "gone".into(),
+            display_name: "Gone".into(),
+            email: None,
+            password: "gone correct horse".into(),
+            is_active: Some(false),
+            profile_ids: vec![],
+        };
+        users::create(pool, &RequestContext::system("test", "test"), &input).await.unwrap();
+        let ctx = from("198.51.100.8");
+        let wrong = login(pool, &auth, &headers, &ctx, login_body("gone", "a wrong guess")).await.err().expect("wrong");
+        let wrong = answer_bytes(wrong).await;
+        assert_eq!(wrong.0, axum::http::StatusCode::UNAUTHORIZED);
+        let right =
+            login(pool, &auth, &headers, &ctx, login_body("gone", "gone correct horse")).await.err().expect("disabled");
+        assert_eq!(answer_bytes(right).await, wrong, "a disabled account's right password");
+        let failures = auth_rows(pool, "login.failure").await;
+        assert_eq!(failures[0].3.get("reason"), None, "the wrong password");
+        assert_eq!(failures[1].3["reason"], "account_disabled", "audited with the reason");
+
+        use sso::Refusal::*;
+        let refusals = [
+            InvalidUsername,
+            AccountConflict,
+            AccountDisabled,
+            NotAuthorised,
+            LastAdministrator,
+            MfaNotEnforced,
+            ProviderDisabled,
+        ];
+        for refusal in refusals {
+            // A name each, so the throttle's lock does not answer instead.
+            let name = format!("dave-{}", refusal.code());
+            let attempt = throttle_gate(&auth.throttle, &name, ctx.client.net, "sign-ins").await.unwrap();
+            let attempt = Reservation { name: attempt, entry: None };
+            let answer = sso::DirectoryAnswer::Refused(refusal);
+            let e = directory_answer(pool, &auth, &headers, &ctx, attempt, &login_body(&name, "x"), answer)
+                .await
+                .err()
+                .expect("refused");
+            assert_eq!(answer_bytes(e).await, wrong, "{refusal:?}");
+            let last = auth_rows(pool, "login.failure").await.pop().unwrap();
+            assert_eq!(last.3["reason"], refusal.code(), "{refusal:?} audited with the reason");
+        }
         db.drop().await;
     }
 
