@@ -160,7 +160,9 @@ the same flow for a source checkout.
    shadoucmdb create-admin --username admin --display-name "Jane Admin"   # prompts for the password
    ```
 
-   Further users and their permission profiles are managed under Administration. Behind a TLS proxy, let it
+   Further users and their permission profiles are managed under Administration. The server speaks plain
+   HTTP: in production put a TLS reverse proxy in front of it, bind the API to `127.0.0.1` (`API_HOST`, or
+   publish the Docker port on `127.0.0.1`) when the proxy runs on the same host, and let the proxy
    send `X-Forwarded-Proto` so session cookies are marked `Secure`. For single sign-on through an
    OIDC provider or LDAP/AD, set `PUBLIC_URL` and add the identity provider under Administration.
 

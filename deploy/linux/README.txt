@@ -122,6 +122,20 @@ Install as a systemd service
   curl -s http://127.0.0.1:3000/readyz
   journalctl -u shadoucmdb -f
 
+The server speaks plain HTTP only. Sign-in passwords, session cookies and API
+tokens cross the network unencrypted unless a TLS front end terminates HTTPS
+for it. For anything beyond a quick evaluation:
+
+  1. Put a TLS reverse proxy in front (nginx, Apache httpd, HAProxy or your
+     load balancer), forwarding to http://127.0.0.1:3000/ and sending
+     X-Forwarded-Proto so session cookies are marked Secure.
+  2. When the proxy runs on this machine, set API_HOST=127.0.0.1 in
+     shadoucmdb.env so port 3000 is not reachable from the network. When it
+     runs elsewhere, let only the proxy's address reach port 3000 in the host
+     firewall.
+  3. Add the proxy's address to TRUSTED_PROXIES and set PUBLIC_URL to the
+     https:// address users open.
+
 
 Upgrade
 -------

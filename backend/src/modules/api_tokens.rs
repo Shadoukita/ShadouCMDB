@@ -1798,7 +1798,8 @@ pub(crate) mod tests {
 
     /// GitHub #154: a token must not widen or weaken a permission profile
     /// (including `requireMfa` on the built-in one) or import profiles, since
-    /// the change would outlive the token's revocation.
+    /// the change would outlive the token's revocation. Nor export the
+    /// configuration (GitHub #445).
     #[tokio::test]
     async fn permission_profile_administration_needs_a_session() {
         let Some(db) = scratch::database("permission_profile_administration_needs_a_session").await else { return };
@@ -1833,12 +1834,16 @@ pub(crate) mod tests {
         assert_eq!(status, 201, "{created}");
         let tok = Creds { bearer: created["secret"].as_str().map(str::to_owned), ..Creds::default() };
 
-        // Reading profiles and exporting the configuration stay open to the token.
+        // Reading profiles stays open to the token.
         let (status, v, _) = call(&app, "GET", "/api/v1/admin/profiles", &tok, None).await;
         assert_eq!(status, 200, "{v}");
         let (status, v, _) = call(&app, "GET", &admin_path, &tok, None).await;
         assert_eq!(status, 200, "{v}");
-        let (status, mut file, _) = call(&app, "GET", "/api/v1/admin/config/export", &tok, None).await;
+        // The configuration export is not (GitHub #445): a leaked token would
+        // otherwise pull the data model, profiles and mappings in one call.
+        let (status, v, _) = call(&app, "GET", "/api/v1/admin/config/export", &tok, None).await;
+        assert_eq!((status, code(&v)), (403, "FORBIDDEN"), "{v}");
+        let (status, mut file, _) = call(&app, "GET", "/api/v1/admin/config/export", &session, None).await;
         assert_eq!(status, 200, "{file}");
         file["permissionProfiles"][0]["globalPermissions"] = json!(["audit.view", "users.manage"]);
 
@@ -1871,8 +1876,8 @@ pub(crate) mod tests {
                 .fetch_all(pool)
                 .await
                 .unwrap();
-        assert_eq!(outcomes[..3], ["accepted", "accepted", "accepted"]);
-        assert_eq!(outcomes[3..], ["session_only"; 7]);
+        assert_eq!(outcomes[..2], ["accepted", "accepted"]);
+        assert_eq!(outcomes[2..], ["session_only"; 8]);
 
         // A session still administers profiles and imports.
         let (status, v, _) = call(&app, "POST", "/api/v1/admin/config/import?mode=apply", &session, Some(file)).await;
