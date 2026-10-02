@@ -11,6 +11,7 @@ import {
   compactLayouts,
   deletable,
   freeTemplateName,
+  ownLayoutLink,
   sectionErrors,
   setClassTemplate,
   STANDARD_TEMPLATE,
@@ -161,6 +162,30 @@ describe("class table", () => {
     assert.deepEqual(names(classRows(CLASSES, doc(), { sort: "-class" })), ["switch", "Server", "Application"]);
     assert.deepEqual(names(classRows(CLASSES, doc(), { sort: "template" })), ["Server", "Application", "switch"]);
     assert.deepEqual(names(classRows(CLASSES, doc(), { sort: "-template" })), ["Application", "switch", "Server"]);
+  });
+  test("CIs with their own layout: counted per class, unknown shown apart, sortable, linked to the inventory", () => {
+    assert.deepEqual(
+      classRows(CLASSES, doc(), {}).map((r) => r.ownLayoutCount),
+      [undefined, undefined, undefined],
+      "not counted yet",
+    );
+    const owned = new Map<string, number | null>([
+      ["application", 0],
+      ["server", 3],
+      ["switch", null],
+    ]);
+    assert.deepEqual(
+      classRows(CLASSES, doc(), { owned }).map((r) => [r.key, r.ownLayoutCount]),
+      [
+        ["application", 0],
+        ["server", 3],
+        ["switch", null],
+      ],
+    );
+    assert.equal(classRows(CLASSES, doc(), { owned: new Map() })[0].ownLayoutCount, null, "a class the counts leave out is unknown");
+    assert.deepEqual(names(classRows(CLASSES, doc(), { owned, sort: "owned" })), ["Application", "Server", "switch"]);
+    assert.deepEqual(names(classRows(CLASSES, doc(), { owned, sort: "-owned" })), ["Server", "Application", "switch"], "unknown last either way");
+    assert.deepEqual(ownLayoutLink("c-1"), { path: "/cis", query: { classId: "c-1", includeSubclasses: "false", ownLayout: "true" } });
   });
   test("a few hundred classes", () => {
     const many = Array.from({ length: 500 }, (_, i) => ({ id: String(i), key: `c_${i}`, name: `Class ${String(i).padStart(3, "0")}`, isActive: true }));

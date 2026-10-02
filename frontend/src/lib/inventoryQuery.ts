@@ -19,12 +19,16 @@ export type QueryContext = "inventory" | "search";
 
 /** URL parameters that make up a list's state (not the page: `offset`). Any of them means "the URL says". */
 export const STATE_KEYS = {
-  inventory: ["q", "classId", "includeSubclasses", "lookupValueId", "criticalityValueId", "active", "deleted", "ipWithin", "sort", "limit", "columns"],
+  inventory: ["q", "classId", "includeSubclasses", "lookupValueId", "criticalityValueId", "active", "deleted", "ipWithin", "ownLayout", "layoutTemplate", "sort", "limit", "columns"],
   search: ["q", "classId", "includeSubclasses", "lookupValueId", "criticalityValueId", "active", "deleted", "ipWithin", "limit"],
 } as const satisfies Record<QueryContext, readonly string[]>;
 
-/** Filters, which "Clear filters" removes (sort, page size and columns stay). */
-export const FILTER_KEYS = ["q", "classId", "lookupValueId", "criticalityValueId", "active", "deleted", "ipWithin"] as const;
+/**
+ * Filters, which "Clear filters" removes (sort, page size and columns stay).
+ * `ownLayout` and `layoutTemplate` (CIs with a layout of their own, from Customization ›
+ * Layouts) are inventory only: the search endpoint does not take them.
+ */
+export const FILTER_KEYS = ["q", "classId", "lookupValueId", "criticalityValueId", "active", "deleted", "ipWithin", "ownLayout", "layoutTemplate"] as const;
 
 export const DEFAULT_LIMIT = 50;
 export const DEFAULT_SORT = "label";

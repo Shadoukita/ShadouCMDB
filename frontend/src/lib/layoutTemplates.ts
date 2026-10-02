@@ -131,26 +131,35 @@ export interface ClassRow {
   isActive: boolean;
   templateKey: string;
   templateName: string;
+  /** Live CIs of the class itself with a layout of their own: null when unknown (a class you may not view), undefined while counting. */
+  ownLayoutCount: number | null | undefined;
 }
 
-export type ClassSort = "class" | "-class" | "template" | "-template";
+export type ClassSort = "class" | "-class" | "template" | "-template" | "owned" | "-owned";
+
+/** The inventory of a class's CIs with a layout of their own (the count is per class, without subclasses). */
+export function ownLayoutLink(classId: string) {
+  return { path: "/cis", query: { classId, includeSubclasses: "false", ownLayout: "true" } };
+}
 
 /**
  * The class table's rows: every class with its default template (from `doc`, the
  * page's draft), narrowed by `q` (class name or key, or template name; any case)
- * and `uses` (a template key), sorted by class or template name (then class).
+ * and `uses` (a template key), sorted by class or template name or by the number
+ * of CIs with a layout of their own (`owned`, by class key; unknown counts last), then class.
  */
 export function classRows(
   classes: readonly { id: string; key: string; name: string; isActive: boolean }[],
   doc: UiSettingsDocument,
-  opts: { q?: string; uses?: string; sort?: string },
+  opts: { q?: string; uses?: string; sort?: string; owned?: ReadonlyMap<string, number | null> },
 ): ClassRow[] {
   const names = new Map(doc.layoutTemplates.map((t) => [t.key, t.name]));
   const q = (opts.q ?? "").trim().toLowerCase();
   const rows = classes
     .map((c): ClassRow => {
       const templateKey = classTemplateKey(doc, c.key);
-      return { key: c.key, id: c.id, name: c.name, isActive: c.isActive, templateKey, templateName: names.get(templateKey) ?? templateKey };
+      const ownLayoutCount = opts.owned ? (opts.owned.get(c.key) ?? null) : undefined;
+      return { key: c.key, id: c.id, name: c.name, isActive: c.isActive, templateKey, templateName: names.get(templateKey) ?? templateKey, ownLayoutCount };
     })
     .filter((r) => !opts.uses || r.templateKey === opts.uses)
     .filter((r) => !q || r.name.toLowerCase().includes(q) || r.key.includes(q) || r.templateName.toLowerCase().includes(q));
@@ -158,10 +167,13 @@ export function classRows(
   const sort = (opts.sort ?? "class") as ClassSort;
   const dir = sort.startsWith("-") ? -1 : 1;
   const field = sort.replace(/^-/, "");
+  const known = (r: ClassRow) => (typeof r.ownLayoutCount === "number" ? 1 : 0);
   return rows.sort((a, b) =>
     field === "template"
       ? dir * a.templateName.localeCompare(b.templateName, undefined, { sensitivity: "base" }) || byName(a, b)
-      : dir * byName(a, b),
+      : field === "owned"
+        ? known(b) - known(a) || dir * ((a.ownLayoutCount ?? 0) - (b.ownLayoutCount ?? 0)) || byName(a, b)
+        : dir * byName(a, b),
   );
 }
 
