@@ -31,6 +31,7 @@ export function emptyDocument(): UiSettingsDocument {
     dashboard: { widgets: null },
     listViews: [],
     layouts: [],
+    layoutTemplates: [],
   };
 }
 
@@ -51,6 +52,8 @@ export function normalizeDocument(doc: Partial<UiSettingsDocument> | undefined):
     },
     listViews: (d.listViews ?? []).map((v) => ({ columns: [], defaultSort: null, pageSize: null, ...v, defaultFilters: { ...EMPTY_FILTERS, lookups: {}, ...v.defaultFilters } })),
     layouts: (d.layouts ?? []).map(normalizeLayout),
+    // Kept as the API sent them: classes and CIs refer to them, and the API refuses to drop one in use.
+    layoutTemplates: d.layoutTemplates ?? [],
   };
 }
 
@@ -430,6 +433,8 @@ export function withoutKinds(l: UiClassLayout, kinds: readonly SectionKind[]): U
 export function normalizeLayout(l: UiClassLayout): UiClassLayout {
   return {
     classKey: l.classKey,
+    // The class's default template: the tabs below are its layout, and saving them edits it.
+    ...(l.templateKey ? { templateKey: l.templateKey } : {}),
     tabs: (l.tabs ?? []).map((t) => ({
       key: t.key,
       label: t.label,

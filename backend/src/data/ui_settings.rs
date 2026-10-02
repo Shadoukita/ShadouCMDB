@@ -16,6 +16,8 @@ pub struct Model {
     pub classes: HashMap<String, HashMap<String, bool>>,
     /// lookup list key -> its value keys
     pub lookups: HashMap<String, HashSet<String>>,
+    /// class key -> name (for the templates made of class layouts)
+    pub class_names: HashMap<String, String>,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -89,9 +91,11 @@ pub async fn version(pool: &PgPool, version: i32) -> sqlx::Result<Option<Version
 /// Every class key with its effective attributes (own and inherited), and the lookup lists with their value keys.
 pub async fn model(conn: &mut PgConnection) -> sqlx::Result<Model> {
     let mut m = Model::default();
-    let classes: Vec<(String,)> = sqlx::query_as("SELECT key FROM ci_classes").fetch_all(&mut *conn).await?;
-    for (k,) in classes {
-        m.classes.entry(k).or_default();
+    let classes: Vec<(String, String)> =
+        sqlx::query_as("SELECT key, name FROM ci_classes").fetch_all(&mut *conn).await?;
+    for (k, name) in classes {
+        m.classes.entry(k.clone()).or_default();
+        m.class_names.insert(k, name);
     }
     let attrs: Vec<(String, String, bool)> = sqlx::query_as(
         "WITH RECURSIVE lineage (class_id, ancestor_id) AS (
@@ -119,6 +123,80 @@ pub async fn model(conn: &mut PgConnection) -> sqlx::Result<Model> {
         values.extend(value);
     }
     Ok(m)
+}
+
+// ---------------------------------------------------------------------------
+// CIs' own layouts
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct OverrideRow {
+    pub ci_id: Uuid,
+    pub template_key: Option<String>,
+    pub layout: Option<Value>,
+    pub version: i32,
+    pub updated_at: DateTime<Utc>,
+    pub updated_by_name: Option<String>,
+}
+
+const OVERRIDE_COLUMNS: &str = "ci_id, template_key, layout, version, updated_at, updated_by_name";
+
+pub async fn layout_override(
+    conn: &mut PgConnection,
+    ci_id: Uuid,
+    for_update: bool,
+) -> sqlx::Result<Option<OverrideRow>> {
+    let lock = if for_update { " FOR UPDATE" } else { "" };
+    sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT {OVERRIDE_COLUMNS} FROM ci_layout_overrides WHERE ci_id = $1{lock}"
+    )))
+    .bind(ci_id)
+    .fetch_optional(conn)
+    .await
+}
+
+/// Creates or replaces a CI's own layout: a template key or a layout (exactly one is Some).
+pub async fn put_layout_override(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    ci_id: Uuid,
+    template_key: Option<&str>,
+    layout: Option<&Value>,
+) -> sqlx::Result<OverrideRow> {
+    sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "INSERT INTO ci_layout_overrides (ci_id, template_key, layout, updated_by_type, updated_by_id, updated_by_name)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (ci_id) DO UPDATE SET template_key = EXCLUDED.template_key, layout = EXCLUDED.layout,
+           version = ci_layout_overrides.version + 1, updated_by_type = EXCLUDED.updated_by_type,
+           updated_by_id = EXCLUDED.updated_by_id, updated_by_name = EXCLUDED.updated_by_name
+         RETURNING {OVERRIDE_COLUMNS}"
+    )))
+    .bind(ci_id)
+    .bind(template_key)
+    .bind(layout)
+    .bind(ctx.actor.actor_type.as_str())
+    .bind(&ctx.actor.id)
+    .bind(&ctx.actor.name)
+    .fetch_one(conn)
+    .await
+}
+
+pub async fn delete_layout_override(conn: &mut PgConnection, ci_id: Uuid) -> sqlx::Result<()> {
+    sqlx::query("DELETE FROM ci_layout_overrides WHERE ci_id = $1").bind(ci_id).execute(conn).await?;
+    Ok(())
+}
+
+/// Per template key: how many live (not deleted) CIs use it as their own layout, and their classes.
+pub async fn template_use(conn: &mut PgConnection) -> sqlx::Result<HashMap<String, (i64, Vec<Uuid>)>> {
+    let rows: Vec<(String, i64, Vec<Uuid>)> = sqlx::query_as(
+        "SELECT o.template_key, count(*), array_agg(DISTINCT ci.class_id)
+         FROM ci_layout_overrides o JOIN configuration_items ci ON ci.id = o.ci_id
+         WHERE o.template_key IS NOT NULL AND ci.deleted_at IS NULL
+         GROUP BY o.template_key",
+    )
+    .fetch_all(conn)
+    .await?;
+    Ok(rows.into_iter().map(|(k, n, classes)| (k, (n, classes))).collect())
 }
 
 // ---------------------------------------------------------------------------

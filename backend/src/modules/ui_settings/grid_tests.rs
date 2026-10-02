@@ -85,9 +85,10 @@ async fn sections_side_by_side_are_validated_and_stored() {
              "fields": [{"field": "validFrom", "width": 1}]},
         ])
     );
-    // The row holds the same document the version endpoint shows.
+    // The row holds the same layout the version endpoint shows, in the class's template (SHAA-1472).
     let raw: Value = sqlx::query_scalar("SELECT settings FROM ui_settings").fetch_one(&db.pool).await.unwrap();
-    assert_eq!(raw["layouts"][0]["tabs"], stored["settings"]["layouts"][0]["tabs"]);
+    assert_eq!(raw["layouts"][0], json!({"classKey": "server", "templateKey": "server"}));
+    assert_eq!(raw["layoutTemplates"][1]["layout"]["tabs"], stored["settings"]["layouts"][0]["tabs"]);
 
     db.drop().await;
 }
@@ -183,15 +184,16 @@ async fn free_tabs_are_validated_normalised_audited_and_exported() {
     );
     let saved = v["settings"].clone();
 
-    // The audit row holds the stored form.
+    // The audit row holds the stored form: the layout is in the class's template (SHAA-1472).
     let (status, log, _) = call(&app, "GET", "/api/v1/audit-log?entityType=ui_settings&limit=1", &s, None).await;
     assert_eq!(status, 200, "{log}");
-    assert_eq!(log["data"][0]["newValue"]["settings"]["layouts"], saved["layouts"], "{log}");
+    let audited = &log["data"][0]["newValue"]["settings"];
+    assert_eq!(audited["layoutTemplates"][1]["layout"]["tabs"], saved["layouts"][0]["tabs"], "{log}");
 
     // Export, reset, import: the free tab comes back as it was.
     let (status, file, _) = call(&app, "GET", "/api/v1/admin/config/export", &s, None).await;
     assert_eq!(status, 200, "{file}");
-    assert_eq!(file["uiSettings"]["settings"]["layouts"], saved["layouts"]);
+    assert_eq!(file["uiSettings"]["settings"]["layoutTemplates"][1]["layout"]["tabs"], saved["layouts"][0]["tabs"]);
     let (status, v, _) =
         call(&app, "PUT", "/api/v1/ui-settings", &s, Some(json!({"version": version, "settings": {}}))).await;
     assert_eq!(status, 200, "{v}");
