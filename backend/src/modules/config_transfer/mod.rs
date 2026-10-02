@@ -2978,6 +2978,29 @@ mod tests {
         db.drop().await;
     }
 
+    /// GH#344: 20,000 owners with the same key, and lists to look through for
+    /// the statuses, import within the request timeout. (The fold of the
+    /// largest file is timed in `legacy`; writing its 200,000 values here
+    /// would time the audit trail instead.)
+    #[tokio::test]
+    async fn the_largest_legacy_sections_import_quickly() {
+        let Some(db) = scratch::database("the_largest_legacy_sections_import_quickly").await else { return };
+        let ctx = RequestContext::system("test", "test");
+        crate::seed::seed_system_rows(&db.pool).await.unwrap();
+        let file: ConfigFile = serde_json::from_value(serde_json::json!({
+            "format": "shadoucmdb.config", "formatVersion": 1, "lookups": legacy::worst_case(5)
+        }))
+        .unwrap();
+        let started = std::time::Instant::now();
+        let dry = import(&db.pool, &ctx, &file, ImportMode::DryRun).await.unwrap();
+        let took = started.elapsed();
+        assert!(took < std::time::Duration::from_secs(120), "{took:?}");
+        let created: Vec<&str> =
+            dry.changes.iter().filter(|c| c.section == "lookupLists").map(|c| c.key.as_str()).collect();
+        assert!(created.contains(&"owner") && created.contains(&"status_6"), "{created:?}");
+        db.drop().await;
+    }
+
     /// Format 4: impactDirection and the criticality list round-trip; a file
     /// before version 4 leaves the impact direction as it is; a dry run shows
     /// a change; a non-directional type is refused a one-way direction.
