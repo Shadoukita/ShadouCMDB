@@ -544,56 +544,59 @@ const dropped = computed(() => {
     <ErrorAlert :error="actionError" title="The view action failed" />
   </div>
 
-  <SavedViewDialog
-    :open="!!dialog"
-    :mode="dialog?.mode ?? 'create'"
-    :initial="dialogInitial"
-    :can-share="canShare"
-    :busy="dialogBusy"
-    :error="dialogError"
-    @submit="submitDialog"
-    @cancel="closeDialog"
-    @manage="openManageFromLimit"
-  />
+  <!-- In <body>, not the toolbar: the toolbar's control widths would apply to the dialog fields (GH#483). -->
+  <Teleport to="body">
+    <SavedViewDialog
+      :open="!!dialog"
+      :mode="dialog?.mode ?? 'create'"
+      :initial="dialogInitial"
+      :can-share="canShare"
+      :busy="dialogBusy"
+      :error="dialogError"
+      @submit="submitDialog"
+      @cancel="closeDialog"
+      @manage="openManageFromLimit"
+    />
 
-  <ConfirmDialog
-    :open="!!deleting"
-    :title="`Delete view “${deleting?.name ?? ''}”?`"
-    confirm-label="Delete view"
-    busy-label="Deleting…"
-    :busy="remove.isPending.value"
-    @confirm="confirmDelete"
-    @cancel="deleting = null"
-  >
-    <template v-if="deleting">
-      <ErrorAlert v-if="deleteError" :error="deleteError" title="The view was not deleted" />
-      <p v-if="deleting.visibility === 'shared'">
-        It is shared with everyone<template v-if="deleting.defaultCount !== undefined">
-          and is the default for <strong>{{ deleting.defaultCount.toLocaleString() }}</strong>
-          {{ deleting.defaultCount === 1 ? "user" : "users" }}</template
-        >. They will return to the standard list. Configuration items are not affected.
-      </p>
-      <p v-else-if="deleting.isDefault">
-        This cannot be undone. It is your default for <strong>{{ homeName(deleting, classes) }}</strong>. The
-        {{ homeName(deleting, classes) }} list will open with the standard columns and filters.
-      </p>
-      <p v-else>This cannot be undone. Configuration items are not affected.</p>
-    </template>
-  </ConfirmDialog>
+    <ConfirmDialog
+      :open="!!deleting"
+      :title="`Delete view “${deleting?.name ?? ''}”?`"
+      confirm-label="Delete view"
+      busy-label="Deleting…"
+      :busy="remove.isPending.value"
+      @confirm="confirmDelete"
+      @cancel="deleting = null"
+    >
+      <template v-if="deleting">
+        <ErrorAlert v-if="deleteError" :error="deleteError" title="The view was not deleted" />
+        <p v-if="deleting.visibility === 'shared'">
+          It is shared with everyone<template v-if="deleting.defaultCount !== undefined">
+            and is the default for <strong>{{ deleting.defaultCount.toLocaleString() }}</strong>
+            {{ deleting.defaultCount === 1 ? "user" : "users" }}</template
+          >. They will return to the standard list. Configuration items are not affected.
+        </p>
+        <p v-else-if="deleting.isDefault">
+          This cannot be undone. It is your default for <strong>{{ homeName(deleting, classes) }}</strong>. The
+          {{ homeName(deleting, classes) }} list will open with the standard columns and filters.
+        </p>
+        <p v-else>This cannot be undone. Configuration items are not affected.</p>
+      </template>
+    </ConfirmDialog>
 
-  <ConfirmDialog
-    :open="!!conflict"
-    title="This view was changed elsewhere"
-    confirm-label="Load latest"
-    cancel-label="Cancel"
-    tone="primary"
-    @confirm="loadLatest"
-    @cancel="conflict = null"
-  >
-    <p>{{ conflict?.message }}</p>
-    <p>Load the latest version, or keep what the list shows now as a new view.</p>
-    <p><button type="button" class="btn" @click="conflictSaveAs">Save as new view…</button></p>
-  </ConfirmDialog>
+    <ConfirmDialog
+      :open="!!conflict"
+      title="This view was changed elsewhere"
+      confirm-label="Load latest"
+      cancel-label="Cancel"
+      tone="primary"
+      @confirm="loadLatest"
+      @cancel="conflict = null"
+    >
+      <p>{{ conflict?.message }}</p>
+      <p>Load the latest version, or keep what the list shows now as a new view.</p>
+      <p><button type="button" class="btn" @click="conflictSaveAs">Save as new view…</button></p>
+    </ConfirmDialog>
+  </Teleport>
 
   <ManageViewsDialog
     :open="manageOpen"

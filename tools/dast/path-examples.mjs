@@ -6,7 +6,7 @@
 // request was refused 400 while the path was parsed, and no `/{id}` handler was ever attacked. This
 // script signs in to the running server as the scan's administrator, reads one id per resource from
 // its list endpoint (demo data from `seed --demo`), creates the objects the scan may damage (a user,
-// a profile, a group, an identity provider, an API token, an import job, a saved mapping), and writes the spec with those ids
+// a profile, a group, an identity provider, an API token, an import job, a saved mapping, a saved view), and writes the spec with those ids
 // as examples.
 //
 //   DAST_USERNAME=... DAST_PASSWORD=... node tools/dast/path-examples.mjs <openapi.json> <out.json> [<examples.json>]
@@ -44,7 +44,7 @@ export const LISTED = [
  * Objects created for the scan. The scan changes, disables and deletes what it is given, so it gets
  * objects of its own: never its own account (a password change would end its session) or token.
  */
-export const CREATED = ["admin/profiles", "admin/groups", "admin/users", "admin/identity-providers", "admin/api-tokens", "imports", "import-mappings"];
+export const CREATED = ["admin/profiles", "admin/groups", "admin/users", "admin/identity-providers", "admin/api-tokens", "imports", "import-mappings", "saved-views"];
 
 /**
  * Resources that may have no row yet; any well-formed value still reaches the handler (404). The
@@ -180,6 +180,11 @@ async function collect(request) {
       classKey: "server",
       definition: { mode: "create_only", columns: [{ header: "hostname", target: { kind: "attribute", key: "hostname" } }] },
     })
+  ).id;
+  // A personal view of the scan's administrator: saved views are session-only, and the scan may
+  // change, copy and delete it.
+  examples["saved-views"] = (
+    await request("POST", "saved-views", { context: "inventory", name, visibility: "personal", definition: { classKeys: ["server"] } })
   ).id;
   return examples;
 }
