@@ -688,6 +688,7 @@ async function main() {
 
   await permissions({ serverClass, appClass, dbClass, server, app, database, r1, inService, adminMe });
   await customization({ serverClass, adminMe });
+  await savedViews({ serverClass });
   await realTables({ inService, infra, adminMe });
 
   // --- Deletes and history ------------------------------------------------------
@@ -871,6 +872,43 @@ async function main() {
   console.log('ALL CHECKS PASSED');
 }
 
+/** Saved views (SHAA-578): every operation, resolution into list parameters, defaults and the shared-copy audit. */
+async function savedViews(x: Json) {
+  console.log('\n# Saved views');
+  const put = (url: string, body: unknown, expect = 200) => call('PUT', url, body, expect);
+  const definition = { classKeys: ['server'], filters: { lookups: { environment: ['production'] } },
+    sort: { field: 'label', direction: 'desc' }, columns: ['label', 'ident'], pageSize: 25 };
+  const created = await post('/api/v1/saved-views', { context: 'inventory', name: `Smoke view ${RUN}`, visibility: 'personal', definition });
+  const view = created.json;
+  check(created.headers.get('location') === `/api/v1/saved-views/${view.id}`, 'a saved view answers 201 with its Location');
+  check(view.resolved.state === 'ok' && view.resolved.query.classId === x.serverClass && view.resolved.query.sort === '-label'
+    && view.home === 'server', 'the view resolves into list parameters');
+  const listed = await get(`/api/v1/configuration-items?${new URLSearchParams(view.resolved.query).toString()}`);
+  check(listed.json.page.limit === 25, 'the resolved query is a valid list request');
+  await post('/api/v1/saved-views', { context: 'inventory', name: `smoke VIEW ${RUN}`, visibility: 'personal', definition }, 409);
+  await post('/api/v1/saved-views', { context: 'inventory', name: 'x', visibility: 'personal', definition: { classKeys: ['doesnotexist'] } }, 400);
+  await post('/api/v1/saved-views', { context: 'search', name: 'x', visibility: 'personal', definition: {} }, 400);
+  const list = (await get('/api/v1/saved-views?context=inventory')).json;
+  check(list.data.some((v: Json) => v.id === view.id) && list.limits.personal.max === 200 && list.limits.shared.max === 500,
+    'the view is listed with the limits');
+  await get(`/api/v1/saved-views/${view.id}`);
+  check((await patch(`/api/v1/saved-views/${view.id}`, { version: 1, description: 'Smoke' })).json.version === 2, 'the view is changed');
+  await patch(`/api/v1/saved-views/${view.id}`, { version: 1, name: 'stale' }, 409);
+  check((await put('/api/v1/saved-views/defaults', { context: 'inventory', classKey: 'server', viewId: view.id })).json.viewId === view.id,
+    'the view is the default for the server list');
+  await put('/api/v1/saved-views/defaults', { context: 'inventory', classKey: null, viewId: view.id }, 400);
+  check((await get(`/api/v1/saved-views/${view.id}`)).json.isDefault === true, 'the view is marked as the default');
+  const shared = (await post(`/api/v1/saved-views/${view.id}/copy`, { name: `Smoke shared ${RUN}`, visibility: 'shared' })).json;
+  check(shared.visibility === 'shared' && shared.defaultCount === 0, 'a shared copy is created');
+  const audit = (await get(`/api/v1/audit-log?entityType=saved_views&entityId=${shared.id}`)).json;
+  check(audit.data.length === 1 && audit.data[0].newValue.copiedFrom === view.id, 'the shared copy is audited with its source');
+  await put('/api/v1/saved-views/defaults', { context: 'inventory', classKey: 'server', viewId: null });
+  await del(`/api/v1/saved-views/${view.id}?version=1`, 409);
+  await del(`/api/v1/saved-views/${view.id}?version=2`);
+  await del(`/api/v1/saved-views/${shared.id}?version=1`);
+  await get(`/api/v1/saved-views/${view.id}`, 404);
+}
+
 /** Profiles, users, class-scoped and global permissions, CSRF, backoff, lockout protection. */
 async function permissions(x: Json) {
   const { serverClass, appClass, dbClass, server, app, database, r1, inService, adminMe } = x;
@@ -901,7 +939,7 @@ async function permissions(x: Json) {
   check(editors.classPermissions[0]?.view === true, 'write rights imply view');
   await patch(`/api/v1/admin/profiles/${editors.id}`, { description: null, globalPermissions: [] });
   const copy = (await post(`/api/v1/admin/profiles/${builtin.id}/clone`, { name: `smoke-admin-copy-${RUN}` })).json;
-  check(!copy.isBuiltin && copy.globalPermissions.length === 7 && copy.classPermissions[0]?.classId === null, 'cloning Administrator gives an editable profile with every permission');
+  check(!copy.isBuiltin && copy.globalPermissions.length === 8 && copy.classPermissions[0]?.classId === null, 'cloning Administrator gives an editable profile with every permission');
   await post(`/api/v1/admin/profiles/${readers.id}/clone`, { name: `smoke-readers-${RUN}` }, 409);
   await get(`/api/v1/admin/profiles?q=smoke-&limit=5`);
 
@@ -1666,7 +1704,7 @@ async function customization(x: Json) {
   const file = exported.json;
   const raw = JSON.stringify(file);
   check(/^attachment; filename="shadoucmdb-config-/.test(exported.headers.get('content-disposition') ?? ''), 'the export downloads as a file');
-  check(file.format === 'shadoucmdb.config' && file.formatVersion === 5 && Array.isArray(file.importMappings) && file.dataModel.areas.some((a: Json) => a.key === 'infrastruktur') && !('users' in file) && !raw.includes('argon2') && !raw.includes('"username"') && !raw.includes('password'), 'the export has no users or password hashes');
+  check(file.format === 'shadoucmdb.config' && file.formatVersion === 6 && Array.isArray(file.importMappings) && Array.isArray(file.savedViews) && file.dataModel.areas.some((a: Json) => a.key === 'infrastruktur') && !('users' in file) && !raw.includes('argon2') && !raw.includes('"username"') && !raw.includes('password'), 'the export has no users or password hashes');
   check(file.permissionProfiles.every((p: Json) => p.name !== 'Administrator') && file.uiSettings.logo?.data === PNG_1X1, 'the export has editable profiles and the images');
   check(file.dataModel.attributes.every((a: Json) => typeof a.class === 'string' && !('classId' in a)), 'the export refers to classes by key');
   const noop = (await post('/api/v1/admin/config/import?mode=dry_run', file, 200)).json;
@@ -1715,7 +1753,7 @@ async function customization(x: Json) {
   attr.dataType = 'text';
   const immutable = await post('/api/v1/admin/config/import?mode=dry_run', retyped, 400);
   check(immutable.json.error?.details?.some((d: Json) => d.code === 'immutable'), 'the data type of an existing attribute cannot change');
-  await post('/api/v1/admin/config/import?mode=apply', { format: 'shadoucmdb.config', formatVersion: 6 }, 400);
+  await post('/api/v1/admin/config/import?mode=apply', { format: 'shadoucmdb.config', formatVersion: 7 }, 400);
   // Format 4: saved import mappings, merged by class key and name (SHAA-714 §6.2).
   const cfgMapping = { name: `Smoke config ${RUN}`, classKey: 'server', definition: { mode: 'create_only', columns: [{ header: 'Hostname', target: { kind: 'attribute', key: 'hostname' } }, { header: 'Notes', target: { kind: 'ignore' } }] } };
   const mappingFile = { format: 'shadoucmdb.config', formatVersion: 4, importMappings: [cfgMapping] };
@@ -1728,6 +1766,15 @@ async function customization(x: Json) {
   check(cfgSaved?.definition?.columns?.length === 2, 'the imported mapping is a saved mapping');
   check((await get('/api/v1/admin/config/export')).json.importMappings.some((m: Json) => m.name === cfgMapping.name && m.classKey === 'server'), 'the export carries the saved mapping');
   if (cfgSaved) await del(`/api/v1/import-mappings/${cfgSaved.id}?version=${cfgSaved.version}`, 204);
+  // Format 6: shared saved views, merged by context and name; unknown keys are warnings (SHAA-578 §4).
+  const cfgView = { context: 'inventory', name: `Smoke config view ${RUN}`, definition: { classKeys: ['server', 'no_such_class'] } };
+  const viewFile = { format: 'shadoucmdb.config', formatVersion: 6, savedViews: [cfgView] };
+  const viewDry = (await post('/api/v1/admin/config/import?mode=dry_run', viewFile, 200)).json;
+  check(viewDry.warnings.some((w: Json) => w.path === 'savedViews.0.definition.classKeys.1'), 'a dry run warns about a class the target lacks');
+  await post('/api/v1/admin/config/import?mode=apply', viewFile, 200);
+  const cfgViewSaved = (await get('/api/v1/saved-views?context=inventory')).json.data.find((v: Json) => v.name === cfgView.name);
+  check(cfgViewSaved?.visibility === 'shared' && cfgViewSaved.resolved.state === 'degraded', 'the imported shared view resolves without the missing class');
+  if (cfgViewSaved) await del(`/api/v1/saved-views/${cfgViewSaved.id}?version=${cfgViewSaved.version}`, 204);
   await post('/api/v1/admin/config/import', file, 400); // mode is required
   await post('/api/v1/admin/config/import?mode=later', file, 400);
 

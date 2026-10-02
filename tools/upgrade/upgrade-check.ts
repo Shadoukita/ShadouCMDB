@@ -240,6 +240,10 @@ async function seed() {
     ],
   });
   const viewer = await ok('POST', '/api/v1/admin/users', { username: VIEWER, displayName: 'Upgrade Viewer', password: VIEWER_PASSWORD, profileIds: [profile.id] });
+  // Migration 0039 grants views.share to every profile holding customization.manage (SHAA-578 D4).
+  const customisers = await ok('POST', '/api/v1/admin/profiles', {
+    name: 'Upgrade customisers', description: 'Branding and layouts (upgrade check)', globalPermissions: ['customization.manage'],
+  });
 
   const ids = {
     area: area?.id ?? null, coreModel,
@@ -249,7 +253,7 @@ async function seed() {
     cis: { server: server.id, server2: server2.id, application: app.id },
     deletedCi: gone.id,
     relationshipType: relType.id, relationshipRule: rule.id, relationship: rel.id,
-    profile: profile.id, viewer: viewer.id,
+    profile: profile.id, viewer: viewer.id, customisers: customisers.id,
     serviceClass: serviceClass?.id ?? null, serviceCis,
   };
 
@@ -453,6 +457,26 @@ async function businessServices(snap: Json) {
   for (const f of found) failures.push(`business services: ${f}`);
 }
 
+/** Migration 0039: views.share for every profile with customization.manage; saved views work for a restricted user. */
+async function savedViews(ids: Json) {
+  if (ids.customisers) {
+    const granted = (await ok('GET', `/api/v1/admin/profiles/${ids.customisers}`)).globalPermissions ?? [];
+    const has = granted.includes('customization.manage') && granted.includes('views.share');
+    if (!has) failures.push(`profile with customization.manage: expected views.share after the upgrade, has ${JSON.stringify(granted)}`);
+    console.error(`${has ? 'ok  ' : 'FAIL'} saved views: the customisers profile holds ${granted.join(', ')}`);
+  }
+  const admin = me;
+  me = await login(VIEWER, VIEWER_PASSWORD);
+  const created = await call('POST', '/api/v1/saved-views', { context: 'inventory', name: 'Upgrade servers', visibility: 'personal',
+    definition: { classKeys: [(await call('GET', `/api/v1/ci-classes/${ids.classes.server}`)).json.key] } });
+  const listed = await call('GET', '/api/v1/saved-views?context=inventory');
+  const works = created.status === 201 && created.json.resolved?.state === 'ok' && listed.json?.data?.some((v: Json) => v.id === created.json.id);
+  if (!works) failures.push(`saved views for the restricted user: create ${created.status}, list ${listed.status}`);
+  if (created.status === 201) await call('DELETE', `/api/v1/saved-views/${created.json.id}?version=1`);
+  me = admin;
+  console.error(`${works ? 'ok  ' : 'FAIL'} saved views: the restricted user saves and lists a view of the server class`);
+}
+
 async function check() {
   let input = '';
   for await (const chunk of process.stdin) input += chunk;
@@ -505,6 +529,9 @@ async function check() {
 
   // 5. Business services (migration 0033): the starter class "service" is adopted, or a new, empty class is created.
   await businessServices(snap);
+
+  // 6. Saved views (migration 0039): customisers gained views.share, and the restricted user can use saved views.
+  await savedViews(ids);
 
   if (failures.length) {
     console.error(`\n${failures.length} difference(s) after the upgrade:\n  ${failures.join('\n  ')}`);
