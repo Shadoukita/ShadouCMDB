@@ -281,7 +281,7 @@ async function copyLink() {
   try {
     await navigator.clipboard.writeText(window.location.href);
     announce("Link copied: it holds every filter, the sort and the columns");
-  } catch (e) {
+  } catch {
     fail("The link could not be copied", new Error(`Copy this address instead: ${window.location.href}`));
   }
 }

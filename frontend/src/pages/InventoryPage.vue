@@ -163,7 +163,7 @@ function clearFilters() {
     <div v-if="list.isError.value" class="panel-body">
       <ErrorAlert :error="list.error.value" :on-retry="() => list.refetch()" />
     </div>
-    <LoadingState v-if="list.isPending.value" :label="sv.holding.value ? 'Opening the saved view…' : 'Loading inventory…'" />
+    <LoadingState v-if="list.isPending.value" :label="sv.holding.value && sv.viewId.value ? 'Opening the saved view…' : 'Loading inventory…'" />
 
     <EmptyState v-if="classDenied" title="Permission denied">
       None of your permission profiles allows viewing {{ currentClass?.name }} configuration items, so none are listed here.

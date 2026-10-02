@@ -75,7 +75,7 @@ const inventoryLink = computed(() => {
       <InventoryFilters :state="state" id-prefix="s" />
       <button v-if="activeFilters.length > 0" type="button" class="btn" @click="state.clearFilters()">Clear filters</button>
     </div>
-    <LoadingState v-if="!q && sv.holding.value" label="Opening the saved view…" />
+    <LoadingState v-if="!q && sv.holding.value && sv.viewId.value" label="Opening the saved view…" />
     <EmptyState v-else-if="!q" title="Type in the search box above">
       Search covers labels, idents and attribute values, including IP addresses and networks. Saved searches are in the View menu.
     </EmptyState>
