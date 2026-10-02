@@ -18,7 +18,7 @@ function gridLayout(placement?: "grid"): UiClassLayout {
           { key: "a", label: "A", columns: 3, width: 6, collapsed: false, fields: [{ field: "ident", width: 1 }] },
           { key: "b", label: "B", columns: 3, width: 6, minHeight: 3, collapsed: false, fields: [{ field: "criticality", width: 1 }] },
           { key: "c", label: "C", columns: 2, width: 12, collapsed: false, fields: [{ field: "validFrom", width: 1 }, { field: "validUntil", width: 1 }] },
-          { key: "d", label: "D", width: 4, newRow: true, kind: "note", text: "Read me" },
+          { key: "d", label: "D", columns: 3, width: 4, newRow: true, kind: "note", text: "Read me" },
         ],
       },
     ],
