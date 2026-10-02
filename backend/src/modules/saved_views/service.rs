@@ -3,7 +3,8 @@
 //! A personal view is its owner's alone: anyone else gets the same `404` as for
 //! a view that does not exist, administrators included (GDPR data
 //! minimisation, §3.2). A shared view is read by every user who may view one of
-//! its classes and changed only with `views.share` (§3.3). Changes to shared
+//! its classes and changed only with `views.share` (§3.3) by a user who may
+//! view every class it names (GH#508). Changes to shared
 //! views are audited in the same transaction; personal views and defaults are
 //! not (§3.4).
 
@@ -64,7 +65,8 @@ pub struct SavedView {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub default_count: Option<i64>,
-    /// Whether the caller may change and delete it: the owner of a personal view, `views.share` for a shared one
+    /// Whether the caller may change and delete it: the owner of a personal view; for a shared one, `views.share` and
+    /// the right to view every class it names
     pub can_edit: bool,
     /// Send it back with changes and deletes (optimistic concurrency)
     pub version: i32,
@@ -81,7 +83,8 @@ pub struct SavedViewLimit {
     pub max: i64,
 }
 
-/// Personal: the caller's views; shared: the instance's shared views. Both contexts count.
+/// Personal: the caller's views; shared: the shared views available to the caller (the instance limit counts every
+/// shared view). Both contexts count.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SavedViewLimits {
@@ -121,7 +124,10 @@ fn name_schema() -> utoipa::openapi::schema::Schema {
         .min_length(Some(1))
         .max_length(Some(100))
         .pattern(Some(NOT_BLANK_PATTERN))
-        .description(Some("Unique per owner and context (shared views: per context), ignoring case"))
+        .description(Some(
+            "Unique per owner and context, ignoring case. Shared views: unique per context across the instance, \
+             including shared views not available to you",
+        ))
         .into()
 }
 
@@ -164,7 +170,7 @@ pub struct UpdateSavedView {
     #[schema(schema_with = description_schema)]
     #[serde(default, deserialize_with = "patch_trimmed")]
     pub description: Option<Option<String>>,
-    /// Replaces the definition. Class keys of the stored definition that the caller may not view are kept
+    /// Replaces the definition. Class keys of a personal view that its owner may no longer view are kept
     #[schema(nullable = false)]
     #[serde(default)]
     pub definition: Option<SavedViewDefinition>,
@@ -316,6 +322,15 @@ fn require_share(ctx: &RequestContext) -> Result<(), AppError> {
     ))
 }
 
+/// A shared view that names a class the caller may not view: changing it could
+/// widen it for those who may, deleting it would remove what they rely on (GH#508).
+fn partly_hidden() -> AppError {
+    AppError::new(
+        ErrorCode::Forbidden,
+        "This shared view includes classes you may not view, so you cannot change or delete it. Copy it instead.",
+    )
+}
+
 fn coded(code: ErrorCode, message: &str, field: &str, detail: &str) -> AppError {
     AppError::new(code, message).with_details(vec![FieldError {
         location: FieldLocation::Body,
@@ -416,7 +431,7 @@ fn dto(seen: &Seen, ctx: &RequestContext, viewer: &Viewer, cat: &Catalogue) -> R
         home: home.map(str::to_owned),
         is_default: row.is_default && !home_hidden,
         default_count: (row.shared() && shares).then_some(row.default_count),
-        can_edit: !row.shared() || shares,
+        can_edit: !row.shared() || (shares && viewer.sees_all(cat, stored)),
         version: row.version,
         created_at: row.created_at,
         created_by: SavedViewUser { id: row.created_by_id, name: row.created_by_name.clone() },
@@ -429,12 +444,19 @@ fn dto(seen: &Seen, ctx: &RequestContext, viewer: &Viewer, cat: &Catalogue) -> R
 // Reads
 // ---------------------------------------------------------------------------
 
-async fn counts(conn: &mut PgConnection, me: Uuid) -> sqlx::Result<(i64, i64)> {
+/// The caller's personal views, and the shared views available to them: a
+/// shared view none of whose classes they may view is not counted, so the
+/// number does not tell that one exists (GH#507). `visible_keys`: see
+/// [`Viewer::visible_keys`]; [`Viewer::sees_shared`] in SQL.
+async fn counts(conn: &mut PgConnection, me: Uuid, visible_keys: Option<Vec<String>>) -> sqlx::Result<(i64, i64)> {
     sqlx::query_as(
-        "SELECT count(*) FILTER (WHERE owner_id = $1), count(*) FILTER (WHERE owner_id IS NULL)
+        "SELECT count(*) FILTER (WHERE owner_id = $1),
+           count(*) FILTER (WHERE owner_id IS NULL AND ($2::text[] IS NULL
+             OR coalesce(definition -> 'classKeys', '[]'::jsonb) = '[]'::jsonb OR definition -> 'classKeys' ?| $2))
          FROM cmdb.saved_views WHERE owner_id = $1 OR owner_id IS NULL",
     )
     .bind(me)
+    .bind(visible_keys)
     .fetch_one(conn)
     .await
 }
@@ -459,7 +481,7 @@ pub async fn list(pool: &PgPool, ctx: &RequestContext, q: &ListSavedViewsQuery) 
             data.push(dto(&Seen { row, stored }, ctx, &viewer, &cat)?);
         }
     }
-    let (personal, shared) = counts(&mut conn, me).await?;
+    let (personal, shared) = counts(&mut conn, me, viewer.visible_keys(&cat)).await?;
     Ok(SavedViewList {
         data,
         limits: SavedViewLimits {
@@ -620,8 +642,8 @@ fn version_conflict(sent: i32, row: &Row) -> AppError {
 }
 
 /// The view, locked, if the caller may change it: `404` when they may not read
-/// it, `403` for a shared view without `views.share`, `409 VERSION_CONFLICT`
-/// when stale.
+/// it, `403` for a shared view without `views.share` or with a class they may
+/// not view, `409 VERSION_CONFLICT` when stale.
 async fn for_change(
     conn: &mut PgConnection,
     ctx: &RequestContext,
@@ -634,6 +656,9 @@ async fn for_change(
     let seen = fetch_readable(conn, me, id, true, viewer, cat).await?;
     if seen.row.shared() {
         require_share(ctx)?;
+        if !viewer.sees_all(cat, &seen.stored) {
+            return Err(partly_hidden());
+        }
     }
     if seen.row.version != version {
         return Err(version_conflict(version, &seen.row));
@@ -891,9 +916,13 @@ pub(crate) async fn config_write(
             let cat = Catalogue::load(conn).await?;
             let viewer = Viewer::of(ctx);
             let stored = before.definition()?;
-            // A shared view the importer cannot see is not theirs to rewrite (GH#476).
+            // A shared view the importer cannot see is not theirs to rewrite (GH#476), nor one
+            // they see only part of (GH#508); the import skips both with a warning.
             if !viewer.sees_shared(&cat, &stored) {
                 return Err(not_found(id));
+            }
+            if !viewer.sees_all(&cat, &stored) {
+                return Err(partly_hidden());
             }
             let merged = merge_hidden(&viewer, &cat, &stored, definition.clone());
             if merged.json_bytes() > super::definition::MAX_DEFINITION_BYTES {

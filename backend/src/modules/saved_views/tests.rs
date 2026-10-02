@@ -496,6 +496,11 @@ async fn views_never_reveal_or_widen_beyond_the_callers_rights() {
     assert!(list["data"].as_array().unwrap().iter().all(|v| v["id"] != vms["id"]));
     let (status, _) = w.call(&b, "GET", &format!("{VIEWS}/{vms_id}"), None).await;
     assert_eq!(status, 404);
+    // GH#507: nor does the shared count tell that it exists.
+    let (_, list) = w.call(&b, "GET", VIEWS, None).await;
+    assert_eq!(list["limits"]["shared"], json!({ "used": 1, "max": 500 }), "{list}");
+    let (_, list) = w.call(&admin, "GET", VIEWS, None).await;
+    assert_eq!(list["limits"]["shared"], json!({ "used": 2, "max": 500 }), "{list}");
 
     // 6. A's personal view is 404 to B whatever B does.
     let mine = w.created(&a, view("inventory", "Alice's", "personal", json!({ "classKeys": ["server"] }))).await;
@@ -571,20 +576,48 @@ async fn views_never_reveal_or_widen_beyond_the_callers_rights() {
     let (_, seen) = w.call(&admin, "GET", &format!("{VIEWS}/{mixed_id}"), None).await;
     assert_eq!((seen["isDefault"].as_bool(), seen["defaultCount"].as_i64()), (Some(false), Some(1)));
 
-    // 8. S edits the shared view: the VM key S cannot see stays stored.
+    // 8. S may change a shared view on servers, but not one that also names the VM class S cannot see
+    // (GH#508): an edit or delete made without seeing all of it would change it for those who do.
+    let racks = w
+        .created(
+            &admin,
+            view("inventory", "Racks", "shared", json!({ "classKeys": ["server"], "filters": { "q": "rack" } })),
+        )
+        .await;
+    let racks_path = format!("{VIEWS}/{}", racks["id"].as_str().unwrap());
+    let (_, seen) = w.call(&s, "GET", &racks_path, None).await;
+    assert_eq!(seen["canEdit"], true);
+    let (status, edited) =
+        w.call(&s, "PATCH", &racks_path, Some(json!({ "version": 1, "name": "Server racks" }))).await;
+    assert_eq!((status, edited["name"].as_str()), (200, Some("Server racks")), "{edited}");
+    let (_, seen) = w.call(&s, "GET", &format!("{VIEWS}/{mixed_id}"), None).await;
+    assert_eq!(seen["canEdit"], false, "{seen}");
+    let stored = w.stored(&mixed_id).await;
+    for (method, path, body) in [
+        (
+            "PATCH",
+            format!("{VIEWS}/{mixed_id}"),
+            Some(json!({ "version": 1, "definition": { "classKeys": ["server"] } })),
+        ),
+        ("PATCH", format!("{VIEWS}/{mixed_id}"), Some(json!({ "version": 1, "definition": { "classKeys": [] } }))),
+        ("PATCH", format!("{VIEWS}/{mixed_id}"), Some(json!({ "version": 1, "name": "Renamed" }))),
+        ("DELETE", format!("{VIEWS}/{mixed_id}?version=1"), None),
+    ] {
+        let (status, v) = w.call(&s, method, &path, body).await;
+        assert_eq!((status, code(&v)), (403, "FORBIDDEN"), "{method} {path}: {v}");
+        assert!(!v.to_string().contains("virtual_machine"), "{v}");
+    }
+    assert_eq!(w.stored(&mixed_id).await, stored, "the view is untouched");
     let (status, edited) = w
         .call(
-            &s,
+            &admin,
             "PATCH",
             &format!("{VIEWS}/{mixed_id}"),
             Some(json!({ "version": 1,
-        "definition": { "classKeys": ["server"], "sort": { "field": "ident", "direction": "desc" } } })),
+        "definition": { "classKeys": ["server", "virtual_machine"], "sort": { "field": "ident", "direction": "desc" } } })),
         )
         .await;
     assert_eq!(status, 200, "{edited}");
-    assert_eq!(edited["definition"]["classKeys"], json!(["server"]));
-    assert!(!edited.to_string().contains("virtual_machine"));
-    assert_eq!(w.stored(&mixed_id).await["classKeys"], json!(["server", "virtual_machine"]));
     assert_eq!(w.stored(&mixed_id).await["sort"], json!({ "field": "ident", "direction": "desc" }));
     let (_, fleet) = w.call(&b, "GET", &format!("{VIEWS}/{mixed_id}"), None).await;
     assert_eq!(fleet["isDefault"], true, "the home did not move, so B's default stays");
@@ -596,8 +629,7 @@ async fn views_never_reveal_or_widen_beyond_the_callers_rights() {
         .call(&admin, "PATCH", &format!("/api/v1/admin/profiles/{sharers}"), Some(json!({ "globalPermissions": [] })))
         .await;
     assert_eq!(status, 200, "{p}");
-    let (status, v) =
-        w.call(&s, "PATCH", &format!("{VIEWS}/{mixed_id}"), Some(json!({ "version": 2, "name": "Renamed" }))).await;
+    let (status, v) = w.call(&s, "PATCH", &racks_path, Some(json!({ "version": 2, "name": "Renamed" }))).await;
     assert_eq!((status, code(&v)), (403, "FORBIDDEN"), "{v}");
 
     // 11. An auditor limited to servers never sees the VM key in saved_views entries.
@@ -632,7 +664,13 @@ async fn views_never_reveal_or_widen_beyond_the_callers_rights() {
     assert!(entries.iter().any(|e| e["newValue"]["hiddenClassKeyCount"] == 1), "{log}");
     let (_, full) = w.call(&admin, "GET", "/api/v1/audit-log?entityType=saved_views&limit=200", None).await;
     assert!(full.to_string().contains("virtual_machine"));
-    assert_eq!(full["page"]["total"], log["page"]["total"], "the entries themselves are not hidden");
+    // GH#506: the entry about the VM-only view, which is 404 to R, is left out with its name and filters.
+    assert!(full.to_string().contains("VMs only") && !log.to_string().contains("VMs only"), "{log}");
+    let total = |v: &Value| v["page"]["total"].as_i64().unwrap();
+    assert_eq!((total(&full) - total(&log), total(&log)), (1, entries.len() as i64), "{log}");
+    let (_, by_id) =
+        w.call(&r, "GET", &format!("/api/v1/audit-log?entityType=saved_views&entityId={vms_id}"), None).await;
+    assert_eq!((total(&by_id), by_id["data"].as_array().map(Vec::len)), (0, Some(0)), "{by_id}");
 
     // §3.4: one row per shared change with the right values; personal changes write none.
     let rows = w.audit_rows(&mixed_id).await;
@@ -728,7 +766,7 @@ async fn views_never_reveal_or_widen_beyond_the_callers_rights() {
     .fetch_one(&w.pool)
     .await
     .unwrap();
-    assert_eq!((personal_left, defaults_left, shared_left), (0, 0, 3));
+    assert_eq!((personal_left, defaults_left, shared_left), (0, 0, 4));
     let creator: String = sqlx::query_scalar("SELECT created_by_name FROM saved_views WHERE id = $1::uuid")
         .bind(&mixed_id)
         .fetch_one(&w.pool)
@@ -1048,8 +1086,8 @@ async fn shared_views_travel_with_the_configuration_file() {
 }
 
 /// GH#475/#476: a restricted importer neither sees nor rewrites a shared view
-/// that the API answers 404 to them, and a diff of a view they do see never
-/// names a class they cannot view; on a dry run and on apply alike.
+/// that the API answers 404 to them, nor (GH#508) one they see only part of,
+/// and never sees a class they cannot view named; on a dry run and on apply alike.
 #[tokio::test]
 async fn config_import_respects_what_the_importer_may_see() {
     let Some((db, w)) = world("saved_views_config_hidden").await else { return };
@@ -1074,9 +1112,9 @@ async fn config_import_respects_what_the_importer_may_see() {
         let body = v.to_string();
         assert!(!body.contains("database") && !body.contains("Secret notes"), "{mode}: {body}");
         let warned: Vec<&str> = v["warnings"].as_array().unwrap().iter().map(|w| w["path"].as_str().unwrap()).collect();
-        assert_eq!(warned, ["savedViews.0"], "{mode}: the hidden view is skipped with a warning");
+        assert_eq!(warned, ["savedViews.0", "savedViews.1"], "{mode}: both views are skipped with a warning");
         let section = v["summary"].as_array().unwrap().iter().find(|s| s["section"] == "savedViews").unwrap();
-        assert_eq!((section["created"].as_i64(), section["updated"].as_i64()), (Some(0), Some(1)), "{mode}: {v}");
+        assert_eq!((section["created"].as_i64(), section["updated"].as_i64()), (Some(0), Some(0)), "{mode}: {v}");
     }
 
     let hidden_row: (Option<String>, Value) =
@@ -1086,10 +1124,8 @@ async fn config_import_respects_what_the_importer_may_see() {
             .await
             .unwrap();
     assert_eq!(hidden_row, (Some("Secret notes".to_owned()), before.0), "the hidden view is untouched");
-    let after = w.stored(mixed["id"].as_str().unwrap()).await;
-    assert_eq!(after["classKeys"], json!(["server", "database"]), "the hidden class stays in the visible view");
-    assert_eq!(after["columns"], json!(["label"]));
-    assert_ne!(after, before.1);
+    // GH#508: the API refuses to change a view with a class the importer cannot see, and so does the import.
+    assert_eq!(w.stored(mixed["id"].as_str().unwrap()).await, before.1, "the partly hidden view is untouched");
 
     db.drop().await;
 }

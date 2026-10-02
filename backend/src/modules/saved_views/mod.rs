@@ -39,8 +39,8 @@ pub fn routes() -> Vec<Route> {
             .summary("The caller's views and the shared views available to them")
             .description(
                 "Session only. Personal views first, then shared ones, each by name; not paged (at most 200 personal \
-                 views per user and 500 shared views per instance, both contexts together, reported in `limits`). \
-                 A shared view whose classes the caller may view none of is left out; one they may view some of \
+                 views per user and 500 shared views per instance, both contexts together; `limits.shared.used` \
+                 counts only the shared views available to the caller). A shared view whose classes the caller may view none of is left out; one they may view some of \
                  comes without the others' keys, which `resolved.issues` only counts (`not_available`). Each view \
                  comes resolved against today's data model: `resolved.state` is `ok`, `degraded` (something that \
                  only narrows or presents results was dropped) or `unavailable` (a filter would disappear and widen \
@@ -61,7 +61,8 @@ pub fn routes() -> Vec<Route> {
                  (`unknown_attribute`, `ambiguous_attribute`) that is not a reference (`not_sortable`); lookup \
                  lists and values must exist and be active (`unknown_lookup`); a search view needs `filters.q` and \
                  takes neither `sort` nor `columns` (`not_allowed`); at most 16 KiB (`too_large`). Names are unique \
-                 per owner and context ignoring case (shared: per context), `409 CONFLICT duplicate_name`; at most \
+                 per owner and context ignoring case (shared: per context, across the instance, including shared \
+                 views the caller cannot see), `409 CONFLICT duplicate_name`; at most \
                  200 personal views per user and 500 shared views (`409 CONFLICT limit_reached`). A shared view is \
                  audited as a `create` of `saved_views`; personal views are not audited.",
             )
@@ -103,9 +104,10 @@ pub fn routes() -> Vec<Route> {
             .summary("Rename a view or change its definition")
             .description(
                 "Session only. Send the `version` you loaded: `409 VERSION_CONFLICT` if someone saved in between. \
-                 A personal view is changed by its owner, a shared view with `views.share` (403); context and \
-                 visibility cannot change (copy instead). The definition is checked as on create; class keys of \
-                 the stored definition the caller may not view are kept. When the view's home changes, defaults \
+                 A personal view is changed by its owner, a shared view with `views.share` by a caller who may \
+                 view every class it names (403 otherwise; `canEdit` says which); context and visibility cannot \
+                 change (copy instead). The definition is checked as on create; class keys of a personal view's \
+                 stored definition its owner may no longer view are kept. When the view's home changes, defaults \
                  for its old home are removed. A shared view is audited as an `update` of `saved_views` with the \
                  view before and after.",
             )
@@ -119,7 +121,8 @@ pub fn routes() -> Vec<Route> {
             .summary("Delete a view")
             .description(
                 "Session only. `?version=` is the version you loaded (`409 VERSION_CONFLICT` otherwise). A personal \
-                 view is deleted by its owner, a shared view with `views.share` (403). Users who had it as their \
+                 view is deleted by its owner, a shared view with `views.share` by a caller who may view every \
+                 class it names (403). Users who had it as their \
                  default get the standard list again. No CI is touched. A shared view is audited as a `delete` of \
                  `saved_views`.",
             )

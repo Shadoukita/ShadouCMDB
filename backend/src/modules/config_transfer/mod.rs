@@ -1090,7 +1090,8 @@ fn validate_mappings(
 /// importer could not save through the API (SHAA-578 §3.1).
 /// GH#475/#476: a stored shared view the importer cannot see (every one of its
 /// classes is hidden from them) is answered `404` by the API, so the import
-/// neither shows nor rewrites it: the file's view of that name is skipped.
+/// neither shows nor rewrites it: the file's view of that name is skipped. So
+/// is one with only some classes hidden, which the API refuses to change (GH#508).
 fn existing_view_hidden(
     current: &[SavedViewSpec],
     key: &(String, String),
@@ -1100,13 +1101,15 @@ fn existing_view_hidden(
     current
         .iter()
         .find(|v| v.context.as_str() == key.0 && v.name.to_lowercase() == key.1)
-        .is_some_and(|v| !viewer.sees_shared(cat, &v.definition))
+        .is_some_and(|v| !viewer.sees_all(cat, &v.definition))
 }
 
 fn hidden_view_warning(path: String, name: &str) -> ImportWarning {
     ImportWarning {
         path,
-        message: format!("A shared view named \"{name}\" exists but is not available to you; this view was skipped"),
+        message: format!(
+            "A shared view named \"{name}\" exists and includes classes you cannot view; this view was skipped"
+        ),
     }
 }
 
