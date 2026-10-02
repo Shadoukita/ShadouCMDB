@@ -11,6 +11,7 @@ import {
   useUpdateSavedView,
   type SavedView,
 } from "../../api/savedViews";
+import { plural } from "../../lib/format";
 import { param, type QueryContext } from "../../lib/inventoryQuery";
 import { definitionFromUrl, droppedSummary, groupViews, homeName, sameState, urlState, viewState, viewUrlQuery, type DefinitionCatalogue } from "../../lib/savedViews";
 import type { useInventoryQueryState } from "../../lib/useInventoryQueryState";
@@ -193,6 +194,13 @@ function onMenuKey(e: KeyboardEvent) {
   }
 }
 
+/** Retry keeps the menu open, so the operator sees the views come in; focus moves to the first item. */
+async function retry() {
+  await viewsQuery.refetch();
+  await nextTick();
+  items()[0]?.focus();
+}
+
 function pick(v: SavedView) {
   if (v.resolved.state === "unavailable") return;
   hide(true);
@@ -220,7 +228,7 @@ watch(
   ([name, total, pending]) => {
     if (!name || pending || total === undefined) return;
     props.selection.applied.value = null;
-    say(props.context === "inventory" ? `View ${name} applied, ${total.toLocaleString()} configuration items` : `View ${name} applied`);
+    say(props.context === "inventory" ? `View ${name} applied, ${plural(total, "configuration item")}` : `View ${name} applied`);
   },
 );
 
@@ -460,7 +468,7 @@ const dropped = computed(() => {
 
       <ul :id="menuId" ref="menuEl" role="menu" aria-label="Views" :aria-describedby="loadError ? `${menuId}-error` : undefined" @keydown="onMenuKey">
         <li v-if="loadError" role="none">
-          <button type="button" role="menuitem" tabindex="-1" @click="viewsQuery.refetch()">Retry</button>
+          <button type="button" role="menuitem" tabindex="-1" @click="retry">Retry</button>
         </li>
         <template v-for="g in (['personal', 'shared'] as const)" :key="g">
           <li v-if="groups[g].length > 0" role="none">

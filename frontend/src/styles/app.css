@@ -2665,11 +2665,14 @@ dialog.member-picker td .badge {
 }
 .view-menu-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--sp-2);
 }
 .view-menu-button {
-  max-width: 280px;
+  display: inline-flex;
+  align-items: center;
+  max-width: min(280px, 100%);
 }
 .view-menu-name {
   overflow: hidden;
@@ -2749,8 +2752,14 @@ dialog.member-picker td .badge {
 .view-menu-banner > .alert {
   margin-bottom: 0;
 }
-dialog.manage-views {
-  width: min(1040px, 96vw);
+dialog.form-dialog.manage-views {
+  width: min(1100px, 96vw);
+}
+dialog.manage-views .table-wrap {
+  overflow-x: auto;
+}
+dialog.manage-views td.row-actions {
+  white-space: nowrap;
 }
 .manage-views-heading {
   margin: 0 0 var(--sp-2);
@@ -2759,5 +2768,8 @@ dialog.manage-views {
 @media (max-width: 480px) {
   .view-menu {
     position: static;
+  }
+  .view-menu-popup {
+    width: auto;
   }
 }

@@ -76,7 +76,7 @@ const inventoryLink = computed(() => {
     <RouterLink v-if="q" class="btn" :to="inventoryLink">Open as filterable inventory</RouterLink>
   </div>
   <section class="panel" aria-label="Search results">
-    <div class="toolbar" role="group" aria-label="Views and filters">
+    <div class="toolbar" role="group" aria-label="Filter the results">
       <SavedViewMenu context="search" :state="state" :selection="selection" :classes="classes.data.value" :catalogue="catalogue" :total="settledTotal" />
       <template v-if="q">
         <InventoryFilters :state="state" id-prefix="s" />
