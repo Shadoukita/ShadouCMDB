@@ -121,8 +121,8 @@ test("1. save as new view; a reload and a view=-only link restore the rows, colu
 
   await menuAction(page, "Save as new view…");
   const dialog = page.getByRole("dialog", { name: "Save as new view" });
-  await expect(dialog.getByLabel("Name", { exact: true })).toBeFocused();
-  await dialog.getByLabel("Name", { exact: true }).fill(vname("Prod servers"));
+  await expect(dialog.getByRole("textbox", { name: "Name", exact: true })).toBeFocused();
+  await dialog.getByRole("textbox", { name: "Name", exact: true }).fill(vname("Prod servers"));
   await dialog.getByLabel(/Description/).fill("Production servers by hostname");
   await dialog.getByRole("button", { name: "Save view" }).click();
   await expect(dialog).toBeHidden();
@@ -171,7 +171,7 @@ test("3. rename to a duplicate is refused at the field; delete names the view an
   await page.goto(`/cis?view=${v.id}`);
   await menuAction(page, "Rename…");
   const rename = page.getByRole("dialog", { name: /^Rename view/ });
-  const name = rename.getByLabel("Name", { exact: true });
+  const name = rename.getByRole("textbox", { name: "Name", exact: true });
   await expect(name).toBeFocused();
   await name.fill(vname("OTHER")); // names are unique ignoring case
   await rename.getByRole("button", { name: "Rename" }).click();
@@ -243,7 +243,7 @@ test.describe("5. shared views", () => {
     await page.goto(`/cis?view=${v.id}`);
     await menuAction(page, "Share a copy…");
     const share = page.getByRole("dialog", { name: /^Share a copy of/ });
-    await share.getByLabel("Name", { exact: true }).fill(vname("Shared"));
+    await share.getByRole("textbox", { name: "Name", exact: true }).fill(vname("Shared"));
     await share.getByRole("button", { name: "Share copy" }).click();
     await expect(share).toBeHidden();
     const shared = await viewByName(request, vname("Shared"));
@@ -266,7 +266,7 @@ test.describe("5. shared views", () => {
     for (const action of ["Save view", "Rename…", "Delete…", "Share a copy…"]) await expect(menu(reader).getByRole("menuitem", { name: action, exact: true })).toHaveCount(0);
     await menu(reader).getByRole("menuitem", { name: "Copy to my views…" }).click();
     const copy = reader.getByRole("dialog", { name: /to my views$/ });
-    await copy.getByLabel("Name", { exact: true }).fill(vname("Reader copy"));
+    await copy.getByRole("textbox", { name: "Name", exact: true }).fill(vname("Reader copy"));
     await copy.getByRole("button", { name: "Copy" }).click();
     await expect(viewButton(reader)).toContainText(vname("Reader copy"));
     await openMenu(reader);
@@ -317,7 +317,7 @@ test("6. a degraded view says what was dropped; an unavailable one is disabled a
   const item = viewItem(page, vname("Unavailable"));
   await expect(item).toHaveAttribute("aria-disabled", "true");
   await expect(item).toHaveAttribute("title", "This view refers to a filter that no longer exists.");
-  await item.click();
+  await item.click({ force: true }); // Playwright waits on aria-disabled items; the click must still do nothing.
   await expect(page).not.toHaveURL(/[?&]view=/);
   await page.keyboard.press("Escape");
   // A link to it is not applied either: a banner, and the class is never listed without the filter.
@@ -339,7 +339,7 @@ test("7. a search view restores the term and the filters; search views are never
   await menuAction(page, "Save as new view…");
   const dialog = page.getByRole("dialog", { name: "Save as new view" });
   await expect(dialog).toContainText("Saves the search term and its filters.");
-  await dialog.getByLabel("Name", { exact: true }).fill(vname("Search"));
+  await dialog.getByRole("textbox", { name: "Name", exact: true }).fill(vname("Search"));
   await dialog.getByRole("button", { name: "Save view" }).click();
   await expect(page).toHaveURL(/[?&]view=/);
 
@@ -414,7 +414,7 @@ test("9. keyboard only: open, move, apply, Esc; Save as and Delete", async ({ pa
   await expect(menu(page).getByRole("menuitem", { name: "Save as new view…" })).toBeFocused();
   await page.keyboard.press("Enter");
   const dialog = page.getByRole("dialog", { name: "Save as new view" });
-  await expect(dialog.getByLabel("Name", { exact: true })).toBeFocused();
+  await expect(dialog.getByRole("textbox", { name: "Name", exact: true })).toBeFocused();
   await page.keyboard.type(vname("Keyboard"));
   await page.keyboard.press("Enter");
   await expect(dialog).toBeHidden();
