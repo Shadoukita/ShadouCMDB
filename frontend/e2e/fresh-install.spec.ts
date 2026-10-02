@@ -1,6 +1,6 @@
 import type { APIRequestContext } from "@playwright/test";
 import { BARE_STATE, FRESH_ADMIN, IMPORT_TARGET_STATE } from "./global-setup";
-import { apiGet, apiSend, applySchemaChange, expect, snap, test } from "./support";
+import { apiGet, apiSend, applySchemaChange, csrf, expect, snap, test } from "./support";
 
 // A bare install built up from nothing, then exported and imported into a second fresh install, nothing mocked.
 // Two more APIs next to the shared demo instance, each on its own migrated and `seed`ed database (system rows only,
@@ -39,7 +39,8 @@ interface ConfigFile {
 }
 
 async function exportConfig(request: APIRequestContext): Promise<ConfigFile> {
-  const res = await request.get("/api/v1/admin/config/export");
+  // The audited export needs the CSRF token although it is a GET (GH#414).
+  const res = await request.get("/api/v1/admin/config/export", { headers: { "X-CSRF-Token": await csrf(request) } });
   expect(res.ok(), `export → ${res.status()}`).toBeTruthy();
   expect(res.headers()["content-disposition"]).toContain("attachment");
   return (await res.json()) as ConfigFile;

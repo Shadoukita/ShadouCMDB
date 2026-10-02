@@ -146,7 +146,7 @@ test("permission profiles and configuration export/import refuse API tokens, rea
     expect((await ctx.get(`/api/v1/admin/profiles/${target.id}`)).status()).toBe(200);
 
     // The export needs a session too (GH#445), so the file to import comes from the signed-in session.
-    const exported = await request.get("/api/v1/admin/config/export");
+    const exported = await request.get("/api/v1/admin/config/export", { headers: { "X-CSRF-Token": await csrf(request) } });
     expect(exported.status()).toBe(200);
     const config = await exported.json();
     const writes = [

@@ -13,7 +13,8 @@ import FormField from "../form/FormField.vue";
 /**
  * Disable/enable, reset password, reset two-factor and delete. Each says what happens to the user's sessions.
  * An identity provider's account has no password here (the API answers 409): its password and second factor
- * are the provider's business, so those panels are replaced by a pointer to it.
+ * are the provider's business, so those panels are replaced by a pointer to it. Your own password and second factor
+ * are not reset here either (the API answers 409): My account changes them and asks for the current password.
  */
 const props = defineProps<{ user: User; isSelf: boolean }>();
 const provider = computed(() => props.user.identityProvider);
@@ -117,16 +118,22 @@ function resetPassword() {
       </p>
     </div>
   </section>
-  <section v-if="!provider" class="panel" aria-labelledby="pw-title">
+  <section v-if="!provider && isSelf" class="panel" aria-labelledby="pw-title">
+    <div class="panel-header"><h2 id="pw-title">Password</h2></div>
+    <div class="panel-body">
+      <p class="muted no-margin" data-testid="self-password">
+        This is you: change your own password under <RouterLink to="/account">My account</RouterLink>. It asks for your
+        current password.
+      </p>
+    </div>
+  </section>
+  <section v-if="!provider && !isSelf" class="panel" aria-labelledby="pw-title">
     <div class="panel-header"><h2 id="pw-title">Reset password</h2></div>
     <form class="panel-body stack" novalidate @submit.prevent="resetPassword">
       <p class="muted" style="margin: 0">
         Sets a new password for {{ user.username }}, signs them out everywhere and revokes their API tokens.
-        <strong v-if="isSelf">This is you: this session stays signed in; your other sessions are signed out.</strong>
       </p>
-      <div v-if="pwDone" class="alert" role="status">
-        Password changed. {{ isSelf ? "Your other sessions were ended." : `${user.username}'s sessions were ended.` }}
-      </div>
+      <div v-if="pwDone" class="alert" role="status">Password changed. {{ user.username }}'s sessions were ended.</div>
       <ErrorAlert v-if="setPassword.isError.value && !pwFieldErrors.password" :error="setPassword.error.value" title="Password not changed" />
       <div class="form-grid">
         <FormField id="reset-password" label="New password" required :error="pwFieldErrors.password" hint="At least 12 characters">
