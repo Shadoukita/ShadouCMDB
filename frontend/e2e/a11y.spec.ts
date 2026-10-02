@@ -1,5 +1,5 @@
 import type { Browser, Page } from "@playwright/test";
-import { apiGet, apiSend, at, checkA11y, classIdByName, expect, test } from "./support";
+import { apiGet, apiSend, at, checkA11y, classIdByName, csrf, expect, test } from "./support";
 
 // Accessibility (WCAG 2.1 A and AA) of the main screens, checked with axe-core. A critical or serious
 // violation fails the test; moderate and minor ones are listed in the output and attached to the report.
@@ -43,6 +43,47 @@ test("inventory Columns popover, light and dark", async ({ page, request }, test
     await expect(page.getByRole("dialog", { name: "Columns" }).getByRole("group", { name: "Attributes of Server" })).toBeVisible();
     await checkA11y(page, testInfo, `columns-popover-${colorScheme}`);
     await page.keyboard.press("Escape");
+  }
+});
+
+test("saved views: the open View menu and its dialogs, light and dark", async ({ page, request }, testInfo) => {
+  const view = await apiSend<{ id: string; version: number }>(request, "POST", "/saved-views", {
+    context: "inventory",
+    name: `zz-e2e-a11y-${stamp}`,
+    visibility: "personal",
+    definition: { classKeys: ["server"] },
+  });
+  try {
+    await page.goto(`/cis?view=${view.id}`);
+    await expect(page.locator("table tbody tr").first()).toBeVisible();
+    const viewButton = page.getByRole("button", { name: /^View:/ });
+    await expect(viewButton).toContainText(`zz-e2e-a11y-${stamp}`);
+    const dialogs: [string, string | RegExp][] = [
+      ["Save as new view…", "Save as new view"],
+      ["Rename…", /^Rename view/],
+      ["Delete…", /^Delete view/],
+      ["Manage views…", "Manage views"],
+    ];
+    for (const colorScheme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme });
+      await viewButton.click();
+      await expect(page.getByRole("menu", { name: "Saved views" })).toBeVisible();
+      await checkA11y(page, testInfo, `view-menu-${colorScheme}`);
+      await page.keyboard.press("Escape");
+      for (const [action, name] of dialogs) {
+        await viewButton.click();
+        await page.getByRole("menu", { name: "Saved views" }).getByRole("menuitem", { name: action }).click();
+        const dialog = page.getByRole("dialog", { name });
+        await expect(dialog).toBeVisible();
+        await checkA11y(page, testInfo, `view-dialog-${action.replace(/\W+/g, "-").toLowerCase()}${colorScheme}`);
+        await page.keyboard.press("Escape");
+        await expect(dialog).toBeHidden();
+      }
+    }
+  } finally {
+    const current = await apiGet<{ version: number }>(request, `/saved-views/${view.id}`);
+    const res = await request.delete(`/api/v1/saved-views/${view.id}?version=${current.version}`, { headers: { "X-CSRF-Token": await csrf(request) } });
+    expect(res.status()).toBe(204);
   }
 });
 
