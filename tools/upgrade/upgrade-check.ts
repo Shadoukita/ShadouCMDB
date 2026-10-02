@@ -459,13 +459,14 @@ async function businessServices(snap: Json) {
 
 /** Migration 0039: views.share for every profile with customization.manage; saved views work for a restricted user. */
 async function savedViews(ids: Json) {
+  // businessServices() signs out at its end; this step signs in on its own.
+  me = await login(ADMIN, ADMIN_PASSWORD);
   if (ids.customisers) {
     const granted = (await ok('GET', `/api/v1/admin/profiles/${ids.customisers}`)).globalPermissions ?? [];
     const has = granted.includes('customization.manage') && granted.includes('views.share');
     if (!has) failures.push(`profile with customization.manage: expected views.share after the upgrade, has ${JSON.stringify(granted)}`);
     console.error(`${has ? 'ok  ' : 'FAIL'} saved views: the customisers profile holds ${granted.join(', ')}`);
   }
-  const admin = me;
   me = await login(VIEWER, VIEWER_PASSWORD);
   const created = await call('POST', '/api/v1/saved-views', { context: 'inventory', name: 'Upgrade servers', visibility: 'personal',
     definition: { classKeys: [(await call('GET', `/api/v1/ci-classes/${ids.classes.server}`)).json.key] } });
@@ -473,7 +474,7 @@ async function savedViews(ids: Json) {
   const works = created.status === 201 && created.json.resolved?.state === 'ok' && listed.json?.data?.some((v: Json) => v.id === created.json.id);
   if (!works) failures.push(`saved views for the restricted user: create ${created.status}, list ${listed.status}`);
   if (created.status === 201) await call('DELETE', `/api/v1/saved-views/${created.json.id}?version=1`);
-  me = admin;
+  me = null;
   console.error(`${works ? 'ok  ' : 'FAIL'} saved views: the restricted user saves and lists a view of the server class`);
 }
 
