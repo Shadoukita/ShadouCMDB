@@ -181,7 +181,9 @@ pub fn routes() -> Vec<Route> {
                  traversed: a CI reachable only through one is left out, and `visibility` says `restricted` whenever \
                  the caller's profile limits the classes they may view. 429 RATE_LIMITED when the caller already \
                  runs IMPACT_MAX_CONCURRENT_PER_USER analyses, 503 SERVER_BUSY when the server runs \
-                 IMPACT_MAX_CONCURRENT.",
+                 IMPACT_MAX_CONCURRENT, or when the database is so slow that the result could not be assembled in \
+                 time. The walks stop at IMPACT_TIMEOUT_MS from the start of the request, and every query of the \
+                 analysis ends within 2 s after that.",
             )
             .errors(&[ErrorCode::NotFound, ErrorCode::RateLimited, ErrorCode::ServerBusy])
             .class_checked()

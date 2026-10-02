@@ -37,6 +37,7 @@ import LoginPage from "./pages/auth/LoginPage.vue";
 import SetupPage from "./pages/auth/SetupPage.vue";
 import { EDITOR_SUFFIX, OPENED_HERE_QUERY, pageOfEditor } from "./lib/layoutEditor";
 import { trackNavigations } from "./lib/navigation";
+import { safeRedirect } from "./lib/signIn";
 import { useSessionStore } from "./stores/session";
 import type { GlobalPermission } from "./api/admin";
 
@@ -135,10 +136,6 @@ export const router = createRouter({
 
 trackNavigations(router);
 
-/** Only same-app paths are followed after sign-in (never another origin). */
-export function safeRedirect(value: unknown): string {
-  return typeof value === "string" && value.startsWith("/") && !value.startsWith("//") ? value : "/";
-}
 
 /**
  * The sign-in query that brings the user back to `route`. The two-factor set-up is only a stop on the

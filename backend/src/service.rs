@@ -19,9 +19,10 @@ pub enum ServiceCommand {
         /// Service name.
         #[arg(long, default_value = DEFAULT_NAME)]
         name: String,
-        /// Account the service runs as. The default is the low-privilege LocalService account.
-        #[arg(long, default_value = r"NT AUTHORITY\LocalService")]
-        account: String,
+        /// Account the service runs as. The default is the service's own virtual account,
+        /// `NT SERVICE\<name>`: a SID no other service shares, without a password.
+        #[arg(long)]
+        account: Option<String>,
         /// Password for --account (not needed for LocalService, NetworkService or virtual accounts).
         #[arg(long)]
         password: Option<String>,
@@ -77,7 +78,10 @@ mod windows_impl {
 
     pub fn run(cmd: ServiceCommand, launch: LaunchOptions) -> anyhow::Result<()> {
         match cmd {
-            ServiceCommand::Install { name, account, password } => install(&name, &account, password, &launch),
+            ServiceCommand::Install { name, account, password } => {
+                let account = account.unwrap_or_else(|| super::virtual_account(&name));
+                install(&name, &account, password, &launch)
+            }
             ServiceCommand::Uninstall { name } => uninstall(&name),
             ServiceCommand::Run { name } => {
                 let _ = SERVICE_NAME.set(name.clone());
@@ -118,7 +122,7 @@ mod windows_impl {
             command: None,
             actions: Some(vec![restart.clone(), restart.clone(), restart]),
         })?;
-        println!("Installed service {name} ({})", executable_path.display());
+        println!("Installed service {name} ({}), running as {account}", executable_path.display());
         println!("Start it with:  sc.exe start {name}   (or Start-Service {name})");
         Ok(())
     }
@@ -194,6 +198,12 @@ mod windows_impl {
     }
 }
 
+/// The per-service virtual account Windows creates for service `name`.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn virtual_account(name: &str) -> String {
+    format!(r"NT SERVICE\{name}")
+}
+
 /// Arguments the SCM passes when it starts the service: the same global
 /// options as the install command (with absolute paths), then `service run`.
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -209,4 +219,39 @@ fn launch_arguments(name: &str, launch: &LaunchOptions) -> anyhow::Result<Vec<Os
     args.extend(["service", "run", "--name"].map(OsString::from));
     args.push(OsString::from(name));
     Ok(args)
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::*;
+
+    #[derive(Parser)]
+    struct Cli {
+        #[command(subcommand)]
+        cmd: ServiceCommand,
+    }
+
+    #[test]
+    fn install_defaults_to_the_services_own_virtual_account() {
+        let Cli { cmd: ServiceCommand::Install { name, account, .. } } =
+            Cli::parse_from(["x", "install", "--name", "CmdbTest"])
+        else {
+            panic!("not an install command");
+        };
+        assert_eq!(account, None);
+        assert_eq!(virtual_account(&name), r"NT SERVICE\CmdbTest");
+        assert_eq!(virtual_account(DEFAULT_NAME), r"NT SERVICE\ShadouCMDB");
+    }
+
+    #[test]
+    fn an_explicit_account_is_kept() {
+        let Cli { cmd: ServiceCommand::Install { account, .. } } =
+            Cli::parse_from(["x", "install", "--account", r"CORP\svc-cmdb$"])
+        else {
+            panic!("not an install command");
+        };
+        assert_eq!(account.as_deref(), Some(r"CORP\svc-cmdb$"));
+    }
 }

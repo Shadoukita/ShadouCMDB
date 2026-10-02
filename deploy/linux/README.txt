@@ -24,19 +24,36 @@ Create the database (once, as a PostgreSQL admin)
 On any machine with psql (it need not be this server), from the directory you
 extracted this archive to (or copy sql/bootstrap/ there):
 
-  read -rsp 'shadoucmdb_owner password: ' OWNER_PW; echo
-  read -rsp 'shadoucmdb_app password: ' APP_PW; echo
-  read -rsp 'shadoucmdb_maintenance password: ' MAINT_PW; echo
   psql "postgres://admin@db.example.internal:5432/postgres" \
-       -v owner_password="$OWNER_PW" \
-       -v app_password="$APP_PW" \
-       -v maintenance_password="$MAINT_PW" \
        -f sql/bootstrap/00_create_role_and_database.sql
-  unset OWNER_PW APP_PW MAINT_PW
+  psql "postgres://admin@db.example.internal:5432/postgres" \
+       -c '\password shadoucmdb_owner' \
+       -c '\password shadoucmdb_app' \
+       -c '\password shadoucmdb_maintenance'
+
+The script creates the roles without a password; they cannot log in until the
+second command has set one. \password prompts for each password twice and
+sends the server only a SCRAM-SHA-256 verifier computed by psql, so the
+password appears neither in the process list nor in the server log. (This
+needs password_encryption = scram-sha-256 on the server, the default since
+PostgreSQL 14.) Do not pass passwords as psql variables (-v): the script
+refuses the owner_password, app_password and maintenance_password variables of
+earlier releases.
 
 Generate each password with `openssl rand -hex 24`. They go into connection
 URLs, where characters such as @ : / # % ? must be percent-encoded (@ -> %40);
 hex passwords need none.
+
+Unattended setup (configuration management, CI): when psql has no terminal,
+\password reads the password and its confirmation as two lines from standard
+input. printf is a shell builtin, so the password stays out of the process
+list:
+
+  printf '%s\n%s\n' "$OWNER_PW" "$OWNER_PW" | setsid -w psql "$ADMIN_URL" -X \
+       -v ON_ERROR_STOP=1 -c '\password shadoucmdb_owner'
+
+setsid detaches psql from the terminal, if there is one, so that it reads
+standard input instead of prompting.
 
 This creates the database shadoucmdb and three roles, none of them superuser:
 
@@ -74,7 +91,7 @@ Install as a systemd service
   # Optional starter data model (or install it later under Administration > Templates):
   sudo -u shadoucmdb shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env seed --template it_infrastructure
   # First administrator (or skip this and use first-run setup in the web UI, with the setup token from
-  # `sudo journalctl -u shadoucmdb` or `sudo cat /var/lib/shadoucmdb/setup-token`):
+  # `sudo cat /var/lib/shadoucmdb/setup-token`; it is in the journal only if that file cannot be written):
   sudo -u shadoucmdb shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env create-admin --username admin
   sudo install -m 0644 shadoucmdb.service /etc/systemd/system/
   sudo systemctl daemon-reload && sudo systemctl enable --now shadoucmdb
@@ -91,7 +108,11 @@ order given in the header of sql/bootstrap/10_split_roles.sql:
   1. install the new binary (first command below), then run migrate as
      before, without MIGRATION_DATABASE_URL:
        sudo -u shadoucmdb shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env migrate
-  2. stop the server and run 10_split_roles.sql as a PostgreSQL admin;
+  2. stop the server, run 10_split_roles.sql as a PostgreSQL admin, then set
+     the passwords of the roles it created with \password, as for a new install:
+       psql "postgres://admin@db.example.internal:5432/shadoucmdb" -f sql/bootstrap/10_split_roles.sql
+       psql "postgres://admin@db.example.internal:5432/shadoucmdb" \
+            -c '\password shadoucmdb_owner' -c '\password shadoucmdb_maintenance'
   3. start the server. From then on, migrate as shown below.
 
 Upgrading from a release without ENCRYPTION_KEY_FILE: the server no longer

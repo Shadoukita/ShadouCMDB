@@ -271,7 +271,7 @@ pub async fn download(
     let layout = Layout::of(&job);
     let file =
         DbFile { pool: pool.clone(), job: id, len: job.file_size as u64, runtime: tokio::runtime::Handle::current() };
-    let limits = Limits { max_rows: cfg.max_rows, max_columns: MAX_COLUMNS };
+    let limits = Limits::new(cfg.max_rows, MAX_COLUMNS, cfg.max_file_bytes);
     let (sink, mut rx) = Sink::new(SEND_TIMEOUT, STREAM_DEADLINE);
     let failed = sink.failed.clone();
     tokio::task::spawn_blocking({

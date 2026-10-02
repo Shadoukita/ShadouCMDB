@@ -12,7 +12,7 @@ use tokio::sync::watch;
 use tower::ServiceExt;
 use uuid::Uuid;
 
-use super::parse::fixtures::{C, Part, sheet_xml, workbook, workbook_parts, zip};
+use super::parse::fixtures::{C, Part, sheet_xml, with_shared_strings, workbook, workbook_parts, zip};
 use super::upload::{CSV_TYPE, XLSX_TYPE};
 use super::worker;
 use crate::config::ImportConfig;
@@ -117,7 +117,11 @@ fn detail(v: &Value) -> &str {
 
 /// Runs queued phases until none is left (one worker, this process).
 async fn drain(pool: &PgPool) {
-    let cfg = std::sync::Arc::new(ImportConfig::default());
+    drain_with(pool, ImportConfig::default()).await;
+}
+
+async fn drain_with(pool: &PgPool, cfg: ImportConfig) {
+    let cfg = std::sync::Arc::new(cfg);
     let (_stop, mut rx) = watch::channel(false);
     while let Some(lease) = worker::claim(pool, "test-worker").await.unwrap() {
         worker::work(pool, &cfg, lease, &mut rx).await;
@@ -245,6 +249,55 @@ async fn an_xlsx_upload_lists_sheets_and_a_bad_one_fails_its_analysis() {
     )
     .await;
     assert_eq!(status, 202);
+    drain(&e.pool).await;
+
+    // GH#403: one long shared string referenced by 200 cells is a small upload;
+    // the analysis refuses its first cell instead of copying the string 200 times.
+    let refs: Vec<String> = (0..200).map(|c| format!("{}2", super::parse::column_name(c))).collect();
+    let mut cells: Vec<(&str, C<'_>)> = vec![("A1", C::S("Hostname"))];
+    cells.extend(refs.iter().map(|r| (r.as_str(), C::Shared(0))));
+    let mut amplified = workbook_parts(&sheet_xml(&cells), None, false, false);
+    with_shared_strings(&mut amplified, &[&"x".repeat(20_000)]);
+    let bytes = zip(&amplified);
+    assert!(bytes.len() < 8 * 1024, "{} bytes", bytes.len());
+    let (status, v, _) = upload(&e.app, &e.admin, XLSX_TYPE, Some("amplified.xlsx"), &[], bytes).await;
+    assert_eq!(status, 202, "{v}");
+    drain(&e.pool).await;
+    let j = job(&e, &e.admin, v["id"].as_str().unwrap()).await;
+    assert_eq!(
+        (j["status"].as_str(), j["error"]["code"].as_str(), j["error"]["row"].as_u64(), j["error"]["column"].as_u64()),
+        (Some("failed"), Some("cell_too_long"), Some(2), Some(0)),
+        "{j}"
+    );
+    db.drop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_xlsx_sheet_holds_no_more_text_than_the_upload_limit() {
+    // GH#446: a few kilobytes of workbook may not expand past IMPORT_MAX_FILE_MB.
+    let Some(db) = scratch::database("import_xlsx_text_limit").await else { return };
+    let cfg = ImportConfig { max_file_bytes: 1024 * 1024, ..Default::default() };
+    let e = env(&db.pool, cfg.clone()).await;
+    // A header, then two rows of 52 cells referring to one 20,000-byte string: 2,080,000 bytes of text.
+    let names: Vec<String> = (0..52).map(super::parse::column_name).collect();
+    let refs: Vec<String> = (2..=3).flat_map(|r| names.iter().map(move |c| format!("{c}{r}"))).collect();
+    let header: Vec<String> = names.iter().map(|c| format!("{c}1")).collect();
+    let mut cells: Vec<(&str, C<'_>)> = header.iter().zip(&names).map(|(r, n)| (r.as_str(), C::S(n))).collect();
+    cells.extend(refs.iter().map(|r| (r.as_str(), C::Shared(0))));
+    let mut parts = workbook_parts(&sheet_xml(&cells), None, false, false);
+    with_shared_strings(&mut parts, &[&"é".repeat(10_000)]);
+    let bytes = zip(&parts);
+    assert!(bytes.len() < 16 * 1024, "{} bytes", bytes.len());
+    let (status, v, _) = upload(&e.app, &e.admin, XLSX_TYPE, Some("expanding.xlsx"), &[], bytes).await;
+    assert_eq!(status, 202, "{v}");
+    drain_with(&e.pool, cfg).await;
+    let j = job(&e, &e.admin, v["id"].as_str().unwrap()).await;
+    assert_eq!(
+        (j["status"].as_str(), j["error"]["code"].as_str(), j["error"]["row"].as_u64()),
+        (Some("failed"), Some("text_limit"), Some(3)),
+        "{j}"
+    );
+    assert!(j["error"]["message"].as_str().unwrap().contains("more than 1 MiB of text"), "{j}");
     db.drop().await;
 }
 

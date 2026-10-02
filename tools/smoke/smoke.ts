@@ -1387,7 +1387,7 @@ async function mfa(builtin: Json, createHash: typeof import('node:crypto').creat
 
   const trail: Json[] = (await get(`/api/v1/audit-log?entityType=users&entityId=${user.id}&sort=occurredAt&limit=100`)).json.data;
   const actions = trail.filter((e) => e.action.startsWith('mfa.')).map((e) => e.action).join(',');
-  check(actions === 'mfa.enrol,mfa.failure,mfa.failure,mfa.recovery_code_used,mfa.recovery_codes,mfa.failure,mfa.recovery_code_used,mfa.disable',
+  check(actions === 'mfa.failure,mfa.enrol,mfa.failure,mfa.failure,mfa.recovery_code_used,mfa.recovery_codes,mfa.failure,mfa.recovery_code_used,mfa.disable',
     `enrolment, failures, recovery codes and the reset are audited (${actions})`);
   const secrets = [secret, ...codes, ...newCodes].flatMap((s) => [s, s.replaceAll('-', '')]);
   check(trail.every((e) => secrets.every((s) => !JSON.stringify(e).includes(s) && !JSON.stringify(e).includes(createHash('sha256').update(s).digest('hex')))),

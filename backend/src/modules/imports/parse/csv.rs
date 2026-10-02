@@ -13,7 +13,7 @@ use csv_core::{ReadRecordResult, ReaderBuilder};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use super::{CellValue, Limits, OnRow, ParseError, Row, column_limit};
+use super::{CellValue, Limits, OnRow, ParseError, Row, check_cell, column_limit};
 
 /// Most bytes of one record, after decoding.
 pub const MAX_RECORD_BYTES: usize = 1024 * 1024;
@@ -439,9 +439,10 @@ fn emit(
     }
     let mut cells = Vec::with_capacity(ends.len());
     let mut start = 0;
-    for &end in ends {
+    for (column, &end) in ends.iter().enumerate() {
         let field = std::str::from_utf8(&out[start..end])
             .map_err(|_| ParseError::new("invalid_encoding", "The file is not valid UTF-8.").at(Some(number), None))?;
+        check_cell(field, number, column as u32)?;
         cells.push(if field.is_empty() { CellValue::Empty } else { CellValue::Text(field.to_owned()) });
         start = end;
     }
@@ -453,7 +454,7 @@ mod tests {
     use super::*;
     use std::ops::ControlFlow;
 
-    const LIMITS: Limits = Limits { max_rows: 100, max_columns: 200 };
+    const LIMITS: Limits = Limits { max_rows: 100, max_columns: 200, max_text_bytes: 1 << 20 };
 
     fn rows(
         bytes: &[u8],
@@ -506,10 +507,11 @@ mod tests {
         // UTF-16 is refused.
         assert_eq!(rows(b"\xFF\xFEa\x00", Encoding::Utf8, None).unwrap_err().code, "unsupported_encoding");
         // A multi-byte character split over the read blocks is joined again.
-        let mut long = "x".repeat(BLOCK - 1).into_bytes();
+        // (Cells of 1,000 bytes keep the line under the cell limit.)
+        let mut long: Vec<u8> = (1..BLOCK).map(|i| if i % 1000 == 0 { b',' } else { b'x' }).collect();
         long.extend_from_slice("ü\n".as_bytes());
         let (_, r) = rows(&long, Encoding::Utf8, Some(b',')).unwrap();
-        assert!(r[0][0].ends_with('ü'));
+        assert!(r[0].last().unwrap().ends_with('ü'));
         // A file cut inside a character.
         assert_eq!(rows(b"a\n\xC3", Encoding::Utf8, None).unwrap_err().code, "invalid_encoding");
     }
@@ -559,10 +561,24 @@ mod tests {
         bytes.extend(std::iter::repeat_n(b'x', MAX_RECORD_BYTES + 10));
         let err = rows(&bytes, Encoding::Utf8, None).unwrap_err();
         assert_eq!((err.code, err.row), ("record_too_long", Some(2)));
-        // Just under the limit is fine.
-        let mut ok = b"a\n".to_vec();
-        ok.extend(std::iter::repeat_n(b'x', MAX_RECORD_BYTES - 1));
-        assert_eq!(rows(&ok, Encoding::Utf8, None).unwrap().1[1][0].len(), MAX_RECORD_BYTES - 1);
+        // Just under the limit is fine (in cells of at most 10,000 characters).
+        let cell = "x".repeat(10_000);
+        let mut ok = vec![cell.as_str(); MAX_RECORD_BYTES / 10_001].join(",");
+        ok.push(',');
+        ok.push_str(&"x".repeat(MAX_RECORD_BYTES - 1 - ok.len()));
+        let ok = format!("a\n{ok}");
+        let r = rows(ok.as_bytes(), Encoding::Utf8, None).unwrap().1;
+        assert_eq!(r[1].iter().map(|c| c.len() + 1).sum::<usize>() - 1, MAX_RECORD_BYTES - 1);
+    }
+
+    #[test]
+    fn a_cell_over_10000_characters_is_refused() {
+        let ok = format!("a,b\nx,{}", "é".repeat(10_000));
+        assert_eq!(rows(ok.as_bytes(), Encoding::Utf8, None).unwrap().1[1][1].chars().count(), 10_000);
+        let over = format!("a,b\nx,\"{}\"", "y".repeat(10_001));
+        let err = rows(over.as_bytes(), Encoding::Utf8, None).unwrap_err();
+        assert_eq!((err.code, err.row, err.column), ("cell_too_long", Some(2), Some(1)));
+        assert!(!err.message.contains('y'), "the message never quotes the cell");
     }
 
     #[test]

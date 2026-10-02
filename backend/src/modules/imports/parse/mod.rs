@@ -133,6 +133,19 @@ pub struct Limits {
     /// Data rows, the header row not counted.
     pub max_rows: u32,
     pub max_columns: u32,
+    /// Most bytes of text in one XLSX sheet with every shared string written
+    /// out; never above [`MAX_SHEET_TEXT_BYTES`](xlsx::MAX_SHEET_TEXT_BYTES).
+    /// A CSV file is bounded by its size already.
+    pub max_text_bytes: usize,
+}
+
+impl Limits {
+    /// The bounds of an import whose upload limit is `max_file_bytes`: a sheet
+    /// may hold as much text as a CSV file of that size, no more (GH#446).
+    pub fn new(max_rows: u32, max_columns: u32, max_file_bytes: u64) -> Self {
+        let max_text_bytes = usize::try_from(max_file_bytes).unwrap_or(usize::MAX).min(xlsx::MAX_SHEET_TEXT_BYTES);
+        Limits { max_rows, max_columns, max_text_bytes }
+    }
 }
 
 /// What the callback returns for each row: go on, or stop reading.
@@ -161,6 +174,22 @@ pub fn column_limit(limits: &Limits, row: u32, column: u32) -> ParseError {
         format!("The file has more than {} columns. Remove the columns you do not import.", limits.max_columns),
     )
     .at(Some(row), Some(column))
+}
+
+/// Refuses a cell longer than [`MAX_CELL_CHARS`](super::MAX_CELL_CHARS)
+/// characters with `cell_too_long` (§3.5). Called before the text is copied,
+/// so a long shared string referenced from many cells is never multiplied.
+pub fn check_cell(text: &str, row: u32, column: u32) -> Result<(), ParseError> {
+    let max = super::MAX_CELL_CHARS as usize;
+    // A character takes at least one byte: most cells need no count.
+    if text.len() > max && text.chars().count() > max {
+        return Err(ParseError::new(
+            "cell_too_long",
+            format!("A cell is longer than {} characters.", group_thousands(max as u64)),
+        )
+        .at(Some(row), Some(column)));
+    }
+    Ok(())
 }
 
 /// 100000 → "100,000".
@@ -192,5 +221,15 @@ mod tests {
         assert_eq!(float_text(1.5), "1.5");
         assert!(CellValue::Text("  ".into()).is_blank());
         assert!(!CellValue::Int(0).is_blank());
+    }
+
+    #[test]
+    fn cells_are_capped_in_characters_not_bytes() {
+        assert!(check_cell(&"x".repeat(10_000), 2, 0).is_ok());
+        // 10,000 characters of two bytes each.
+        assert!(check_cell(&"ü".repeat(10_000), 2, 0).is_ok());
+        let err = check_cell(&"ü".repeat(10_001), 7, 3).unwrap_err();
+        assert_eq!((err.code, err.row, err.column), ("cell_too_long", Some(7), Some(3)));
+        assert_eq!(err.message, "A cell is longer than 10,000 characters.");
     }
 }

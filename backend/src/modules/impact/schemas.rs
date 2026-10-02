@@ -308,7 +308,7 @@ pub struct ImpactSettings {
     pub max_nodes_limit: i32,
     pub default_depth: i32,
     pub default_max_nodes: i32,
-    /// Deadline of one analysis (IMPACT_TIMEOUT_MS)
+    /// Deadline of the walks of one analysis (IMPACT_TIMEOUT_MS); assembling the result may take up to 2 s more
     pub timeout_ms: u64,
     /// Whether any relationship type propagates impact; false: every analysis is empty until an administrator
     /// configures one

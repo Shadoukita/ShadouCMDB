@@ -40,9 +40,14 @@ the same flow for a source checkout.
 1. **Create the database and its roles** on your PostgreSQL server (run as an admin there):
 
    ```sh
-   psql "<admin connection string>" -v owner_password='<pw 1>' -v app_password='<pw 2>' \
-        -v maintenance_password='<pw 3>' -f sql/bootstrap/00_create_role_and_database.sql
+   psql "<admin connection string>" -f sql/bootstrap/00_create_role_and_database.sql
+   psql "<admin connection string>" -c '\password shadoucmdb_owner' -c '\password shadoucmdb_app' \
+        -c '\password shadoucmdb_maintenance'
    ```
+
+   The roles are created without a password and can log in once `\password` has set one. It prompts
+   for the password and sends the server only a SCRAM-SHA-256 verifier, so no password reaches the
+   process list or the server log; do not pass passwords as psql variables (`-v`).
 
    This creates `shadoucmdb_owner` (owns the schema, runs migrations), `shadoucmdb_app` (the API:
    reads and writes data, cannot delete audit history) and `shadoucmdb_maintenance` (may only prune
@@ -148,7 +153,8 @@ the same flow for a source checkout.
 
 8. **Create the first administrator.** Every page and API call except the health probes needs a signed-in
    user. Open the web UI, which offers first-run setup while no user exists (it asks for the one-time setup
-   token the server writes to its log), or run:
+   token the server writes to `SETUP_TOKEN_FILE`, by default `setup-token` next to the env file; with no
+   such file the token is written to the log instead), or run:
 
    ```sh
    shadoucmdb create-admin --username admin --display-name "Jane Admin"   # prompts for the password
@@ -186,6 +192,12 @@ docker compose up api                    # http://localhost:3000/readyz
 
 For a PostgreSQL running on the Docker host itself, set `PGHOST=host.docker.internal`, not
 `localhost`: inside a container, localhost is the container.
+
+The container has no env file and no token file, so a generated first-run setup token goes to
+`docker compose logs api`, where anyone with access to the container logs (or a log shipper) can read it.
+Where that is more people than should own the instance, create the first administrator with
+`docker compose run --rm seed create-admin --username admin` instead, or set `SETUP_TOKEN` in `.env` and
+remove it once setup is done.
 
 ## Backup, restore and reset
 

@@ -9,7 +9,7 @@ use sqlx::PgPool;
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use super::engine::{self, Options, Reached, Traversal, Truncation, Way};
+use super::engine::{self, Options, Reached, Traversal, Truncation, Way, bound, db_error};
 use super::schemas::{
     AnalysisDirection, ClassCount, CriticalityCount, HopCount, ImpactAnalysis, ImpactCriticality, ImpactItem,
     ImpactLimits, ImpactParameters, ImpactQuery, ImpactRelationshipType, ImpactRoot, ImpactSettings, ImpactStatus,
@@ -111,12 +111,21 @@ fn criticality(r: &SummaryRow) -> Option<ImpactCriticality> {
     }
 }
 
-/// The value of each CI's lookup attribute keyed `status`, when its class has one.
+/// The value of each CI's lookup attribute keyed `status`, when its class has
+/// one. Every statement ends by `until`: `statement_timeout` limits each
+/// statement, so it is set again before each one.
 async fn statuses(
     conn: &mut sqlx::PgConnection,
     items: &[(Uuid, Uuid)],
+    until: Instant,
 ) -> Result<HashMap<Uuid, ImpactStatus>, AppError> {
-    let model = Model::load(conn).await?;
+    bound(conn, until).await?;
+    let areas = Model::load_areas(conn).await.map_err(db_error)?;
+    bound(conn, until).await?;
+    let classes = Model::load_classes(conn).await.map_err(db_error)?;
+    bound(conn, until).await?;
+    let fields = Model::load_fields(conn).await.map_err(db_error)?;
+    let model = Model { areas, classes, fields };
     // CIs grouped by the status field their class has (own or inherited).
     let mut by_field: BTreeMap<Uuid, Vec<Uuid>> = BTreeMap::new();
     let mut field_of_class: HashMap<Uuid, Option<Uuid>> = HashMap::new();
@@ -137,13 +146,15 @@ async fn statuses(
     for (field_id, ids) in by_field {
         let Some(field) = model.fields.iter().find(|f| f.id == field_id) else { continue };
         let Some(table) = model.table(field.class_id) else { continue };
-        value_of.extend(data::lookup_column_values(conn, &table, &field.column(), &ids).await?);
+        bound(conn, until).await?;
+        value_of.extend(data::lookup_column_values(conn, &table, &field.column(), &ids).await.map_err(db_error)?);
     }
     let mut values: Vec<Uuid> = value_of.values().copied().collect();
     values.sort_unstable();
     values.dedup();
+    bound(conn, until).await?;
     let names: HashMap<Uuid, data::LookupValue> =
-        data::lookup_values(conn, &values).await?.into_iter().map(|v| (v.id, v)).collect();
+        data::lookup_values(conn, &values).await.map_err(db_error)?.into_iter().map(|v| (v.id, v)).collect();
     Ok(value_of
         .into_iter()
         .filter_map(|(ci, v)| {
@@ -240,17 +251,24 @@ async fn run(
     visible: Option<Vec<Uuid>>,
     started: Instant,
 ) -> Result<Analysis, AppError> {
+    // The walks stop at IMPACT_TIMEOUT_MS from the start of the request; every
+    // statement, before and after them, ends within the assembly allowance
+    // after that (GH#393).
+    let deadline = started + state.config.timeout;
+    let assembly = engine::assembly_deadline(deadline);
     let mut tx = pool.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY").execute(&mut *tx).await?;
+    bound(&mut tx, assembly).await?;
     // A missing, deleted or hidden root answers alike.
-    let root = match items_data::summary(&mut tx, root_id).await? {
+    let root = match items_data::summary(&mut tx, root_id).await.map_err(db_error)? {
         Some(r) if r.deleted_at.is_none() => r,
         _ => return Err(AppError::missing("Configuration item", root_id)),
     };
     ctx.require_class_visible(root.class_id, "Configuration item", root_id)?;
 
     // Every named type must exist (the list is read again in the walk's snapshot).
-    let all_types = data::types(&mut tx).await?;
+    bound(&mut tx, assembly).await?;
+    let all_types = data::types(&mut tx).await.map_err(db_error)?;
     if let Some(ids) = &p.types
         && let Some(unknown) = ids.iter().find(|id| !all_types.iter().any(|t| t.id == **id))
     {
@@ -272,7 +290,7 @@ async fn run(
         types: p.types.as_deref(),
         include_inactive: p.include_inactive,
         max_nodes: p.max_nodes as usize,
-        timeout: state.config.timeout,
+        deadline,
         visible: visible.as_deref(),
         result_classes: None,
     };
@@ -283,12 +301,12 @@ async fn run(
     let chosen: HashMap<Uuid, Way> = merged.iter().map(|(id, m)| (*id, m.chosen.0)).collect();
 
     // Summaries of the result (the snapshot guarantees every row is there).
-    data::set_statement_timeout(&mut tx, engine::ASSEMBLY_TIMEOUT.as_millis() as u64).await?;
+    bound(&mut tx, assembly).await?;
     let ids: Vec<Uuid> = merged.iter().map(|(id, _)| *id).collect();
     let rows: HashMap<Uuid, SummaryRow> =
-        items_data::summaries(&mut tx, &ids).await?.into_iter().map(|r| (r.id, r)).collect();
+        items_data::summaries(&mut tx, &ids).await.map_err(db_error)?.into_iter().map(|r| (r.id, r)).collect();
     let pairs: Vec<(Uuid, Uuid)> = merged.iter().map(|(id, m)| (*id, m.class_id)).collect();
-    let status_of = statuses(&mut tx, &pairs).await?;
+    let status_of = statuses(&mut tx, &pairs, assembly).await?;
     tx.commit().await?;
 
     let type_of: HashMap<Uuid, &data::TypeRow> = traversal.types.iter().map(|t| (t.id, t)).collect();

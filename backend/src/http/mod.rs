@@ -610,7 +610,8 @@ pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'sta
         }
     }
     let app = router(state.clone(), &cfg);
-    let exporter = cfg.audit.export.clone().map(|export| crate::audit_export::spawn(pool.clone(), export));
+    let exporter =
+        cfg.audit.export.clone().map(|export| crate::audit_export::spawn(pool.clone(), export)).transpose()?;
     let import_workers = crate::modules::imports::worker::spawn(pool.clone(), state.imports.clone());
 
     let listener = TcpListener::bind((cfg.api_host.as_str(), cfg.api_port))
