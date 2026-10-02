@@ -134,12 +134,14 @@ const message = (r: Res) => r.json?.error?.message ?? '';
 const field = (r: Res) => r.json?.error?.details?.[0]?.field;
 /** For failure output of the MFA routes: never the secret, recovery codes or session data. */
 const brief = (r: Res) => ({ status: r.status, error: code(r), field: field(r) });
+/** The error body without its `requestId`, which differs on every response. */
+const errorBody = (r: Res) => JSON.stringify({ ...r.json, error: { ...r.json?.error, requestId: undefined } });
 /** A refused sign-in must not tell a right password from a wrong one (GH#437). */
-const sameAnswer = (a: Res, b: Res) => a.status === b.status && JSON.stringify(a.json) === JSON.stringify(b.json);
+const sameAnswer = (a: Res, b: Res) => a.status === b.status && errorBody(a) === errorBody(b);
 
 /** The `reason` of the newest `login.failure` row, if it is `username`'s. */
 async function lastFailureReason(admin: Identity, username: string): Promise<string | undefined> {
-  const last = (await ok(admin, 'GET', '/api/v1/audit-log?action=login.failure&limit=1')).data[0];
+  const last = (await ok(admin, 'GET', '/api/v1/audit-log?action=login.failure&sort=-occurredAt&limit=1')).data[0];
   return last?.newValue?.attemptedUsername === username ? last.newValue.reason : undefined;
 }
 
@@ -267,12 +269,7 @@ async function main(): Promise<void> {
 
   const bobLogin = await login(BOB);
   const bobReason = await lastFailureReason(admin, 'bob');
-  const bobWrong = await login({ username: 'bob', password: 'not-his-password' });
-  check(
-    bobLogin.status === 401 && code(bobLogin) === 'UNAUTHENTICATED' && sameAnswer(bobLogin, bobWrong),
-    'bob (only in an unmapped group) is refused: 401, the same answer as a wrong password',
-    { right: bobLogin.json, wrong: bobWrong.json },
-  );
+  check(bobLogin.status === 401 && code(bobLogin) === 'UNAUTHENTICATED', 'bob (only in an unmapped group) is refused: 401', bobLogin.json);
   check(bobReason === 'not_authorised', 'the audit log keeps the reason: not_authorised', bobReason);
   const users = await ok(admin, 'GET', '/api/v1/admin/users?limit=100');
   check(!users.data.some((u: Json) => u.username === 'bob'), 'no account is created for bob', users.data.map((u: Json) => u.username));
@@ -285,6 +282,8 @@ async function main(): Promise<void> {
     'an unknown name gets the same answer as a wrong password',
     { wrong: wrong.json, unknown: unknown.json },
   );
+  // Compared with alice's wrong password: another wrong one for bob would count toward his lock below.
+  check(sameAnswer(bobLogin, wrong), "bob's refusal is the same answer as a wrong password", { refused: bobLogin.json, wrong: wrong.json });
   check(!cookieOf(wrong, 'shadoucmdb_session') && !cookieOf(unknown, 'shadoucmdb_session'), 'neither sets a session cookie');
   // GH#406: OpenLDAP's uid matching (RFC 4518 string preparation) finds alice's entry for other
   // spellings, each of which the per-name lock would count on its own. Only names an account could
@@ -501,11 +500,10 @@ member: uid=alice,ou=people,${SUFFIX}
   check(stillOn.mfa.totpEnabled === true, 'MFA is still on');
   const newcomer = await login(ALICE);
   const newcomerReason = await lastFailureReason(admin, 'alice');
-  const newcomerWrong = await login({ username: 'alice', password: 'not-her-password' });
   check(
-    newcomer.status === 401 && sameAnswer(newcomer, newcomerWrong) && !cookieOf(newcomer, 'shadoucmdb_session'),
+    newcomer.status === 401 && sameAnswer(newcomer, wrong) && !cookieOf(newcomer, 'shadoucmdb_session'),
     'signing in as the new "alice" is refused, not linked to the old account: the same answer as a wrong password',
-    { right: newcomer.json, wrong: newcomerWrong.json },
+    { refused: newcomer.json, wrong: wrong.json },
   );
   check(newcomerReason === 'account_conflict', 'the audit log keeps the reason: account_conflict', newcomerReason);
 }
