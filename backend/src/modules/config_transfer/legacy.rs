@@ -14,7 +14,7 @@
 //! value of each value. The section brings the values' names, descriptions,
 //! order and state, as a list in the file would.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::format::{ConfigFile, LookupListSpec, LookupSection, LookupValueSpec};
 use super::{ImportWarning, duplicates, owner_key};
@@ -95,10 +95,13 @@ fn add<'a>(
     let keys: HashSet<&str> = values.iter().map(|v| v.key.as_str()).collect();
     // The first free key, as 0016 picks it ("status", "status_2", ...), unless
     // a list on the way already holds every value: then the file carries them.
+    // Indexed, so that a file of many lists with many values costs linear time.
+    let by_key: HashMap<&str, &LookupListSpec> = lk.lists.iter().map(|l| (l.key.as_str(), l)).collect();
     let mut key = base.to_owned();
     let mut n = 1;
-    while let Some(list) = lk.lists.iter().find(|l| l.key == key) {
-        if keys.iter().all(|k| list.values.iter().any(|v| v.key == *k)) {
+    while let Some(list) = by_key.get(key.as_str()) {
+        let held: HashSet<&str> = list.values.iter().map(|v| v.key.as_str()).collect();
+        if keys.is_subset(&held) {
             warnings.push(ImportWarning {
                 path,
                 message: format!(
@@ -115,8 +118,9 @@ fn add<'a>(
     let n = values.len();
     let list = match here(&key) {
         Some(existing) => {
+            let old: HashMap<&str, &LookupValueSpec> = existing.values.iter().map(|o| (o.key.as_str(), o)).collect();
             for v in &mut values {
-                if let Some(old) = existing.values.iter().find(|o| o.key == v.key) {
+                if let Some(old) = old.get(v.key.as_str()) {
                     v.color.clone_from(&old.color);
                     v.parent.clone_from(&old.parent);
                 }
@@ -159,16 +163,25 @@ fn add<'a>(
 fn owner_values(mut owners: Vec<super::format::OwnerSpec>) -> Vec<LookupValueSpec> {
     owners.sort_by_key(|o| o.name.to_lowercase());
     let mut taken: HashSet<String> = HashSet::new();
+    // The last suffix given per base: the search for a free key resumes there
+    // instead of trying "base", "base_2", ... again for every repeat. A key
+    // can still be taken by another base ("a 2" takes "a_2"), hence the loop.
+    let mut last: HashMap<String, usize> = HashMap::new();
     owners
         .into_iter()
         .enumerate()
         .map(|(i, o)| {
             let base = owner_key_base(&o.name);
+            let k = last.entry(base.clone()).or_insert(0);
             let mut key = base.clone();
-            let mut k = 1;
-            while taken.contains(&key) {
-                k += 1;
-                key = format!("{base}_{k}");
+            loop {
+                *k += 1;
+                if *k > 1 {
+                    key = format!("{base}_{k}");
+                }
+                if !taken.contains(&key) {
+                    break;
+                }
             }
             taken.insert(key.clone());
             let kind = match o.kind {
@@ -200,6 +213,31 @@ fn owner_key_base(name: &str) -> String {
     }
     s.truncate(56);
     s.trim_end_matches('_').to_owned()
+}
+
+/// Sections about as large as a file within the size limit can carry: 20,000
+/// owners whose names all give the key "a", and `lists` lists "status",
+/// "status_2", ... that each hold all but one of 1,000 statuses (GH#344).
+/// Searching for a free key one by one took minutes, while the import holds
+/// the import lock.
+#[cfg(test)]
+pub(super) fn worst_case(lists: usize) -> serde_json::Value {
+    use serde_json::json;
+    let owners: Vec<_> = (0..20_000u32)
+        .map(|i| {
+            let marks: String = format!("{i:b}").chars().map(|c| if c == '0' { '.' } else { '-' }).collect();
+            json!({ "kind": "person", "name": format!("a{marks}") })
+        })
+        .collect();
+    let statuses: Vec<_> = (0..1000).map(|i| json!({ "key": format!("s{i}"), "name": "S" })).collect();
+    let lists: Vec<_> = (1..=lists)
+        .map(|n| {
+            let key = if n == 1 { "status".to_owned() } else { format!("status_{n}") };
+            let values: Vec<_> = (0..999).rev().map(|i| json!({ "key": format!("s{i}"), "name": "S" })).collect();
+            json!({ "key": key, "name": "S", "values": values })
+        })
+        .collect();
+    json!({ "owners": owners, "statuses": statuses, "lists": lists })
 }
 
 #[cfg(test)]
@@ -332,6 +370,58 @@ mod tests {
         let errors = fold(&mut f, None, &mut Vec::new());
         assert_eq!(errors[0].field, "lookups.owners.1");
         assert!(f.lookups.unwrap().lists.is_empty(), "a section with problems is not converted");
+    }
+
+    /// The suffixes as 0016 gives them, by trying "base", "base_2", ... for
+    /// every owner (the code before GH#344).
+    fn keys_by_probing(names: &[&str]) -> Vec<String> {
+        let mut names = names.to_vec();
+        names.sort_by_key(|n| n.to_lowercase());
+        let mut taken = HashSet::new();
+        names
+            .iter()
+            .map(|n| {
+                let base = owner_key_base(n);
+                let (mut key, mut k) = (base.clone(), 1);
+                while taken.contains(&key) {
+                    k += 1;
+                    key = format!("{base}_{k}");
+                }
+                taken.insert(key.clone());
+                key
+            })
+            .collect()
+    }
+
+    #[test]
+    fn owner_suffixes_are_those_of_0016() {
+        // Bases that take each other's suffixed keys ("a 2" is "a_2").
+        let names = ["a", "a 2", "a-", "A.", "a 3", "a_2 ", "a 2 2", "a--", "b", "a 4", "a---", "a 2-", "B 2"];
+        let owners = names.iter().map(|n| serde_json::from_value(json!({ "kind": "team", "name": n })).unwrap());
+        let keys: Vec<String> = owner_values(owners.collect()).into_iter().map(|v| v.key).collect();
+        assert_eq!(keys, keys_by_probing(&names));
+        let mut unique = keys.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), keys.len(), "{keys:?}");
+    }
+
+    #[test]
+    fn the_largest_sections_fold_in_linear_time() {
+        let here: LookupSection = serde_json::from_value(json!({ "lists": [{ "key": "owner", "name": "Owner",
+            "values": (0..5000).map(|i| json!({ "key": format!("a_{}", i + 1), "name": "A" })).collect::<Vec<_>>() }] }))
+        .unwrap();
+        let mut f = file(worst_case(200));
+        let mut w = Vec::new();
+        let started = std::time::Instant::now();
+        assert!(fold(&mut f, Some(&here), &mut w).is_empty());
+        let took = started.elapsed();
+        assert!(took < std::time::Duration::from_secs(5), "{took:?}");
+        let lk = f.lookups.unwrap();
+        let owner = lk.lists.iter().find(|l| l.key == "owner").unwrap();
+        assert_eq!((owner.values[0].key.as_str(), owner.values[19_999].key.as_str()), ("a", "a_20000"));
+        assert_eq!(lk.lists.last().unwrap().key, "owner");
+        assert!(lk.lists.iter().any(|l| l.key == "status_201" && l.values.len() == 1000));
     }
 
     #[test]
