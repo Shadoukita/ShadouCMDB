@@ -1194,11 +1194,12 @@ async function permissions(x: Json) {
   check(byToken.some((e: Json) => e.action === 'create' && e.entityType === 'configuration_items' && e.actorType === 'api_client' && e.actorId === adminMe.user.id) &&
     byToken.some((e: Json) => e.action === 'token.use' && e.entityId === editorToken.token.id && e.newValue.outcome === 'accepted' && e.newValue.method === 'POST'),
     'a change made with a token: actor api_client (the owner), and a token.use row with the same request id');
-  // Escalation: a user manager without other rights cannot mint tokens for users who hold more.
+  // Escalation: a user manager without other rights cannot mint tokens for users who hold more,
+  // and cannot revoke their tokens either: such a token answers 404, like a missing one (GH#458).
   await as(asNobody, async () => {
     await post(tokens, { name: 'x', userId: adminMe.user.id, profileId: readers.id, expiresAt: inDays(1) }, 403);
     await post(tokens, { name: 'x', userId: reader.id, profileId: readers.id, expiresAt: inDays(1) }, 403);
-    await del(`${tokens}/${readerToken.token.id}`, 403);
+    await del(`${tokens}/${readerToken.token.id}`, 404);
     await post(tokens, { name: `smoke-own-${RUN}`, profileId: readers.id, expiresAt: inDays(1) }); // their own is fine
   });
   // Revoke: at once, idempotent, kept as history.

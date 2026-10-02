@@ -2459,7 +2459,7 @@ export interface paths {
         post?: never;
         /**
          * Revoke an API token (it stays listed as revoked; revoking twice is a no-op)
-         * @description Requires `users.manage`. 403 when the owner holds permissions you do not (your own tokens are always revocable). Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `users.manage`. 404, as for a missing token, when the owner holds permissions you do not (your own tokens are always revocable). Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         delete: operations["revokeApiToken"];
         options?: never;
