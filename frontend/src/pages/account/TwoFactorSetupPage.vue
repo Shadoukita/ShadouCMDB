@@ -3,6 +3,7 @@ import { computed, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import BrandMark from "../../components/BrandMark.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
+import { t } from "../../i18n";
 import { useDocumentTitle } from "../../lib/composables";
 import { safeRedirect } from "../../lib/signIn";
 import { useSessionStore } from "../../stores/session";
@@ -19,7 +20,7 @@ import TwoFactorSettings from "./TwoFactorSettings.vue";
  * again with a code, so then this screen says that instead of offering a set-up
  * the API would refuse (409).
  */
-useDocumentTitle("Set up two-factor authentication");
+useDocumentTitle(() => t("account.enrol.documentTitle"));
 const route = useRoute();
 const router = useRouter();
 const session = useSessionStore();
@@ -50,31 +51,28 @@ function enrolled() {
       <div class="bare-brand"><BrandMark /></div>
       <div class="page-header">
         <div class="title">
-          <h1>{{ alreadySetUp ? "Sign in again with a code" : "Set up two-factor authentication" }}</h1>
+          <h1>{{ alreadySetUp ? t("account.enrol.againTitle") : t("account.enrol.title") }}</h1>
           <span v-if="session.user" class="muted">{{ session.user.displayName }} ({{ session.user.username }})</span>
         </div>
         <div v-if="!alreadySetUp" class="actions">
-          <button type="button" class="btn" @click="signOut">Sign out</button>
+          <button type="button" class="btn" @click="signOut">{{ t("account.enrol.signOut") }}</button>
         </div>
       </div>
-      <ErrorAlert v-if="signOutError" :error="signOutError" title="Sign-out failed" />
+      <ErrorAlert v-if="signOutError" :error="signOutError" :title="t('account.enrol.signOutFailed')" />
       <section v-if="alreadySetUp" class="panel" aria-labelledby="mfa-again-title">
         <div class="panel-header">
-          <h2 id="mfa-again-title">Two-factor authentication</h2>
-          <span class="badges"><span class="badge ok">On</span><span class="badge warn">Required</span></span>
+          <h2 id="mfa-again-title">{{ t("account.mfa.title") }}</h2>
+          <span class="badges"><span class="badge ok">{{ t("account.mfa.on") }}</span><span class="badge warn">{{ t("account.mfa.required") }}</span></span>
         </div>
         <div class="panel-body stack">
           <div class="alert alert-warn" role="note">
-            Your authenticator app is already set up, but this session was opened with your password alone. A permission
-            profile you hold requires two-factor authentication: sign out, then sign in again with your password and a
-            code from the app.
+            {{ t("account.enrol.alreadySetUp") }}
           </div>
           <p class="muted flush">
-            If you no longer have the authenticator app, sign in with one of your recovery codes instead, or ask an
-            administrator to reset your two-factor authentication.
+            {{ t("account.enrol.noApp") }}
           </p>
           <div class="actions">
-            <button type="button" class="btn btn-primary" @click="signOut">Sign out and sign in with a code</button>
+            <button type="button" class="btn btn-primary" @click="signOut">{{ t("account.enrol.signOutAndIn") }}</button>
           </div>
         </div>
       </section>

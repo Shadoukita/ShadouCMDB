@@ -1,7 +1,7 @@
 // Unit tests for the message catalog (SHAA-927 §5.9, §7.4 item 13). Run: npm run test:unit -w frontend
 import assert from "node:assert/strict";
 import { afterEach, describe, test } from "node:test";
-import { currentLocale, parseMessage, setLocaleForTests, t } from "../src/i18n/index";
+import { currentLocale, parseMessage, setLocaleForTests, t, tAround } from "../src/i18n/index";
 import { de } from "../src/i18n/de";
 import { en } from "../src/i18n/en";
 
@@ -109,5 +109,23 @@ describe("parameters and plurals", () => {
       t("services.members.removeConfirm", { service: "Payroll" }),
       "Remove {n} members from Payroll? The CIs themselves are not deleted.",
     );
+  });
+});
+
+describe("text around markup", () => {
+  test("tAround splits a message at one parameter, in the translator's word order", () => {
+    assert.deepEqual(tAround("auth.signIn.lostAdmin", "command"), ["Lost access to every administrator account? Run ", " on the server."]);
+    setLocaleForTests("de");
+    assert.deepEqual(tAround("auth.signIn.lostAdmin", "command"), [
+      "Kein Zugriff mehr auf ein Administratorkonto? Führen Sie ",
+      " auf dem Server aus.",
+    ]);
+  });
+  test("the recovery-code count is a plural in both languages", () => {
+    assert.equal(t("account.mfa.regenerateBody", { n: 1 }), "You get 10 new codes; the 1 you have now stops working.");
+    assert.equal(t("account.mfa.regenerateBody", { n: 7 }), "You get 10 new codes; the 7 you have now stop working.");
+    setLocaleForTests("de");
+    assert.equal(t("account.mfa.regenerateBody", { n: 1 }), "Sie erhalten 10 neue Codes; der 1 Code, den Sie jetzt haben, wird ungültig.");
+    assert.equal(t("account.mfa.regenerateBody", { n: 7 }), "Sie erhalten 10 neue Codes; die 7 Codes, die Sie jetzt haben, werden ungültig.");
   });
 });

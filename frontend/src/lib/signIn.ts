@@ -1,16 +1,18 @@
+import { t, type MessageKey } from "../i18n/index";
+
 /** Why the last OIDC sign-in did not go through; the server never says more than the code. */
-export const SSO_ERRORS: Record<string, string> = {
-  expired: "The sign-in took too long or was started in another browser tab. Start again.",
-  cancelled: "The sign-in was cancelled at the identity provider.",
-  failed: "The identity provider's answer could not be verified. Start again; if it keeps failing, ask an administrator to check the provider settings.",
-  unavailable: "The identity provider could not be reached or is disabled. Try again later, or sign in with a local account.",
-  not_configured: "Single sign-on is not fully set up on this server (PUBLIC_URL is missing). Ask an administrator.",
-  not_authorised: "None of your groups gives access to ShadouCMDB. Ask an administrator for access.",
-  account_conflict: "A ShadouCMDB account with your username already exists and does not belong to this identity provider. Ask an administrator to resolve the conflict.",
-  account_disabled: "Your ShadouCMDB account is disabled. Ask an administrator.",
-  invalid_username: "Your identity provider did not send a usable username. Ask an administrator to check the provider settings.",
-  last_administrator: "Signing in would leave ShadouCMDB without an active administrator, because your groups no longer map to the Administrator profile. Ask another administrator to check the group mappings.",
-  mfa_not_enforced: "Your identity provider did not confirm a second factor, which your access to ShadouCMDB requires. Sign in again using multi-factor authentication, or ask an administrator to check the provider's MFA settings.",
+export const SSO_ERRORS: Record<string, MessageKey> = {
+  expired: "auth.sso.expired",
+  cancelled: "auth.sso.cancelled",
+  failed: "auth.sso.failed",
+  unavailable: "auth.sso.unavailable",
+  not_configured: "auth.sso.not_configured",
+  not_authorised: "auth.sso.not_authorised",
+  account_conflict: "auth.sso.account_conflict",
+  account_disabled: "auth.sso.account_disabled",
+  invalid_username: "auth.sso.invalid_username",
+  last_administrator: "auth.sso.last_administrator",
+  mfa_not_enforced: "auth.sso.mfa_not_enforced",
 };
 
 /** The shape of a server error code. Anything else in ?ssoError= came from a crafted link, not from us. */
@@ -22,10 +24,8 @@ const SSO_CODE = /^[a-z_]{1,32}$/;
  */
 export function ssoErrorMessage(code: unknown): string | null {
   if (typeof code !== "string" || code === "") return null;
-  if (Object.hasOwn(SSO_ERRORS, code)) return SSO_ERRORS[code];
-  return SSO_CODE.test(code)
-    ? `Single sign-on failed (${code}). Try again, or ask an administrator.`
-    : "Single sign-on failed. Try again, or ask an administrator.";
+  if (Object.hasOwn(SSO_ERRORS, code)) return t(SSO_ERRORS[code]);
+  return SSO_CODE.test(code) ? t("auth.sso.unknownCode", { code }) : t("auth.sso.unknown");
 }
 
 /**

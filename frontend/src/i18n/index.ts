@@ -163,3 +163,12 @@ export function t(key: MessageKey, params: MessageParams = {}): string {
   if (!nodes) parsed.set(cacheKey, (nodes = parseMessage(catalogs[locale][key])));
   return render(nodes, params, locale, null, "");
 }
+
+/**
+ * The text before and after parameter `slot`, for a message that wraps it in markup
+ * (`{{ before }}<strong>{{ name }}</strong>{{ after }}`), so the word order stays the translator's.
+ */
+export function tAround(key: MessageKey, slot: string, params: MessageParams = {}): [before: string, after: string] {
+  const [before = "", after = ""] = t(key, { ...params, [slot]: "\u0000" }).split("\u0000");
+  return [before, after];
+}
