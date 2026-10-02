@@ -11,7 +11,7 @@ import type {
 import type { components } from "../api/schema";
 import { hasMessage, t } from "../i18n/index";
 import { GENERAL_SECTION, groupAttributes } from "./attributes";
-import { readingOrder } from "./freeLayout";
+import { freeCopy, makeFree, readingOrder } from "./freeLayout";
 
 type UiSectionFrame = components["schemas"]["UiSectionFrame"];
 
@@ -429,32 +429,37 @@ export function withoutKinds(l: UiClassLayout, kinds: readonly SectionKind[]): U
   return { ...l, tabs: (l.tabs ?? []).map((t) => ({ ...t, sections: (t.sections ?? []).filter((s) => !kinds.includes(sectionKind(s))) })) };
 }
 
-/** Every optional part of a layout filled in (tabs, sections, columns, widths), without the old `panels`. */
+/**
+ * Every optional part of a layout filled in (tabs, sections, columns, widths),
+ * without the old `panels`. Every tab is free: one stored on the earlier grid
+ * gets each section as a window where it was on the grid (lib/freeLayout makeFree).
+ */
 export function normalizeLayout(l: UiClassLayout): UiClassLayout {
+  const tabs = (l.tabs ?? []).map((t) => ({
+    key: t.key,
+    label: t.label,
+    placement: "free" as const,
+    // Content blocks (a `kind` other than fields: notes, panels) are kept as stored (a copy: the draft is edited), without fields.
+    sections: (t.sections ?? []).map((s) =>
+      sectionKind(s) !== "fields"
+        ? { ...s, width: s.width ?? SECTION_GRID }
+        : {
+            ...s,
+            key: s.key,
+            label: s.label,
+            columns: s.columns ?? GRID_COLUMNS,
+            width: s.width ?? SECTION_GRID,
+            collapsed: !!s.collapsed,
+            fields: (s.fields ?? []).map((f) => ({ field: f.field, width: f.width ?? 1 })),
+          },
+    ),
+  }));
+  tabs.forEach(makeFree);
   return {
     classKey: l.classKey,
     // The class's default template: the tabs below are its layout, and saving them edits it.
     ...(l.templateKey ? { templateKey: l.templateKey } : {}),
-    tabs: (l.tabs ?? []).map((t) => ({
-      key: t.key,
-      label: t.label,
-      // Kept with the sections' frames: a free tab saved without it would go back on the grid.
-      ...(t.placement ? { placement: t.placement } : {}),
-      // Content blocks (a `kind` other than fields: notes, panels) are kept as stored (a copy: the draft is edited), without fields.
-      sections: (t.sections ?? []).map((s) =>
-        sectionKind(s) !== "fields"
-          ? { ...s, width: s.width ?? SECTION_GRID }
-          : {
-              ...s,
-              key: s.key,
-              label: s.label,
-              columns: s.columns ?? GRID_COLUMNS,
-              width: s.width ?? SECTION_GRID,
-              collapsed: !!s.collapsed,
-              fields: (s.fields ?? []).map((f) => ({ field: f.field, width: f.width ?? 1 })),
-            },
-      ),
-    })),
+    tabs,
     hiddenFields: l.hiddenFields ?? [],
     readOnlyFields: l.readOnlyFields ?? [],
   };
@@ -482,14 +487,13 @@ export interface ResolvedSection {
   /** A grid of `fields`, or a content block (a note's `text`, a built-in panel) without fields. */
   kind: SectionKind;
   text?: string;
-  /** Where the section sits as a window of a free tab (lib/freeLayout); absent on the grid and for the automatic sections. */
+  /** Where the section sits as a window of its tab (lib/freeLayout); absent for the automatic sections. */
   frame?: UiSectionFrame;
 }
+/** A tab: the layout's sections are windows (in reading order), the automatic ones follow below them at the full width. */
 export interface ResolvedTab {
   key: string;
   label: string;
-  /** Free: the framed sections are windows (in reading order), the rest follow below them at the full width. */
-  placement: "grid" | "free";
   sections: ResolvedSection[];
 }
 
@@ -530,14 +534,14 @@ export function resolveLayout(
     return c && usable(c) && !placed.has(c) ? c : null;
   };
   const taken = new Set<string>();
-  const tabs: ResolvedTab[] = (layout.tabs ?? []).map((t) => ({
+  // Every tab free: one stored on the earlier grid shows its sections as windows where they were on the grid.
+  const tabs: ResolvedTab[] = (layout.tabs ?? []).map(freeCopy).map((t) => ({
     key: t.key,
     label: t.label,
-    placement: t.placement === "free" ? "free" : "grid",
-    // A free tab's windows in reading order (y, then x): the order of the page, the keyboard and screen readers.
-    sections: (t.placement === "free" ? readingOrder(t.sections ?? []) : (t.sections ?? [])).map((s): ResolvedSection => {
+    // The windows in reading order (y, then x): the order of the page, the keyboard and screen readers.
+    sections: readingOrder(t.sections ?? []).map((s): ResolvedSection => {
       const kind = sectionKind(s);
-      const place = { width: sectionWidth(s), newRow: !!s.newRow, minHeight: s.minHeight ?? undefined, ...(t.placement === "free" && s.frame ? { frame: s.frame } : {}) };
+      const place = { width: sectionWidth(s), newRow: !!s.newRow, minHeight: s.minHeight ?? undefined, ...(s.frame ? { frame: s.frame } : {}) };
       if (kind !== "fields") return { key: s.key, label: s.label, collapsed: !!s.collapsed, columns: GRID_COLUMNS, ...place, fields: [], auto: false, kind, text: s.text };
       const columns = Math.min(Math.max(s.columns ?? GRID_COLUMNS, 1), MAX_COLUMNS);
       const fields: ResolvedField[] = [];
@@ -584,7 +588,7 @@ export function resolveLayout(
     ...groups.map((g) => auto(`_group:${g.group}`, g.group, g.fields)),
     auto("_record", "Record", record.filter((f) => usable(f) && !taken.has(f))),
   ];
-  if (tabs.length === 0) tabs.push({ key: "general", label: GENERAL_SECTION, placement: "grid", sections: [] });
+  if (tabs.length === 0) tabs.push({ key: "general", label: GENERAL_SECTION, sections: [] });
   tabs[0].sections.push(...trailing);
   if (keepEmpty) return tabs.map((t) => ({ ...t, sections: t.sections.filter((s) => !s.auto || s.fields.length > 0) }));
   const shown = tabs.map((t) => ({ ...t, sections: t.sections.filter((s) => s.kind !== "fields" || s.fields.length > 0) })).filter((t) => t.sections.length > 0);

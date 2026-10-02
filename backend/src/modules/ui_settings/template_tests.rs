@@ -459,3 +459,44 @@ async fn an_export_from_before_templates_imports_as_templates() {
 
     db.drop().await;
 }
+
+/// Templates and CIs' own layouts are free like class layouts (SHAA-1471): a tab sent as `grid` is stored
+/// free, and a CI layout stored on the grid before free placement was the only one comes back free.
+#[tokio::test]
+async fn template_and_ci_layouts_on_the_grid_come_back_free() {
+    let Some(db) = scratch::database("template_and_ci_layouts_on_the_grid_come_back_free").await else { return };
+    let w = world(&db).await;
+    let mut grid = tab("Compact", &["ident", "label"]);
+    grid["placement"] = json!("grid");
+    let compact = json!({ "key": "compact", "name": "Compact", "layout": { "tabs": [grid.clone()] } });
+    let (status, v) = w.put(json!({ "layoutTemplates": [compact] })).await;
+    assert_eq!(status, 200, "{v}");
+    let stored = template(&w.raw().await, "compact")["layout"]["tabs"][0].clone();
+    assert_eq!(stored["placement"], "free", "{stored}");
+    assert_eq!(stored["sections"][0]["frame"]["w"], 1.0, "{stored}");
+    assert_eq!(stored["sections"][0]["fields"].as_array().unwrap().len(), 2);
+
+    let ci = w.ci().await;
+    let path = format!("/api/v1/configuration-items/{ci}/layout");
+    let (status, v, _) =
+        call(&w.app, "PUT", &path, &w.admin, Some(json!({ "layout": { "tabs": [grid.clone()] } }))).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(v["layout"]["tabs"][0]["placement"], "free", "{v}");
+    // As a row written before this change holds it.
+    sqlx::query("UPDATE ci_layout_overrides SET layout = $1")
+        .bind(json!({ "tabs": [grid] }))
+        .execute(&w.pool)
+        .await
+        .unwrap();
+    let (status, v, _) = call(&w.app, "GET", &path, &w.admin, None).await;
+    assert_eq!(status, 200, "{v}");
+    let tab = &v["layout"]["tabs"][0];
+    assert_eq!(
+        (tab["placement"].as_str(), tab["sections"][0]["frame"]["x"].as_f64()),
+        (Some("free"), Some(0.0)),
+        "{v}"
+    );
+    assert_eq!(tab["sections"][0]["fields"].as_array().unwrap().len(), 2, "{v}");
+
+    db.drop().await;
+}

@@ -205,7 +205,7 @@ const crumbs = computed<Crumb[]>(() => {
       removed with it.
     </div>
 
-    <LayoutEditView v-if="editor.active && classKey" :editor="editor" :class-name="c.class.name" :class-key="classKey" :attrs="activeAttrs" :attrs-error="attrs.error.value">
+    <LayoutEditView v-if="editor.active && classKey" :editor="editor" :class-name="c.class.name" :attrs="activeAttrs" :attrs-error="attrs.error.value">
       <template #field="{ field }">
         <AttributeValue v-if="defFor(field)" :def="defFor(field)!" :value="c.attributes[defFor(field)!.key]" :ref-info="c.attributeReferences[defFor(field)!.key]" :self="self" :trail="trail" />
         <CoreFieldValue v-else :ci="c" :field="field" />

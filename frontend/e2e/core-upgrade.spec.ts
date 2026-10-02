@@ -74,7 +74,7 @@ function formerFields(ci: OldCi): [label: string, text: string][] {
 
 const detailValue = (page: Page, label: string) =>
   page
-    .locator(".layout-panels dt")
+    .locator(".layout-container dt")
     .filter({ hasText: new RegExp(`^${label}$`) })
     .locator("+ dd");
 
@@ -83,7 +83,7 @@ test('every former fixed field shows on the detail page as a class field; no "Ot
     await page.goto(`/cis/${ci.id}`);
     await expect(page.getByRole("heading", { level: 1 })).toHaveText(ci.name!);
     // A layout saved before the upgrade may put its own sections first.
-    const sections = page.locator(".layout-panels > details > summary h2");
+    const sections = page.locator(".layout-container details > summary h2");
     await expect(sections.filter({ hasText: /^General$/ })).toHaveCount(1);
     await expect(sections.filter({ hasText: /^Other$/ })).toHaveCount(0);
     await expect(detailValue(page, "Ident")).toHaveText(/^CI-[0-9A-HJKMNP-TV-Z]{8}$/);
