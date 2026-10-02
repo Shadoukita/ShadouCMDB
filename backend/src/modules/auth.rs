@@ -1526,21 +1526,21 @@ pub(crate) mod tests {
         let Some(db) = scratch::database("a_refused_right_password_answers_like_a_wrong_one").await else { return };
         let (pool, auth, headers) = (&db.pool, auth_state(), HeaderMap::new());
         setup(pool, &auth, &headers, &from("192.0.2.1"), body("owner")).await.unwrap();
+        let (password, guess) = (Uuid::new_v4().to_string(), Uuid::new_v4().to_string());
         let input = UserCreate {
             username: "gone".into(),
             display_name: "Gone".into(),
             email: None,
-            password: "gone correct horse".into(),
+            password: password.as_str().into(),
             is_active: Some(false),
             profile_ids: vec![],
         };
         users::create(pool, &RequestContext::system("test", "test"), &input).await.unwrap();
         let ctx = from("198.51.100.8");
-        let wrong = login(pool, &auth, &headers, &ctx, login_body("gone", "a wrong guess")).await.err().expect("wrong");
+        let wrong = login(pool, &auth, &headers, &ctx, login_body("gone", &guess)).await.err().expect("wrong");
         let wrong = answer_bytes(wrong).await;
         assert_eq!(wrong.0, axum::http::StatusCode::UNAUTHORIZED);
-        let right =
-            login(pool, &auth, &headers, &ctx, login_body("gone", "gone correct horse")).await.err().expect("disabled");
+        let right = login(pool, &auth, &headers, &ctx, login_body("gone", &password)).await.err().expect("disabled");
         assert_eq!(answer_bytes(right).await, wrong, "a disabled account's right password");
         let failures = auth_rows(pool, "login.failure").await;
         assert_eq!(failures[0].3.get("reason"), None, "the wrong password");
@@ -1562,7 +1562,7 @@ pub(crate) mod tests {
             let attempt = throttle_gate(&auth.throttle, &name, ctx.client.net, "sign-ins").await.unwrap();
             let attempt = Reservation { name: attempt, entry: None };
             let answer = sso::DirectoryAnswer::Refused(refusal);
-            let e = directory_answer(pool, &auth, &headers, &ctx, attempt, &login_body(&name, "x"), answer)
+            let e = directory_answer(pool, &auth, &headers, &ctx, attempt, &login_body(&name, &guess), answer)
                 .await
                 .err()
                 .expect("refused");
