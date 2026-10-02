@@ -130,7 +130,7 @@ test("a user's own password change revokes their own tokens, not the ones they c
   await asDave.ctx.dispose();
 });
 
-test("permission profiles and configuration import refuse API tokens, reading still accepts them (GH#154)", async ({ request, playwright, baseURL }) => {
+test("permission profiles and configuration export/import refuse API tokens, reading profiles still accepts them (GH#154, GH#445)", async ({ request, playwright, baseURL }) => {
   const target = await apiSend<{ id: string }>(request, "POST", "/admin/profiles", { name: `E2E token target ${stamp}`, globalPermissions: [] });
   profiles.push(target.id);
   const before = await apiGet<unknown>(request, `/admin/profiles/${target.id}`);
@@ -142,13 +142,15 @@ test("permission profiles and configuration import refuse API tokens, reading st
   });
   const ctx = await bearer(playwright, baseURL!, created.secret);
   try {
-    const exported = await ctx.get("/api/v1/admin/config/export");
-    expect(exported.status()).toBe(200);
     expect((await ctx.get("/api/v1/admin/profiles")).status()).toBe(200);
     expect((await ctx.get(`/api/v1/admin/profiles/${target.id}`)).status()).toBe(200);
 
+    // The export needs a session too (GH#445), so the file to import comes from the signed-in session.
+    const exported = await request.get("/api/v1/admin/config/export");
+    expect(exported.status()).toBe(200);
     const config = await exported.json();
     const writes = [
+      ctx.get("/api/v1/admin/config/export"),
       ctx.post("/api/v1/admin/profiles", { data: { name: `E2E by token ${stamp}` } }),
       ctx.patch(`/api/v1/admin/profiles/${target.id}`, { data: { globalPermissions: ["users.manage"] } }),
       ctx.patch(`/api/v1/admin/profiles/${adminProfileId}`, { data: { requireMfa: false } }),
@@ -171,7 +173,7 @@ test("permission profiles and configuration import refuse API tokens, reading st
   expect(named.data.filter((p) => p.name === `E2E by token ${stamp}` || p.name === `E2E clone ${stamp}`)).toHaveLength(0);
   // Each refusal is audited as a session_only use of the token.
   const audit = await apiGet<{ data: { action: string; newValue: unknown }[] }>(request, `/audit-log?entityType=api_tokens&entityId=${created.token.id}&limit=50`);
-  expect(audit.data.filter((e) => e.action === "token.use" && JSON.stringify(e.newValue).includes("session_only")).length).toBeGreaterThanOrEqual(7);
+  expect(audit.data.filter((e) => e.action === "token.use" && JSON.stringify(e.newValue).includes("session_only")).length).toBeGreaterThanOrEqual(8);
   await request.delete(`/api/v1/admin/api-tokens/${created.token.id}`, { headers: { "X-CSRF-Token": await csrf(request) } });
 });
 

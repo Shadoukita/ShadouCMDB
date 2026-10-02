@@ -1844,8 +1844,7 @@ pub fn routes() -> Vec<Route> {
                  the target's profiles untouched. Likewise `importMappings` is only present when the caller holds \
                  `cis.import`, and holds only the mappings of classes the caller can view. Every export is \
                  recorded in the audit log as one `export` entry (entity type `config`) naming the sections \
-                 included and the number of import mappings, never their content. Needs a signed-in session, \
-                 like the import: an API token answers 403.",
+                 included and the number of import mappings, never their content.",
             )
             .requires(GlobalPermission::ConfigExportImport)
             .session_only()
