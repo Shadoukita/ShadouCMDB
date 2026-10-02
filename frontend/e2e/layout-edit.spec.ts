@@ -1,5 +1,5 @@
 import type { Browser, Locator, Page } from "@playwright/test";
-import { apiGet, apiSend, classIdByName, csrf, expect, resetUiSettings, snap, test } from "./support";
+import { apiGet, apiSend, classIdByName, csrf, expect, resetUiSettings, saveLayout, snap, test } from "./support";
 
 // Edit layout: the Server layout edited on a real Server CI (the demo seed) in the layout editor's
 // own window, saved as a settings version, and seen by a user who may only view servers. The walk starts from and ends
@@ -69,8 +69,9 @@ test("the editor window: add a tab and a section, move fields, save, and a viewe
   // Tall enough that a dragged field and where it is dropped are both in view.
   await page.setViewportSize({ width: 1440, height: 2400 });
   // The mode is unmistakable, and says what the change applies to.
-  await expect(bar(page)).toContainText("Editing the Server layout");
-  await expect(bar(page)).toContainText("Changes apply to every Server configuration item");
+  await expect(bar(page)).toContainText("Layout editor · Server");
+  await expect(bar(page).getByTestId("le-target")).toContainText("Template: Standard");
+  await expect(bar(page)).toContainText("Saving to the template changes every class and CI that uses it");
   await expect(bar(page).getByText("No unsaved changes")).toBeVisible();
   // The canvas is the real page: the CI's own values, the built-in General tab, its sections as windows.
   await expect(tabBar(page).getByRole("button", { name: "General", exact: true })).toHaveAttribute("aria-pressed", "true");
@@ -147,9 +148,7 @@ test("the editor window: add a tab and a section, move fields, save, and a viewe
   await expect(bar(page)).toBeVisible();
 
   // Save with a note: a new settings version.
-  await bar(page).getByLabel("Note for this version").fill(`e2e in-place layout ${stamp}`);
-  await bar(page).getByRole("button", { name: "Save layout" }).click();
-  await expect(bar(page).getByRole("status")).toContainText(/Saved as version \d+/);
+  await saveLayout(page, `e2e in-place layout ${stamp}`);
   await expect(bar(page).getByText("No unsaved changes")).toBeVisible();
   // The page the editor was opened from shows the saved layout without a reload.
   const tabs = origin.getByRole("tablist", { name: "CI sections" }).getByRole("tab");
@@ -185,7 +184,7 @@ test("the editor on the form: the CI's values in place, read-only fields, and ba
   await origin.goto(`/cis/${ci.id}/edit`);
   let page = await openEditor(origin);
   await expect(page).toHaveURL(new RegExp(`/cis/${ci.id}/edit/layout-editor$`));
-  await expect(bar(page)).toContainText("Editing the Server layout");
+  await expect(bar(page)).toContainText("Layout editor · Server");
   // The form's own controls, inert, with the CI's values.
   await expect(field(page, "Ident").locator("#f-ident")).toHaveValue(ci.ident);
   await expect(page.getByRole("button", { name: "Save changes" })).toHaveCount(0);
@@ -193,8 +192,7 @@ test("the editor on the form: the CI's values in place, read-only fields, and ba
   await field(page, "Serial number").hover();
   await field(page, "Serial number").getByLabel("Read-only").check();
   await expect(field(page, "Serial number")).toContainText("read-only");
-  await bar(page).getByRole("button", { name: "Save layout" }).click();
-  await expect(bar(page).getByRole("status")).toContainText(/Saved as version \d+/);
+  await saveLayout(page);
   await closeEditor(page);
   await expect(origin.getByLabel("Serial number")).toBeDisabled();
   await expect(origin.getByRole("tablist", { name: "Form tabs" }).getByRole("tab")).toHaveText(["General", "Hardware"]);
@@ -229,8 +227,9 @@ test("a concurrent save is reported with a way to reload", async ({ page, reques
     headers: { "X-CSRF-Token": await csrf(request) },
   });
   expect(res.ok()).toBeTruthy();
-  await bar(page).getByRole("button", { name: "Save layout" }).click();
-  await expect(bar(page).getByRole("alert").filter({ hasText: "Someone else saved the settings" })).toBeVisible();
+  await bar(page).getByTestId("le-save").click();
+  await page.getByRole("dialog", { name: /^Save to the template/ }).getByRole("button", { name: "Save to template", exact: true }).click();
+  await expect(bar(page).getByRole("alert").filter({ hasText: "Someone else saved while you were editing" })).toBeVisible();
   await bar(page).getByRole("button", { name: "Load the latest version" }).click();
   await expect(bar(page).getByText("No unsaved changes")).toBeVisible();
   await expect(bar(page).getByRole("alert")).toHaveCount(0);
@@ -244,12 +243,13 @@ test("Customization › Layouts: Edit CI opens the editor on the most recently u
   // No designer preview any more: the class picker, and one way into the editor.
   await expect(admin.getByTestId("designer-frame")).toHaveCount(0);
   await expect(admin.getByRole("toolbar", { name: "Preview width" })).toHaveCount(0);
-  await expect(admin.getByTestId("layout-status")).toContainText("Server uses the built-in layout");
+  await expect(admin.getByTestId("layout-status")).toContainText("Server uses the template “Standard” by default.");
   const edit = admin.getByTestId("layout-edit-ci");
   await expect(edit).toHaveText(`Edit CI: ${recent.label}`);
   let page = await openEditor(admin, edit);
-  await expect(page).toHaveURL(new RegExp(`/cis/${recent.id}/layout-editor$`));
-  await expect(bar(page)).toContainText("Editing the Server layout");
+  // The class's default template, whatever layout the CI shows.
+  await expect(page).toHaveURL(new RegExp(`/cis/${recent.id}/layout-editor\\?template=standard$`));
+  await expect(bar(page)).toContainText("Layout editor · Server");
   await expect(page.locator("[data-window]").first()).toBeVisible();
   await page.close();
   await snap(admin, "customization-layouts");
@@ -260,7 +260,7 @@ test("Customization › Layouts: Edit CI opens the editor on the most recently u
   await admin.getByLabel("Configuration item to edit the layout on").selectOption({ label: ci.label });
   await expect(edit).toHaveText(`Edit CI: ${ci.label}`);
   page = await openEditor(admin, edit);
-  await expect(page).toHaveURL(new RegExp(`/cis/${ci.id}/layout-editor$`));
+  await expect(page).toHaveURL(new RegExp(`/cis/${ci.id}/layout-editor\\?template=standard$`));
   await page.close();
 
   // A class without CIs: a link to the create form's layout editor.
@@ -268,11 +268,11 @@ test("Customization › Layouts: Edit CI opens the editor on the most recently u
   await apiSend(request, "POST", "/ci-classes", { key, name: `E2E Empty ${stamp}` });
   await admin.goto(`/admin/customization/layouts?class=${key}`);
   const create = admin.getByRole("link", { name: `Create a E2E Empty ${stamp} CI to edit its layout` });
-  await expect(create).toHaveAttribute("href", /\/cis\/new\/layout-editor\?classId=[^&]+$/);
+  await expect(create).toHaveAttribute("href", /\/cis\/new\/layout-editor\?classId=[^&]+&template=standard$/);
   await expect(admin.getByTestId("layout-edit-ci")).toHaveCount(0);
   page = await openEditor(admin, create);
-  await expect(page).toHaveURL(/\/cis\/new\/layout-editor\?classId=[^&]+$/);
-  await expect(bar(page)).toContainText(`Editing the E2E Empty ${stamp} layout`);
+  await expect(page).toHaveURL(/\/cis\/new\/layout-editor\?classId=[^&]+&template=standard$/);
+  await expect(bar(page)).toContainText(`Layout editor · E2E Empty ${stamp}`);
   await expect(field(page, "Ident")).toBeVisible();
   await page.close();
 });
@@ -395,20 +395,29 @@ test("content blocks: a note and built-in panels placed in the editor, on the de
   // An API refusal is shown next to the block it concerns (here a refusal the editor cannot produce itself).
   await page.route("**/api/v1/ui-settings", async (route) => {
     if (route.request().method() !== "PUT") return route.fallback();
-    const sent = route.request().postDataJSON() as { settings: { layouts: { tabs: { sections: { kind?: string }[] }[] }[] } };
-    const t = sent.settings.layouts[0].tabs.findIndex((x) => x.sections.some((s) => s.kind === "audit"));
-    const s = sent.settings.layouts[0].tabs[t].sections.findIndex((x) => x.kind === "audit");
+    // The editor saves the template it edits (Standard, the first template after the reset).
+    const sent = route.request().postDataJSON() as { settings: { layoutTemplates: { key: string; layout: { tabs: { sections: { kind?: string }[] }[] } }[] } };
+    const i = sent.settings.layoutTemplates.findIndex((x) => x.key === "standard");
+    const tabs = sent.settings.layoutTemplates[i].layout.tabs;
+    const t = tabs.findIndex((x) => x.sections.some((s) => s.kind === "audit"));
+    const s = tabs[t].sections.findIndex((x) => x.kind === "audit");
     await route.fulfill({
       status: 400,
-      json: { error: { code: "VALIDATION_ERROR", message: "Invalid settings", details: [{ field: `settings.layouts.0.tabs.${t}.sections.${s}.kind`, message: "The audit panel can be placed once in a layout" }] } },
+      json: {
+        error: {
+          code: "VALIDATION_ERROR",
+          message: "Invalid settings",
+          details: [{ field: `settings.layoutTemplates.${i}.layout.tabs.${t}.sections.${s}.kind`, message: "The audit panel can be placed once in a layout" }],
+        },
+      },
     });
   });
-  await bar(page).getByRole("button", { name: "Save layout" }).click();
-  await expect(section(page, "Audit trail").getByRole("alert")).toContainText(/settings\.layouts\.0\.tabs\.1\.sections\.\d+\.kind The audit panel can be placed once/);
+  await bar(page).getByTestId("le-save").click();
+  await page.getByRole("dialog", { name: /^Save to the template/ }).getByRole("button", { name: "Save to template", exact: true }).click();
+  await expect(section(page, "Audit trail").getByRole("alert")).toContainText(/settings\.layoutTemplates\.0\.layout\.tabs\.1\.sections\.\d+\.kind The audit panel can be placed once/);
   await page.unroute("**/api/v1/ui-settings");
 
-  await bar(page).getByRole("button", { name: "Save layout" }).click();
-  await expect(bar(page).getByRole("status")).toContainText(/Saved as version \d+/);
+  await saveLayout(page);
   await expect(section(page, "Audit trail").getByRole("alert")).toHaveCount(0);
 
   // The detail page: the note on General, the panels on Links instead of their usual places; History keeps its tab.
@@ -550,14 +559,14 @@ test("windows dragged, resized, overlapped and layered, saved, and shown as plac
   await snap(page, "layout-free-editor");
 
   const expected = { x: await num(key, "x"), y: await num(key, "y"), w: await num(key, "w"), h: await num(key, "h") };
-  await bar(page).getByRole("button", { name: "Save layout" }).click();
-  await expect(bar(page).getByRole("status")).toContainText(/Saved as version \d+/);
+  await saveLayout(page);
   await closeEditor(page);
 
   // Stored: a free tab, the frames as placed, Floating on top of General; sections in reading order (y, then x).
   type Frame = { x: number; y: number; w: number; h: number; z: number };
-  const stored = await apiGet<{ settings: { layouts: { classKey: string; tabs: { placement?: string; sections: { key: string; frame?: Frame }[] }[] }[] } }>(request, "/ui-settings");
-  const tab = stored.settings.layouts.find((l) => l.classKey === "server")!.tabs[0];
+  // Saved to the template Server uses (Standard: the class has no default of its own).
+  const stored = await apiGet<{ settings: { layoutTemplates: { key: string; layout: { tabs: { placement?: string; sections: { key: string; frame?: Frame }[] }[] } }[] } }>(request, "/ui-settings");
+  const tab = stored.settings.layoutTemplates.find((t) => t.key === "standard")!.layout.tabs[0];
   expect(tab.placement).toBe("free");
   const saved = Object.fromEntries(tab.sections.map((s) => [s.key, s.frame!]));
   expect(saved[key]).toMatchObject({ y: expected.y, h: expected.h });
