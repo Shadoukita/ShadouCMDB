@@ -43,7 +43,7 @@ mime_guess = "2"
 # Decodes the id in a token.use path before the audit log judges it; already in the tree through axum.
 percent-encoding = "2"
 # Bulk import: the XLSX preflight reads every XML part as events and refuses a DOCTYPE (no DTD, no entities).
-quick-xml = "0.41"
+quick-xml = "0.42"
 regex = "1"
 # The engine under `regex`, so validation patterns can manage their own matching caches
 # (GH#430). The engines `regex` uses are listed so the choice holds without it.
