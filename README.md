@@ -84,6 +84,10 @@ the same flow for a source checkout.
    | `require` | Encrypted, but the server certificate is not verified. Logs a warning at startup unless the host is loopback. |
    | `disable` | Only for a database on a trusted private network without TLS. |
 
+   `shadoucmdb` reads `.env` from the current directory only, never from a parent directory; run it
+   from the directory that holds `.env`, or pass `--env-file /path/to/.env`. The file it loaded is
+   logged at startup (`loaded environment from …`).
+
    There is no default host. If nothing is configured, the backend exits with an error naming
    the missing variable. Every variable is documented in [`.env.example`](.env.example).
 

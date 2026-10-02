@@ -2247,3 +2247,40 @@ async fn a_suggestion_matches_headers_by_saved_mapping_key_and_label() {
         call(&e.app, "GET", &format!("/api/v1/imports/{id}/mapping-suggestion?classKey=nope"), &alice, None).await;
     assert_eq!((status, detail(&v)), (400, "unknown_class"), "{v}");
 }
+
+/// GH#410: business service members change only through the service, so a
+/// mapping cannot name the member type.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_mapping_cannot_write_business_service_members() {
+    let Some(db) = scratch::database("import_mapping_member_type").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    server_class(&e).await;
+    let file = "Hostname;Cores;Service\nweb01;8;Shop\n";
+    let (status, v, _) = upload(&e.app, &e.admin, CSV_TYPE, Some("members.csv"), &[], file.as_bytes().to_vec()).await;
+    assert_eq!(status, 202, "{v}");
+    let id = v["id"].as_str().unwrap().to_owned();
+    drain(&e.pool).await;
+
+    let member_type: String =
+        sqlx::query_scalar("SELECT key FROM relationship_types WHERE system_role = 'business_service_member'")
+            .fetch_one(&e.pool)
+            .await
+            .unwrap();
+    let mut mapping = server_mapping();
+    mapping["columns"].as_array_mut().unwrap().push(json!({ "index": 2, "target": {
+        "kind": "relationship", "typeKey": member_type, "direction": "incoming",
+        "match": { "by": "label" }
+    } }));
+    let (status, v, _) = call(&e.app, "PUT", &format!("/api/v1/imports/{id}/mapping"), &e.admin, Some(mapping)).await;
+    assert_eq!((status, detail(&v)), (400, "system_relationship_type"), "{v}");
+    assert_eq!(v["error"]["details"][0]["field"], "columns[2].target.typeKey", "{v}");
+
+    let edges: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM ci_relationships e JOIN relationship_types t ON t.id = e.relationship_type_id
+         WHERE t.system_role = 'business_service_member'",
+    )
+    .fetch_one(&e.pool)
+    .await
+    .unwrap();
+    assert_eq!(edges, 0);
+}

@@ -244,6 +244,12 @@ pub(crate) mod capture {
             .with_ansi(false)
             .without_time()
             .finish();
+        // With one scoped subscriber registered, a call site first reached on
+        // another thread takes that thread's interest (none) for good; a
+        // second one, kept alive, makes tracing ask every live subscriber.
+        static SECOND: std::sync::LazyLock<tracing::Dispatch> =
+            std::sync::LazyLock::new(|| tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default()));
+        std::sync::LazyLock::force(&SECOND);
         let guard = tracing::subscriber::set_default(subscriber);
         // Interest is cached per call site for all threads; a test registering
         // its subscriber at the same time could leave this one's out.

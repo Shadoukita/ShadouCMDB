@@ -331,7 +331,7 @@ pub struct Config {
     pub business_services: BusinessServiceConfig,
 }
 
-/// The env file the variables were read from (`--env-file`, or the `.env` found).
+/// The env file the variables were read from (`--env-file`, or `./.env`), as an absolute path.
 static ENV_FILE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 
 /// Records the env file `main` loaded: a generated setup token is written next to it.

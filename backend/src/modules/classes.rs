@@ -2040,6 +2040,34 @@ impl Resource for RelationshipRules {
     fn id(row: &RelationshipRule) -> Uuid {
         row.id
     }
+
+    /// Any class may be a business service member, and members change only
+    /// through the service, so the member type takes no rules (GH#410; the
+    /// trigger of migration 0041 is the backstop).
+    fn after_write<'a>(
+        conn: &'a mut PgConnection,
+        _ctx: &'a RequestContext,
+        row: &'a RelationshipRule,
+        _previous: Option<&'a RelationshipRule>,
+    ) -> BoxFuture<'a, Result<(), AppError>> {
+        Box::pin(async move {
+            let system: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM cmdb.relationship_types WHERE id = $1 AND system_role IS NOT NULL)",
+            )
+            .bind(row.relationship_type_id)
+            .fetch_one(&mut *conn)
+            .await?;
+            if system {
+                return Err(AppError::field(
+                    "relationshipTypeId",
+                    "The built-in business service membership type takes no rules: any CI can be a member, added on \
+                     the business service",
+                    "system_relationship_type",
+                ));
+            }
+            Ok(())
+        })
+    }
 }
 
 // ===========================================================================

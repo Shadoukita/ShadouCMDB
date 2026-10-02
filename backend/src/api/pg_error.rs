@@ -170,8 +170,13 @@ pub fn map(err: &sqlx::Error, field_prefix: Option<&str>) -> Option<AppError> {
         Some("ci_classes_system_no_subclass") => {
             return Some(AppError::field("parentId", humanise(pg.message()), "system_class"));
         }
-        Some("relationship_types_system_fixed") => {
+        Some("relationship_types_system_fixed" | "relationship_type_rules_system_type") => {
             return Some(AppError::field(field, humanise(pg.message()), "system_relationship_type"));
+        }
+        // A business service keeps its type and no CI becomes one (0034, 0041):
+        // items::plan refuses first with the same code; this is the backstop.
+        Some("configuration_items_service_members" | "configuration_items_service_class") => {
+            return Some(AppError::field("classId", humanise(pg.message()), "business_service_class"));
         }
         Some("relationship_types_impact_nondirectional") => {
             return Some(AppError::field(
