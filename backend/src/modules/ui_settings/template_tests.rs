@@ -265,8 +265,8 @@ async fn cis_use_another_template_or_their_own_layout_and_used_templates_stay() 
     assert_eq!(
         u["classes"],
         json!([
-            { "classKey": "business_service", "className": "Business service", "templateKey": "standard", "explicit": false },
-            { "classKey": "server", "className": "Server", "templateKey": "server", "explicit": true }
+            { "classKey": "business_service", "className": "Business service", "templateKey": "standard", "explicit": false, "ownLayoutCount": 0 },
+            { "classKey": "server", "className": "Server", "templateKey": "server", "explicit": true, "ownLayoutCount": 1 }
         ])
     );
 
@@ -497,6 +497,99 @@ async fn template_and_ci_layouts_on_the_grid_come_back_free() {
         "{v}"
     );
     assert_eq!(tab["sections"][0]["fields"].as_array().unwrap().len(), 2, "{v}");
+
+    db.drop().await;
+}
+
+/// What the admin tables link to: per class the CIs with their own layout, per template a CI that shows it,
+/// and the inventory list filtered by either (SHAA-1504).
+#[tokio::test]
+async fn usage_counts_own_layouts_names_a_sample_ci_and_the_list_filters_by_them() {
+    let Some(db) = scratch::database("usage_counts_own_layouts_names_a_sample_ci_and_the_list_filters_by_them").await
+    else {
+        return;
+    };
+    let w = &world(&db).await;
+    let compact = json!({ "key": "compact", "name": "Compact", "layout": { "tabs": [tab("Compact", &["ident"])] } });
+    let (status, v) = w.put(json!({ "layouts": [], "layoutTemplates": [compact] })).await;
+    assert_eq!(status, 200, "{v}");
+    let (a, b, c, plain, deleted) = (w.ci().await, w.ci().await, w.ci().await, w.ci().await, w.ci().await);
+    let set = |id: Uuid, body: Value| {
+        let path = format!("/api/v1/configuration-items/{id}/layout");
+        let app = w.app.clone();
+        let admin = w.admin.clone();
+        async move {
+            let (status, v, _) = call(&app, "PUT", &path, &admin, Some(body)).await;
+            assert_eq!(status, 200, "{v}");
+        }
+    };
+    set(a, json!({ "templateKey": "compact" })).await;
+    set(b, json!({ "templateKey": "compact" })).await;
+    set(c, json!({ "layout": { "tabs": [tab("Mine", &["label"])] } })).await;
+    set(deleted, json!({ "templateKey": "compact" })).await;
+    let (status, v, _) =
+        call(&w.app, "DELETE", &format!("/api/v1/configuration-items/{deleted}"), &w.admin, None).await;
+    assert!(status == 204 || status == 200, "{v}");
+    let label = |id: Uuid| async move {
+        let (_, v, _) = call(&w.app, "GET", &format!("/api/v1/configuration-items/{id}"), &w.admin, None).await;
+        v["label"].as_str().unwrap().to_owned()
+    };
+    let first = if label(a).await.to_lowercase() <= label(b).await.to_lowercase() { a } else { b };
+
+    let usage = |creds: Creds| async move {
+        let (status, u, _) = call(&w.app, "GET", "/api/v1/ui-settings/layout-templates/usage", &creds, None).await;
+        assert_eq!(status, 200, "{u}");
+        let t = |key: &str| u["templates"].as_array().unwrap().iter().find(|t| t["key"] == key).unwrap().clone();
+        let class = |key: &str| u["classes"].as_array().unwrap().iter().find(|c| c["classKey"] == key).unwrap().clone();
+        (t("compact"), t("standard"), class("server"))
+    };
+    let (compact, standard, server) = usage(w.admin.clone()).await;
+    // Live CIs only: the deleted one counts nowhere and is never the sample.
+    assert_eq!(
+        (compact["overrideCount"].as_i64(), compact["sampleCiId"].as_str()),
+        (Some(2), Some(&*first.to_string()))
+    );
+    assert_eq!((standard["overrideCount"].as_i64(), &standard["sampleCiId"]), (Some(0), &Value::Null));
+    assert_eq!(server["ownLayoutCount"], 3, "{server}");
+
+    // A manager who may not view servers learns neither the counts nor a CI.
+    let blind = w.user("blind", None, &["customization.manage"]).await;
+    let (compact, _, server) = usage(blind).await;
+    assert_eq!((&compact["overrideCount"], &compact["sampleCiId"]), (&Value::Null, &Value::Null), "{compact}");
+    assert_eq!(server["ownLayoutCount"], Value::Null, "{server}");
+
+    // The inventory list behind the links.
+    let ids = |query: &'static str| async move {
+        let path = format!("/api/v1/configuration-items?classId={}&includeSubclasses=false&{query}", w.server);
+        let (status, v, _) = call(&w.app, "GET", &path, &w.admin, None).await;
+        (status, v)
+    };
+    let sorted = |v: &Value| {
+        let mut out: Vec<Uuid> =
+            v["data"].as_array().unwrap().iter().map(|i| i["id"].as_str().unwrap().parse().unwrap()).collect();
+        out.sort();
+        (out, v["page"]["total"].as_i64().unwrap())
+    };
+    let set_of = |mut ids: Vec<Uuid>| {
+        ids.sort();
+        let n = ids.len() as i64;
+        (ids, n)
+    };
+    let (status, v) = ids("ownLayout=true").await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(sorted(&v), set_of(vec![a, b, c]));
+    let (_, v) = ids("ownLayout=false").await;
+    assert_eq!(sorted(&v), set_of(vec![plain]));
+    let (_, v) = ids("layoutTemplate=compact").await;
+    assert_eq!(sorted(&v), set_of(vec![a, b]));
+    let (_, v) = ids("layoutTemplate=compact&deleted=only").await;
+    assert_eq!(sorted(&v), set_of(vec![deleted]));
+    let (_, v) = ids("layoutTemplate=standard").await;
+    assert_eq!(sorted(&v), set_of(vec![]));
+    let (status, v) = ids("layoutTemplate=Not%20a%20key").await;
+    assert_eq!((status, v["error"]["details"][0]["field"].as_str()), (400, Some("layoutTemplate")), "{v}");
+    let (status, v) = ids("ownLayout=maybe").await;
+    assert_eq!(status, 400, "{v}");
 
     db.drop().await;
 }

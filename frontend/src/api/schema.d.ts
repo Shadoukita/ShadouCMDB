@@ -2188,7 +2188,7 @@ export interface paths {
         };
         /**
          * Which layout template each class uses, and who uses each template
-         * @description Requires `customization.manage`. Per template: the classes that use it as their default and the number of live CIs that show it instead of their class's default (null when some of those CIs are in classes you may not view). Per class: its default template. Templates are edited in the settings document (`layoutTemplates`, PUT /api/v1/ui-settings); one that a class or a live CI uses cannot be removed (409 CONFLICT).
+         * @description Requires `customization.manage`. Per template: the classes that use it as their default, the number of live CIs that show it instead of their class's default (null when some of those CIs are in classes you may not view) and one of those CIs you may view (`sampleCiId`). Per class: its default template and the number of its live CIs with a layout of their own (`ownLayoutCount`, null when you may not view the class). The CIs themselves: GET /api/v1/configuration-items with `ownLayout` or `layoutTemplate`. Templates are edited in the settings document (`layoutTemplates`, PUT /api/v1/ui-settings); one that a class or a live CI uses cannot be removed (409 CONFLICT).
          */
         get: operations["getLayoutTemplateUsage"];
         put?: never;
@@ -3166,6 +3166,13 @@ export interface components {
             templateKey: string;
             /** @description Whether the class has a layout entry (false: it uses Standard because it has none) */
             explicit: boolean;
+            /**
+             * Format: int64
+             * @description Live CIs of the class itself (not its subclasses) with a layout of their own, another template or a
+             *     custom one; null when you may not view the class. The list of them:
+             *     GET /api/v1/configuration-items?classId=<id>&includeSubclasses=false&ownLayout=true
+             */
+            ownLayoutCount: number | null;
         };
         /** @description A whole configuration: data model, lookups, permission profiles, UI settings, saved import mappings and shared saved views (no users, passwords, CIs or personal views) */
         ConfigFile: {
@@ -4356,6 +4363,12 @@ export interface components {
              *     may not view
              */
             overrideCount: number | null;
+            /**
+             * Format: uuid
+             * @description A live CI you may view that shows it as its own layout (the first by label), to open the layout
+             *     editor on when no class uses the template; null when there is none
+             */
+            sampleCiId: string | null;
         };
         /** @description Which template each class uses, and who uses each template */
         LayoutTemplateUsages: {
@@ -7501,6 +7514,10 @@ export interface operations {
                 criticalityValueId?: string;
                 /** @description Soft-deleted CIs: exclude (default), include, or only */
                 deleted?: "exclude" | "include" | "only";
+                /** @description true: only CIs with a layout of their own (another template or a custom layout, see /configuration-items/{id}/layout); false: only CIs that show their class's default template */
+                ownLayout?: "true" | "false";
+                /** @description Only CIs that show this layout template (`layoutTemplates[].key`) as their own layout, not as their class's default */
+                layoutTemplate?: string;
             };
             header?: never;
             path?: never;

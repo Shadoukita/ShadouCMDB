@@ -17,7 +17,7 @@ use super::schemas::{
 };
 use crate::api::context::RequestContext;
 use crate::api::route::InvalidBody;
-use crate::api::schemas::{LookupRef, Page, Paged};
+use crate::api::schemas::{KEY_PATTERN, LookupRef, Page, Paged};
 use crate::api::validate;
 use crate::auth::permissions::ClassOp;
 use crate::data::classes as class_data;
@@ -196,6 +196,8 @@ async fn filters(conn: &mut PgConnection, model: &Model, q: &impl ItemFilterQuer
         criticality_value_ids: q.criticality_value_id().map(|l| l.0.clone()),
         deleted: Some(q.deleted()),
         visible_class_ids: None,
+        own_layout: None,
+        layout_template: None,
         // Also where ipWithin looks.
         search_tables: data::search_tables(model),
     })
@@ -258,9 +260,21 @@ pub async fn list(
     let mut conn = pool.acquire().await?;
     let model = Model::load(&mut conn).await?;
     let sort = list_sort(&model, q)?;
+    if let Some(key) = &q.layout_template
+        && !validate::cached_regex(KEY_PATTERN).is_some_and(|r| r.is_match(key))
+    {
+        return Err(AppError::validation(vec![FieldError {
+            location: FieldLocation::Query,
+            field: "layoutTemplate".into(),
+            message: "Not a layout template key (lower_snake_case)".into(),
+            code: "invalid_string".into(),
+        }]));
+    }
     let f = ItemFilters {
         q: q.q.clone(),
         visible_class_ids: ctx.class_scope(ClassOp::View),
+        own_layout: q.own_layout.map(bool::from),
+        layout_template: q.layout_template.clone(),
         ..filters(&mut conn, &model, q).await?
     };
     let (rows, total) = data::list(&mut conn, &f, sort, q.sort.desc, q.limit, q.offset).await?;
