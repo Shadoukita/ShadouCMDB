@@ -61,3 +61,176 @@ async fn check(pool: &sqlx::PgPool, allow_gaps: bool) -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::db::scratch;
+    use sqlx::{Connection, Executor};
+    use std::time::{Duration, Instant};
+
+    /// One audit row per statement, as the API writes them.
+    const INSERT_ONE: &str = "INSERT INTO audit_log (actor_type, action, entity_type, entity_id, new_value)
+                              VALUES ('system', 'create', 'lookup_list', gen_random_uuid(), '{}')";
+
+    async fn problems(pool: &sqlx::PgPool) -> Vec<(i64, String, String)> {
+        sqlx::query_as("SELECT chain_seq, problem, detail FROM audit_log_verify()").fetch_all(pool).await.unwrap()
+    }
+
+    /// The head equals the newest row, and chain_seq runs 1..=n without holes.
+    async fn assert_chain_intact(pool: &sqlx::PgPool) {
+        assert_eq!(problems(pool).await, vec![]);
+        let (n, max, head_ok): (i64, Option<i64>, bool) = sqlx::query_as(
+            "SELECT (SELECT count(*) FROM audit_log), (SELECT max(chain_seq) FROM audit_log),
+                    (SELECT h.last_seq = a.chain_seq AND h.last_hash = a.row_hash
+                     FROM audit_log_chain_head h,
+                          (SELECT chain_seq, row_hash FROM audit_log ORDER BY chain_seq DESC LIMIT 1) a)",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(max, Some(n));
+        assert!(head_ok, "the head is the newest row");
+    }
+
+    async fn insert_in_one_transaction(pool: &sqlx::PgPool, n: usize) -> Duration {
+        let mut tx = pool.begin().await.unwrap();
+        let start = Instant::now();
+        for _ in 0..n {
+            tx.execute(INSERT_ONE).await.unwrap();
+        }
+        tx.commit().await.unwrap();
+        start.elapsed()
+    }
+
+    /// N single-row audit inserts in one transaction, looped on the server so
+    /// that the trigger, not the round trips, dominates the time.
+    async fn insert_looped(pool: &sqlx::PgPool, n: usize) -> Duration {
+        let start = Instant::now();
+        pool.execute(sqlx::AssertSqlSafe(format!("DO $$ BEGIN FOR i IN 1..{n} LOOP {INSERT_ONE}; END LOOP; END $$")))
+            .await
+            .unwrap();
+        start.elapsed()
+    }
+
+    /// GH#487: each row used to update the head, leaving a row version per
+    /// audit row that every later insert in the transaction walked (O(N^2)).
+    #[tokio::test]
+    async fn audit_rows_in_one_transaction_cost_linear_time() {
+        let Some(db) = scratch::database("audit_rows_in_one_transaction_cost_linear_time").await else { return };
+        insert_looped(&db.pool, 1_000).await; // warm-up
+        let small = insert_looped(&db.pool, 5_000).await;
+        let large = insert_looped(&db.pool, 40_000).await;
+        let ratio = large.as_secs_f64() / small.as_secs_f64();
+        eprintln!("5,000 rows: {small:?}, 40,000 rows: {large:?}, ratio {ratio:.1} (linear 8, quadratic 64)");
+        assert!(ratio < 16.0, "8x the rows took {ratio:.1}x the time: {small:?} vs {large:?}");
+        insert_in_one_transaction(&db.pool, 100).await;
+
+        // Many rows in one statement see each other too.
+        sqlx::query(
+            "INSERT INTO audit_log (actor_type, action, entity_type, entity_id, new_value)
+             SELECT 'system', 'create', 'lookup_list', gen_random_uuid(), jsonb_build_object('i', i)
+             FROM generate_series(1, 500) i",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        assert_chain_intact(&db.pool).await;
+        db.drop().await;
+    }
+
+    /// Writers in parallel, some rolling back to a savepoint or as a whole:
+    /// the chain stays gapless and the head ends on the newest row.
+    #[tokio::test]
+    async fn concurrent_writers_keep_one_intact_chain() {
+        let Some(db) = scratch::database("concurrent_writers_keep_one_intact_chain").await else { return };
+        let mut writers = Vec::new();
+        for w in 0..8 {
+            let pool = db.pool.clone();
+            writers.push(tokio::spawn(async move {
+                for t in 0..10 {
+                    let mut tx = pool.begin().await.unwrap();
+                    for _ in 0..20 {
+                        tx.execute(INSERT_ONE).await.unwrap();
+                    }
+                    let mut sp = tx.begin().await.unwrap();
+                    sp.execute(INSERT_ONE).await.unwrap();
+                    sp.rollback().await.unwrap();
+                    tx.execute(INSERT_ONE).await.unwrap();
+                    if (w + t) % 5 == 0 {
+                        tx.rollback().await.unwrap();
+                    } else {
+                        tx.commit().await.unwrap();
+                    }
+                }
+            }));
+        }
+        for w in writers {
+            w.await.unwrap();
+        }
+        let n: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_log").fetch_one(&db.pool).await.unwrap();
+        assert!(n >= 8 * 8 * 21, "{n} rows");
+        assert_chain_intact(&db.pool).await;
+        db.drop().await;
+    }
+
+    /// Under REPEATABLE READ a writer whose snapshot predates another
+    /// transaction's audit rows must fail, not fork the chain.
+    #[tokio::test]
+    async fn a_stale_repeatable_read_writer_gets_a_serialization_failure() {
+        let Some(db) = scratch::database("a_stale_repeatable_read_writer_gets_a_serialization_failure").await else {
+            return;
+        };
+        let mut stale = db.pool.acquire().await.unwrap();
+        stale.execute("BEGIN ISOLATION LEVEL REPEATABLE READ").await.unwrap();
+        stale.execute("SELECT count(*) FROM audit_log").await.unwrap(); // takes the snapshot
+        insert_in_one_transaction(&db.pool, 3).await;
+        let err = stale.execute(INSERT_ONE).await.unwrap_err();
+        assert_eq!(err.as_database_error().and_then(|e| e.code()).as_deref(), Some("40001"), "{err}");
+        stale.execute("ROLLBACK").await.unwrap();
+        drop(stale);
+        assert_chain_intact(&db.pool).await;
+        db.drop().await;
+    }
+
+    /// Upgrade: a chain written by migration 0018's trigger continues under
+    /// 0040's, and rows deleted from its end still show up.
+    #[tokio::test]
+    async fn the_upgrade_continues_an_existing_chain() {
+        let Some(db) = scratch::empty("the_upgrade_continues_an_existing_chain").await else { return };
+        let before = sqlx::migrate::Migrator {
+            migrations: std::borrow::Cow::Owned(
+                crate::db::MIGRATOR.iter().filter(|m| m.version <= 39).cloned().collect(),
+            ),
+            table_name: std::borrow::Cow::Borrowed("public._sqlx_migrations"),
+            ..sqlx::migrate!("../sql/migrations")
+        };
+        before.run(&db.pool).await.unwrap();
+        insert_in_one_transaction(&db.pool, 50).await;
+        insert_in_one_transaction(&db.pool, 50).await;
+        crate::db::MIGRATOR.run(&db.pool).await.unwrap();
+        assert_chain_intact(&db.pool).await;
+        insert_in_one_transaction(&db.pool, 50).await;
+        assert_chain_intact(&db.pool).await;
+
+        // The newest row deleted behind the trigger's back (the test role owns the table).
+        let mut c = db.pool.acquire().await.unwrap();
+        let mut tx = c.begin().await.unwrap();
+        tx.execute("ALTER TABLE audit_log DISABLE TRIGGER audit_log_append_only").await.unwrap();
+        tx.execute("DELETE FROM audit_log WHERE chain_seq = (SELECT max(chain_seq) FROM audit_log)").await.unwrap();
+        tx.execute("ALTER TABLE audit_log ENABLE TRIGGER audit_log_append_only").await.unwrap();
+        tx.commit().await.unwrap();
+        drop(c);
+        let n: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_log").fetch_one(&db.pool).await.unwrap();
+        assert_eq!(
+            problems(&db.pool).await,
+            vec![(n + 1, "tail".into(), format!("rows {} to {} missing", n + 1, n + 1))]
+        );
+        // The chain continues from the head, not the newest surviving row.
+        insert_in_one_transaction(&db.pool, 2).await;
+        assert_eq!(
+            problems(&db.pool).await,
+            vec![(n + 2, "gap".into(), format!("rows {} to {} missing", n + 1, n + 1))]
+        );
+        db.drop().await;
+    }
+}
