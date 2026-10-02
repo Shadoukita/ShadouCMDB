@@ -81,7 +81,7 @@ test("Members tab: empty, then two members added through the picker", async ({ p
   await expect(page.locator(".service-members-live")).toHaveText("2 members added.");
   await expect(add).toBeFocused();
   await expect(page.getByRole("tab", { name: "Members (2)" })).toBeVisible();
-  expect((await memberNames(page)).sort()).toEqual([N("srv-1"), N("srv-2")]);
+  await expect.poll(async () => (await memberNames(page)).sort()).toEqual([N("srv-1"), N("srv-2")]);
   await checkA11y(page, testInfo, "members-tab", { include: ".service-members" });
   await snap(page, "members-tab");
 });
@@ -128,7 +128,7 @@ test("filters live in the URL and survive a reload", async ({ page }) => {
   await expect(page.getByRole("tab", { name: "Members (3)" })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByLabel("Search members")).toHaveValue(`srv-3-${stamp}`);
   await expect(page.getByLabel("Kind")).toHaveValue("ci");
-  expect(await memberNames(page)).toEqual([N("srv-3")]);
+  await expect.poll(() => memberNames(page)).toEqual([N("srv-3")]);
 
   await page.getByLabel("Kind").selectOption("service");
   await expect(page.getByRole("heading", { name: "No members match these filters." })).toBeVisible();
