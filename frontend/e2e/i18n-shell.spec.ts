@@ -41,8 +41,9 @@ test("the shell and the dashboard are German with the German catalog", async ({ 
   const nav = page.getByRole("navigation", { name: "Hauptmenü" });
   await expect(nav.getByRole("link", { name: "Alle Configuration Items" })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Navigationspfad" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Neues CI" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Abmelden" })).toBeVisible();
+  // Exact: the dashboard's own "+ Neues CI" button would otherwise match too.
+  await expect(page.getByRole("banner").getByRole("link", { name: "Neues CI", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Abmelden", exact: true })).toBeVisible();
   await expect(page.getByLabel("Configuration Items durchsuchen")).toHaveAttribute("placeholder", /^CIs nach Bezeichnung/);
   await expectNoEnglish(page.locator("body"));
   await checkA11y(page, testInfo, "dashboard-de");
