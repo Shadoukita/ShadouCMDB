@@ -695,6 +695,12 @@ table.data.loading tbody {
 .toolbar .field input {
   width: 150px;
 }
+/* The text-input width is not for checkboxes: a 150 px box centres the tick far from its label (GH#479). */
+.toolbar .field input[type="checkbox"],
+.toolbar .field input[type="radio"] {
+  width: auto;
+  margin: 0;
+}
 /* A filter select is as wide as its longest option, so its value is never clipped. */
 .toolbar .field select {
   width: auto;

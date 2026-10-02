@@ -295,4 +295,14 @@ export const de: { [K in MessageKey]: string } = {
     "{n, plural, =0 {Der Benutzer war für keinen Business-Service verantwortlich.} one {Der Benutzer wurde als Verantwortlicher aus # Business-Service entfernt.} other {Der Benutzer wurde als Verantwortlicher aus # Business-Services entfernt.}}",
   "users.deleted.servicesWithheld":
     "Der Benutzer war möglicherweise für Business-Services verantwortlich, die Sie nicht sehen können; er wurde dort überall als Verantwortlicher entfernt.",
+  "common.notSet": "Nicht gesetzt",
+  "criticality.title": "Kritikalität: {name}",
+  "ciState.active": "Aktiv",
+  "ciState.deleted": "Gelöscht",
+  "ciState.inactive": "Inaktiv",
+  "ciState.inactive.title": "Außerhalb des Gültigkeitszeitraums",
+  "ciState.activatesOn": " · wird am {date} aktiv",
+  "ciState.deactivatesOn": "Wird am {date} inaktiv",
+  "ciState.alsoDeactivatesOn": " · wird am {date} inaktiv",
+  "ciState.validUntil": "Gültig bis {date}",
 };

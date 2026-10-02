@@ -287,6 +287,16 @@ export const en = {
     "{n, plural, =0 {They were not owner of any business service.} one {They were removed as owner from # business service.} other {They were removed as owner from # business services.}}",
   "users.deleted.servicesWithheld":
     "They may have been owner of business services you cannot view; they were removed as owner from all of them.",
+  "common.notSet": "Not set",
+  "criticality.title": "Criticality: {name}",
+  "ciState.active": "Active",
+  "ciState.deleted": "Deleted",
+  "ciState.inactive": "Inactive",
+  "ciState.inactive.title": "Outside its validity period",
+  "ciState.activatesOn": " · activates on {date}",
+  "ciState.deactivatesOn": "Deactivates on {date}",
+  "ciState.alsoDeactivatesOn": " · deactivates on {date}",
+  "ciState.validUntil": "Valid until {date}",
 } satisfies Record<string, string>;
 
 export type MessageKey = keyof typeof en;
