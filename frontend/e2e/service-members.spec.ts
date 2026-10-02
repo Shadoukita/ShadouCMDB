@@ -55,9 +55,14 @@ test("Members tab: empty, then two members added through the picker", async ({ p
   await expect(dialog).toBeVisible();
   await expect(dialog).toHaveAttribute("aria-modal", "true");
   await expect(dialog.getByLabel("Search configuration items")).toBeFocused();
+  // The results are busy from the keystroke until the search's own page is in: wait for that before checking a box,
+  // or the click lands on the previous search's rows and the scan below runs over a table that is still loading.
+  const results = dialog.locator("table.data");
   await dialog.getByLabel("Search configuration items").fill(`srv-1-${stamp}`);
+  await expect(results).toHaveAttribute("aria-busy", "false");
   await dialog.getByRole("checkbox", { name: `Select ${N("srv-1")}` }).check();
   await dialog.getByLabel("Search configuration items").fill(`srv-2-${stamp}`);
+  await expect(results).toHaveAttribute("aria-busy", "false");
   await dialog.getByRole("checkbox", { name: `Select ${N("srv-2")}` }).check();
   // The tray keeps the choice across searches.
   await expect(dialog.getByRole("heading", { name: "Selected (2)" })).toBeVisible();
@@ -76,7 +81,7 @@ test("Members tab: empty, then two members added through the picker", async ({ p
   await expect(page.locator(".service-members-live")).toHaveText("2 members added.");
   await expect(add).toBeFocused();
   await expect(page.getByRole("tab", { name: "Members (2)" })).toBeVisible();
-  expect((await memberNames(page)).sort()).toEqual([N("srv-1"), N("srv-2")]);
+  await expect.poll(async () => (await memberNames(page)).sort()).toEqual([N("srv-1"), N("srv-2")]);
   await checkA11y(page, testInfo, "members-tab", { include: ".service-members" });
   await snap(page, "members-tab");
 });
@@ -86,6 +91,7 @@ test("picker: already a member, and refused CIs stay in the open dialog with the
   await page.locator(".service-members-actions").getByRole("button", { name: "Add members" }).click();
   const dialog = picker(page);
   await dialog.getByLabel("Search configuration items").fill(stamp);
+  await expect(dialog.locator("table.data")).toHaveAttribute("aria-busy", "false");
   await expect(dialog.getByRole("checkbox", { name: `Select ${N("srv-1")}` })).toBeDisabled();
   await expect(dialog.locator("tr", { hasText: N("srv-1") })).toContainText("Already a member");
   await dialog.getByRole("checkbox", { name: `Select ${N("srv-3")}` }).check();
@@ -122,7 +128,7 @@ test("filters live in the URL and survive a reload", async ({ page }) => {
   await expect(page.getByRole("tab", { name: "Members (3)" })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByLabel("Search members")).toHaveValue(`srv-3-${stamp}`);
   await expect(page.getByLabel("Kind")).toHaveValue("ci");
-  expect(await memberNames(page)).toEqual([N("srv-3")]);
+  await expect.poll(() => memberNames(page)).toEqual([N("srv-3")]);
 
   await page.getByLabel("Kind").selectOption("service");
   await expect(page.getByRole("heading", { name: "No members match these filters." })).toBeVisible();

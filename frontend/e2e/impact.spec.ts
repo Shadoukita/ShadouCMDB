@@ -127,6 +127,7 @@ test("2. the Impact tab lists the affected CIs, grouped by class, then by critic
   // "Via" names the last hop, as a link.
   const appB = page.getByRole("row").filter({ has: page.getByRole("link", { name: N("app-b"), exact: true }) });
   await expect(appB).toContainText(`needs ${N("app-a")}`);
+  await expect(page.locator("#impact-view-panel")).toHaveAttribute("aria-busy", "false");
   await checkA11y(page, testInfo, "impact-list", { include: ".impact", strict: true });
   await snap(page, "impact-list-by-class");
 
@@ -136,6 +137,7 @@ test("2. the Impact tab lists the affected CIs, grouped by class, then by critic
   // The criticality badges keep AA contrast in the dark theme too.
   await page.getByLabel("Theme").selectOption("dark");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(page.locator("#impact-view-panel")).toHaveAttribute("aria-busy", "false");
   await checkA11y(page, testInfo, "impact-list-dark", { include: ".impact", strict: true });
   await snap(page, "impact-list-dark");
   await page.getByLabel("Theme").selectOption("");
@@ -200,6 +202,7 @@ test("4. the tree view shows the same CIs and walks by keyboard (§6.3.4)", asyn
   expect(levels).toEqual([`1 ${N("app-a")}`, `2 ${N("app-b")}`, `1 ${N("app-c")}`, `1 ${N("secret")}`, `2 ${N("app-d")}`]);
   await expect(tree.getByRole("treeitem").nth(2)).toContainText("also reached via 1 other relationship");
   await expect(tree.getByRole("treeitem").first()).toContainText("is needed by →");
+  await expect(page.locator("#impact-view-panel")).toHaveAttribute("aria-busy", "false");
   await checkA11y(page, testInfo, "impact-tree", { include: ".impact", strict: true });
   await snap(page, "impact-tree");
 
@@ -257,6 +260,7 @@ test("7. a truncated result says why, and still exports as CSV (§6.3.7)", async
   await page.goto(`/cis/${ids.db}/impact?depth=2`);
   const banner = page.getByRole("status").filter({ hasText: "Incomplete result." });
   await expect(banner).toContainText("Showing the first 500 affected CIs. Narrow the relationship types or reduce the depth to see a complete result.");
+  await expect(page.locator("#impact-view-panel")).toHaveAttribute("aria-busy", "false");
   await checkA11y(page, testInfo, "impact-truncated", { include: ".impact", strict: true });
   await snap(page, "impact-truncated");
 

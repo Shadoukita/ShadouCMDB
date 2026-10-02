@@ -58,6 +58,8 @@ const total = computed(() => results.data.value?.page.total ?? 0);
 const pageIds = computed(() => rows.value.map((c) => c.id));
 const membership = useMembershipOf(() => props.service.id, pageIds);
 const isMember = (id: string) => !!membership.data.value?.has(id);
+/** The rows on screen are not yet those of the typed search: the debounce is pending or the next page is loading. */
+const stale = computed(() => results.isPlaceholderData.value || qText.value !== q.value);
 
 // ---------- Selection ----------
 interface Picked {
@@ -185,7 +187,7 @@ const to = computed(() => Math.min(offset.value + PAGE, total.value));
           <template v-else>
             <p v-if="membership.isError.value" class="muted">{{ t("services.picker.alreadyCheckFailed") }}</p>
             <div class="table-wrap" role="region" tabindex="0" :aria-label="t('services.picker.results')">
-              <table :class="['data', { loading: results.isPlaceholderData.value }]">
+              <table :class="['data', { loading: stale }]" :aria-busy="stale">
                 <caption class="sr-only">{{ t("services.picker.results") }}</caption>
                 <thead>
                   <tr>

@@ -376,7 +376,7 @@ async function onViewKey(e: KeyboardEvent) {
               {{ v.label }}
             </button>
           </div>
-          <div id="impact-view-panel" role="tabpanel" :aria-labelledby="`impact-view-${state.view}`" :class="{ loading: stale }">
+          <div id="impact-view-panel" role="tabpanel" :aria-labelledby="`impact-view-${state.view}`" :class="{ loading: stale }" :aria-busy="stale">
             <template v-if="state.view === 'list'">
               <ImpactServicesSection :analysis="data" :self="self" :trail="trail" />
               <ImpactList :analysis="data" :group="state.group" :sort="state.sort" :self="self" :trail="trail" @sort="(s) => setState({ sort: s })" />
