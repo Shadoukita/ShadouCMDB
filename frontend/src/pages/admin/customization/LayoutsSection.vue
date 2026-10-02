@@ -257,6 +257,7 @@ async function edit(key: string) {
     :cls="selected"
     :template-key="saved.has(selectedTemplate) ? selectedTemplate : undefined"
     :template-name="templateName(selectedTemplate)"
+    :ready="!usage.isLoading.value"
     @close="closeClass"
   />
 

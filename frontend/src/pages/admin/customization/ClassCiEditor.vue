@@ -18,6 +18,8 @@ const props = defineProps<{
   /** The class's default template, when it is saved (the editor loads the saved settings). */
   templateKey?: string;
   templateName: string;
+  /** Whether it is known which templates are saved (until then the editor would not know which one to open). */
+  ready: boolean;
 }>();
 const emit = defineEmits<{ close: [] }>();
 const router = useRouter();
@@ -56,10 +58,10 @@ function onPick(id: string) {
 const templateQuery = computed(() => (props.templateKey ? { [TEMPLATE_QUERY]: props.templateKey } : {}));
 const createEditor = computed(() => ({ path: `/cis/new${EDITOR_SUFFIX}`, query: { classId: props.cls.id, ...templateQuery.value } }));
 function editCi() {
-  if (ci.value) openLayoutEditor(router, { path: `/cis/${ci.value.id}` }, props.cls.key, props.templateKey);
+  if (ci.value && props.ready) openLayoutEditor(router, { path: `/cis/${ci.value.id}` }, props.cls.key, props.templateKey);
 }
 function editOnCreate() {
-  openLayoutEditor(router, { path: "/cis/new", query: { classId: props.cls.id } }, props.cls.key, props.templateKey);
+  if (props.ready) openLayoutEditor(router, { path: "/cis/new", query: { classId: props.cls.id } }, props.cls.key, props.templateKey);
 }
 </script>
 
@@ -88,7 +90,7 @@ function editOnCreate() {
           <span class="muted">{{ t("customization.layouts.recentHint", { n: PICKER_SIZE }) }}</span>
         </div>
         <span>
-          <button type="button" class="btn btn-primary" :disabled="!ci" data-testid="layout-edit-ci" @click="editCi">
+          <button type="button" class="btn btn-primary" :disabled="!ci || !ready" data-testid="layout-edit-ci" @click="editCi">
             {{ ci ? t("customization.layouts.editCi", { name: ci.label }) : t("customization.layouts.editCiLoading") }}
           </button>
         </span>
