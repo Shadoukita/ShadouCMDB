@@ -1,4 +1,4 @@
-import type { Browser, Page } from "@playwright/test";
+import type { Browser, Locator, Page } from "@playwright/test";
 import { apiGet, apiSend, classIdByName, csrf, expect, resetUiSettings, snap, test } from "./support";
 
 // Edit layout: the Server layout edited on a real Server CI (the demo seed) in the layout editor's
@@ -36,9 +36,9 @@ async function signInUi(browser: Browser, username: string, password: string): P
   return page;
 }
 
-/** Clicks a button that opens the layout editor, and returns its window once the editor shows. */
-async function openEditor(page: Page, name: "Edit layout" | "Open on a CI" = "Edit layout"): Promise<Page> {
-  const [popup] = await Promise.all([page.waitForEvent("popup"), page.getByRole("button", { name }).click()]);
+/** Clicks what opens the layout editor (the page's Edit layout by default), and returns its window once the editor shows. */
+async function openEditor(page: Page, opener: Locator = page.getByRole("button", { name: "Edit layout" })): Promise<Page> {
+  const [popup] = await Promise.all([page.waitForEvent("popup"), opener.click()]);
   await expect(bar(popup)).toBeVisible();
   return popup;
 }
@@ -72,10 +72,16 @@ test("the editor window: add a tab and a section, move fields, save, and a viewe
   await expect(bar(page)).toContainText("Editing the Server layout");
   await expect(bar(page)).toContainText("Changes apply to every Server configuration item");
   await expect(bar(page).getByText("No unsaved changes")).toBeVisible();
-  // The canvas is the real page: the CI's own values, the built-in General tab.
+  // The canvas is the real page: the CI's own values, the built-in General tab, its sections as windows.
   await expect(tabBar(page).getByRole("button", { name: "General", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(field(page, "Ident")).toContainText(ci.ident);
   await expect(page.getByRole("tablist", { name: "CI sections" })).toHaveCount(0);
+  await expect(page.locator('[data-window="general"]')).toBeVisible();
+  // One placement only: no Grid / Free switch, no preview widths, no designer; snapping and layers always there.
+  for (const name of ["Grid", "Free", "Desktop", "Phone", "Open in the designer"]) await expect(bar(page).getByRole("button", { name, exact: true })).toHaveCount(0);
+  await expect(bar(page).getByRole("link", { name: "Open in the designer" })).toHaveCount(0);
+  await expect(bar(page).getByRole("button", { name: /^Snap (on|off)$/ })).toBeVisible();
+  await expect(bar(page).getByTestId("le-layer")).toHaveText("No window selected");
 
   // + Tab: added at the end of the tab bar, named in place.
   await tabBar(page).getByRole("button", { name: "+ Tab" }).click();
@@ -128,12 +134,6 @@ test("the editor window: add a tab and a section, move fields, save, and a viewe
   await bar(page).getByRole("button", { name: "Redo" }).click();
   await expect(page.getByTestId("le-hidden").getByRole("listitem")).toHaveText([/Asset tag/]);
 
-  // Width presets narrow the page: the grid falls back to one column.
-  await bar(page).getByRole("button", { name: "Phone" }).click();
-  const ident = (await field(page, "Ident").boundingBox())!;
-  const from = (await field(page, "Valid from").boundingBox())!;
-  expect(from.y).toBeGreaterThan(ident.y + ident.height - 1);
-  await bar(page).getByRole("button", { name: "Desktop" }).click();
   await snap(page, "layout-edit-detail");
 
   // Unsaved changes are guarded: closing the editor asks first.
@@ -166,12 +166,12 @@ test("the editor window: add a tab and a section, move fields, save, and a viewe
   await viewer.goto(`/cis/${ci.id}`);
   const vtabs = viewer.getByRole("tablist", { name: "CI sections" }).getByRole("tab");
   await expect(vtabs).toHaveText(["General", "Hardware", "Relationship map", "Impact"]);
-  await expect(viewer.locator(".layout-panels > details > summary h2")).toContainText(["Lifecycle"]);
-  await expect(viewer.locator(".layout-panels").getByText("Asset tag", { exact: true })).toHaveCount(0);
+  await expect(viewer.locator(".lg-free > details > summary h2")).toContainText(["Lifecycle"]);
+  await expect(viewer.locator(".layout-container").getByText("Asset tag", { exact: true })).toHaveCount(0);
   await expect(viewer.getByRole("button", { name: "Edit layout" })).toHaveCount(0);
   await vtabs.filter({ hasText: "Hardware" }).click();
-  await expect(viewer.locator(".layout-panels > details > summary h2")).toHaveText(["Hardware facts"]);
-  await expect(viewer.locator(".layout-panels dt")).toHaveText(["Model", "CPU cores"]);
+  await expect(viewer.locator(".lg-free > details > summary h2")).toHaveText(["Hardware facts"]);
+  await expect(viewer.locator(".lg-free dt")).toHaveText(["Model", "CPU cores"]);
   // The editor's URL is just the page for them.
   await viewer.goto(`/cis/${ci.id}/layout-editor`);
   await expect(viewer).toHaveURL(new RegExp(`/cis/${ci.id}$`));
@@ -236,17 +236,41 @@ test("a concurrent save is reported with a way to reload", async ({ page, reques
   await expect(bar(page).getByRole("alert")).toHaveCount(0);
 });
 
-test("the designer opens its class on a real CI, or on an empty form without CIs", async ({ page: designer, request }) => {
-  await designer.goto("/admin/customization/layouts?class=server");
-  let page = await openEditor(designer, "Open on a CI");
-  await expect(page).toHaveURL(new RegExp(`/cis/${ci.id}/layout-editor$`));
+test("Customization › Layouts: Edit CI opens the editor on the most recently updated CI, another one, or the create form", async ({ page: admin, request }) => {
+  const serverId = await classIdByName(request, "Server");
+  const recent = (await apiGet<{ data: { id: string; label: string }[] }>(request, `/configuration-items?classId=${serverId}&sort=-updatedAt&limit=1`)).data[0];
+  await admin.goto("/admin/customization/layouts?class=server");
+  // No designer preview any more: the class picker, and one way into the editor.
+  await expect(admin.getByTestId("designer-frame")).toHaveCount(0);
+  await expect(admin.getByRole("toolbar", { name: "Preview width" })).toHaveCount(0);
+  await expect(admin.getByTestId("layout-status")).toContainText("Server uses the built-in layout");
+  const edit = admin.getByTestId("layout-edit-ci");
+  await expect(edit).toHaveText(`Edit CI: ${recent.label}`);
+  let page = await openEditor(admin, edit);
+  await expect(page).toHaveURL(new RegExp(`/cis/${recent.id}/layout-editor$`));
   await expect(bar(page)).toContainText("Editing the Server layout");
+  await expect(page.locator("[data-window]").first()).toBeVisible();
+  await page.close();
+  await snap(admin, "customization-layouts");
+
+  // Another CI, found by name.
+  await admin.getByLabel("Edit on another CI").fill(ci.label);
+  await admin.getByLabel("Edit on another CI").press("Enter");
+  await expect(admin.getByLabel("Configuration item to edit the layout on").locator("option", { hasText: ci.label }).first()).toBeAttached();
+  await admin.getByLabel("Configuration item to edit the layout on").selectOption({ label: ci.label });
+  await expect(edit).toHaveText(`Edit CI: ${ci.label}`);
+  page = await openEditor(admin, edit);
+  await expect(page).toHaveURL(new RegExp(`/cis/${ci.id}/layout-editor$`));
   await page.close();
 
+  // A class without CIs: a link to the create form's layout editor.
   const key = `e2e_empty_${stamp}`;
   await apiSend(request, "POST", "/ci-classes", { key, name: `E2E Empty ${stamp}` });
-  await designer.goto(`/admin/customization/layouts?class=${key}`);
-  page = await openEditor(designer, "Open on a CI");
+  await admin.goto(`/admin/customization/layouts?class=${key}`);
+  const create = admin.getByRole("link", { name: `Create a E2E Empty ${stamp} CI to edit its layout` });
+  await expect(create).toHaveAttribute("href", /\/cis\/new\/layout-editor\?classId=[^&]+$/);
+  await expect(admin.getByTestId("layout-edit-ci")).toHaveCount(0);
+  page = await openEditor(admin, create);
   await expect(page).toHaveURL(/\/cis\/new\/layout-editor\?classId=[^&]+$/);
   await expect(bar(page)).toContainText(`Editing the E2E Empty ${stamp} layout`);
   await expect(field(page, "Ident")).toBeVisible();
@@ -267,97 +291,66 @@ test("with popups blocked the editor opens in the same tab, and says so", async 
   await expect(page.getByRole("tablist", { name: "CI sections" })).toBeVisible();
 });
 
-test("sections side by side: resize by dragging, drop beside another, saved, stacked on a phone", async ({ page: origin, request }) => {
+test("a layout sent on the grid (an older export or API client) opens as windows with every field", async ({ page: origin, request }) => {
   await resetUiSettings(request);
+  const current = await apiGet<{ version: number }>(request, "/ui-settings");
+  // Two half-width sections side by side, then one on a row of its own: the grid format before SHAA-1471.
+  const fields = { general: ["ident", "validFrom", "validUntil"], side: ["attributes.serial_number", "attributes.manufacturer"], below: ["attributes.model"] };
+  const grid = {
+    classKey: "server",
+    tabs: [
+      {
+        key: "general",
+        label: "General",
+        placement: "grid",
+        sections: [
+          { key: "general", label: "General", width: 6, fields: fields.general.map((field) => ({ field })) },
+          { key: "side", label: "Side by side", width: 6, fields: fields.side.map((field) => ({ field })) },
+          { key: "below", label: "Below", newRow: true, fields: fields.below.map((field) => ({ field })) },
+        ],
+      },
+    ],
+  };
+  const res = await request.put("/api/v1/ui-settings", { data: { version: current.version, settings: { layouts: [grid] } }, headers: { "X-CSRF-Token": await csrf(request) } });
+  expect(res.ok(), await res.text()).toBeTruthy();
+  // Stored free, each section a window where it was on the grid.
+  type Frame = { x: number; y: number; w: number; h: number; z: number };
+  const stored = await apiGet<{ settings: { layouts: { classKey: string; tabs: { placement?: string; sections: { key: string; frame?: Frame }[] }[] }[] } }>(request, "/ui-settings");
+  const tab = stored.settings.layouts.find((l) => l.classKey === "server")!.tabs[0];
+  expect(tab.placement).toBe("free");
+  expect(tab.sections.map((s) => [s.key, s.frame?.x, s.frame?.w])).toEqual([
+    ["general", 0, 0.5],
+    ["side", 0.5, 0.5],
+    ["below", 0, 1],
+  ]);
+
+  // The page: windows side by side, then the one below; every field there.
   await origin.goto(`/cis/${ci.id}`);
-  const page = await openEditor(origin);
-  const shell = (key: string) => page.locator(`[data-section-shell="${key}"]`);
-  const grid = page.getByRole("region", { name: "Tab General" });
-  const say = page.locator(".le-canvas [aria-live=assertive]");
-
-  // Drag the General section's right edge to the middle of the tab: it snaps to 6 of 12 columns, with a live guide.
-  const edge = (await shell("general").getByTestId("section-edge-right").boundingBox())!;
-  const box = (await grid.boundingBox())!;
-  await page.mouse.move(edge.x + edge.width / 2, edge.y + edge.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(box.x + box.width * 0.75, edge.y + edge.height / 2, { steps: 4 });
-  await page.mouse.move(box.x + box.width / 2 + 3, edge.y + edge.height / 2, { steps: 6 });
-  await expect(shell("general").getByTestId("section-guide")).toHaveText("6 / 12");
-  await page.mouse.up();
-  await expect(shell("general")).toHaveAttribute("data-width", "6");
-  await expect(shell("general").getByTestId("section-guide")).toHaveCount(0);
-  await expect(say).toHaveText("Section General: 6 of 12 columns wide.");
-  // The whole drag is one undo step.
-  await bar(page).getByRole("button", { name: "Undo" }).click();
-  await expect(shell("general")).toHaveAttribute("data-width", "12");
-  await expect(bar(page).getByText("No unsaved changes")).toBeVisible();
-  await bar(page).getByRole("button", { name: "Redo" }).click();
-  await expect(shell("general")).toHaveAttribute("data-width", "6");
-
-  // A new section at the end of the tab, with a field in it.
-  await page.getByRole("button", { name: "Add a section to General" }).click();
-  await page.getByLabel("Section name").fill("Side by side");
-  await page.getByLabel("Section name").press("Enter");
-  await field(page, "Serial number").hover();
-  await field(page, "Serial number").getByLabel("Move Serial number to section").selectOption({ label: "Side by side" });
-  await expect(section(page, "Side by side").locator(".le-field")).toHaveCount(1);
-  // Renaming keeps the key the section got when it was added.
-  const key = (await page.locator("[data-section-shell]").filter({ has: section(page, "Side by side") }).getAttribute("data-section-shell"))!;
-  const grip = page.getByRole("button", { name: /^Section Side by side, / });
-
-  // Alt+↑ on its grip moves it up, to right below General.
-  await grip.focus();
-  const shells = page.locator("[data-section-shell]");
-  for (let i = 0; i < 10 && (await shells.nth(1).getAttribute("data-section-shell")) !== key; i++) await page.keyboard.press("Alt+ArrowUp");
-  await expect(shells.nth(1)).toHaveAttribute("data-section-shell", key);
-  await expect(grip).toBeFocused();
-
-  // Drag it by its grip onto General's right edge: it sits next to General, sharing the row.
-  await grip.scrollIntoViewIfNeeded();
-  const general = (await shell("general").boundingBox())!;
-  await grip.dragTo(shell("general"), { targetPosition: { x: general.width - 10, y: general.height - 40 } });
-  await expect(say).toHaveText("Section Side by side placed right of General, 6 of 12 columns wide.");
-  await expect(shell(key)).toHaveAttribute("data-width", "6");
-  const g = (await shell("general").boundingBox())!;
-  const n = (await shell(key).boundingBox())!;
-  expect(Math.abs(n.y - g.y)).toBeLessThan(2);
-  expect(n.x).toBeGreaterThan(g.x + g.width - 1);
-
-  // Keyboard: Alt+← / Alt+→ on the section's grip resize it by one column.
-  await grip.focus();
-  await page.keyboard.press("Alt+ArrowLeft");
-  await expect(shell(key)).toHaveAttribute("data-width", "5");
-  await page.keyboard.press("Alt+ArrowRight");
-  await expect(shell(key)).toHaveAttribute("data-width", "6");
-  await snap(page, "layout-edit-side-by-side");
-
-  await bar(page).getByRole("button", { name: "Save layout" }).click();
-  await expect(bar(page).getByRole("status")).toContainText(/Saved as version \d+/);
-  await closeEditor(page);
-
-  // The CI page shows the two sections side by side on a wide screen…
-  const onPage = (key: string) => origin.locator(`.layout-panels > details[data-section="${key}"]`);
-  await expect(onPage(key)).toContainText("Serial number");
+  const onPage = (key: string) => origin.locator(`.lg-free > details[data-section="${key}"]`);
+  await expect(onPage("side")).toContainText("Serial number");
   const a = (await onPage("general").boundingBox())!;
-  const b = (await onPage(key).boundingBox())!;
+  const b = (await onPage("side").boundingBox())!;
+  const c = (await onPage("below").boundingBox())!;
   expect(Math.abs(b.y - a.y)).toBeLessThan(2);
   expect(b.x).toBeGreaterThan(a.x + a.width - 1);
-  expect(Math.abs(b.width - a.width)).toBeLessThan(2);
-  await snap(origin, "layout-side-by-side-detail");
-  // …and stacked at the full width on a phone.
-  await origin.setViewportSize({ width: 390, height: 844 });
-  await expect(async () => {
-    const pa = (await onPage("general").boundingBox())!;
-    const pb = (await onPage(key).boundingBox())!;
-    expect(pb.y).toBeGreaterThan(pa.y + pa.height - 1);
-    expect(Math.abs(pb.width - pa.width)).toBeLessThan(2);
-  }).toPass();
-  await snap(origin, "layout-side-by-side-phone");
-  await origin.setViewportSize({ width: 1440, height: 900 });
+  expect(c.y).toBeGreaterThan(Math.max(a.y + a.height, b.y + b.height) - 1);
+  // Active follows Valid until wherever that is placed.
+  await expect(onPage("general").locator("dt")).toHaveText(["Ident", "Valid from", "Valid until", "Active"]);
+  await expect(onPage("side").locator("dt")).toHaveText(["Serial number", "Manufacturer"]);
+  await expect(onPage("below").locator("dt")).toHaveText(["Model"]);
+
+  // The editor: the same windows, nothing to switch.
+  const page = await openEditor(origin);
+  for (const key of ["general", "side", "below"]) await expect(page.locator(`[data-window="${key}"]`)).toBeVisible();
+  await expect(section(page, "Side by side").locator(".le-field")).toHaveCount(2);
+  await expect(bar(page).getByRole("button", { name: "Grid", exact: true })).toHaveCount(0);
+  await expect(bar(page).getByText("No unsaved changes")).toBeVisible();
+  await snap(page, "layout-edit-from-grid");
+  await page.close();
   await resetUiSettings(request);
 });
 
-test("content blocks: a note and built-in panels placed in the editor, on the detail page, the form and in the designer", async ({ page, request }) => {
+test("content blocks: a note and built-in panels placed in the editor, on the detail page and the form", async ({ page, request }) => {
   await resetUiSettings(request);
   await page.goto(`/cis/${ci.id}/layout-editor`);
   await expect(bar(page)).toBeVisible();
@@ -422,9 +415,9 @@ test("content blocks: a note and built-in panels placed in the editor, on the de
   await page.goto(`/cis/${ci.id}`);
   const tabs = page.getByRole("tablist", { name: "CI sections" }).getByRole("tab");
   await expect(tabs).toHaveText(["General", "Links", "Relationship map", "Impact", "History"]);
-  const heads = page.locator(".layout-panels > details > summary h2");
+  const heads = page.locator(".layout-container details > summary h2");
   await expect(heads).toContainText(["General", "Before you edit", "Record"]);
-  await expect(page.locator(".layout-panels .note-text strong")).toHaveText("Ops");
+  await expect(page.locator(".lg-free .note-text strong")).toHaveText("Ops");
   await expect(page.locator("#rel-title")).toHaveCount(0);
   await tabs.filter({ hasText: "Links" }).click();
   await expect(heads).toHaveText(["Relationships", "Audit trail"]);
@@ -437,23 +430,9 @@ test("content blocks: a note and built-in panels placed in the editor, on the de
   await expect(page.locator("form .note-text strong")).toHaveText("Ops");
   await expect(page.getByRole("tab", { name: "Links" })).toHaveCount(0);
 
-  // The designer draws the blocks; clearing the note's text is refused by the API, next to the note.
-  await page.goto("/admin/customization/layouts?class=server");
-  const d = (label: string) => page.getByRole("region", { name: `Section ${label}`, exact: true });
-  await expect(d("Before you edit").locator(".note-text strong")).toHaveText("Ops");
-  await d("Before you edit").getByRole("button", { name: "Before you edit" }).click();
-  await page.getByLabel("Text", { exact: true }).fill("");
-  await expect(page.getByText("A note needs text.")).toBeVisible();
-  await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(d("Before you edit").getByRole("alert")).toContainText(/settings\.layouts\.0\.tabs\.0\.sections\.\d+\.text Must not be blank/);
-  await page.getByRole("button", { name: "Discard", exact: true }).click();
-  await page.getByRole("tab", { name: "Links" }).click();
-  await expect(d("Relationships")).toContainText("Relationships panel");
-  await expect(d("Audit trail")).toContainText("Audit trail panel");
-  await snap(page, "layout-blocks-designer");
 });
 
-test("free placement: windows dragged, resized, overlapped and layered, saved, and shown as placed", async ({ page: origin, request }) => {
+test("windows dragged, resized, overlapped and layered, saved, and shown as placed", async ({ page: origin, request }) => {
   await resetUiSettings(request);
   await origin.goto(`/cis/${ci.id}`);
   const page = await openEditor(origin);
@@ -463,20 +442,12 @@ test("free placement: windows dragged, resized, overlapped and layered, saved, a
   const num = async (key: string, attr: "x" | "y" | "w" | "h" | "z") => Number(await win(key).getAttribute(`data-${attr}`));
   const say = page.locator(".le-canvas [aria-live=assertive]");
 
-  // Grid stays the default; switching the tab to Free keeps every section where it is.
-  const placement = bar(page).getByRole("group", { name: "Placement of the tab General" });
-  await expect(placement.getByRole("button", { name: "Grid" })).toHaveAttribute("aria-pressed", "true");
-  const before = (await page.locator('[data-section-shell="general"]').boundingBox())!;
-  await placement.getByRole("button", { name: "Free" }).click();
-  await expect(area).toHaveAttribute("data-placement", "free");
-  const after = (await win("general").boundingBox())!;
-  expect(Math.abs(after.y - before.y)).toBeLessThan(2);
-  expect(Math.abs(after.x - before.x)).toBeLessThan(2);
-  expect(Math.abs(after.width - before.width)).toBeLessThan(2);
-  expect(Math.abs(after.height - before.height)).toBeLessThan(2);
-  await expect(say).toContainText("Tab General is free");
+  // The built-in layout's sections are windows, stacked at the full width.
+  await expect(win("general")).toBeVisible();
+  expect(await num("general", "x")).toBe(0);
+  expect(await num("general", "w")).toBe(1);
 
-  // + Section on a free tab: a new window below the others, on top of the stack.
+  // + Section: a new window below the others, on top of the stack.
   await page.getByRole("button", { name: "Add a section to General" }).click();
   await page.getByLabel("Section name").fill("Floating");
   await page.getByLabel("Section name").press("Enter");
@@ -623,11 +594,5 @@ test("free placement: windows dragged, resized, overlapped and layered, saved, a
   await snap(origin, "layout-free-phone");
   await origin.setViewportSize({ width: 1440, height: 900 });
 
-  // Back to the grid: the editor orders the sections by position, as the API does.
-  const editor = await openEditor(origin);
-  await bar(editor).getByRole("group", { name: "Placement of the tab General" }).getByRole("button", { name: "Grid" }).click();
-  await expect(editor.locator("[data-le-area]")).toHaveAttribute("data-placement", "grid");
-  expect(await editor.locator("[data-section-shell]").evaluateAll((els) => els.map((e) => e.getAttribute("data-section-shell")))).toEqual(tab.sections.map((s) => s.key));
-  await expect(editor.locator("[data-window]")).toHaveCount(0);
   await resetUiSettings(request);
 });

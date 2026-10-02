@@ -132,32 +132,30 @@ One settings document (`GET /ui-settings`) applies to every user. The screens re
   class list without filters (menu, links); a reload or Back keeps the URL as it is, so a cleared filter stays
   cleared. Attribute columns read the values the list API returns with each CI.
 - **Detail and form layout** (`detail/LayoutPanels.vue`, `form/CiForm.vue`, `lib/uiSettings.ts`
-  `resolveLayout`): per class, tabs of sections on a 12-column grid (`sectionClass`: a section spans 1–12, so
-  sections sit side by side), each section a grid of 1–12 columns whose fields span some of them (collapsed
-  sections start closed on the detail page), hidden fields, and fields read-only on the form. Fields no section
-  places follow at the end of the first tab, in a General section and their attribute groups. The grids answer to
-  the width of their container (CSS container queries): sections stack below 820 px of tab width, and a
-  section's field grid narrows to two columns and then one with the section's own width, on small screens and
-  in the designers' previews alike. The form keeps every tab in the page, shows the tab of
-  the first missing or rejected field and counts errors per tab. Required fields stay editable on a new CI
-  whatever the layout says, or it could not be saved. A tab is either on the grid or free: on a free tab each
-  section is a window with its own position and size (`lib/freeLayout.ts`, `components/layoutEdit/FreeWindow.vue`),
-  and windows may overlap.
+  `resolveLayout`): per class, tabs of sections, each section a window with its own position and size
+  (`lib/freeLayout.ts`; windows may overlap) and a grid of 1–12 columns whose fields span some of them
+  (collapsed sections start closed on the detail page), hidden fields, and fields read-only on the form. Fields
+  no section places follow below the windows of the first tab, in a General section and their attribute groups.
+  A tab saved on the earlier 12-column grid (or sent that way, e.g. by an older export) is shown as windows where
+  its sections were on the grid (`makeFree`, the same estimate the API stores). The grids answer to the width of
+  their container (CSS container queries): windows stack in reading order below 820 px of tab width, and a
+  section's field grid narrows to two columns and then one with the section's own width. The form keeps every
+  tab in the page, shows the tab of the first missing or rejected field and counts errors per tab. Required
+  fields stay editable on a new CI whatever the layout says, or it could not be saved.
 
 The editor (`src/pages/admin/customization/`) works on the *stored* document of the current version, which keeps
 references to classes that do not exist right now, and saves the whole document with the version it loaded
 (`409 VERSION_CONFLICT` if someone saved in between). Its History section lists every saved version and restores
 one by saving it again as the newest. Branding and navigation preview live in the real header and
-menu while the editor is open; the dashboard and list view sections preview inline. The layout section is a
-visual form designer (`admin/customization/LayoutsSection.vue`, `designer/`, edits in `lib/layoutDesign.ts`):
-the canvas is the class's form with every field drawn as it will appear; fields are dragged between sections and
-tabs (or onto a tab), resized by dragging their right edge; sections are resized on the tab's 12 columns by
-their edges and placed side by side by their grip (`components/layoutEdit/SectionShell.vue`, shared with the
-in-page layout editor), and the preview frame is resized by its grip (`PreviewResizeHandle.vue`), with laptop,
-tablet and phone widths as shortcuts. Everything has a keyboard path: Enter selects a field, Alt+↑/↓ moves it,
-Alt+←/→ changes its width, Delete hides it, and the properties bar offers the same as buttons and selects,
-announced to screen readers. Core fields (ident, valid from, valid until) can be moved but not hidden. Leaving
-Customization or reloading with unsaved changes asks first. The issues the API
+menu while the editor is open; the dashboard and list view sections preview inline. The layout section
+(`admin/customization/LayoutsSection.vue`) picks a class and opens the layout editor on one of its CIs
+(**Edit CI: <name>**: the most recently updated, or another found by name; a class without CIs links to the
+create form's editor). The layout editor is the CI page itself (`components/layoutEdit/`, `lib/layoutEditor.ts`,
+edits in `lib/layoutDesign.ts`), in a window of its own: fields are dragged between sections and tabs (or onto a
+tab) and resized by dragging their right edge; each section is a window (`FreeWindow.vue`) moved and resized
+anywhere, snapping to the other windows and an 8 px grid, and stacked in layers. Everything has a keyboard path,
+announced to screen readers. Core fields (ident, valid from, valid until) can be moved but not hidden. The editor
+saves a new settings version itself. Leaving Customization or reloading with unsaved changes asks first. The issues the API
 reports (unknown classes, a required attribute hidden by a layout) are listed above the sections.
 
 ### Errors, states and navigation
@@ -183,8 +181,9 @@ src/api/admin.ts       the same for sign-in, users, permission profiles, API tok
 src/api/datamodel.ts   the same for areas, classes, attributes, relationship types/rules, lookups, lists and templates
 src/api/uiSettings.ts  the same for UI settings, their versions and images, and configuration export/import
 src/api/               also identity providers, two-factor authentication, schema changes, the CSRF token and the query client
-src/lib/uiSettings.ts  how the settings document is applied: menu merge, list columns, layout tabs and grid
-src/lib/layoutDesign.ts the form designer's edits on a class layout (move, resize, tabs, sections, side by side)
+src/lib/uiSettings.ts  how the settings document is applied: menu merge, list columns, layout tabs and windows
+src/lib/layoutDesign.ts the layout editor's edits on a class layout (move, resize, tabs, sections, notes, panels)
+src/lib/freeLayout.ts  the windows of a layout tab: frames, snapping, layers, a grid tab made free
 src/lib/permissions.ts permission checks mirrored from the server
 src/router.ts          routes (Vue Router, HTML5 history) and the setup → sign-in → app guard
 src/stores/            Pinia stores (the session, branding and theme, the one-shot "Created …/Saved …" notice)

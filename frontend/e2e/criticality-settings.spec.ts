@@ -40,26 +40,29 @@ test("list views: Criticality is a column and a default sort of a class's list",
 
 test("layouts: Criticality is placed like the other fields, can be read-only and hidden", async ({ page, request }) => {
   const serverId = await classIdByName(request, "Server");
-  await page.goto("/admin/customization/layouts?class=server");
-  await page.getByRole("button", { name: "Customize the Server layout" }).click();
-  const frame = page.getByTestId("designer-frame");
-  const chip = (label: string) => frame.locator(".designer-field").filter({ has: page.locator(".designer-label", { hasText: new RegExp(`^${label}\\*?$`) }) });
-  const props = page.getByRole("complementary", { name: "Layout properties" });
+  // The layout editor on an empty Server form (what Customization › Layouts links to for a class without CIs).
+  const editor = `/cis/new/layout-editor?classId=${serverId}`;
+  const bar = page.getByRole("region", { name: "Layout editing" });
+  const field = (label: string) => page.locator(".le-field").filter({ has: page.getByRole("button", { name: new RegExp(`^${label}, `) }) });
+  const saveLayout = async () => {
+    await bar.getByRole("button", { name: "Save layout" }).click();
+    await expect(bar.getByRole("status")).toContainText(/Saved as version \d+/);
+  };
+  await page.goto(editor);
   // The built-in General section holds it after the other core fields.
-  await expect(frame.locator(".designer-section").first().locator(".designer-label").nth(3)).toHaveText("Criticality");
+  await expect(page.locator('[data-window="general"] .le-field').nth(3)).toContainText("Criticality");
 
-  await chip("Criticality").click();
-  await expect(props.getByRole("button", { name: "Hide field" })).toBeEnabled();
-  await props.getByLabel("Read-only on the form").check();
-  await save(page, "e2e criticality read-only");
+  await field("Criticality").hover();
+  await field("Criticality").getByLabel("Read-only").check();
+  await saveLayout();
   await page.goto(`/cis/new?classId=${serverId}`);
   await expect(page.getByLabel("Criticality")).toBeDisabled();
 
-  await page.goto("/admin/customization/layouts?class=server");
-  await chip("Criticality").focus();
+  await page.goto(editor);
+  await page.getByRole("button", { name: /^Criticality, / }).focus();
   await page.keyboard.press("Delete");
-  await expect(page.getByTestId("designer-hidden").getByRole("listitem")).toHaveText([/Criticality/]);
-  await save(page, "e2e criticality hidden");
+  await expect(page.getByTestId("le-hidden").getByRole("listitem")).toHaveText([/Criticality/]);
+  await saveLayout();
   const stored = await apiGet<{ settings: { layouts: { classKey: string; hiddenFields?: string[] }[] } }>(request, "/ui-settings");
   expect(stored.settings.layouts.find((l) => l.classKey === "server")?.hiddenFields).toContain("criticality");
 

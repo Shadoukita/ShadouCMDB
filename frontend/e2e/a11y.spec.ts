@@ -46,7 +46,7 @@ test("inventory Columns popover, light and dark", async ({ page, request }, test
   }
 });
 
-test("CI detail page (grid layout), its delete dialog and the edit form", async ({ page, request }, testInfo) => {
+test("CI detail page (built-in layout), its delete dialog and the edit form", async ({ page, request }, testInfo) => {
   // A demo-seed Server with its relationships, so the relationship table is checked too. Read-only: creating
   // a Server here would change which Server other specs pick as the first one by label (layout-edit).
   const serverId = await classIdByName(request, "Server");
@@ -64,6 +64,12 @@ test("CI detail page (grid layout), its delete dialog and the edit form", async 
   await page.goto(`/cis/${ci.id}/edit`);
   await expect(page.getByRole("button", { name: "Save changes" })).toBeVisible();
   await checkA11y(page, testInfo, "ci-edit");
+});
+
+test("Customization › Layouts: the class picker and Edit CI", async ({ page }, testInfo) => {
+  await page.goto("/admin/customization/layouts?class=server");
+  await expect(page.getByTestId("layout-edit-ci")).toHaveText(/^Edit CI: .+/);
+  await checkA11y(page, testInfo, "customization-layouts");
 });
 
 test("class and attribute editor", async ({ page, request }, testInfo) => {
