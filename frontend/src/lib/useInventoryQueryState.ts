@@ -34,6 +34,11 @@ export interface QueryStateOptions {
   lookupValueIds?: (lookups: UiListFilters["lookups"]) => string | undefined | null;
   /** Attribute keys of the listed class, or null while they load (or with no single class). */
   attributeKeys?: MaybeRefOrGetter<ReadonlySet<string> | null>;
+  /**
+   * True while a saved view is about to fill the URL (a `view=` link, the user's default:
+   * lib/useSavedViewState): the list is not queried and no list view filters are written meanwhile.
+   */
+  hold?: MaybeRefOrGetter<boolean>;
   /** For tests; the app uses the current route and router. */
   route?: Pick<RouteLocationNormalizedLoaded, "query">;
   router?: Pick<Router, "push" | "replace">;
@@ -91,11 +96,14 @@ export function useInventoryQueryState(options: QueryStateOptions) {
       const lookups = listView.value?.defaultFilters?.lookups;
       return lookups && Object.keys(lookups).length > 0 ? options.lookupValueIds?.(lookups) : undefined;
     });
+    const onlyClass = computed(() => Object.keys(route.query).every((k) => k === "classId"));
     watch(
-      () => [defaultsFor.value, currentClass.value, toValue(options.settingsLoaded), listView.value, defaultLookupIds.value] as const,
+      () => [defaultsFor.value, currentClass.value, toValue(options.settingsLoaded), listView.value, defaultLookupIds.value, toValue(options.hold), onlyClass.value] as const,
       ([forId]) => {
         if (!forId) return;
-        if (forId !== classId.value) return void (defaultsFor.value = null);
+        // A saved view (the user's default for this list) filled the URL instead: it replaces the list view's filters.
+        if (forId !== classId.value || !onlyClass.value) return void (defaultsFor.value = null);
+        if (toValue(options.hold)) return;
         if (!currentClass.value || !toValue(options.settingsLoaded)) return;
         const f = listView.value?.defaultFilters;
         if (!hasFilters(f)) return void (defaultsFor.value = null);
@@ -121,6 +129,7 @@ export function useInventoryQueryState(options: QueryStateOptions) {
    */
   const settled = computed(
     () =>
+      !toValue(options.hold) &&
       defaultsFor.value === null &&
       ((!!get("sort") && !!get("limit")) || !classId.value || (toValue(options.classes) !== undefined && toValue(options.settingsLoaded))),
   );
@@ -153,6 +162,8 @@ export function useInventoryQueryState(options: QueryStateOptions) {
   const resetColumns = () => update({ columns: undefined }, false);
 
   const clearFilters = () => router.push({ path, query: clearedQuery(route.query, options.context === "search" ? ["q"] : []) });
+  /** The sort and page size in effect, which a URL without them stands for (comparing with a saved view). */
+  const stateDefaults = computed(() => ({ sort: sort.value, limit: limit.value }));
 
   function onPage(p: { limit: number; offset: number }) {
     update({ limit: p.limit === defaultLimit.value ? undefined : String(p.limit), offset: p.offset ? String(p.offset) : undefined }, false);
@@ -195,6 +206,7 @@ export function useInventoryQueryState(options: QueryStateOptions) {
     toggleColumn: toggle,
     resetColumns,
     clearFilters,
+    stateDefaults,
     onPage,
     columnSort,
     toggleSort,

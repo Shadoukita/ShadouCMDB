@@ -13,12 +13,14 @@ import ErrorAlert from "../components/ErrorAlert.vue";
 import InventoryFilters from "../components/InventoryFilters.vue";
 import LoadingState from "../components/LoadingState.vue";
 import PaginationBar from "../components/PaginationBar.vue";
+import SavedViewsBar from "../components/views/SavedViewsBar.vue";
 import { useAppSettings } from "../lib/appSettings";
 import { useDebounced, useDocumentTitle } from "../lib/composables";
 import { viewableClasses } from "../lib/permissions";
 import { ATTRIBUTE_PREFIX, BUILTIN_FIELDS, fieldLabel, isSortableAttribute, listViewFor, lookupValueIds } from "../lib/uiSettings";
 import { useInventoryQueryState } from "../lib/useInventoryQueryState";
 import { useImportAccess } from "../lib/useImportAccess";
+import { useSavedViewState } from "../lib/useSavedViewState";
 import { useSessionStore } from "../stores/session";
 
 /**
@@ -27,13 +29,15 @@ import { useSessionStore } from "../stores/session";
  * so a view survives reload and can be bookmarked or shared. Filtering and paging
  * happen in the API. What the URL leaves out comes from the class's list view
  * (Administration › Customization › List views), then the built-in defaults:
- * see lib/inventoryQuery.
+ * see lib/inventoryQuery. A saved view (the View menu, a `view=` link, the user's
+ * default for the list) fills the URL before the list is queried: lib/useSavedViewState.
  */
 const classes = useCiClasses();
 const settings = useAppSettings();
 const lookupLists = useLookupLists();
 const lookupValues = useAllLookupListValues();
 const attrKeys = computed(() => (attrs.data.value ? new Set(attrs.data.value.map((a) => a.key)) : null));
+const sv = useSavedViewState({ context: "inventory", classes: () => classes.data.value });
 const state = useInventoryQueryState({
   context: "inventory",
   classes: () => classes.data.value,
@@ -42,6 +46,7 @@ const state = useInventoryQueryState({
   lookupValueIds: (lookups) =>
     lookupLists.data.value && lookupValues.data.value ? (lookupValueIds(lookups, lookupLists.data.value, lookupValues.data.value) ?? undefined) : null,
   attributeKeys: attrKeys,
+  hold: () => sv.holding.value,
 });
 const { get, limit, offset, columns, activeFilters } = state;
 const classById = (id: string) => classes.data.value?.find((c) => c.id === id);
@@ -122,15 +127,15 @@ function clearFilters() {
   </div>
 
   <section class="panel" aria-label="Inventory">
-    <form class="toolbar" role="search" @submit.prevent>
-      <div class="field search">
-        <label for="f-q">Search</label>
-        <input id="f-q" v-model="qText" type="search" placeholder="Label, ident, attribute values…" />
-      </div>
-      <InventoryFilters :state="state" id-prefix="f" />
-      <button v-if="activeFilters.length > 0" type="button" class="btn" @click="clearFilters">Clear filters</button>
+    <SavedViewsBar
+      context="inventory"
+      :sv="sv"
+      :defaults="state.stateDefaults.value"
+      :classes="classes.data.value ?? []"
+      :total="list.data.value?.page.total"
+      :fetching="list.isFetching.value"
+    >
       <ColumnsPopover
-        class="toolbar-end"
         :columns="columns"
         :fields="fieldChoices"
         :attributes="attributeChoices"
@@ -140,12 +145,20 @@ function clearFilters() {
         @reorder="state.setColumns"
         @reset="state.resetColumns"
       />
+    </SavedViewsBar>
+    <form class="toolbar" role="search" @submit.prevent>
+      <div class="field search">
+        <label for="f-q">Search</label>
+        <input id="f-q" v-model="qText" type="search" placeholder="Label, ident, attribute values…" />
+      </div>
+      <InventoryFilters :state="state" id-prefix="f" />
+      <button v-if="activeFilters.length > 0" type="button" class="btn" @click="clearFilters">Clear filters</button>
     </form>
 
     <div v-if="list.isError.value" class="panel-body">
       <ErrorAlert :error="list.error.value" :on-retry="() => list.refetch()" />
     </div>
-    <LoadingState v-if="list.isPending.value" label="Loading inventory…" />
+    <LoadingState v-if="list.isPending.value" :label="sv.holding.value ? 'Opening the saved view…' : 'Loading inventory…'" />
 
     <EmptyState v-if="classDenied" title="Permission denied">
       None of your permission profiles allows viewing {{ currentClass?.name }} configuration items, so none are listed here.

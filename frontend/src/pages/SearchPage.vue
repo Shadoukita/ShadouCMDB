@@ -9,22 +9,27 @@ import InventoryFilters from "../components/InventoryFilters.vue";
 import LoadingState from "../components/LoadingState.vue";
 import PaginationBar from "../components/PaginationBar.vue";
 import CiStateBadge from "../components/CiStateBadge.vue";
+import SavedViewsBar from "../components/views/SavedViewsBar.vue";
 import { useDocumentTitle } from "../lib/composables";
 import { plural } from "../lib/format";
 import { useInventoryQueryState } from "../lib/useInventoryQueryState";
+import { useSavedViewState } from "../lib/useSavedViewState";
 
 /**
  * Full global-search results (ranked by the API), with the field that matched.
  * The term and the filters live in the URL (/search?q=…&classId=…&active=all),
  * in the same state as the inventory's (lib/inventoryQuery): search has no sort
- * (it is ranked) and no column choice.
+ * (it is ranked) and no column choice. A search view (the View menu, a `view=`
+ * link) saves the term and the filters; it is never a default (D7).
  */
 const classes = useCiClasses();
+const sv = useSavedViewState({ context: "search", classes: () => classes.data.value });
 const state = useInventoryQueryState({
   context: "search",
   classes: () => classes.data.value,
   settingsLoaded: true,
   listViewFor: () => undefined,
+  hold: () => sv.holding.value,
 });
 const { limit, offset, activeFilters } = state;
 const q = computed(() => state.get("q"));
@@ -53,12 +58,21 @@ const inventoryLink = computed(() => {
     <RouterLink v-if="q" class="btn" :to="inventoryLink">Open as filterable inventory</RouterLink>
   </div>
   <section class="panel" aria-label="Search results">
+    <SavedViewsBar
+      context="search"
+      :sv="sv"
+      :defaults="state.stateDefaults.value"
+      :classes="classes.data.value ?? []"
+      :total="search.data.value?.page.total"
+      :fetching="search.isFetching.value"
+    />
     <div v-if="q" class="toolbar" role="group" aria-label="Filter the results">
       <InventoryFilters :state="state" id-prefix="s" />
       <button v-if="activeFilters.length > 0" type="button" class="btn" @click="state.clearFilters()">Clear filters</button>
     </div>
-    <EmptyState v-if="!q" title="Type in the search box above">
-      Search covers labels, idents and attribute values, including IP addresses and networks.
+    <LoadingState v-if="!q && sv.holding.value" label="Opening the saved view…" />
+    <EmptyState v-else-if="!q" title="Type in the search box above">
+      Search covers labels, idents and attribute values, including IP addresses and networks. Saved searches are in the View menu.
     </EmptyState>
     <LoadingState v-if="search.isLoading.value" label="Searching…" />
     <div v-if="search.isError.value" class="panel-body">

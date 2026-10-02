@@ -9,12 +9,13 @@ import { attributeKey, BUILTIN, DEFAULT_COLUMNS, listColumns, sortParam } from "
  * leaves out comes from the list's baseline, then from the built-in defaults:
  *
  *   1. the URL;
- *   2. (later) a saved view (`view=<id>`) or the user's default view;
+ *   2. a saved view (`view=<id>`) or the user's default view, which fill the URL
+ *      (lib/useSavedViewState) so the list then reads it as in 1.;
  *   3. the class's list view in UI settings (Administration › Customization);
  *   4. the built-in defaults below.
  *
- * Saved views plug in as another `ListBaseline` ahead of the list view's
- * (`resolveBaseline`), so the screens and the URL format stay as they are.
+ * A saved view never acts as a baseline: applying one writes all of its state
+ * into the URL, so a reload or a shared link shows the same list.
  */
 
 export type QueryContext = "inventory" | "search";
@@ -54,7 +55,6 @@ export const BUILT_IN_BASELINE: ListBaseline = { source: "builtIn", columns: [..
 
 /**
  * The baseline for a list: the class's list view (Customization), else the built-in one.
- * A saved view's resolved state will come first here (§1.3 steps 2 and 3 of the saved-views spec).
  */
 export function resolveBaseline(listView: UiListView | undefined): ListBaseline {
   if (!listView) return BUILT_IN_BASELINE;
@@ -162,9 +162,11 @@ export function patchQuery(query: LocationQuery | LocationQueryRaw, patch: Recor
 /**
  * The query after "Clear filters": sort, page size and columns stay, unless the
  * sort or a column needs the class. `keep` names filters that stay too (the search term).
+ * The saved view stays named, so the list shows as modified and Revert brings the filters back.
  */
 export function clearedQuery(query: LocationQuery | LocationQueryRaw, keep: readonly string[] = []): LocationQueryRaw {
   const next: LocationQueryRaw = {};
+  if (param(query, "view")) next.view = param(query, "view");
   for (const k of keep) if (param(query, k)) next[k] = param(query, k);
   const sort = param(query, "sort");
   if (sort && !isAttributeSort(sort)) next.sort = sort;
