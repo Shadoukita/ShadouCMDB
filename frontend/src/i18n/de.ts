@@ -588,7 +588,7 @@ export const de: { [K in MessageKey]: string } = {
   "customization.layouts.listError": "Die Configuration Items der Klasse konnten nicht geladen werden",
   "customization.layouts.createCi": "Legen Sie ein CI der Klasse {class} an, um ihr Layout zu bearbeiten",
   "customization.layouts.otherCi": "An einem anderen CI bearbeiten",
-  "customization.layouts.searchPlaceholder": "Nach Namen suchen, dann Eingabe",
+  "customization.layouts.searchPlaceholder": "Nach Namen suchen",
   "customization.layouts.ci": "Configuration Item, an dem das Layout bearbeitet wird",
   "customization.layouts.chooseCi": "CI wählen…",
   "customization.layouts.noMatch": "Kein CI passt",

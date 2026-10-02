@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useCiList, type CiClass } from "../../../api/queries";
 import type { UiSettingsDocument } from "../../../api/uiSettings";
@@ -25,6 +25,12 @@ const own = computed(() => (cls.value ? props.doc.layouts.find((l) => l.classKey
 /** The CIs offered: the most recently updated first, narrowed by the search. */
 const search = ref("");
 const q = ref("");
+let typing: ReturnType<typeof setTimeout> | undefined;
+watch(search, (v) => {
+  clearTimeout(typing);
+  typing = setTimeout(() => (q.value = v.trim()), 300);
+});
+onBeforeUnmount(() => clearTimeout(typing));
 const PICKER_SIZE = 25;
 const list = useCiList(
   () => ({ classId: cls.value?.id, limit: PICKER_SIZE, sort: "-updatedAt", ...(q.value ? { q: q.value } : {}) }),
@@ -39,6 +45,7 @@ const none = computed(() => !q.value && found.value?.page.total === 0);
 watch(cls, () => {
   picked.value = null;
   search.value = "";
+  clearTimeout(typing);
   q.value = "";
 });
 function onPick(id: string) {
@@ -87,8 +94,7 @@ function useBuiltIn() {
               v-model="search"
               type="search"
               :placeholder="t('customization.layouts.searchPlaceholder')"
-              @keydown.enter.prevent="q = search.trim()"
-              @search="q = search.trim()"
+              @keydown.enter.prevent
             />
             <label class="sr-only" for="layout-ci">{{ t("customization.layouts.ci") }}</label>
             <select id="layout-ci" :value="ci?.id ?? ''" :disabled="!found || found.data.length === 0" @change="onPick(($event.target as HTMLSelectElement).value)">

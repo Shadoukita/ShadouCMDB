@@ -574,7 +574,7 @@ export const en = {
   "customization.layouts.listError": "Could not load the class's configuration items",
   "customization.layouts.createCi": "Create a {class} CI to edit its layout",
   "customization.layouts.otherCi": "Edit on another CI",
-  "customization.layouts.searchPlaceholder": "Search by name, then Enter",
+  "customization.layouts.searchPlaceholder": "Find by name",
   "customization.layouts.ci": "Configuration item to edit the layout on",
   "customization.layouts.chooseCi": "Choose a CI…",
   "customization.layouts.noMatch": "No CI matches",

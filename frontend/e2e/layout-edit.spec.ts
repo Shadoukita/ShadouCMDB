@@ -237,6 +237,7 @@ test("a concurrent save is reported with a way to reload", async ({ page, reques
 });
 
 test("Customization › Layouts: Edit CI opens the editor on the most recently updated CI, another one, or the create form", async ({ page: admin, request }) => {
+  await resetUiSettings(request);
   const serverId = await classIdByName(request, "Server");
   const recent = (await apiGet<{ data: { id: string; label: string }[] }>(request, `/configuration-items?classId=${serverId}&sort=-updatedAt&limit=1`)).data[0];
   await admin.goto("/admin/customization/layouts?class=server");
@@ -255,7 +256,6 @@ test("Customization › Layouts: Edit CI opens the editor on the most recently u
 
   // Another CI, found by name.
   await admin.getByLabel("Edit on another CI").fill(ci.label);
-  await admin.getByLabel("Edit on another CI").press("Enter");
   await expect(admin.getByLabel("Configuration item to edit the layout on").locator("option", { hasText: ci.label }).first()).toBeAttached();
   await admin.getByLabel("Configuration item to edit the layout on").selectOption({ label: ci.label });
   await expect(edit).toHaveText(`Edit CI: ${ci.label}`);

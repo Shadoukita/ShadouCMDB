@@ -409,7 +409,15 @@ test("layouts: the API validates the layout document and converts the older pane
   expect(v1.ok(), await v1.text()).toBeTruthy();
   const saved = (await v1.json()).settings.layouts[0];
   expect(saved.panels).toBeUndefined();
-  expect(saved.tabs).toEqual([{ key: "general", label: "General", sections: [{ key: "main", label: "Main", columns: 3, width: 12, collapsed: false, fields: [{ field: "attributes.model", width: 1 }] }] }]);
+  // Every tab is stored free (SHAA-1471): the section is a window at the full width.
+  expect(saved.tabs).toEqual([
+    {
+      key: "general",
+      label: "General",
+      placement: "free",
+      sections: [{ key: "main", label: "Main", columns: 3, width: 12, collapsed: false, fields: [{ field: "attributes.model", width: 1 }], frame: { x: 0, y: 0, w: 1, h: 96, z: 1 } }],
+    },
+  ]);
 });
 
 test("a concurrent save is reported, not overwritten", async ({ page, request }) => {

@@ -283,7 +283,8 @@ test.describe("imported into a fresh install", () => {
     await page.locator("#attr-tier").selectOption({ label: "Gold" });
     await page.getByRole("button", { name: `Create ${CLASS}` }).click();
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("pdu-ber1-b01");
-    await expect(page.locator(".layout-panels > details > summary h2").first()).toHaveText(/Power feed/);
+    // The imported layout's section is a window (every tab is free).
+    await expect(page.locator(".layout-container details > summary h2").first()).toHaveText(/Power feed/);
 
     await page.goto(`/cis?classId=${classId}`);
     await expect(page.locator("table.data thead th")).toHaveText([/Label/, /Name/, /Status/, /Tier/, /Outlets/]);
