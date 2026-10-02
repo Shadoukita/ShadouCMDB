@@ -205,7 +205,8 @@ pub async fn suggest(
         by_label.entry(normalise(&d.label)).or_default().push(c);
     }
     let types: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT key, forward_label, reverse_label FROM cmdb.relationship_types WHERE is_active ORDER BY sort_order, key",
+        "SELECT key, forward_label, reverse_label FROM cmdb.relationship_types
+         WHERE is_active AND system_role IS NULL ORDER BY sort_order, key",
     )
     .fetch_all(&mut *conn)
     .await?;

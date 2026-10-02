@@ -295,13 +295,13 @@ pub async fn resolve(
             ColumnTarget::Relationship { type_key, direction, match_ } => {
                 target_id = format!("relationships.{type_key}.{direction:?}");
                 let rules = rules_of(conn, type_key).await?;
-                let type_row = sqlx::query_as::<_, (Uuid, bool)>(
-                    "SELECT id, is_active FROM cmdb.relationship_types WHERE key = $1",
+                let type_row = sqlx::query_as::<_, (Uuid, bool, bool)>(
+                    "SELECT id, is_active, system_role IS NOT NULL FROM cmdb.relationship_types WHERE key = $1",
                 )
                 .bind(type_key)
                 .fetch_optional(&mut *conn)
                 .await?;
-                let Some((type_id, active)) = type_row else {
+                let Some((type_id, active, system)) = type_row else {
                     errors.push(error(
                         at("target.typeKey"),
                         format!("Relationship type \"{type_key}\" does not exist"),
@@ -309,6 +309,16 @@ pub async fn resolve(
                     ));
                     continue;
                 };
+                // Business service members change only through the service's
+                // members endpoint, which keeps the limits and the history (GH#410).
+                if system {
+                    errors.push(error(
+                        at("target.typeKey"),
+                        "Business service members cannot be imported; add them on the business service",
+                        "system_relationship_type",
+                    ));
+                    continue;
+                }
                 let candidates = other_end(ctx, &model, &rules, class_id, *direction);
                 if !active || candidates.is_empty() {
                     errors.push(error(
