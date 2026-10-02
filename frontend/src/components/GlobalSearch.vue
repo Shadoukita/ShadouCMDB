@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useSearch } from "../api/queries";
+import { t } from "../i18n";
 import { useDebounced } from "../lib/composables";
 
 /**
@@ -19,8 +20,8 @@ const { data, isFetching, isError } = useSearch(q, 8);
 const hits = computed(() => (q.value ? (data.value?.data ?? []) : []));
 
 function onGlobalKey(e: KeyboardEvent) {
-  const t = e.target as HTMLElement;
-  if (e.key === "/" && !["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName) && !t.isContentEditable) {
+  const target = e.target as HTMLElement;
+  if (e.key === "/" && !["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) && !target.isContentEditable) {
     e.preventDefault();
     input.value?.focus();
   }
@@ -77,7 +78,7 @@ onBeforeUnmount(() => clearTimeout(closeTimer));
 
 <template>
   <form class="global-search combo" role="search" @submit.prevent="onSubmit">
-    <label for="global-search" class="sr-only">Search configuration items</label>
+    <label for="global-search" class="sr-only">{{ t("globalSearch.label") }}</label>
     <input
       id="global-search"
       ref="input"
@@ -87,7 +88,7 @@ onBeforeUnmount(() => clearTimeout(closeTimer));
       aria-controls="global-search-list"
       :aria-activedescendant="active >= 0 ? `gs-${active}` : undefined"
       autocomplete="off"
-      placeholder="Search CIs by label, ident, IP, attribute…  ( / )"
+      :placeholder="t('globalSearch.placeholder')"
       :value="text"
       @input="onInput"
       @focus="onFocus"
@@ -95,8 +96,8 @@ onBeforeUnmount(() => clearTimeout(closeTimer));
       @keydown="onKeydown"
     />
     <ul v-if="open && q" id="global-search-list" class="combo-list" role="listbox" style="width: 100%">
-      <li v-if="isError" class="note">Search failed — press Enter to see the error</li>
-      <li v-else-if="hits.length === 0" class="note">{{ isFetching ? "Searching…" : `No CI matches “${q}”` }}</li>
+      <li v-if="isError" class="note">{{ t("globalSearch.failed") }}</li>
+      <li v-else-if="hits.length === 0" class="note">{{ isFetching ? t("common.searching") : t("globalSearch.noMatch", { q }) }}</li>
       <li
         v-for="(h, i) in hits"
         :id="`gs-${i}`"
@@ -118,7 +119,7 @@ onBeforeUnmount(() => clearTimeout(closeTimer));
         style="cursor: pointer"
         @mousedown.prevent="go(`/search?q=${encodeURIComponent(q)}`)"
       >
-        See all {{ data.page.total.toLocaleString() }} results ↵
+        {{ t("globalSearch.seeAll", { n: data.page.total }) }}
       </li>
     </ul>
   </form>

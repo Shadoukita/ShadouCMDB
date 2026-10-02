@@ -9,6 +9,7 @@ import type { UiListFilters, UiWidget } from "../../api/uiSettings";
 import ErrorAlert from "../../components/ErrorAlert.vue";
 import LoadingState from "../../components/LoadingState.vue";
 import CiStateBadge from "../../components/CiStateBadge.vue";
+import { formatNumber, t } from "../../i18n";
 import { formatRelative } from "../../lib/format";
 import { attributeKey, compareValues, lookupValueIds, sortParam } from "../../lib/uiSettings";
 
@@ -85,20 +86,20 @@ const viewAll = computed(() => {
 <template>
   <section class="panel">
     <div class="panel-header">
-      <h2>{{ title }} <span v-if="search && !loading && !error" class="muted">{{ total.toLocaleString() }}</span></h2>
-      <RouterLink v-if="viewAll" :to="viewAll">View all</RouterLink>
+      <h2>{{ title }} <span v-if="search && !loading && !error" class="muted">{{ formatNumber(total) }}</span></h2>
+      <RouterLink v-if="viewAll" :to="viewAll">{{ t("dashboard.viewAll") }}</RouterLink>
     </div>
     <div class="panel-body flush">
       <LoadingState v-if="loading" />
       <div v-if="error" class="panel-body"><ErrorAlert :error="error" :on-retry="() => results.forEach((r) => r.refetch())" /></div>
-      <p v-else-if="!loading && rows.length === 0" class="panel-body muted">No configuration items match.</p>
+      <p v-else-if="!loading && rows.length === 0" class="panel-body muted">{{ t("dashboard.noMatch") }}</p>
       <table v-if="!loading && rows.length > 0" class="data">
         <thead>
           <tr>
-            <th scope="col">Label</th>
-            <th scope="col">Ident</th>
-            <th scope="col">Class</th>
-            <th scope="col">Changed</th>
+            <th scope="col">{{ t("dashboard.col.label") }}</th>
+            <th scope="col">{{ t("dashboard.col.ident") }}</th>
+            <th scope="col">{{ t("dashboard.col.class") }}</th>
+            <th scope="col">{{ t("dashboard.col.changed") }}</th>
           </tr>
         </thead>
         <tbody>

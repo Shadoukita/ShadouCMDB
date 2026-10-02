@@ -100,7 +100,7 @@ function active(item: NavLinkItem): (r: RouteLocationNormalizedLoaded) => boolea
         type="button"
         :aria-expanded="!folded.has(g.area.key)"
         :aria-controls="`nav-${g.id}`"
-        :title="folded.has(g.area.key) ? `Show the classes of ${g.area.name}` : `Hide the classes of ${g.area.name}`"
+        :title="t(folded.has(g.area.key) ? 'nav.area.show' : 'nav.area.hide', { area: g.area.name })"
         @click="toggle(g.area.key)"
       >
         <span class="nav-fold" aria-hidden="true">{{ folded.has(g.area.key) ? "▸" : "▾" }}</span>
@@ -122,17 +122,17 @@ function active(item: NavLinkItem): (r: RouteLocationNormalizedLoaded) => boolea
       </NavLink>
       <!-- Bulk import sits under Inventory, only while it is switched on and the user holds cis.import. -->
       <NavLink v-if="item.page === 'inventory' && importAccess.available.value" to="/imports" :active="(r) => r.path.startsWith('/imports')">
-        Bulk import
+        {{ t("nav.bulkImport") }}
       </NavLink>
       <NavLink v-if="item.page === 'inventory' && showServices" to="/services" :active="(r) => r.path.startsWith('/services')">
         {{ t("services.nav") }}
       </NavLink>
     </template>
   </template>
-  <p v-if="classes.isError.value" class="nav-note">Classes unavailable</p>
+  <p v-if="classes.isError.value" class="nav-note">{{ t("nav.classesUnavailable") }}</p>
   <!-- The built-in classes (Business service) do not count: until a class of its own exists, the data model is empty. -->
   <p v-else-if="classes.data.value && dataModelEmpty(classes.data.value)" class="nav-note">
-    No classes yet.
-    <RouterLink v-if="session.can('datamodel.manage')" to="/admin/templates">Set up the data model</RouterLink>
+    {{ t("nav.noClasses") }}
+    <RouterLink v-if="session.can('datamodel.manage')" to="/admin/templates">{{ t("nav.setUpDataModel") }}</RouterLink>
   </p>
 </template>

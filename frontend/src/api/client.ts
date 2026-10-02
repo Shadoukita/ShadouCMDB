@@ -3,6 +3,7 @@
 // error envelope into an ApiError. Components never call fetch directly.
 import createClient from "openapi-fetch";
 import { config } from "../config";
+import { t } from "../i18n/index";
 import { csrfFromCookies } from "./csrf";
 import type { components, paths } from "./schema";
 
@@ -133,7 +134,7 @@ export async function unwrap<T>(request: Promise<FetchResult<T>>): Promise<T> {
     throw new ApiError(
       0,
       "NETWORK_ERROR",
-      `Cannot reach the ShadouCMDB API at ${config.apiBaseUrl || window.location.origin}. Check that the backend is running and the API base URL is configured.`,
+      t("error.network.body", { url: config.apiBaseUrl || window.location.origin }),
     );
   }
   const { data, error, response } = result;
@@ -151,6 +152,6 @@ export async function unwrap<T>(request: Promise<FetchResult<T>>): Promise<T> {
   throw new ApiError(
     response.status,
     response.status === 404 ? "NOT_FOUND" : "UNEXPECTED_RESPONSE",
-    `The API answered ${response.status} ${response.statusText} without an error body. Is the API base URL pointing at the ShadouCMDB backend?`,
+    t("error.unexpectedResponse", { status: `${response.status} ${response.statusText}`.trim() }),
   );
 }

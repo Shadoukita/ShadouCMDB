@@ -155,13 +155,26 @@ function render(nodes: Node[], params: MessageParams, locale: Locale, count: num
   return out;
 }
 
-/** The text for `key` in the active locale, with `{name}` parameters and plurals filled in. */
+/**
+ * The text for `key` in the active locale, with `{name}` parameters and plurals filled in. A message
+ * missing from the active catalog falls back to English, so a user never sees a raw key.
+ */
 export function t(key: MessageKey, params: MessageParams = {}): string {
   const locale = currentLocale();
   const cacheKey = `${locale}\u0000${key}`;
   let nodes = parsed.get(cacheKey);
-  if (!nodes) parsed.set(cacheKey, (nodes = parseMessage(catalogs[locale][key])));
+  if (!nodes) parsed.set(cacheKey, (nodes = parseMessage(catalogs[locale][key] ?? en[key] ?? "")));
   return render(nodes, params, locale, null, "");
+}
+
+/** Whether `key` is in the catalog: for keys built at run time (`nav.page.${page}`) before calling `t`. */
+export function hasMessage(key: string): key is MessageKey {
+  return Object.hasOwn(en, key);
+}
+
+/** A number in the active locale ("1,200" in English, "1.200" in German). */
+export function formatNumber(n: number): string {
+  return cached(numberFormats, currentLocale(), () => new Intl.NumberFormat(currentLocale())).format(n);
 }
 
 /**
