@@ -11,7 +11,6 @@ import LayoutEditBar from "./LayoutEditBar.vue";
 defineProps<{
   editor: LayoutEditor;
   className: string;
-  classKey: string;
   /** The class's active attributes; undefined while they load. */
   attrs: readonly EffectiveAttribute[] | undefined;
   attrsError?: unknown;
@@ -30,7 +29,7 @@ defineSlots<{
   <ErrorAlert v-else-if="attrsError" :error="attrsError" title="Could not load the class's attributes" />
   <LoadingState v-else-if="!attrs || !editor.layout" label="Loading attribute definitions…" />
   <template v-else>
-    <LayoutEditBar :editor="editor" :class-name="className" :class-key="classKey" />
+    <LayoutEditBar :editor="editor" :class-name="className" />
     <LayoutCanvas :editor="editor" :attrs="attrs" :form="form">
       <template #field="{ field }"><slot name="field" :field="field" /></template>
       <template #first-tab-end><slot name="first-tab-end" /></template>

@@ -9,16 +9,15 @@ import CoreFieldValue from "./CoreFieldValue.vue";
 
 /**
  * One tab of the detail page's fields (lib/uiSettings resolveLayout): its
- * sections on the tab's 12-column grid (side by side where their widths allow
- * it, stacked on small screens), collapsed ones closed, each a grid of label/value cells as wide as
+ * sections as windows where the layout puts them (lib/freeLayout; stacked on
+ * small screens), collapsed ones closed, each a grid of label/value cells as wide as
  * the class layout says. On the first tab the built-in sections follow: General,
  * the attribute groups and the record's class and timestamps. Notes and the
  * built-in panels a layout places are sections too (BlockContent). Values no current
  * definition describes (e.g. after a class change) are listed last on the first
  * tab (`orphans`), so nothing stored is hidden; values of archived fields
- * (`archived`) are listed there too, apart and labelled. On a free tab the sections with
- * a frame are windows where the layout puts them (lib/freeLayout), and the rest
- * follows below them on the grid.
+ * (`archived`) are listed there too, apart and labelled. The sections the layout
+ * does not place follow below the windows at the full width.
  */
 const props = defineProps<{
   ci: Ci;
@@ -33,7 +32,7 @@ const props = defineProps<{
 const values = computed(() => props.ci.attributes as Record<string, unknown>);
 const refs = computed(() => props.ci.attributeReferences);
 const defFor = (field: string) => props.defs.find((d) => d.key === attributeKey(field));
-/** The windows of a free tab, then everything on the grid. */
+/** The windows, then everything the layout does not place. */
 const groups = computed(() => {
   const windows = props.sections.filter((p) => p.frame);
   const flow = props.sections.filter((p) => !p.frame);
