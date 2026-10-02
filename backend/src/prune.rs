@@ -175,12 +175,14 @@ mod tests {
 
     #[tokio::test]
     async fn only_the_maintenance_role_can_prune_and_the_api_role_cannot_delete() {
-        const TEST: &str = "only_the_maintenance_role_can_prune_and_the_api_role_cannot_delete";
-        if !scratch::split_roles().await {
-            scratch::database(TEST).await; // prints the skip notice (or fails in CI)
+        let Some(roles) =
+            scratch::Roles::create("only_the_maintenance_role_can_prune_and_the_api_role_cannot_delete").await
+        else {
             return;
-        }
-        let Some(db) = scratch::database(TEST).await else { return };
+        };
+        let db = roles.database().await;
+        let (set_app, set_maintenance) =
+            (format!("SET LOCAL ROLE {}", roles.app), format!("SET ROLE {}", roles.maintenance));
         let mut c = db.pool.acquire().await.unwrap();
 
         // As the schema owner: one old and one recent row per scope, and two expired sessions.
@@ -201,7 +203,8 @@ mod tests {
 
         // The API role: no UPDATE, DELETE or TRUNCATE on audit_log, even with the
         // purge variable set, and no EXECUTE on the purge function.
-        c.execute("BEGIN; SET LOCAL ROLE shadoucmdb_app").await.unwrap();
+        c.execute("BEGIN").await.unwrap();
+        c.execute(sqlx::AssertSqlSafe(set_app.as_str())).await.unwrap();
         for stmt in [
             "UPDATE audit_log SET actor_name = 'tampered'",
             "DELETE FROM audit_log",
@@ -218,7 +221,7 @@ mod tests {
         c.execute("ROLLBACK").await.unwrap();
 
         // The maintenance role: no direct DELETE, a floor of 30 days, a dry run that deletes nothing.
-        c.execute("SET ROLE shadoucmdb_maintenance").await.unwrap();
+        c.execute(sqlx::AssertSqlSafe(set_maintenance.as_str())).await.unwrap();
         c.execute("BEGIN; SAVEPOINT sp").await.unwrap();
         let r = c.execute("DELETE FROM audit_log").await;
         assert_eq!(sqlstate(&mut c, r).await, "42501", "maintenance role: DELETE");
@@ -231,7 +234,7 @@ mod tests {
         c.execute("RESET ROLE").await.unwrap();
         assert_eq!(count(&mut c, "true").await, 5, "a dry run deletes nothing and records nothing");
 
-        c.execute("SET ROLE shadoucmdb_maintenance").await.unwrap();
+        c.execute(sqlx::AssertSqlSafe(set_maintenance.as_str())).await.unwrap();
         let done = prune(&mut c, 180, Scope::Auth, false, Some("tester")).await.unwrap();
         assert_eq!(done, dry);
         let changes = prune(&mut c, 365, Scope::Changes, false, Some("tester")).await.unwrap();
@@ -269,22 +272,19 @@ mod tests {
 
         drop(c);
         db.drop().await;
+        roles.drop().await;
     }
 
     #[tokio::test]
     async fn the_api_role_cannot_change_the_system_schema() {
-        const TEST: &str = "the_api_role_cannot_change_the_system_schema";
-        if !scratch::split_roles().await {
-            scratch::database(TEST).await;
-            return;
-        }
-        let Some(db) = scratch::database(TEST).await else { return };
+        let Some(roles) = scratch::Roles::create("the_api_role_cannot_change_the_system_schema").await else { return };
+        let db = roles.database().await;
         let mut c = db.pool.acquire().await.unwrap();
 
         // After migrate, the API role owns only the area schemas and what is in them. Owning
         // anything else would let it drop, alter or disable the triggers on a system table.
         let owned: Vec<String> = sqlx::query_scalar(
-            "WITH r AS (SELECT 'shadoucmdb_app'::regrole AS oid)
+            "WITH r AS (SELECT $1::regrole AS oid)
              SELECT kind || ' ' || name FROM (
                SELECT 'schema', nspname::text, nspname FROM pg_namespace, r WHERE nspowner = r.oid
                UNION ALL SELECT 'relation', c.oid::regclass::text, n.nspname
@@ -299,12 +299,15 @@ mod tests {
              WHERE nsp IS NULL OR nsp::text NOT IN (SELECT key FROM cmdb.areas)
              ORDER BY 1",
         )
+        .bind(&roles.app)
         .fetch_all(&mut *c)
         .await
         .unwrap();
-        assert!(owned.is_empty(), "owned by shadoucmdb_app outside the area schemas: {owned:?}");
+        assert!(owned.is_empty(), "owned by the API role outside the area schemas: {owned:?}");
 
-        c.execute("BEGIN; SET LOCAL ROLE shadoucmdb_app").await.unwrap();
+        c.execute("BEGIN").await.unwrap();
+        c.execute(sqlx::AssertSqlSafe(format!("SET LOCAL ROLE {}", roles.app))).await.unwrap();
+        let owner_to_api = format!("ALTER TABLE cmdb.users OWNER TO {}", roles.app);
         for stmt in [
             "DROP TABLE cmdb.audit_log",
             "ALTER TABLE cmdb.audit_log DISABLE TRIGGER USER",
@@ -315,7 +318,7 @@ mod tests {
             "DROP FUNCTION cmdb.prune_audit_log(interval, text, boolean, text)",
             "DROP TABLE cmdb.configuration_items",
             "ALTER TABLE cmdb.users ADD COLUMN x int",
-            "ALTER TABLE cmdb.users OWNER TO shadoucmdb_app",
+            owner_to_api.as_str(),
             "DROP SCHEMA cmdb CASCADE",
             "CREATE TABLE cmdb.planted (x int)",
             "CREATE FUNCTION public.planted() RETURNS int LANGUAGE sql AS 'SELECT 1'",
@@ -329,38 +332,40 @@ mod tests {
 
         drop(c);
         db.drop().await;
+        roles.drop().await;
     }
 
     #[tokio::test]
     async fn a_function_planted_in_public_does_not_run_with_the_owners_rights() {
-        const TEST: &str = "a_function_planted_in_public_does_not_run_with_the_owners_rights";
-        if !scratch::split_roles().await {
-            scratch::database(TEST).await;
+        let Some(roles) =
+            scratch::Roles::create("a_function_planted_in_public_does_not_run_with_the_owners_rights").await
+        else {
             return;
-        }
-        let Some(db) = scratch::database(TEST).await else { return };
+        };
+        let db = roles.database().await;
+        let (app, maintenance) = (roles.app.as_str(), roles.maintenance.as_str());
         let mut c = db.pool.acquire().await.unwrap();
-        let privilege = |sql: &'static str| sqlx::query_scalar::<_, bool>(sql);
+        let privilege = |sql: &'static str| sqlx::query_scalar::<_, bool>(sql).bind(app);
 
         let open = privilege(
             "SELECT has_schema_privilege('public', 'public', 'CREATE')
-                 OR has_schema_privilege('shadoucmdb_app', 'public', 'CREATE')",
+                 OR has_schema_privilege($1, 'public', 'CREATE')",
         );
         assert!(!open.fetch_one(&mut *c).await.unwrap(), "only the owner may create objects in public");
 
         // Reopen public as PostgreSQL 14 ships it. The API role plants a jsonb_object_agg(text, bigint)
         // aggregate, a closer match than pg_catalog's ("any", "any"); if prune_audit_log() resolved it,
         // its state function would run as the schema owner and grant the API role DELETE on audit_log.
-        c.execute(
+        c.execute(sqlx::AssertSqlSafe(format!(
             "INSERT INTO audit_log (actor_type, action, entity_type, entity_id, new_value, occurred_at)
-               VALUES ('system', 'login.failure', 'sessions', gen_random_uuid(), '{}', now() - interval '200 days');
-             GRANT CREATE ON SCHEMA public TO shadoucmdb_app;
-             SET ROLE shadoucmdb_app;
+               VALUES ('system', 'login.failure', 'sessions', gen_random_uuid(), '{{}}', now() - interval '200 days');
+             GRANT CREATE ON SCHEMA public TO {app};
+             SET ROLE {app};
              CREATE FUNCTION public.hijack(jsonb, text, bigint) RETURNS jsonb LANGUAGE plpgsql AS $$
-               BEGIN GRANT UPDATE, DELETE ON cmdb.audit_log TO shadoucmdb_app; RETURN $1; END $$;
+               BEGIN GRANT UPDATE, DELETE ON cmdb.audit_log TO {app}; RETURN $1; END $$;
              CREATE AGGREGATE public.jsonb_object_agg(text, bigint) (sfunc = public.hijack, stype = jsonb);
-             SET ROLE shadoucmdb_maintenance;",
-        )
+             SET ROLE {maintenance};",
+        )))
         .await
         .unwrap();
         let dry = prune(&mut c, 180, Scope::Auth, true, None).await.unwrap();
@@ -368,8 +373,8 @@ mod tests {
         c.execute("RESET ROLE").await.unwrap();
 
         let gained = privilege(
-            "SELECT has_table_privilege('shadoucmdb_app', 'cmdb.audit_log', 'UPDATE')
-                 OR has_table_privilege('shadoucmdb_app', 'cmdb.audit_log', 'DELETE')",
+            "SELECT has_table_privilege($1, 'cmdb.audit_log', 'UPDATE')
+                 OR has_table_privilege($1, 'cmdb.audit_log', 'DELETE')",
         );
         assert!(!gained.fetch_one(&mut *c).await.unwrap(), "the planted aggregate ran as the owner");
         assert_eq!(dry, vec![("login.failure".into(), 1), ("sessions".into(), 0)]);
@@ -377,9 +382,9 @@ mod tests {
 
         // The 30-day floor holds for month and year intervals too: it is checked on the resulting
         // cutoff, so '1 month' is refused exactly when the previous month was shorter than 30 days.
-        let short = privilege("SELECT now() - interval '1 month' > now() - interval '30 days'");
+        let short = sqlx::query_scalar::<_, bool>("SELECT now() - interval '1 month' > now() - interval '30 days'");
         let month_is_short = short.fetch_one(&mut *c).await.unwrap();
-        c.execute("SET ROLE shadoucmdb_maintenance").await.unwrap();
+        c.execute(sqlx::AssertSqlSafe(format!("SET ROLE {maintenance}"))).await.unwrap();
         for (window, refused) in [("1 month", month_is_short), ("1 year -340 days", true), ("29 days 23:59", true)] {
             c.execute("BEGIN; SAVEPOINT sp").await.unwrap();
             let r = sqlx::query("SELECT * FROM prune_audit_log($1::interval, 'auth', true)")
@@ -397,5 +402,6 @@ mod tests {
 
         drop(c);
         db.drop().await;
+        roles.drop().await;
     }
 }
