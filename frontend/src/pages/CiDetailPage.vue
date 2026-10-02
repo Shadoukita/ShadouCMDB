@@ -5,6 +5,7 @@ import { ApiError } from "../api/client";
 import { useAreas } from "../api/datamodel";
 import { useCi, useCiClasses, useClassAttributes } from "../api/queries";
 import { useServiceSettings } from "../api/services";
+import { useCiLayout } from "../api/uiSettings";
 import Breadcrumbs, { type Crumb } from "../components/Breadcrumbs.vue";
 import EmptyState from "../components/EmptyState.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
@@ -13,12 +14,14 @@ import CiStateBadge from "../components/CiStateBadge.vue";
 import CriticalityBadge from "../components/CriticalityBadge.vue";
 import LayoutEditView from "../components/layoutEdit/LayoutEditView.vue";
 import EditLayoutButton from "../components/layoutEdit/EditLayoutButton.vue";
+import { t } from "../i18n";
 import { useAppSettings } from "../lib/appSettings";
 import { useDocumentTitle } from "../lib/composables";
 import { useLayoutEditor } from "../lib/layoutEditor";
+import { asClassLayout } from "../lib/layoutTemplates";
 import { formatDateTime } from "../lib/format";
 import { useTrail, type TrailStep } from "../lib/trail";
-import { attributeKey, builtInLayout, DETAIL_CORE, DETAIL_RECORD, layoutFor, placedPanels, resolveLayout, withoutKinds } from "../lib/uiSettings";
+import { attributeKey, builtInLayout, DETAIL_CORE, DETAIL_RECORD, layoutFor, normalizeLayout, placedPanels, resolveLayout, withoutKinds } from "../lib/uiSettings";
 import { useFlashStore } from "../stores/flash";
 import { useSessionStore } from "../stores/session";
 import AttributeValue from "./detail/AttributeValue.vue";
@@ -76,13 +79,29 @@ watch(
   { immediate: true },
 );
 
-// The class's layout from Customization, if it has one; otherwise the built-in one: General (core fields and
-// ungrouped attributes), the attribute groups, then the record's class and timestamps.
+// The CI's layout (its own, a template chosen for it, or its class's default template; GET
+// /configuration-items/{id}/layout), else the class's from the settings; without tabs the built-in one:
+// General (core fields and ungrouped attributes), the attribute groups, then the record's class and timestamps.
 const settings = useAppSettings();
 const classes = useCiClasses();
 const areas = useAreas();
 const classKey = computed(() => classes.data.value?.find((k) => k.id === c.value?.classId)?.key);
-const layout = computed(() => layoutFor(settings.doc.value, classKey.value));
+const ciLayout = useCiLayout(() => (c.value ? id.value : undefined));
+const layout = computed(() => {
+  const own = ciLayout.data.value;
+  if (own && own.ciId === id.value) return normalizeLayout(asClassLayout(own.classKey, own.layout));
+  return layoutFor(settings.doc.value, classKey.value);
+});
+/** Waiting for the CI's layout (on an error the class's applies). */
+const layoutLoading = computed(() => ciLayout.isLoading.value);
+/** For those who may change layouts: the CI does not show its class's default layout. */
+const ownLayout = computed(() => {
+  const l = ciLayout.data.value;
+  if (!session.can("customization.manage") || !l || l.ciId !== id.value || l.source === "class_default") return null;
+  return l.source === "custom"
+    ? { label: t("ciLayout.badgeCustom"), title: t("ciLayout.badgeCustomTitle", { class: c.value?.class.name ?? "" }) }
+    : { label: t("ciLayout.badgeTemplate", { name: l.templateName ?? "" }), title: t("ciLayout.badgeTemplateTitle", { name: l.templateName ?? "", class: c.value?.class.name ?? "" }) };
+});
 const attrs = useClassAttributes(() => c.value?.classId, { includeInactive: true });
 const defs = computed(() => (attrs.data.value ?? []).filter((d) => d.isActive));
 // Archived fields are kept out of the layout (one may have been superseded by a core field, GH#369);
@@ -99,7 +118,7 @@ const placed = computed(() => placedPanels(layout.value));
 
 // Edit layout (the layout-editor route, in its own window): the class layout edited on this CI, for users who may customize.
 const activeAttrs = computed(() => attrs.data.value?.filter((d) => d.isActive));
-const editor = useLayoutEditor({ classKey, attrs: activeAttrs });
+const editor = useLayoutEditor({ classKey, attrs: activeAttrs, ciId: id });
 const defFor = (f: string) => defs.value.find((d) => d.key === attributeKey(f));
 /** The record section as the draft layout places it (always last on the first tab). */
 const recordSection = computed(() =>
@@ -191,6 +210,7 @@ const crumbs = computed<Crumb[]>(() => {
         <span v-if="c.deletedAt" class="badge danger">Deleted {{ formatDateTime(c.deletedAt) }}</span>
         <CiStateBadge v-else :ci="c" />
         <CriticalityBadge :value="c.criticality" />
+        <span v-if="ownLayout" class="badge ci-own-layout" data-testid="ci-own-layout" :title="ownLayout.title">{{ ownLayout.label }}</span>
       </div>
       <div v-if="!c.deletedAt" class="actions">
         <EditLayoutButton v-if="editor.allowed && !editor.active" :editor="editor" />
@@ -239,7 +259,7 @@ const crumbs = computed<Crumb[]>(() => {
 
     <div v-if="!editor.active" :id="`panel-${tabId(current)}`" role="tabpanel" :aria-labelledby="`tab-${tabId(current)}`">
       <template v-if="layoutIndex >= 0">
-        <LoadingState v-if="attrs.isLoading.value" label="Loading attribute definitions…" />
+        <LoadingState v-if="attrs.isLoading.value || layoutLoading" label="Loading attribute definitions…" />
         <ErrorAlert
           v-else-if="attrs.isError.value"
           :error="attrs.error.value"

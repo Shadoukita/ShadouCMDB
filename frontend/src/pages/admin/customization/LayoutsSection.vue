@@ -1,150 +1,376 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from "vue";
-import { useRouter } from "vue-router";
-import { useCiList, type CiClass } from "../../../api/queries";
-import type { UiSettingsDocument } from "../../../api/uiSettings";
+import { useQueryClient } from "@tanstack/vue-query";
+import { computed, nextTick, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
+import { fetchCiList, useCiClasses } from "../../../api/queries";
+import { useLayoutTemplateUsage, type UiLayoutTemplate, type UiSettingsDocument } from "../../../api/uiSettings";
 import ConfirmDialog from "../../../components/ConfirmDialog.vue";
+import EmptyState from "../../../components/EmptyState.vue";
 import ErrorAlert from "../../../components/ErrorAlert.vue";
+import LoadingState from "../../../components/LoadingState.vue";
+import PaginationBar from "../../../components/PaginationBar.vue";
 import { t } from "../../../i18n";
-import { EDITOR_SUFFIX, openLayoutEditor } from "../../../lib/layoutEditor";
-import ClassPicker from "./ClassPicker.vue";
+import { useDebounced } from "../../../lib/composables";
+import { openLayoutEditor } from "../../../lib/layoutEditor";
+import {
+  addTemplate,
+  classesUsing,
+  classRows,
+  classTemplateKey,
+  deletable,
+  freeTemplateName,
+  setClassTemplate,
+  STANDARD_TEMPLATE,
+  type TemplateUsers,
+} from "../../../lib/layoutTemplates";
+import { useListQuery } from "../../../lib/listQuery";
+import ClassCiEditor from "./ClassCiEditor.vue";
+import TemplateDialog from "./TemplateDialog.vue";
 
 /**
- * Customization › Detail and form layout: pick a class, then edit its layout
- * on a real CI page (the layout editor of CiDetailPage, in its own window):
- * by default the class's most recently updated CI, or another one found by
- * name. The editor saves a new settings version itself. A class without CIs
- * gets a link to the create form's layout editor. "Use the built-in layout"
- * drops the class's own layout from this page's draft (saved with the page).
+ * Customization › Layouts: layout templates (SHAA-1472) and which one each
+ * class uses.
+ *
+ * - Classes: every class with its default template (an inline select, part of
+ *   this page's draft, saved with it), searchable, filterable by template and
+ *   sortable, with the filter in the URL. "Edit CI…" opens the class's panel to
+ *   edit its default template on one of its CIs (ClassCiEditor).
+ * - Templates: who uses each (classes from the draft, CIs from the API) and
+ *   Edit (the layout editor on a CI that shows it, else on a CI of a class that
+ *   uses it, else on the most recently updated CI), Rename, Duplicate and Delete
+ *   (only when nobody uses it), plus New template.
+ *
+ * Template changes and class defaults go into the draft and are saved with the
+ * page as one settings version; the layout itself is edited (and saved) in the
+ * layout editor.
  */
 const props = defineProps<{ doc: UiSettingsDocument; error?: unknown }>();
+const route = useRoute();
 const router = useRouter();
-const cls = ref<CiClass>();
-const own = computed(() => (cls.value ? props.doc.layouts.find((l) => l.classKey === cls.value!.key) : undefined));
+const qc = useQueryClient();
+const classes = useCiClasses();
+const usage = useLayoutTemplateUsage();
+const allClasses = computed(() => classes.data.value ?? []);
+const classByKey = computed(() => new Map(allClasses.value.map((c) => [c.key, c])));
+const classById = computed(() => new Map(allClasses.value.map((c) => [c.id, c])));
 
-/** The CIs offered: the most recently updated first, narrowed by the search. */
-const search = ref("");
-const q = ref("");
-let typing: ReturnType<typeof setTimeout> | undefined;
-watch(search, (v) => {
-  clearTimeout(typing);
-  typing = setTimeout(() => (q.value = v.trim()), 300);
+// ---------- Classes ----------
+const lq = useListQuery({ sort: "class" });
+const search = ref(lq.get("q"));
+const typed = useDebounced(search, 250);
+watch(typed, (q) => {
+  if (q !== lq.get("q")) lq.update({ q: q || undefined });
 });
-onBeforeUnmount(() => clearTimeout(typing));
-const PICKER_SIZE = 25;
-const list = useCiList(
-  () => ({ classId: cls.value?.id, limit: PICKER_SIZE, sort: "-updatedAt", ...(q.value ? { q: q.value } : {}) }),
-  () => !!cls.value,
+watch(
+  () => lq.get("q"),
+  (q) => {
+    if (q !== typed.value) search.value = q;
+  },
 );
-const found = computed(() => (list.isPlaceholderData.value ? undefined : list.data.value));
-/** The CI chosen in the picker; until then the most recently updated one. */
-const picked = ref<{ id: string; label: string } | null>(null);
-const ci = computed(() => picked.value ?? (q.value ? null : (found.value?.data[0] ?? null)));
-/** The class has no CI at all (not just none matching the search). */
-const none = computed(() => !q.value && found.value?.page.total === 0);
-watch(cls, () => {
-  picked.value = null;
+const uses = computed(() => lq.get("uses"));
+const rows = computed(() => classRows(allClasses.value, props.doc, { q: lq.get("q"), uses: uses.value, sort: lq.sort.value }));
+const page = computed(() => rows.value.slice(lq.offset.value, lq.offset.value + lq.limit.value));
+const filtered = computed(() => !!lq.get("q") || !!uses.value);
+function clearFilters() {
   search.value = "";
-  clearTimeout(typing);
-  q.value = "";
+  lq.update({ q: undefined, uses: undefined });
+}
+const CLASS_COLUMNS = [
+  { key: "class", label: () => t("customization.layouts.colClass"), sort: "class" },
+  { key: "template", label: () => t("customization.layouts.colTemplate"), sort: "template" },
+  { key: "actions", label: () => t("customization.layouts.colActions"), sort: "" },
+] as const;
+
+function setDefault(classKey: string, templateKey: string) {
+  setClassTemplate(props.doc, classKey, templateKey);
+}
+
+/** The class whose panel is open (?class=<key>, so it survives a reload). */
+const selected = computed(() => {
+  const k = route.query.class;
+  return typeof k === "string" ? classByKey.value.get(k) : undefined;
 });
-function onPick(id: string) {
-  const c = found.value?.data.find((x) => x.id === id);
-  if (c) picked.value = { id: c.id, label: c.label };
+async function openClass(key: string) {
+  await router.replace({ query: { ...route.query, class: key } });
+  await nextTick();
+  document.querySelector<HTMLElement>("[data-testid=layout-class-panel] select, [data-testid=layout-class-panel] a")?.focus();
+}
+/** The open class's default template (in the draft); the editor opens on it once it is saved. */
+const selectedTemplate = computed(() => (selected.value ? classTemplateKey(props.doc, selected.value.key) : STANDARD_TEMPLATE));
+const closeClass = () => router.replace({ query: { ...route.query, class: undefined } });
+
+// ---------- Templates ----------
+/** Templates in the saved settings (the usage counts and the editor know only those). */
+const saved = computed(() => new Set((usage.data.value?.templates ?? []).map((u) => u.key)));
+const templateName = (key: string) => props.doc.layoutTemplates.find((x) => x.key === key)?.name ?? key;
+function users(key: string): TemplateUsers {
+  const u = usage.data.value?.templates.find((x) => x.key === key);
+  return {
+    classKeys: classesUsing(props.doc, key, allClasses.value.map((c) => c.key)),
+    ciCount: u ? u.overrideCount : usage.data.value ? 0 : undefined,
+  };
+}
+const className = (key: string) => classByKey.value.get(key)?.name ?? key;
+/** Who uses a template, for the Delete button's explanation. */
+function inUse(key: string): string {
+  if (key === STANDARD_TEMPLATE) return t("layoutTemplates.deleteStandard");
+  const u = users(key);
+  const names = u.classKeys.map(className);
+  const list = names.length > 5 ? `${names.slice(0, 5).join(", ")} ${t("layoutTemplates.andMore", { n: names.length - 5 })}` : names.join(", ");
+  if (u.ciCount === undefined) return t("layoutTemplates.deleteCounting");
+  return t(u.ciCount === null ? "layoutTemplates.inUseHidden" : "layoutTemplates.inUse", { classes: names.length, list, cis: u.ciCount ?? 0 });
+}
+const ciCell = (key: string) => {
+  const n = users(key).ciCount;
+  return n === undefined ? "…" : n === null ? "?" : n.toLocaleString();
+};
+
+const dialog = ref<{ mode: "new" | "rename"; initial: { key?: string; name: string; description?: string; from?: string } } | null>(null);
+function newTemplate() {
+  dialog.value = { mode: "new", initial: { name: "" } };
+}
+function duplicate(tp: UiLayoutTemplate) {
+  dialog.value = { mode: "new", initial: { name: freeTemplateName(t("layoutTemplates.copyName", { name: tp.name }), props.doc.layoutTemplates), description: tp.description, from: tp.key } };
+}
+function rename(tp: UiLayoutTemplate) {
+  dialog.value = { mode: "rename", initial: { key: tp.key, name: tp.name, description: tp.description } };
+}
+function onDialog(v: { name: string; description: string; from: string }) {
+  const d = dialog.value;
+  dialog.value = null;
+  if (!d) return;
+  if (d.mode === "new") {
+    const from = v.from ? props.doc.layoutTemplates.find((x) => x.key === v.from)?.layout : undefined;
+    addTemplate(props.doc, v.name, from, v.description);
+    return;
+  }
+  const tp = props.doc.layoutTemplates.find((x) => x.key === d.initial.key);
+  if (!tp) return;
+  tp.name = v.name;
+  if (v.description) tp.description = v.description;
+  else delete tp.description;
 }
 
-const createEditor = computed(() => (cls.value ? { path: `/cis/new${EDITOR_SUFFIX}`, query: { classId: cls.value.id } } : undefined));
-function editCi() {
-  if (cls.value && ci.value) openLayoutEditor(router, { path: `/cis/${ci.value.id}` }, cls.value.key);
-}
-function editOnCreate() {
-  if (cls.value) openLayoutEditor(router, { path: "/cis/new", query: { classId: cls.value.id } }, cls.value.key);
+const removing = ref<UiLayoutTemplate | null>(null);
+function remove() {
+  const key = removing.value?.key;
+  removing.value = null;
+  if (key) props.doc.layoutTemplates = props.doc.layoutTemplates.filter((x) => x.key !== key);
 }
 
-const confirmBuiltIn = ref(false);
-function useBuiltIn() {
-  props.doc.layouts = props.doc.layouts.filter((l) => l !== own.value);
-  confirmBuiltIn.value = false;
+/** Opens the layout editor on the template: on a CI of a class that uses it, else on the most recently updated CI, else on a create form. */
+const opening = ref<string | null>(null);
+const openError = ref<unknown>(null);
+async function edit(key: string) {
+  opening.value = key;
+  openError.value = null;
+  try {
+    const using = users(key).classKeys.map((k) => classByKey.value.get(k)).filter((c) => !!c);
+    for (const c of using.slice(0, 5)) {
+      const ci = (await fetchCiList(qc, { classId: c.id, limit: 1, sort: "-updatedAt" })).data[0];
+      if (ci) return void openLayoutEditor(router, { path: `/cis/${ci.id}` }, c.key, key);
+    }
+    const any = (await fetchCiList(qc, { limit: 1, sort: "-updatedAt" })).data[0];
+    const cls = any ? classById.value.get(any.classId) : undefined;
+    if (any && cls) return void openLayoutEditor(router, { path: `/cis/${any.id}` }, cls.key, key);
+    const target = using[0] ?? allClasses.value.find((c) => c.isActive);
+    if (target) openLayoutEditor(router, { path: "/cis/new", query: { classId: target.id } }, target.key, key);
+  } catch (e) {
+    openError.value = e;
+  } finally {
+    opening.value = null;
+  }
 }
 </script>
 
 <template>
   <section class="panel">
     <div class="panel-header">
-      <h2>{{ t("customization.layouts.title") }}</h2>
-      <span class="muted">{{ t("customization.layouts.subtitle") }}</span>
+      <h2>{{ t("customization.layouts.classesTitle") }}</h2>
+      <span class="muted">{{ t("customization.layouts.classesSubtitle") }}</span>
     </div>
-    <div class="panel-body layouts-body">
-      <ClassPicker v-model:selected="cls" :customized="doc.layouts.map((l) => l.classKey)" noun="layout" />
-
-      <template v-if="cls">
-        <p class="muted" data-testid="layout-status">
-          {{ own ? t("customization.layouts.own", { class: cls.name }) : t("customization.layouts.builtIn", { class: cls.name }) }}
-        </p>
-
-        <ErrorAlert v-if="list.isError.value" :error="list.error.value" :title="t('customization.layouts.listError')" :on-retry="() => list.refetch()" />
-        <p v-else-if="none">
-          <a :href="router.resolve(createEditor!).href" data-testid="layout-create-ci" @click.prevent="editOnCreate">{{ t("customization.layouts.createCi", { class: cls.name }) }}</a>
-        </p>
-        <div v-else class="layouts-edit">
+    <div class="panel-body stack">
+      <LoadingState v-if="classes.isLoading.value" :label="t('customization.layouts.loadingClasses')" />
+      <ErrorAlert v-else-if="classes.isError.value" :error="classes.error.value" :on-retry="() => classes.refetch()" />
+      <template v-else>
+        <div class="toolbar" role="search" :aria-label="t('customization.layouts.filterLabel')">
           <div class="inline-control">
-            <label for="layout-ci-search">{{ t("customization.layouts.otherCi") }}</label>
-            <input
-              id="layout-ci-search"
-              v-model="search"
-              type="search"
-              :placeholder="t('customization.layouts.searchPlaceholder')"
-              @keydown.enter.prevent
-            />
-            <label class="sr-only" for="layout-ci">{{ t("customization.layouts.ci") }}</label>
-            <select id="layout-ci" :value="ci?.id ?? ''" :disabled="!found || found.data.length === 0" @change="onPick(($event.target as HTMLSelectElement).value)">
-              <option v-if="!ci" value="" disabled>{{ found && found.data.length === 0 ? t("customization.layouts.noMatch") : t("customization.layouts.chooseCi") }}</option>
-              <option v-if="ci && !found?.data.some((c) => c.id === ci!.id)" :value="ci.id">{{ ci.label }}</option>
-              <option v-for="c in found?.data ?? []" :key="c.id" :value="c.id">{{ c.label }}</option>
-            </select>
-            <span class="muted">{{ t("customization.layouts.recentHint", { n: PICKER_SIZE }) }}</span>
+            <label for="layout-class-q">{{ t("customization.layouts.search") }}</label>
+            <input id="layout-class-q" v-model="search" type="search" :placeholder="t('customization.layouts.searchClasses')" @keydown.enter.prevent />
           </div>
-          <span>
-            <button type="button" class="btn btn-primary" :disabled="!ci" data-testid="layout-edit-ci" @click="editCi">
-              {{ ci ? t("customization.layouts.editCi", { name: ci.label }) : t("customization.layouts.editCiLoading") }}
-            </button>
-          </span>
-          <p class="hint">{{ t("customization.layouts.editHint", { class: cls.name }) }}</p>
+          <div class="inline-control">
+            <label for="layout-class-uses">{{ t("customization.layouts.usesFilter") }}</label>
+            <select id="layout-class-uses" :value="uses" @change="lq.update({ uses: ($event.target as HTMLSelectElement).value || undefined })">
+              <option value="">{{ t("customization.layouts.anyTemplate") }}</option>
+              <option v-for="tp in doc.layoutTemplates" :key="tp.key" :value="tp.key">{{ tp.name }}</option>
+            </select>
+          </div>
+          <span class="muted" role="status">{{ t("customization.layouts.classCount", { n: rows.length, total: allClasses.length }) }}</span>
         </div>
 
-        <div v-if="own" class="layouts-reset">
-          <button type="button" class="btn btn-sm" @click="confirmBuiltIn = true">{{ t("customization.layouts.useBuiltIn", { class: cls.name }) }}</button>
-        </div>
+        <EmptyState v-if="allClasses.length === 0" :title="t('customization.layouts.noClasses')" />
+        <EmptyState v-else-if="rows.length === 0 && filtered" :title="t('customization.layouts.noMatchClasses')">
+          <template #actions><button type="button" class="btn" @click="clearFilters">{{ t("customization.layouts.clearFilters") }}</button></template>
+        </EmptyState>
+        <template v-else>
+          <div class="table-wrap">
+            <table class="data compact" data-testid="layout-classes">
+              <caption class="sr-only">{{ t("customization.layouts.classesCaption") }}</caption>
+              <thead>
+                <tr>
+                  <th v-for="c in CLASS_COLUMNS" :key="c.key" scope="col" :aria-sort="c.sort ? lq.ariaSort(c.sort) : undefined">
+                    <button v-if="c.sort" type="button" class="sort" @click="lq.toggleSort(c.sort)">{{ c.label() }} {{ lq.sortIndicator(c.sort) }}</button>
+                    <template v-else>{{ c.label() }}</template>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="r in page" :key="r.key" :class="{ selected: selected?.key === r.key }">
+                  <th scope="row">
+                    {{ r.name }} <span class="mono muted">{{ r.key }}</span>
+                    <span v-if="!r.isActive" class="badge">{{ t("customization.layouts.archived") }}</span>
+                  </th>
+                  <td>
+                    <label class="sr-only" :for="`layout-default-${r.key}`">{{ t("customization.layouts.defaultFor", { class: r.name }) }}</label>
+                    <select :id="`layout-default-${r.key}`" :value="r.templateKey" @change="setDefault(r.key, ($event.target as HTMLSelectElement).value)">
+                      <option v-for="tp in doc.layoutTemplates" :key="tp.key" :value="tp.key">{{ tp.name }}</option>
+                    </select>
+                  </td>
+                  <td>
+                    <button type="button" class="btn btn-sm" :aria-label="t('customization.layouts.editOnCiFor', { class: r.name })" @click="openClass(r.key)">
+                      {{ t("customization.layouts.editOnCi") }}
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <PaginationBar :total="rows.length" :limit="lq.limit.value" :offset="lq.offset.value" @change="lq.onPage" />
+        </template>
+        <p class="hint">{{ t("customization.layouts.classesHint") }}</p>
       </template>
-      <p v-else class="muted">{{ t("customization.layouts.chooseClass") }}</p>
     </div>
   </section>
 
+  <ClassCiEditor
+    v-if="selected"
+    :cls="selected"
+    :template-key="saved.has(selectedTemplate) ? selectedTemplate : undefined"
+    :template-name="templateName(selectedTemplate)"
+    @close="closeClass"
+  />
+
+  <section class="panel">
+    <div class="panel-header">
+      <h2>{{ t("customization.layouts.templatesTitle") }}</h2>
+      <button type="button" class="btn btn-primary btn-sm" @click="newTemplate">{{ t("layoutTemplates.new") }}</button>
+    </div>
+    <div class="panel-body stack">
+      <ErrorAlert v-if="usage.isError.value" :error="usage.error.value" :title="t('layoutTemplates.usageError')" :on-retry="() => usage.refetch()" />
+      <ErrorAlert v-if="openError" :error="openError" :title="t('layoutTemplates.openError')" />
+      <div class="table-wrap">
+        <table class="data compact" data-testid="layout-templates">
+          <caption class="sr-only">{{ t("customization.layouts.templatesCaption") }}</caption>
+          <thead>
+            <tr>
+              <th scope="col">{{ t("layoutTemplates.name") }}</th>
+              <th scope="col">{{ t("layoutTemplates.description") }}</th>
+              <th scope="col" class="num">{{ t("layoutTemplates.usedByClasses") }}</th>
+              <th scope="col" class="num">{{ t("layoutTemplates.usedByCis") }}</th>
+              <th scope="col">{{ t("customization.layouts.colActions") }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="tp in doc.layoutTemplates" :key="tp.key" :data-template="tp.key">
+              <th scope="row">
+                {{ tp.name }}
+                <span v-if="tp.key === STANDARD_TEMPLATE" class="badge">{{ t("layoutTemplates.builtIn") }}</span>
+                <span v-if="usage.data.value && !saved.has(tp.key)" class="badge warn">{{ t("layoutTemplates.unsaved") }}</span>
+              </th>
+              <td :title="tp.description">{{ tp.description ?? "" }}</td>
+              <td class="num" :title="users(tp.key).classKeys.map(className).join(', ') || undefined">{{ users(tp.key).classKeys.length.toLocaleString() }}</td>
+              <td class="num" :title="users(tp.key).ciCount === null ? t('layoutTemplates.cisHidden') : undefined">{{ ciCell(tp.key) }}</td>
+              <td class="tpl-actions">
+                <button
+                  type="button"
+                  class="btn btn-sm"
+                  :disabled="!saved.has(tp.key) || opening !== null"
+                  :title="saved.has(tp.key) ? t('layoutTemplates.editHint') : t('layoutTemplates.editUnsaved')"
+                  :aria-label="t('layoutTemplates.editFor', { name: tp.name })"
+                  @click="edit(tp.key)"
+                >
+                  {{ opening === tp.key ? t("layoutTemplates.opening") : t("common.edit") }}
+                </button>
+                <button type="button" class="btn btn-sm" :aria-label="t('layoutTemplates.renameFor', { name: tp.name })" @click="rename(tp)">{{ t("layoutTemplates.rename") }}</button>
+                <button type="button" class="btn btn-sm" :aria-label="t('layoutTemplates.duplicateFor', { name: tp.name })" @click="duplicate(tp)">{{ t("layoutTemplates.duplicate") }}</button>
+                <button
+                  type="button"
+                  class="btn btn-sm btn-danger"
+                  :aria-disabled="!deletable(tp.key, users(tp.key))"
+                  :aria-label="t('layoutTemplates.deleteFor', { name: tp.name })"
+                  :aria-describedby="deletable(tp.key, users(tp.key)) ? undefined : `tpl-in-use-${tp.key}`"
+                  :title="deletable(tp.key, users(tp.key)) ? undefined : inUse(tp.key)"
+                  @click="deletable(tp.key, users(tp.key)) && (removing = tp)"
+                >
+                  {{ t("common.delete") }}
+                </button>
+                <span v-if="!deletable(tp.key, users(tp.key))" :id="`tpl-in-use-${tp.key}`" class="sr-only">{{ inUse(tp.key) }}</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="hint">{{ t("customization.layouts.templatesHint") }}</p>
+    </div>
+  </section>
+
+  <TemplateDialog
+    :open="!!dialog"
+    :mode="dialog?.mode ?? 'new'"
+    :templates="doc.layoutTemplates"
+    :initial="dialog?.initial ?? { name: '' }"
+    @submit="onDialog"
+    @cancel="dialog = null"
+  />
   <ConfirmDialog
-    :open="confirmBuiltIn"
-    :title="t('customization.layouts.useBuiltInTitle', { class: cls?.name ?? '' })"
-    :confirm-label="t('customization.layouts.useBuiltInConfirm')"
-    @confirm="useBuiltIn"
-    @cancel="confirmBuiltIn = false"
+    :open="!!removing"
+    :title="t('layoutTemplates.deleteTitle', { name: removing?.name ?? '' })"
+    :confirm-label="t('layoutTemplates.deleteConfirm')"
+    @confirm="remove"
+    @cancel="removing = null"
   >
-    {{ t("customization.layouts.useBuiltInBody", { class: cls?.name ?? "" }) }}
+    {{ t("layoutTemplates.deleteBody", { name: removing?.name ?? "" }) }}
   </ConfirmDialog>
 </template>
 
 <style scoped>
-.layouts-body,
-.layouts-edit {
+.toolbar {
   display: flex;
-  flex-direction: column;
-  gap: var(--sp-3);
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-4);
 }
-.layouts-body p {
-  margin: 0;
-}
-.layouts-edit input[type="search"] {
+.toolbar input[type="search"] {
   max-width: 260px;
 }
-.layouts-edit select {
-  max-width: 360px;
+table.data select {
+  max-width: 280px;
+}
+table.data tbody th {
+  font-weight: 600;
+  text-align: left;
+}
+tr.selected {
+  background: var(--c-surface-alt);
+}
+.tpl-actions {
+  white-space: nowrap;
+}
+.tpl-actions .btn + .btn {
+  margin-left: 4px;
+}
+.tpl-actions [aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 </style>

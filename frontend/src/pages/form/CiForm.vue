@@ -12,6 +12,7 @@ import {
   type CiCreateBody,
   type CiUpdateBody,
 } from "../../api/queries";
+import { useCiLayout } from "../../api/uiSettings";
 import AttributeInput from "../../components/AttributeInput.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
 import LayoutEditView from "../../components/layoutEdit/LayoutEditView.vue";
@@ -21,6 +22,7 @@ import { useAppSettings } from "../../lib/appSettings";
 import { HIDDEN_CI } from "../../lib/format";
 import { hintFor, nowFormValue, NOW_HINT, toApiValue, toFormValue, type FormValue } from "../../lib/attributeValues";
 import type { LayoutEditor } from "../../lib/layoutEditor";
+import { asClassLayout } from "../../lib/layoutTemplates";
 import { createReusableTemplate } from "../../lib/reusableTemplate";
 import {
   ATTRIBUTE_PREFIX,
@@ -32,6 +34,7 @@ import {
   freeAreaStyle,
   gridClass,
   layoutFor,
+  normalizeLayout,
   PANELS,
   resolveLayout,
   sectionClass,
@@ -115,8 +118,15 @@ const defs = computed(() => (attrs.data.value ?? []).filter((d) => d.isActive ||
 const settings = useAppSettings();
 const classes = useCiClasses();
 const classKey = computed(() => classes.data.value?.find((c) => c.id === props.classId)?.key);
-/** The class's layout; in layout edit mode the draft, so the fields show what is being set (read-only). */
-const layout = computed(() => (props.editor?.active && props.editor.layout) || layoutFor(settings.doc.value, classKey.value));
+/** An existing CI's layout: its own, a template chosen for it, or its class's default (a new CI gets the class's). */
+const ciLayout = useCiLayout(() => (props.mode === "edit" ? props.ci?.id : undefined));
+/** The layout; in layout edit mode the draft, so the fields show what is being set (read-only). */
+const layout = computed(() => {
+  if (props.editor?.active && props.editor.layout) return props.editor.layout;
+  const own = ciLayout.data.value;
+  if (own && own.ciId === props.ci?.id) return normalizeLayout(asClassLayout(own.classKey, own.layout));
+  return layoutFor(settings.doc.value, classKey.value);
+});
 const activeAttrs = computed(() => attrs.data.value?.filter((d) => d.isActive));
 const requiredField = (f: string) => !!defs.value.find((d) => `${ATTRIBUTE_PREFIX}${d.key}` === f && d.isRequired && d.isActive);
 const keepEditable = (f: string) => props.mode === "create" && requiredField(f);
