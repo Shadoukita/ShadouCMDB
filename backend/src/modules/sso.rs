@@ -176,26 +176,6 @@ impl Refusal {
             Refusal::ProviderDisabled => "unavailable",
         }
     }
-
-    pub fn message(self) -> &'static str {
-        match self {
-            Refusal::InvalidUsername => {
-                "Your identity provider did not send a usable username; ask an administrator to check the provider settings"
-            }
-            Refusal::AccountConflict => {
-                "An account with your username already exists in ShadouCMDB; ask an administrator to resolve the conflict"
-            }
-            Refusal::AccountDisabled => "This account is disabled",
-            Refusal::NotAuthorised => "None of your groups gives access to ShadouCMDB; ask an administrator for access",
-            Refusal::LastAdministrator => {
-                "Signing in would remove the last active administrator; ask another administrator to check the group mappings"
-            }
-            Refusal::MfaNotEnforced => {
-                "Your identity provider did not confirm a second factor, which your access to ShadouCMDB requires. Sign in again using multi-factor authentication, or ask an administrator to check the provider's MFA settings."
-            }
-            Refusal::ProviderDisabled => "Sign-in through this identity provider is disabled",
-        }
-    }
 }
 
 fn usable_username(name: Option<&str>) -> Option<String> {
