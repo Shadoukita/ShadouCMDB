@@ -80,6 +80,11 @@ test("save as new view, reload, and open the view= bookmark", async ({ page, bro
   await menuItem(page, "Save as new view…").click();
   const dialog = page.getByRole("dialog", { name: "Save as new view" });
   await expect(dialog.getByLabel("Name")).toBeFocused();
+  // The Name field spans the dialog like Description; toolbar control widths must not reach it (GH#483).
+  const widths = await dialog.evaluate((d) =>
+    ["#sv-name", "#sv-description"].map((s) => Math.round(d.querySelector(s)!.getBoundingClientRect().width)),
+  );
+  expect(widths[0]).toBe(widths[1]);
   await dialog.getByLabel("Name").fill(name);
   await dialog.getByLabel("Description").fill("Production servers by label, newest first");
   await dialog.getByRole("button", { name: "Save view" }).click();
