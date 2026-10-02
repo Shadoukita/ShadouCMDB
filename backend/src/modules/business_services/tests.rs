@@ -884,6 +884,95 @@ async fn the_service_class_and_member_type_are_protected_by_the_api() {
     );
 }
 
+/// GH#410: membership changes only through the service. The member type takes
+/// no relationship rules (which the import took as leave to write members),
+/// and no CI moves into the service type (which nested services deeper than
+/// the configured limit without an edge being written).
+#[tokio::test]
+async fn membership_cannot_bypass_the_service() {
+    let Some(db) = scratch::database("business_services_invariants").await else { return };
+    let mut w = World::new(&db, BusinessServiceConfig { max_members: 5_000, max_nesting: 2 }).await;
+    let admin = w.admin.clone();
+    let type_error = vec![("relationshipTypeId".to_owned(), "system_relationship_type".to_owned())];
+
+    // Rules: refused on create and on update, by the API and by the database.
+    let rule = json!({
+        "relationshipTypeId": w.member_type, "sourceClassId": w.service_class, "targetClassId": w.classes["server"]
+    });
+    let (status, v, _) = call(&w.app, "POST", "/api/v1/relationship-rules", &admin, Some(rule)).await;
+    assert_eq!((status, details(&v)), (400, type_error.clone()), "{v}");
+    let (_, rules) = w.get(&admin, &format!("/api/v1/relationship-rules?relationshipTypeId={}", w.runs_on)).await;
+    let runs_on_rule = rules["data"][0]["id"].as_str().unwrap().to_owned();
+    let (status, v, _) = call(
+        &w.app,
+        "PATCH",
+        &format!("/api/v1/relationship-rules/{runs_on_rule}"),
+        &admin,
+        Some(json!({ "relationshipTypeId": w.member_type })),
+    )
+    .await;
+    assert_eq!((status, details(&v)), (400, type_error.clone()), "{v}");
+    let err = sqlx::query(
+        "INSERT INTO relationship_type_rules (relationship_type_id, source_class_id, target_class_id) VALUES ($1, $2, $3)",
+    )
+    .bind(w.member_type)
+    .bind(w.service_class)
+    .bind(w.classes["server"])
+    .execute(&w.pool)
+    .await
+    .unwrap_err();
+    let constraint = err.as_database_error().and_then(|e| e.constraint().map(str::to_owned));
+    assert_eq!(constraint.as_deref(), Some("relationship_type_rules_system_type"));
+    let rules: i64 = sqlx::query_scalar("SELECT count(*) FROM relationship_type_rules WHERE relationship_type_id = $1")
+        .bind(w.member_type)
+        .fetch_one(&w.pool)
+        .await
+        .unwrap();
+    assert_eq!(rules, 0);
+
+    // Class move: A > B > C is at the limit (2 levels) and C includes web-01.
+    // Making web-01 a service would nest one level deeper: refused by the API
+    // (GH#409) and by the database, which no longer lets any CI become one.
+    for s in ["A", "B", "C", "D"] {
+        w.ci("business_service", s, &format!("Service {s}")).await;
+    }
+    w.ci("server", "web-01", "web-01").await;
+    assert_eq!(w.add(&admin, "A", &["B"]).await.0, 200);
+    assert_eq!(w.add(&admin, "B", &["C"]).await.0, 200);
+    assert_eq!(w.add(&admin, "C", &["web-01"]).await.0, 200);
+    let path = format!("/api/v1/configuration-items/{}", w.id("web-01"));
+    let body = json!({ "classId": w.service_class, "attributes": { "name": "web-01" } });
+    let (status, v, _) = call(&w.app, "PATCH", &path, &admin, Some(body)).await;
+    assert_eq!((status, details(&v)), (400, vec![("classId".to_owned(), "business_service_class".to_owned())]));
+    let err = sqlx::query("UPDATE configuration_items SET class_id = $1 WHERE id = $2")
+        .bind(w.service_class)
+        .bind(w.id("web-01"))
+        .execute(&w.pool)
+        .await
+        .unwrap_err();
+    let constraint = err.as_database_error().and_then(|e| e.constraint().map(str::to_owned));
+    assert_eq!(constraint.as_deref(), Some("configuration_items_service_class"));
+    let mapped = crate::api::pg_error::map(&err, None).expect("a client error");
+    assert_eq!(
+        mapped.details.iter().flatten().map(|d| (d.field.as_str(), d.code.as_str())).collect::<Vec<_>>(),
+        [("classId", "business_service_class")]
+    );
+
+    // A chain made deeper than the limit before these paths were closed (here
+    // D > A, written past the API) is listed up to the limit and flagged.
+    let (status, v) = w.get(&admin, &format!("/api/v1/configuration-items/{}/business-services", w.id("web-01"))).await;
+    assert_eq!((status, &v["truncated"], v["data"].as_array().map(Vec::len)), (200, &json!(false), Some(3)), "{v}");
+    sqlx::query("INSERT INTO ci_relationships (relationship_type_id, source_ci_id, target_ci_id) VALUES ($1, $2, $3)")
+        .bind(w.member_type)
+        .bind(w.id("D"))
+        .bind(w.id("A"))
+        .execute(&w.pool)
+        .await
+        .unwrap();
+    let (status, v) = w.get(&admin, &format!("/api/v1/configuration-items/{}/business-services", w.id("web-01"))).await;
+    assert_eq!((status, &v["truncated"], v["data"].as_array().map(Vec::len)), (200, &json!(true), Some(3)), "{v}");
+}
+
 // ---------------------------------------------------------------------------
 // §7.1 Soft delete
 // ---------------------------------------------------------------------------

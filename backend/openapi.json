@@ -28624,7 +28624,7 @@
           },
           "truncated": {
             "type": "boolean",
-            "description": "The CI is part of more than 200 services, or the walk stopped at a bound of the impact analysis"
+            "description": "The CI is part of more than 200 services, services including it are nested deeper than\nBUSINESS_SERVICE_MAX_NESTING (the deeper ones are left out), or the walk stopped at a bound of the\nimpact analysis"
           },
           "visibility": {
             "type": "string",

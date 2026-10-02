@@ -237,6 +237,9 @@ pub(super) fn match_by_role(
             rename(&mut r.source_class, &classes);
             rename(&mut r.target_class, &classes);
         }
+        // Rules never applied to the member type and are refused on it now
+        // (GH#410); a file from before that carries one imports without it.
+        dm.relationship_rules.retain(|r| !role_of_type.contains_key(r.relationship_type.as_str()));
     }
     for p in file.permission_profiles.iter_mut().flatten() {
         for g in &mut p.class_permissions {
