@@ -539,7 +539,9 @@ pub struct ConfigurationItemService {
 pub struct ConfigurationItemServiceList {
     /// Direct first, then by nesting depth, then by name; at most 200
     pub data: Vec<ConfigurationItemService>,
-    /// The CI is part of more than 200 services, or the walk stopped at a bound of the impact analysis
+    /// The CI is part of more than 200 services, services including it are nested deeper than
+    /// BUSINESS_SERVICE_MAX_NESTING (the deeper ones are left out), or the walk stopped at a bound of the
+    /// impact analysis
     pub truncated: bool,
     #[schema(inline)]
     pub visibility: Visibility,

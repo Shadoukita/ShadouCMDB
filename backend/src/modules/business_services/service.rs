@@ -788,7 +788,11 @@ pub async fn part_of(
     let Some(walk) = traversal.walks.into_iter().next() else { return Ok(empty(&visible)) };
     let parent: HashMap<Uuid, Uuid> = walk.nodes.iter().map(|n| (n.id, n.via.parent_id)).collect();
     let mut nodes = walk.nodes;
-    let truncated = nodes.len() > MAX_PART_OF || walk.truncated.is_some_and(|t| t != engine::Truncation::MaxNodes);
+    // A chain deeper than the limit (made before GH#410 closed the other paths
+    // into membership) is listed up to the limit and reported as cut short.
+    let truncated = nodes.len() > MAX_PART_OF
+        || walk.more_beyond_depth
+        || walk.truncated.is_some_and(|t| t != engine::Truncation::MaxNodes);
     nodes.truncate(MAX_PART_OF);
     let ids: Vec<Uuid> = nodes.iter().map(|n| n.id).collect();
     bound(&mut tx, assembly).await?;
