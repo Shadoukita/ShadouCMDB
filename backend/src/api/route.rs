@@ -207,7 +207,7 @@ pub trait BodyInput: Sized + Send + 'static {
         body: RequestBody,
         limit: usize,
         _media: &'static [&'static str],
-        budget: Option<&crate::http::Capacity>,
+        budget: Option<crate::http::BodyHold>,
     ) -> impl Future<Output = Result<Self, AppError>> + Send {
         async move { Self::parse(read_body(headers, body, limit, budget).await?) }
     }
@@ -247,7 +247,7 @@ impl BodyInput for RawBody {
         limit: usize,
         media: &'static [&'static str],
         // Nothing is read here: the handler gets the stream.
-        _budget: Option<&crate::http::Capacity>,
+        _budget: Option<crate::http::BodyHold>,
     ) -> impl Future<Output = Result<Self, AppError>> + Send {
         let essence = headers
             .get(header::CONTENT_TYPE)
@@ -843,6 +843,7 @@ impl RouteBuilder {
                         user_agent: auth::session::user_agent(&headers).filter(|_| capture.user_agent),
                         net: auth::throttle::Net::of(trusted_ip),
                     };
+                    let net = client.net;
                     let used = auth::token::Use { method: &method, path: uri.path(), operation_id: &operation_id };
                     let rule = Rule { access, session_only, before_mfa_enrolment, safe_method };
                     // Authorise before reading the body: an anonymous caller must not make
@@ -861,7 +862,8 @@ impl RouteBuilder {
                             capacity.check_public()?;
                         }
                         let limit = capacity.public_body_timeout;
-                        let read = B::read(&headers, body, body_limit, body_media, Some(capacity));
+                        let hold = capacity.hold_public_body(net);
+                        let read = B::read(&headers, body, body_limit, body_media, Some(hold));
                         let body = tokio::time::timeout(limit, read).await.map_err(|_| {
                             AppError::new(
                                 ErrorCode::RequestTimeout,
@@ -1000,18 +1002,19 @@ pub const PUBLIC_BODY_LIMIT: usize = 64 * 1024;
 /// JSON is the only accepted body type. An empty body counts as no body
 /// (clients often send Content-Type: application/json on DELETE).
 ///
-/// With a `budget` (public routes), the bytes received so far count against
-/// the shared public body budget as soon as the read has to wait for more,
-/// until the body is parsed: 503 SERVER_BUSY once the budget is spent. Bytes
-/// are counted as received, not as declared, so a slow sender holds only what
-/// it has actually sent. A body that arrives without a wait (every sign-in
+/// With a `budget` (public routes), the bytes received so far, plus
+/// [`crate::http::WAITING_BODY_COST`], count against the shared public body
+/// budget and the client network's share of it as soon as the read has to wait
+/// for more, until the body is parsed: 503 SERVER_BUSY once either is spent.
+/// Bytes are counted as received, not as declared, so a slow sender holds only
+/// what it has actually sent. A body that arrives without a wait (every sign-in
 /// that is not deliberately slow) is never held and never counts, so slow
 /// senders that fill the budget cannot refuse it (PR #307 review).
 async fn read_body(
     headers: &HeaderMap,
     body: RequestBody,
     limit: usize,
-    budget: Option<&crate::http::Capacity>,
+    budget: Option<crate::http::BodyHold>,
 ) -> Result<Option<Value>, AppError> {
     let too_large = || AppError::new(ErrorCode::PayloadTooLarge, "Request body is too large");
     let declared =
@@ -1027,24 +1030,23 @@ async fn read_body(
             Err(e) if is_length_limit(&e) => return Err(too_large()),
             Err(e) => return Err(unreadable(&e)),
         },
-        Some(capacity) => {
+        Some(mut hold) => {
             use futures_util::FutureExt;
             use http_body_util::BodyExt;
-            let (mut body, mut buf, mut reserved) = (body, Vec::new(), None::<tokio::sync::OwnedSemaphorePermit>);
-            let mut charged = 0;
+            let (mut body, mut buf, mut charged) = (body, Vec::new(), None::<usize>);
             loop {
                 let frame = match body.frame().now_or_never() {
                     Some(frame) => frame,
-                    // Waiting for more: what is buffered so far is now held, so it counts.
+                    // Waiting for more: the connection and what is buffered so far are now held, so they count.
                     None => {
-                        if buf.len() > charged {
-                            let more = capacity.reserve_public_body(buf.len() - charged)?;
-                            charged = buf.len();
-                            match &mut reserved {
-                                Some(r) => r.merge(more),
-                                None => reserved = Some(more),
-                            }
+                        let more = match charged {
+                            None => crate::http::WAITING_BODY_COST + buf.len(),
+                            Some(n) => buf.len() - n,
+                        };
+                        if more > 0 {
+                            hold.add(more)?;
                         }
+                        charged = Some(buf.len());
                         body.frame().await
                     }
                 };
@@ -1055,7 +1057,7 @@ async fn read_body(
                 }
                 buf.extend_from_slice(&data);
             }
-            (axum::body::Bytes::from(buf), reserved)
+            (axum::body::Bytes::from(buf), Some(hold))
         }
     };
     if bytes.is_empty() {
@@ -1255,8 +1257,8 @@ mod tests {
         const SLOW: usize = PUBLIC * 4;
         const SENT: &[u8] = b"{\"username\":";
         // Exactly what the slow sign-ins hold: they spend the whole budget.
-        const BUDGET: usize = SLOW * SENT.len();
-        let capacity = Capacity::with_body_budget(1, PUBLIC, BUDGET, Duration::from_secs(3));
+        const BUDGET: usize = SLOW * (SENT.len() + crate::http::WAITING_BODY_COST);
+        let capacity = Capacity::with_body_budget(1, PUBLIC, BUDGET, BUDGET, Duration::from_secs(3));
         let app = app_with_capacity(db.pool.clone(), capacity.clone());
         let session = set_up_owner(&app).await;
         let (login, me) = ("/api/v1/auth/login", "/api/v1/auth/me");
@@ -1335,6 +1337,50 @@ mod tests {
         assert_eq!(send(&app, "POST", login, &Creds::default(), wrong, None).await.0, 401);
         drop(held);
         assert_eq!(send(&app, "GET", me, &session, Body::empty(), None).await.0, 200);
+
+        db.drop().await;
+    }
+
+    /// GH#343: a public body that has sent nothing held neither a permit nor any
+    /// budget, so nothing bounded how many could wait at once. Each now counts
+    /// against the body budget while it waits, and the extras are refused.
+    #[tokio::test]
+    async fn public_bodies_that_send_nothing_are_bounded_too() {
+        let Some(db) = scratch::database("public_bodies_that_send_nothing_are_bounded").await else { return };
+        const STALLED: usize = 4;
+        const BUDGET: usize = STALLED * crate::http::WAITING_BODY_COST;
+        let capacity = Capacity::with_body_budget(1, 2, BUDGET, BUDGET, Duration::from_secs(2));
+        let app = app_with_capacity(db.pool.clone(), capacity.clone());
+        set_up_owner(&app).await;
+        let login = "/api/v1/auth/login";
+        let stalled = || Body::from_stream(stream::pending::<Result<Bytes, std::convert::Infallible>>());
+
+        let started = Instant::now();
+        let waiting: Vec<_> = (0..STALLED)
+            .map(|_| {
+                let app = app.clone();
+                tokio::spawn(async move { send(&app, "POST", login, &Creds::default(), stalled(), Some(100)).await })
+            })
+            .collect();
+        while capacity.available_body_bytes() > 0 {
+            assert!(started.elapsed() < Duration::from_secs(5), "the stalled sign-ins were never counted");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        // More than the budget allows: refused at once, not left waiting.
+        let anonymous = Creds::default();
+        for _ in 0..STALLED {
+            let refused = send(&app, "POST", login, &anonymous, stalled(), Some(100));
+            let refused = tokio::time::timeout(Duration::from_millis(500), refused).await;
+            assert_eq!(refused.expect("a stalled body past the limit was left waiting"), (503, "SERVER_BUSY".into()));
+        }
+        // A sign-in that arrives in one go still gets through.
+        let good = json!({ "username": "owner", "password": "correct horse battery" }).to_string();
+        assert_eq!(send(&app, "POST", login, &Creds::default(), Body::from(good), None).await.0, 200);
+
+        for task in waiting {
+            assert_eq!(task.await.unwrap(), (408, "REQUEST_TIMEOUT".into()));
+        }
+        assert_eq!(capacity.available_body_bytes(), BUDGET, "the body budget was not given back");
 
         db.drop().await;
     }

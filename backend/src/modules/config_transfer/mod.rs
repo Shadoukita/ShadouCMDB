@@ -216,6 +216,8 @@ struct Snapshot {
     file: ConfigFile,
     ids: Ids,
     builtin_profile: String,
+    /// Which stored shared views the importer may see (SHAA-578 §3.2, GH#475/#476)
+    views_catalogue: saved_views::resolve::Catalogue,
 }
 
 async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
@@ -497,7 +499,8 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
         import_mappings: Some(mapping_specs),
         saved_views: Some(view_specs),
     };
-    Ok(Snapshot { file, ids, builtin_profile })
+    let views_catalogue = saved_views::resolve::Catalogue::load(conn).await?;
+    Ok(Snapshot { file, ids, builtin_profile, views_catalogue })
 }
 
 /// GH#186: the permission profiles section is only exported to callers who may
@@ -1050,6 +1053,28 @@ fn validate_mappings(
 /// Whether a shared view in the file refers to a class here that the caller
 /// may not view. Such a view is skipped, so an import never writes a view the
 /// importer could not save through the API (SHAA-578 §3.1).
+/// GH#475/#476: a stored shared view the importer cannot see (every one of its
+/// classes is hidden from them) is answered `404` by the API, so the import
+/// neither shows nor rewrites it: the file's view of that name is skipped.
+fn existing_view_hidden(
+    current: &[SavedViewSpec],
+    key: &(String, String),
+    cat: &saved_views::resolve::Catalogue,
+    viewer: &saved_views::resolve::Viewer,
+) -> bool {
+    current
+        .iter()
+        .find(|v| v.context.as_str() == key.0 && v.name.to_lowercase() == key.1)
+        .is_some_and(|v| !viewer.sees_shared(cat, &v.definition))
+}
+
+fn hidden_view_warning(path: String, name: &str) -> ImportWarning {
+    ImportWarning {
+        path,
+        message: format!("A shared view named \"{name}\" exists but is not available to you; this view was skipped"),
+    }
+}
+
 fn view_names_hidden_class(v: &SavedViewSpec, snap: &Snapshot, ctx: &RequestContext) -> bool {
     v.definition
         .class_keys
@@ -1101,6 +1126,8 @@ fn validate_views(
             m
         });
 
+    let viewer = saved_views::resolve::Viewer::of(ctx);
+    let stored = snap.file.saved_views.as_deref().unwrap_or_default();
     let mut seen = HashSet::new();
     let mut creates = 0i64;
     for (i, v) in views.iter().enumerate() {
@@ -1122,6 +1149,10 @@ fn validate_views(
                 path: p,
                 message: format!("The shared view \"{}\" refers to a class you cannot view and was skipped", v.name),
             });
+            continue;
+        }
+        if existing_view_hidden(stored, &merge_key, &snap.views_catalogue, &viewer) {
+            warnings.push(hidden_view_warning(p, &v.name));
             continue;
         }
         let d = &v.definition;
@@ -1325,7 +1356,7 @@ async fn run(
     }
     let file = &archive_superseded_fields(keep_current_settings(file, &snap.file), &snap.file, &mut warnings);
     let decoded = validate(file, &snap, ctx, legacy_problems, &mut warnings)?;
-    let Snapshot { file: current, ids, .. } = snap;
+    let Snapshot { file: current, ids, views_catalogue, .. } = snap;
     let cur_dm = current.data_model.unwrap_or_default();
     let cur_lk = current.lookups.unwrap_or_default();
     let cur_profiles = current.permission_profiles.unwrap_or_default();
@@ -1846,11 +1877,16 @@ async fn run(
             {
                 continue; // warned about in validate
             }
+            if existing_view_hidden(current.saved_views.as_deref().unwrap_or_default(), &key, &views_catalogue, &viewer)
+            {
+                continue; // warned about in validate
+            }
             let path = format!("savedViews.{i}");
             let label = format!("{}.{}", v.context.as_str(), v.name);
             let existing = im.ids.views.get(&key).copied();
             let fields = match old.get(&key) {
-                // The name keeps its current spelling; the class keys the importer may not view stay.
+                // The name keeps its current spelling; the class keys the importer may not view stay,
+                // and the diff shows only what the importer may see of either side (GH#475).
                 Some(before) => {
                     let definition = saved_views::resolve::merge_hidden(
                         &viewer,
@@ -1858,7 +1894,10 @@ async fn run(
                         &before.definition,
                         v.definition.clone(),
                     );
-                    diff(*before, &SavedViewSpec { name: before.name.clone(), definition, ..v.clone() })
+                    let seen = |d: &saved_views::definition::SavedViewDefinition| viewer.visible_part(&catalogue, d).0;
+                    let was = SavedViewSpec { definition: seen(&before.definition), ..(*before).clone() };
+                    let now = SavedViewSpec { name: before.name.clone(), definition: seen(&definition), ..v.clone() };
+                    diff(&was, &now)
                 }
                 None => Vec::new(),
             };

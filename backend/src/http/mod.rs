@@ -139,12 +139,16 @@ impl AppState {
 /// routes (setup, sign-in, OIDC, branding) draw from their own, smaller pool,
 /// and only once their body is in (GH#283): anyone can send one slowly, so a
 /// body in transit holds no permit. It must arrive within
-/// `HTTP_HEADER_READ_TIMEOUT_SECS`, and what has arrived counts against a
-/// shared budget of `HTTP_MAX_CONCURRENT_REQUESTS` × 64 KiB (at least 16 MiB)
-/// of body bytes once the read has to wait for more, so slow senders cost a
-/// connection each but never the permits of real sign-ins, and the memory they
-/// hold stays bounded. A body that arrives without a wait is never held and
-/// never counts, so a spent budget cannot refuse it. Anonymous
+/// `HTTP_HEADER_READ_TIMEOUT_SECS`, and once the read has to wait for more, it
+/// counts against a shared budget of `HTTP_MAX_CONCURRENT_REQUESTS` × 64 KiB
+/// (16 MiB to 256 MiB): what has arrived, plus [`WAITING_BODY_COST`] for the
+/// connection that waits. So slow senders cost a connection each but never the
+/// permits of real sign-ins, and both the memory and the number of bodies in
+/// transit stay bounded, even for bodies that send nothing (GH#343). One client
+/// network (`auth::throttle::Net`) holds at most a sixteenth of the budget
+/// (GH#342), so one host cannot spend it for everyone else. A body that arrives
+/// without a wait is never held and never counts, so a spent budget cannot
+/// refuse it. Anonymous
 /// callers can then only saturate the public routes, never the capacity
 /// signed-in users and API tokens need. Only the health routes (liveness,
 /// readiness, version; `RouteBuilder::unlimited`) take no permit, so a busy
@@ -155,6 +159,9 @@ pub struct Capacity {
     public: Arc<tokio::sync::Semaphore>,
     /// Bytes held by public request bodies waiting for the rest, one permit per byte.
     public_body_bytes: Arc<tokio::sync::Semaphore>,
+    /// The share of those bytes each client network holds, and the most one may hold.
+    public_body_by_net: Arc<std::sync::Mutex<std::collections::HashMap<crate::auth::throttle::Net, usize>>>,
+    public_body_per_net: usize,
     /// Time a public route may take to receive its body.
     pub public_body_timeout: Duration,
 }
@@ -162,6 +169,15 @@ pub struct Capacity {
 /// Floor of the public body budget, so a small HTTP_MAX_CONCURRENT_REQUESTS
 /// does not leave room for only a handful of bodies.
 const MIN_PUBLIC_BODY_BUDGET: usize = 16 * 1024 * 1024;
+/// Ceiling of the public body budget: HTTP_MAX_CONCURRENT_REQUESTS goes up to
+/// 1,000,000, which would otherwise let slow senders hold about 64 GiB (GH#342).
+const MAX_PUBLIC_BODY_BUDGET: usize = 256 * 1024 * 1024;
+/// The part of the public body budget one client network may hold.
+const PUBLIC_BODY_SHARES: usize = 16;
+/// What a public body that waits for more costs beyond its bytes: the
+/// connection, its task, timer and buffers. Charged even when nothing has
+/// arrived yet, so the budget also bounds how many bodies are in transit (GH#343).
+pub const WAITING_BODY_COST: usize = 4 * 1024;
 
 impl Capacity {
     /// `max` requests for authenticated routes, and `max / 8` (at least 16) for public ones.
@@ -170,17 +186,28 @@ impl Capacity {
     }
 
     pub fn with_sizes(global: usize, public: usize, public_body_timeout: Duration) -> Self {
-        let budget = global.saturating_mul(crate::api::route::PUBLIC_BODY_LIMIT).max(MIN_PUBLIC_BODY_BUDGET);
-        Capacity::with_body_budget(global, public, budget, public_body_timeout)
+        let budget = global
+            .saturating_mul(crate::api::route::PUBLIC_BODY_LIMIT)
+            .clamp(MIN_PUBLIC_BODY_BUDGET, MAX_PUBLIC_BODY_BUDGET);
+        let per_net = (budget / PUBLIC_BODY_SHARES).max(crate::api::route::PUBLIC_BODY_LIMIT + WAITING_BODY_COST);
+        Capacity::with_body_budget(global, public, budget, per_net, public_body_timeout)
     }
 
-    pub fn with_body_budget(global: usize, public: usize, body_bytes: usize, public_body_timeout: Duration) -> Self {
+    pub fn with_body_budget(
+        global: usize,
+        public: usize,
+        body_bytes: usize,
+        per_net: usize,
+        public_body_timeout: Duration,
+    ) -> Self {
         Capacity {
             global: Arc::new(tokio::sync::Semaphore::new(global)),
             public: Arc::new(tokio::sync::Semaphore::new(public)),
             public_body_bytes: Arc::new(tokio::sync::Semaphore::new(
                 body_bytes.min(tokio::sync::Semaphore::MAX_PERMITS),
             )),
+            public_body_by_net: Arc::default(),
+            public_body_per_net: per_net,
             public_body_timeout,
         }
     }
@@ -204,13 +231,9 @@ impl Capacity {
         Err(server_busy())
     }
 
-    /// Room for `bytes` more of a public request body, or 503 SERVER_BUSY.
-    pub fn reserve_public_body(&self, bytes: usize) -> Result<tokio::sync::OwnedSemaphorePermit, AppError> {
-        let n = u32::try_from(bytes).map_err(|_| server_busy())?;
-        self.public_body_bytes.clone().try_acquire_many_owned(n).map_err(|_| {
-            tracing::warn!("request refused: public request body budget reached");
-            server_busy()
-        })
+    /// What a public request body from `net` holds of the budget: nothing until [`BodyHold::add`].
+    pub fn hold_public_body(&self, net: crate::auth::throttle::Net) -> BodyHold {
+        BodyHold { capacity: self.clone(), net, permit: None, bytes: 0 }
     }
 
     #[cfg(test)]
@@ -221,6 +244,60 @@ impl Capacity {
     #[cfg(test)]
     pub fn available_body_bytes(&self) -> usize {
         self.public_body_bytes.available_permits()
+    }
+
+    #[cfg(test)]
+    pub fn held_body_bytes(&self, net: crate::auth::throttle::Net) -> usize {
+        self.public_body_by_net.lock().expect("not poisoned").get(&net).copied().unwrap_or(0)
+    }
+}
+
+/// Budget held by one public request body, given back when dropped.
+pub struct BodyHold {
+    capacity: Capacity,
+    net: crate::auth::throttle::Net,
+    permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    bytes: usize,
+}
+
+impl BodyHold {
+    /// Holds `bytes` more, or 503 SERVER_BUSY when the budget or this client network's share is spent.
+    pub fn add(&mut self, bytes: usize) -> Result<(), AppError> {
+        let n = u32::try_from(bytes).map_err(|_| server_busy())?;
+        let capacity = &self.capacity;
+        let mut by_net = capacity.public_body_by_net.lock().unwrap_or_else(|e| e.into_inner());
+        let held = by_net.get(&self.net).copied().unwrap_or(0);
+        if held.saturating_add(bytes) > capacity.public_body_per_net {
+            tracing::warn!("request refused: one client network's share of the public request body budget reached");
+            return Err(server_busy());
+        }
+        let more = capacity.public_body_bytes.clone().try_acquire_many_owned(n).map_err(|_| {
+            tracing::warn!("request refused: public request body budget reached");
+            server_busy()
+        })?;
+        by_net.insert(self.net, held + bytes);
+        drop(by_net);
+        match &mut self.permit {
+            Some(p) => p.merge(more),
+            None => self.permit = Some(more),
+        }
+        self.bytes += bytes;
+        Ok(())
+    }
+}
+
+impl Drop for BodyHold {
+    fn drop(&mut self) {
+        if self.bytes == 0 {
+            return;
+        }
+        let mut by_net = self.capacity.public_body_by_net.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(held) = by_net.get_mut(&self.net) {
+            *held -= self.bytes.min(*held);
+            if *held == 0 {
+                by_net.remove(&self.net);
+            }
+        }
     }
 }
 
@@ -664,6 +741,9 @@ pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'sta
     Ok(())
 }
 
+/// Requests one HTTP/2 connection may have open at once (RFC 9113 recommends no fewer than 100).
+const HTTP2_MAX_CONCURRENT_STREAMS: u32 = 100;
+
 /// Accepts connections until `shutdown`, then waits for open ones to finish
 /// their current request. axum::serve sets no timer on hyper, which leaves
 /// HTTP/1 header reads unbounded; this loop sets one.
@@ -681,9 +761,12 @@ async fn accept_loop(
 
     let mut builder = Builder::new(TokioExecutor::new());
     builder.http1().timer(TokioTimer::new()).header_read_timeout(http.header_read_timeout);
+    // Explicit rather than hyper's default: each stream of a public route may
+    // wait for its body, and that is what Capacity's body budget bounds (GH#343).
     builder
         .http2()
         .timer(TokioTimer::new())
+        .max_concurrent_streams(HTTP2_MAX_CONCURRENT_STREAMS)
         .enable_connect_protocol()
         .keep_alive_interval(Duration::from_secs(30))
         .keep_alive_timeout(Duration::from_secs(20));
@@ -1155,5 +1238,66 @@ mod tests {
         assert!(read.is_ok(), "connection still open after the header read timeout");
         let _ = tx.send(());
         server.await.unwrap();
+    }
+
+    /// GH#342: the public body budget grew with HTTP_MAX_CONCURRENT_REQUESTS
+    /// without a ceiling (about 64 GiB at the 1,000,000 the setting accepts).
+    #[test]
+    fn the_public_body_budget_has_a_floor_and_a_ceiling() {
+        const MIB: usize = 1024 * 1024;
+        let timeout = Duration::from_secs(10);
+        assert_eq!(Capacity::new(1, timeout).available_body_bytes(), 16 * MIB);
+        assert_eq!(Capacity::new(512, timeout).available_body_bytes(), 32 * MIB);
+        assert_eq!(Capacity::new(1_000_000, timeout).available_body_bytes(), 256 * MIB);
+    }
+
+    /// GH#342: one client network could hold the whole public body budget, so
+    /// sign-ins from everywhere else that had to wait for their body got 503.
+    #[test]
+    fn one_client_network_holds_at_most_its_share_of_the_public_body_budget() {
+        use crate::auth::throttle::Net;
+        let net = |ip: &str| Net::of(Some(ip.parse().unwrap()));
+        let capacity = Capacity::new(512, Duration::from_secs(10));
+        let (budget, share) = (32 * 1024 * 1024, 2 * 1024 * 1024);
+        let full = crate::api::route::PUBLIC_BODY_LIMIT;
+
+        // A /24 fills its share, whichever of its addresses the bodies come from.
+        let mut held = Vec::new();
+        for i in 0..share / full {
+            let mut hold = capacity.hold_public_body(net(&format!("203.0.113.{}", i % 250)));
+            hold.add(full).unwrap();
+            held.push(hold);
+        }
+        assert_eq!(capacity.held_body_bytes(net("203.0.113.1")), share);
+        let mut more = capacity.hold_public_body(net("203.0.113.7"));
+        assert_eq!(more.add(1).unwrap_err().code, ErrorCode::ServerBusy);
+        // A refusal holds nothing, and other networks still get their share.
+        assert_eq!(capacity.held_body_bytes(net("203.0.113.1")), share);
+        assert_eq!(capacity.available_body_bytes(), budget - share);
+        let mut other = capacity.hold_public_body(net("198.51.100.20"));
+        other.add(full).unwrap();
+        let mut v6 = capacity.hold_public_body(net("2001:db8::1"));
+        v6.add(full).unwrap();
+        assert_eq!(capacity.held_body_bytes(net("2001:db8::ffff")), full);
+
+        // Dropped holds give back both the budget and the network's share.
+        drop((held, more, other, v6));
+        assert_eq!(capacity.available_body_bytes(), budget);
+        assert_eq!(capacity.held_body_bytes(net("203.0.113.1")), 0);
+        assert!(
+            capacity.public_body_by_net.lock().unwrap().is_empty(),
+            "networks are forgotten once they hold nothing"
+        );
+
+        // The budget itself still bounds every network together.
+        let mut held = Vec::new();
+        for n in 0..PUBLIC_BODY_SHARES {
+            let mut hold = capacity.hold_public_body(net(&format!("10.0.{n}.1")));
+            hold.add(share).unwrap();
+            held.push(hold);
+        }
+        let mut late = capacity.hold_public_body(net("10.1.0.1"));
+        assert_eq!(late.add(1).unwrap_err().code, ErrorCode::ServerBusy);
+        assert_eq!(capacity.held_body_bytes(net("10.1.0.1")), 0, "a refusal for the budget holds no share");
     }
 }

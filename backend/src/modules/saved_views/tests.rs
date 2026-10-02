@@ -1046,3 +1046,50 @@ async fn shared_views_travel_with_the_configuration_file() {
     src_db.drop().await;
     dst_db.drop().await;
 }
+
+/// GH#475/#476: a restricted importer neither sees nor rewrites a shared view
+/// that the API answers 404 to them, and a diff of a view they do see never
+/// names a class they cannot view; on a dry run and on apply alike.
+#[tokio::test]
+async fn config_import_respects_what_the_importer_may_see() {
+    let Some((db, w)) = world("saved_views_config_hidden").await else { return };
+    let admin = w.admin.clone();
+    let mut hidden = view("inventory", "Hidden", "shared", json!({ "classKeys": ["database"] }));
+    hidden["description"] = json!("Secret notes");
+    let hidden = w.created(&admin, hidden).await;
+    let mixed =
+        w.created(&admin, view("inventory", "Mixed", "shared", json!({ "classKeys": ["server", "database"] }))).await;
+    let profile = w.profile("Importers", &["views.share", "config.export_import"], &["server"]).await;
+    let (dave, _) = w.user("dave", &[&profile]).await;
+    let file = json!({ "format": "shadoucmdb.config", "formatVersion": 6, "savedViews": [
+        { "context": "inventory", "name": "hidden", "description": "Mine now", "definition": { "classKeys": ["server"] } },
+        { "context": "inventory", "name": "Mixed", "description": "Changed", "definition": { "classKeys": ["server"], "columns": ["label"] } }
+    ] });
+    let before = (w.stored(hidden["id"].as_str().unwrap()).await, w.stored(mixed["id"].as_str().unwrap()).await);
+
+    for mode in ["dry_run", "apply"] {
+        let (status, v) =
+            w.call(&dave, "POST", &format!("/api/v1/admin/config/import?mode={mode}"), Some(file.clone())).await;
+        assert_eq!(status, 200, "{v}");
+        let body = v.to_string();
+        assert!(!body.contains("database") && !body.contains("Secret notes"), "{mode}: {body}");
+        let warned: Vec<&str> = v["warnings"].as_array().unwrap().iter().map(|w| w["path"].as_str().unwrap()).collect();
+        assert_eq!(warned, ["savedViews.0"], "{mode}: the hidden view is skipped with a warning");
+        let section = v["summary"].as_array().unwrap().iter().find(|s| s["section"] == "savedViews").unwrap();
+        assert_eq!((section["created"].as_i64(), section["updated"].as_i64()), (Some(0), Some(1)), "{mode}: {v}");
+    }
+
+    let hidden_row: (Option<String>, Value) =
+        sqlx::query_as("SELECT description, definition FROM saved_views WHERE id = $1::uuid")
+            .bind(hidden["id"].as_str().unwrap())
+            .fetch_one(&w.pool)
+            .await
+            .unwrap();
+    assert_eq!(hidden_row, (Some("Secret notes".to_owned()), before.0), "the hidden view is untouched");
+    let after = w.stored(mixed["id"].as_str().unwrap()).await;
+    assert_eq!(after["classKeys"], json!(["server", "database"]), "the hidden class stays in the visible view");
+    assert_eq!(after["columns"], json!(["label"]));
+    assert_ne!(after, before.1);
+
+    db.drop().await;
+}

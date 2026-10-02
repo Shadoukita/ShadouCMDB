@@ -585,9 +585,10 @@ pub mod scratch {
     /// A three-role install of a test's own: an API and a maintenance role
     /// (NOLOGIN) named for this test, which its databases name in
     /// `shadoucmdb.app_role` / `shadoucmdb.maintenance_role` as
-    /// [`super::RoleNames`] does. Unlike [`split_roles`] it never creates the
-    /// cluster-wide default `shadoucmdb_app`, which would make every other
-    /// test's restore switch to that role (`act_as_api_role`).
+    /// [`super::RoleNames`] does. Roles are cluster-wide, so no test creates
+    /// the default `shadoucmdb_app`: once it exists, every other test's
+    /// restore switches to it (`act_as_api_role`), and a database migrated
+    /// before then granted it nothing (GH#421).
     pub struct Roles {
         admin: PgConnectOptions,
         pub app: String,
@@ -635,27 +636,6 @@ pub mod scratch {
                 c.execute(sqlx::AssertSqlSafe(format!("DROP ROLE {role}"))).await.unwrap();
             }
         }
-    }
-
-    /// Roles are cluster-wide. Creates the API and maintenance roles the
-    /// migrations grant to (without LOGIN; tests use SET ROLE), so a scratch
-    /// database migrated afterwards has the three-role grants. Call it before
-    /// [`database`]; false when there is no test database.
-    pub async fn split_roles() -> bool {
-        let Ok(url) = std::env::var("SHADOUCMDB_TEST_DATABASE_URL") else { return false };
-        let opts = PgConnectOptions::from_str(&url).unwrap();
-        let mut c = opts.connect().await.unwrap();
-        for role in ["shadoucmdb_app", "shadoucmdb_maintenance"] {
-            c.execute(sqlx::AssertSqlSafe(format!(
-                // unique_violation: another test created it concurrently.
-                "DO $$ BEGIN CREATE ROLE {role} NOLOGIN;
-                 EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL; END $$"
-            )))
-            .await
-            .unwrap();
-        }
-        c.close().await.ok();
-        true
     }
 
     impl Scratch {
@@ -711,15 +691,8 @@ mod tests {
     #[tokio::test]
     async fn migrate_refuses_code_planted_in_the_api_roles_objects() {
         use sqlx::{Connection, Executor};
-        let Some(db) = super::scratch::empty("migrate_refuses_code_planted").await else { return };
-        db.pool
-            .execute(
-                "DO $$ BEGIN CREATE ROLE shadoucmdb_app NOLOGIN;
-                 EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL; END $$",
-            )
-            .await
-            .unwrap();
-        super::MIGRATOR.run(&db.pool).await.unwrap();
+        let Some(roles) = super::scratch::Roles::create("migrate_refuses_code_planted").await else { return };
+        let db = roles.database().await;
         let mut tx = db.pool.begin().await.unwrap();
         assert!(super::act_as_api_role(&mut tx).await.unwrap(), "three-role install");
         let ctx = crate::api::context::RequestContext::system("test", "test");
@@ -729,16 +702,18 @@ mod tests {
         tx.commit().await.unwrap();
         let mut c = db.pool.acquire().await.unwrap();
         let api_schemas: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM pg_namespace WHERE nspowner = (SELECT oid FROM pg_roles WHERE rolname = 'shadoucmdb_app')",
+            "SELECT count(*) FROM pg_namespace WHERE nspowner = (SELECT oid FROM pg_roles WHERE rolname = $1)",
         )
+        .bind(&roles.app)
         .fetch_one(&mut *c)
         .await
         .unwrap();
         assert!(api_schemas > 0, "the API role owns the area schemas");
         let enum_checks: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid
-             WHERE c.contype = 'c' AND t.relowner = (SELECT oid FROM pg_roles WHERE rolname = 'shadoucmdb_app')",
+             WHERE c.contype = 'c' AND t.relowner = (SELECT oid FROM pg_roles WHERE rolname = $1)",
         )
+        .bind(&roles.app)
         .fetch_one(&mut *c)
         .await
         .unwrap();
@@ -747,9 +722,10 @@ mod tests {
 
         let table: String = sqlx::query_scalar(
             "SELECT c.oid::regclass::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-             WHERE c.relkind = 'r' AND n.nspowner = (SELECT oid FROM pg_roles WHERE rolname = 'shadoucmdb_app')
+             WHERE c.relkind = 'r' AND n.nspowner = (SELECT oid FROM pg_roles WHERE rolname = $1)
              ORDER BY 1 LIMIT 1",
         )
+        .bind(&roles.app)
         .fetch_one(&mut *c)
         .await
         .unwrap();
@@ -764,7 +740,7 @@ mod tests {
             format!("ALTER TABLE {table} ENABLE ROW LEVEL SECURITY"),
             format!("CREATE POLICY planted ON {table} USING (true)"),
             "CREATE FUNCTION public.planted_owned() RETURNS int LANGUAGE sql AS 'SELECT 1'".to_owned(),
-            "ALTER FUNCTION public.planted_owned() OWNER TO shadoucmdb_app".to_owned(),
+            format!("ALTER FUNCTION public.planted_owned() OWNER TO {}", roles.app),
             // GH#464: expressions that run built-ins as whoever writes the row.
             format!(
                 "ALTER TABLE {table} ADD COLUMN planted_default text DEFAULT query_to_xml('SELECT 1', true, true, '')::text"
@@ -772,7 +748,7 @@ mod tests {
             format!("ALTER TABLE {table} ADD COLUMN planted_constant text DEFAULT 'harmless'"),
             format!("ALTER TABLE {table} ADD CONSTRAINT planted_check CHECK (set_config('a.b', 'c', true) <> '')"),
             "CREATE OPERATOR public.=== (FUNCTION = pg_catalog.pg_notify, LEFTARG = text, RIGHTARG = text)".to_owned(),
-            "ALTER OPERATOR public.=== (text, text) OWNER TO shadoucmdb_app".to_owned(),
+            format!("ALTER OPERATOR public.=== (text, text) OWNER TO {}", roles.app),
             format!("ALTER TABLE {table} ADD CONSTRAINT planted_operator CHECK ((id::text === 'x') IS NULL)"),
             format!("CREATE DOMAIN {schema}.planted_domain AS text DEFAULT now()::text CHECK (VALUE ~ 'x')"),
         ] {
@@ -781,7 +757,7 @@ mod tests {
         let err = super::refuse_planted_code(&mut tx).await.unwrap_err().to_string();
         tx.rollback().await.unwrap();
         for expected in [
-            "the API role \"shadoucmdb_app\"".to_owned(),
+            format!("the API role \"{}\"", roles.app),
             format!("  function {schema}.planted()"),
             "  function planted_owned()".to_owned(),
             format!("  trigger planted on {table}"),
@@ -819,6 +795,7 @@ mod tests {
         assert!(err.contains(&expected), "{expected:?} missing from: {err}");
         drop(c);
         db.drop().await;
+        roles.drop().await;
     }
 
     #[test]
