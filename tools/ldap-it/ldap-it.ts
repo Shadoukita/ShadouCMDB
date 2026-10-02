@@ -345,11 +345,12 @@ async function main(): Promise<void> {
     const r = await test('alice');
     check(r.ok === false && r.message === UNREACHABLE && r.details.length === 0 && r.user === null, `${what}: the test answers the generic unreachable text`, r);
     check(!LEAK.test(JSON.stringify(r)), `${what}: the test leaks no TLS or socket detail`, r);
-    for (const who of [ALICE, { username: 'nobody-else-in-the-directory', password: 'x-password' }]) {
-      const l = await login(who);
-      check(l.status === 503 && code(l) === 'IDENTITY_PROVIDER_UNAVAILABLE', `${what}: sign-in as ${who.username} is 503 IDENTITY_PROVIDER_UNAVAILABLE`, l.json);
-      check(!LEAK.test(JSON.stringify(l.json)), `${what}: the sign-in error leaks no TLS or socket detail`, l.json);
-    }
+    const l = await login(ALICE);
+    check(l.status === 503 && code(l) === 'IDENTITY_PROVIDER_UNAVAILABLE', `${what}: sign-in as alice is 503 IDENTITY_PROVIDER_UNAVAILABLE`, l.json);
+    check(!LEAK.test(JSON.stringify(l.json)), `${what}: the sign-in error leaks no TLS or socket detail`, l.json);
+    // GH#499: a name no account has gets the generic 401, so the outage does not tell local accounts apart.
+    const nobody = await login({ username: 'nobody-else-in-the-directory', password: 'x-password' });
+    check(nobody.status === 401 && code(nobody) === 'UNAUTHENTICATED', `${what}: sign-in as an unknown name is the generic 401`, nobody.json);
   };
   await untrusted('CA not trusted (another CA configured)', { caCertificate: OTHER_CA });
   await untrusted('CA not trusted (no CA configured)', { caCertificate: null });
