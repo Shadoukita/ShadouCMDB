@@ -2,12 +2,14 @@
 //! talks SQL lives under data/; services call these and never build HTTP
 //! responses, routes call services and never touch the database.
 
+use std::cell::RefCell;
+
 use serde_json::Value;
 use sqlx::postgres::PgRow;
 use sqlx::{AssertSqlSafe, FromRow, PgConnection, Postgres, QueryBuilder};
 use uuid::Uuid;
 
-use crate::api::context::RequestContext;
+use crate::api::context::{Actor, RequestContext};
 
 // ---------------------------------------------------------------------------
 // WHERE clauses shared by a page query and its count
@@ -392,7 +394,55 @@ pub async fn run_handler<F: std::future::Future>(csrf_free_read: Option<std::syn
     f.await
 }
 
-/// Append audit rows in the caller's transaction so a change and its audit commit together.
+/// Audit rows held back by `hold_audit`, in order, grouped by actor and request.
+type Held = Vec<(Actor, String, Vec<AuditEntry>)>;
+
+tokio::task_local! {
+    /// Inside `hold_audit` (`Some`) or `discard_audit` (`None`).
+    static HELD: RefCell<Option<Held>>;
+}
+
+/// Audit rows written while `hold_audit` ran; `write` inserts them.
+#[must_use = "held audit rows are lost unless written"]
+pub struct HeldAudit(Held);
+
+impl HeldAudit {
+    /// Inserts the held rows in the order they were written, in the caller's transaction.
+    pub async fn write(self, conn: &mut PgConnection) -> sqlx::Result<()> {
+        for (actor, request_id, entries) in self.0 {
+            insert_audit(conn, &actor, &request_id, entries).await?;
+        }
+        Ok(())
+    }
+}
+
+/// Runs `f` with every `write_audit` call held in memory instead of inserted,
+/// and returns the held rows for the caller to `write` just before commit.
+///
+/// Every audit insert locks the single audit chain head row until the
+/// transaction ends (migration 0040), so every other audited write, sign-ins
+/// included, waits behind it. A long transaction that audits as it goes (a
+/// configuration import) would hold that lock for its whole run; holding the
+/// rows back confines the lock to the final insert and the commit (GH#500).
+/// Not for work that rolls back to a savepoint and carries on: the rows
+/// written before the rollback would still be held.
+pub async fn hold_audit<T>(f: impl Future<Output = T>) -> (T, HeldAudit) {
+    HELD.scope(RefCell::new(Some(Vec::new())), async move {
+        let out = f.await;
+        let held = HELD.with(|h| h.take()).unwrap_or_default();
+        (out, HeldAudit(held))
+    })
+    .await
+}
+
+/// Runs `f` with every `write_audit` call dropped: for work whose transaction
+/// is always rolled back (a dry run), so it never takes the audit chain lock.
+pub async fn discard_audit<T>(f: impl Future<Output = T>) -> T {
+    HELD.scope(RefCell::new(None), f).await
+}
+
+/// Append audit rows in the caller's transaction so a change and its audit
+/// commit together (unless `hold_audit` or `discard_audit` is running).
 pub async fn write_audit(conn: &mut PgConnection, ctx: &RequestContext, entries: Vec<AuditEntry>) -> sqlx::Result<()> {
     #[cfg(debug_assertions)]
     if let (Ok(op), Some(p)) = (CSRF_FREE_READ.try_with(Clone::clone), ctx.principal())
@@ -400,6 +450,35 @@ pub async fn write_audit(conn: &mut PgConnection, ctx: &RequestContext, entries:
     {
         panic!("{op} is a GET without csrf_on_read() but writes an audit row for a session (GH#503)");
     }
+    let mut entries = Some(entries);
+    let deferred = HELD.try_with(|held| {
+        let entries = entries.take().unwrap_or_default();
+        if let Some(held) = held.borrow_mut().as_mut() {
+            match held.last_mut() {
+                Some((actor, request_id, last))
+                    if actor.actor_type == ctx.actor.actor_type
+                        && actor.id == ctx.actor.id
+                        && actor.name == ctx.actor.name
+                        && *request_id == ctx.request_id =>
+                {
+                    last.extend(entries)
+                }
+                _ => held.push((ctx.actor.clone(), ctx.request_id.clone(), entries)),
+            }
+        }
+    });
+    if deferred.is_ok() {
+        return Ok(());
+    }
+    insert_audit(conn, &ctx.actor, &ctx.request_id, entries.unwrap_or_default()).await
+}
+
+async fn insert_audit(
+    conn: &mut PgConnection,
+    actor: &Actor,
+    request_id: &str,
+    entries: Vec<AuditEntry>,
+) -> sqlx::Result<()> {
     let mut rest = entries;
     while !rest.is_empty() {
         let batch: Vec<AuditEntry> = rest.drain(..rest.len().min(AUDIT_BATCH)).collect();
@@ -421,10 +500,10 @@ pub async fn write_audit(conn: &mut PgConnection, ctx: &RequestContext, entries:
              FROM UNNEST($5::text[], $6::text[], $7::uuid[], $8::jsonb[], $9::jsonb[])
                   WITH ORDINALITY AS u(action, entity_type, entity_id, old_value, new_value, n)
              ORDER BY u.n",
-            ctx.actor.actor_type.as_str(),
-            ctx.actor.id,
-            ctx.actor.name,
-            ctx.request_id,
+            actor.actor_type.as_str(),
+            actor.id,
+            actor.name,
+            request_id,
             &actions as &[&str],
             &entity_types as &[&str],
             &entity_ids,
