@@ -889,7 +889,13 @@ pub(crate) async fn config_write(
             let me = user_id.unwrap_or_default();
             let before = fetch(conn, me, id, true).await?.ok_or_else(|| not_found(id))?;
             let cat = Catalogue::load(conn).await?;
-            let merged = merge_hidden(&Viewer::of(ctx), &cat, &before.definition()?, definition.clone());
+            let viewer = Viewer::of(ctx);
+            let stored = before.definition()?;
+            // A shared view the importer cannot see is not theirs to rewrite (GH#476).
+            if !viewer.sees_shared(&cat, &stored) {
+                return Err(not_found(id));
+            }
+            let merged = merge_hidden(&viewer, &cat, &stored, definition.clone());
             if merged.json_bytes() > super::definition::MAX_DEFINITION_BYTES {
                 return Err(too_large());
             }
