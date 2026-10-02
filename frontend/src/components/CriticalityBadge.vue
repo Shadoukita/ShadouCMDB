@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { criticalityTone, NOT_SET } from "../lib/impact";
+import { t } from "../i18n";
+import { criticalityNotSet } from "../lib/ciState";
+import { criticalityTone } from "../lib/impact";
 
 /**
  * A CI's criticality (the system lookup list `criticality`): always its text, never colour alone.
@@ -12,6 +14,6 @@ const text = computed(() => props.value?.label ?? props.value?.name ?? "");
 </script>
 
 <template>
-  <span v-if="value" :class="['badge', 'criticality', criticalityTone(value.rank)]" :title="`Criticality: ${text}`" dir="auto">{{ text }}</span>
-  <span v-else-if="showUnset" class="muted">{{ NOT_SET }}</span>
+  <span v-if="value" :class="['badge', 'criticality', criticalityTone(value.rank)]" :title="t('criticality.title', { name: text })" dir="auto">{{ text }}</span>
+  <span v-else-if="showUnset" class="muted">{{ criticalityNotSet() }}</span>
 </template>

@@ -8,6 +8,7 @@ import ConfirmDialog from "../../components/ConfirmDialog.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
 import LoadingState from "../../components/LoadingState.vue";
 import { t } from "../../i18n";
+import { canConfirmDelete, directParentCount, parentCheckState } from "../../lib/serviceDelete";
 import ServiceError from "./ServiceError.vue";
 
 /**
@@ -21,8 +22,9 @@ const qc = useQueryClient();
 const open = ref(false);
 const del = useDeleteCi();
 const parents = useServicesOfCi(() => props.service.id, open);
-/** The services that include this one directly: it is removed from them. */
-const parentCount = computed(() => (parents.data.value?.data ?? []).filter((s) => s.direct).length);
+const parentCount = computed(() => directParentCount(parents.data.value?.data));
+/** Confirm waits for the "included in N services" check: the operator sees that sentence first (GH#477). */
+const check = computed(() => parentCheckState({ isError: parents.isError.value, isSuccess: parents.isSuccess.value }));
 
 function cancel() {
   del.reset();
@@ -48,6 +50,7 @@ function confirm() {
     :cancel-label="t('common.cancel')"
     :busy-label="t('common.deleting')"
     :busy="del.isPending.value"
+    :confirm-disabled="!canConfirmDelete(check)"
     @cancel="cancel"
     @confirm="confirm"
   >
@@ -56,8 +59,8 @@ function confirm() {
       {{ t("services.delete.body", { n: service.memberCount }) }}
       <template v-if="service.visibility === 'restricted'">{{ t("services.delete.restricted") }}</template>
     </p>
-    <LoadingState v-if="parents.isLoading.value" :label="t('services.delete.checking')" />
-    <ServiceError v-else-if="parents.isError.value" :error="parents.error.value" :title="t('services.delete.checkFailed')" :on-retry="() => parents.refetch()" />
+    <ServiceError v-if="check === 'failed'" :error="parents.error.value" :title="t('services.delete.checkFailed')" :on-retry="() => parents.refetch()" />
+    <LoadingState v-else-if="check === 'pending'" :label="t('services.delete.checking')" />
     <p v-else-if="parentCount > 0">{{ t("services.delete.nested", { n: parentCount }) }}</p>
   </ConfirmDialog>
 </template>

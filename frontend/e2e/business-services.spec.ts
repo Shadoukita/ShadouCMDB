@@ -222,6 +222,36 @@ test("a service's CI URL redirects; its Impact tab defaults to Upstream and a li
   }
 });
 
+test("delete: Confirm waits for the included-in check, and a failed check offers Retry (GH#477)", async ({ page }) => {
+  const lookup = "**/api/v1/configuration-items/*/business-services*";
+  let release!: () => void;
+  const held = new Promise<void>((r) => (release = r));
+  let fail = false;
+  await page.route(lookup, async (route) => {
+    await held;
+    return fail
+      ? route.fulfill({ status: 503, json: { error: { code: "SERVER_BUSY", message: "busy", requestId: "req-busy" } } })
+      : route.fallback();
+  });
+  await page.goto(`/services/${ids.pay}`);
+  await page.getByRole("button", { name: "Delete" }).click();
+  const dialog = page.getByRole("dialog", { name: `Delete business service ${PAY}?` });
+  const confirm = dialog.getByRole("button", { name: "Delete business service" });
+  await expect(dialog).toContainText("Checking which services include it");
+  await expect(confirm).toBeDisabled();
+  fail = true;
+  release();
+  // The query client retries a 5xx twice with backoff before it reports the error.
+  await expect(dialog.getByText("The server is busy. Try again in a moment.")).toBeVisible({ timeout: 10_000 });
+  await expect(confirm).toBeDisabled();
+  fail = false;
+  await dialog.getByRole("button", { name: "Retry" }).click();
+  await expect(dialog).toContainText("It is also part of 1 other business service; it is removed from it.");
+  await expect(confirm).toBeEnabled();
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await page.unroute(lookup);
+});
+
 test("delete: the dialog names the memberships and the services it is nested in", async ({ page }, testInfo) => {
   await page.goto(`/services/${ids.pay}`);
   await page.getByRole("button", { name: "Delete" }).click();

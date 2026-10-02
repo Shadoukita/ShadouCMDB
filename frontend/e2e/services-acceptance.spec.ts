@@ -403,6 +403,10 @@ test("13: with the locale forced to German, the list, picker and dialogs are Ger
 
   await page.goto(`/services/${ids.shop}?tab=members`);
   await expect(page.getByRole("tab", { name: "Mitglieder (3)" })).toHaveAttribute("aria-selected", "true");
+  // The table cells too (GH#478): the state and criticality badges come from the catalog.
+  await expect(page.getByRole("cell", { name: "Aktiv", exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("cell", { name: "Active", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("cell", { name: "Not set", exact: true })).toHaveCount(0);
   await page.locator(".service-members-actions").getByRole("button", { name: "Mitglieder hinzufügen" }).click();
   const dialog = page.getByRole("dialog", { name: `Mitglieder zu ${SHOP} hinzufügen` });
   await dialog.getByLabel("Configuration Items suchen").fill(pg(5));

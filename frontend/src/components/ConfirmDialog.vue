@@ -11,6 +11,8 @@ const props = defineProps<{
   title: string;
   confirmLabel: string;
   busy?: boolean;
+  /** Keeps the confirm button disabled (not the cancel one), e.g. while the dialog still checks what it will delete. */
+  confirmDisabled?: boolean;
   cancelLabel?: string;
   busyLabel?: string;
   /** "primary" for a confirmation that destroys nothing (load the latest version). */
@@ -43,7 +45,7 @@ function onCancel(e: Event) {
       <div class="body"><slot /></div>
       <div class="footer">
         <button type="button" class="btn" :disabled="busy" autofocus @click="emit('cancel')">{{ cancelLabel ?? "Cancel" }}</button>
-        <button type="button" :class="['btn', tone === 'primary' ? 'btn-primary' : 'btn-danger']" :disabled="busy" @click="emit('confirm')">
+        <button type="button" :class="['btn', tone === 'primary' ? 'btn-primary' : 'btn-danger']" :disabled="busy || confirmDisabled" @click="emit('confirm')">
           {{ busy ? (busyLabel ?? "Working…") : confirmLabel }}
         </button>
       </div>
