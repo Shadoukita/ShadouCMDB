@@ -134,6 +134,14 @@ const message = (r: Res) => r.json?.error?.message ?? '';
 const field = (r: Res) => r.json?.error?.details?.[0]?.field;
 /** For failure output of the MFA routes: never the secret, recovery codes or session data. */
 const brief = (r: Res) => ({ status: r.status, error: code(r), field: field(r) });
+/** A refused sign-in must not tell a right password from a wrong one (GH#437). */
+const sameAnswer = (a: Res, b: Res) => a.status === b.status && JSON.stringify(a.json) === JSON.stringify(b.json);
+
+/** The `reason` of the newest `login.failure` row, if it is `username`'s. */
+async function lastFailureReason(admin: Identity, username: string): Promise<string | undefined> {
+  const last = (await ok(admin, 'GET', '/api/v1/audit-log?action=login.failure&limit=1')).data[0];
+  return last?.newValue?.attemptedUsername === username ? last.newValue.reason : undefined;
+}
 
 /** Runs tools/ldap-it/ldap.sh with the same environment. */
 function directory(command: string, stdin?: string): void {
@@ -258,11 +266,14 @@ async function main(): Promise<void> {
   check(denied.status === 403, 'and nothing more: /admin/users is 403 for her', denied.json);
 
   const bobLogin = await login(BOB);
+  const bobReason = await lastFailureReason(admin, 'bob');
+  const bobWrong = await login({ username: 'bob', password: 'not-his-password' });
   check(
-    bobLogin.status === 401 && code(bobLogin) === 'UNAUTHENTICATED' && /None of your groups/.test(message(bobLogin)),
-    'bob (only in an unmapped group) is refused: 401, no group gives access',
-    bobLogin.json,
+    bobLogin.status === 401 && code(bobLogin) === 'UNAUTHENTICATED' && sameAnswer(bobLogin, bobWrong),
+    'bob (only in an unmapped group) is refused: 401, the same answer as a wrong password',
+    { right: bobLogin.json, wrong: bobWrong.json },
   );
+  check(bobReason === 'not_authorised', 'the audit log keeps the reason: not_authorised', bobReason);
   const users = await ok(admin, 'GET', '/api/v1/admin/users?limit=100');
   check(!users.data.some((u: Json) => u.username === 'bob'), 'no account is created for bob', users.data.map((u: Json) => u.username));
 
@@ -489,11 +500,14 @@ member: uid=alice,ou=people,${SUFFIX}
   const stillOn = await ok(alice, 'GET', '/api/v1/auth/me');
   check(stillOn.mfa.totpEnabled === true, 'MFA is still on');
   const newcomer = await login(ALICE);
+  const newcomerReason = await lastFailureReason(admin, 'alice');
+  const newcomerWrong = await login({ username: 'alice', password: 'not-her-password' });
   check(
-    newcomer.status === 401 && /already exists/.test(message(newcomer)) && !cookieOf(newcomer, 'shadoucmdb_session'),
-    'signing in as the new "alice" is refused (account conflict), not linked to the old account',
-    newcomer.json,
+    newcomer.status === 401 && sameAnswer(newcomer, newcomerWrong) && !cookieOf(newcomer, 'shadoucmdb_session'),
+    'signing in as the new "alice" is refused, not linked to the old account: the same answer as a wrong password',
+    { right: newcomer.json, wrong: newcomerWrong.json },
   );
+  check(newcomerReason === 'account_conflict', 'the audit log keeps the reason: account_conflict', newcomerReason);
 }
 
 try {
