@@ -9,20 +9,18 @@ import { attributeKey, BUILTIN, DEFAULT_COLUMNS, listColumns, sortParam } from "
  * leaves out comes from the list's baseline, then from the built-in defaults:
  *
  *   1. the URL;
- *   2. (later) a saved view (`view=<id>`) or the user's default view;
+ *   2. a saved view (`view=<id>` alone) or the user's default view: written into
+ *      the URL in full (lib/useSavedViewSelection), so from then on it is step 1;
  *   3. the class's list view in UI settings (Administration › Customization);
  *   4. the built-in defaults below.
- *
- * Saved views plug in as another `ListBaseline` ahead of the list view's
- * (`resolveBaseline`), so the screens and the URL format stay as they are.
  */
 
 export type QueryContext = "inventory" | "search";
 
 /** URL parameters that make up a list's state (not the page: `offset`). Any of them means "the URL says". */
 export const STATE_KEYS = {
-  inventory: ["q", "classId", "lookupValueId", "criticalityValueId", "active", "deleted", "ipWithin", "sort", "limit", "columns"],
-  search: ["q", "classId", "lookupValueId", "criticalityValueId", "active", "deleted", "ipWithin", "limit"],
+  inventory: ["q", "classId", "includeSubclasses", "lookupValueId", "criticalityValueId", "active", "deleted", "ipWithin", "sort", "limit", "columns"],
+  search: ["q", "classId", "includeSubclasses", "lookupValueId", "criticalityValueId", "active", "deleted", "ipWithin", "limit"],
 } as const satisfies Record<QueryContext, readonly string[]>;
 
 /** Filters, which "Clear filters" removes (sort, page size and columns stay). */
@@ -54,7 +52,7 @@ export const BUILT_IN_BASELINE: ListBaseline = { source: "builtIn", columns: [..
 
 /**
  * The baseline for a list: the class's list view (Customization), else the built-in one.
- * A saved view's resolved state will come first here (§1.3 steps 2 and 3 of the saved-views spec).
+ * A saved view does not come in here: applying one writes all of its state into the URL.
  */
 export function resolveBaseline(listView: UiListView | undefined): ListBaseline {
   if (!listView) return BUILT_IN_BASELINE;
@@ -148,6 +146,7 @@ export function patchQuery(query: LocationQuery | LocationQueryRaw, patch: Recor
     else delete next[k];
   }
   if ("classId" in patch && param(query, "classId") !== (patch.classId ?? "")) {
+    if (!patch.classId) delete next.includeSubclasses;
     if (!("sort" in patch) && isAttributeSort(param(query, "sort"))) delete next.sort;
     if (!("columns" in patch) && param(query, "columns")) {
       const kept = parseColumns(param(query, "columns")).filter((f) => attributeKey(f) === null);

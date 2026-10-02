@@ -6,7 +6,16 @@ import { onMounted, ref, useId, watch } from "vue";
  * Rendered under <body> so a dialog opened from a table row does not inherit the cell's
  * nowrap/ellipsis/right-align or the row-actions sibling margin that pins it left (GH#279).
  */
-const props = defineProps<{ open: boolean; title: string; confirmLabel: string; busy?: boolean; cancelLabel?: string; busyLabel?: string }>();
+const props = defineProps<{
+  open: boolean;
+  title: string;
+  confirmLabel: string;
+  busy?: boolean;
+  cancelLabel?: string;
+  busyLabel?: string;
+  /** "primary" for a confirmation that destroys nothing (load the latest version). */
+  tone?: "danger" | "primary";
+}>();
 const emit = defineEmits<{ confirm: []; cancel: [] }>();
 const dialog = ref<HTMLDialogElement>();
 /** Unique per dialog: a page can hold several (disable, reset, delete…), each named by its own title. */
@@ -34,7 +43,7 @@ function onCancel(e: Event) {
       <div class="body"><slot /></div>
       <div class="footer">
         <button type="button" class="btn" :disabled="busy" autofocus @click="emit('cancel')">{{ cancelLabel ?? "Cancel" }}</button>
-        <button type="button" class="btn btn-danger" :disabled="busy" @click="emit('confirm')">
+        <button type="button" :class="['btn', tone === 'primary' ? 'btn-primary' : 'btn-danger']" :disabled="busy" @click="emit('confirm')">
           {{ busy ? (busyLabel ?? "Working…") : confirmLabel }}
         </button>
       </div>
