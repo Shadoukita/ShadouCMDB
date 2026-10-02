@@ -852,6 +852,17 @@ async fn resolution_follows_the_data_model_without_rewriting_the_view() {
     );
     assert!(v["resolved"]["query"].get("sort").is_none(), "the list sorts by label: {v}");
     assert_eq!(v["resolved"]["columns"], json!(["label"]));
+    // The messages name the attribute by its label, as operators know it (§1.5), not by its key.
+    let label: String = sqlx::query_scalar("SELECT label FROM ci_attribute_definitions WHERE id = $1")
+        .bind(hostname)
+        .fetch_one(&w.pool)
+        .await
+        .unwrap();
+    assert_eq!(v["resolved"]["issues"][1]["message"], format!("Column \"{label}\" no longer exists and is left out"));
+    assert_eq!(
+        v["resolved"]["issues"][0]["message"],
+        format!("Sort by \"{label}\" is no longer possible; the list sorts by label")
+    );
     w.call(&admin, "PATCH", &format!("/api/v1/attribute-definitions/{hostname}"), Some(json!({ "isActive": true })))
         .await;
 
@@ -865,6 +876,17 @@ async fn resolution_follows_the_data_model_without_rewriting_the_view() {
             Some("degraded"),
             vec![("definition.filters.lookups.environment.1".to_owned(), "unknown_lookup_value".to_owned())]
         )
+    );
+    let (list, value): (String, String) = sqlx::query_as(
+        "SELECT l.name, v.name FROM lookup_list_values v JOIN lookup_lists l ON l.id = v.list_id WHERE v.id = $1",
+    )
+    .bind(staging)
+    .fetch_one(&w.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        v["resolved"]["issues"][0]["message"],
+        format!("\"{value}\" is no longer an active value of lookup list \"{list}\" and is left out")
     );
     assert_eq!(
         v["resolved"]["query"]["lookupValueId"].as_str().unwrap(),

@@ -38,23 +38,28 @@ const ATTRIBUTE_PREFIX: &str = "attributes.";
 #[derive(Debug, Clone)]
 pub struct ClassInfo {
     pub id: Uuid,
+    pub name: String,
     pub is_active: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct AttributeInfo {
     pub id: Uuid,
+    pub label: String,
     pub data_type: AttributeDataType,
     pub is_active: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct ListInfo {
+    pub name: String,
     pub is_active: bool,
     /// The criticality list (`system_role`): filtered by `criticalityValueId`, not `lookupValueId`.
     pub criticality: bool,
     /// value key -> (id, is_active)
     pub values: HashMap<String, (Uuid, bool)>,
+    /// value key -> display name
+    pub value_names: HashMap<String, String>,
 }
 
 /// Classes, their effective attributes and the lookup lists, by key. Three
@@ -67,44 +72,50 @@ pub struct Catalogue {
     pub lists: HashMap<String, ListInfo>,
 }
 
-/// A lookup list (key, is_active, criticality) with one of its values (key, id, is_active), if any.
-type ListRow = (String, bool, bool, Option<String>, Option<Uuid>, Option<bool>);
+/// A lookup list (key, name, is_active, criticality) with one of its values (key, id, name, is_active), if any.
+type ListRow = (String, String, bool, bool, Option<String>, Option<Uuid>, Option<String>, Option<bool>);
 
 impl Catalogue {
     pub async fn load(conn: &mut PgConnection) -> sqlx::Result<Catalogue> {
         let mut cat = Catalogue::default();
-        let classes: Vec<(String, Uuid, bool)> =
-            sqlx::query_as("SELECT key, id, is_active FROM cmdb.ci_classes").fetch_all(&mut *conn).await?;
-        for (key, id, is_active) in classes {
-            cat.classes.insert(key, ClassInfo { id, is_active });
+        let classes: Vec<(String, Uuid, String, bool)> =
+            sqlx::query_as("SELECT key, id, name, is_active FROM cmdb.ci_classes").fetch_all(&mut *conn).await?;
+        for (key, id, name, is_active) in classes {
+            cat.classes.insert(key, ClassInfo { id, name, is_active });
         }
-        let attrs: Vec<(String, String, Uuid, AttributeDataType, bool)> = sqlx::query_as(
+        let attrs: Vec<(String, String, Uuid, String, AttributeDataType, bool)> = sqlx::query_as(
             "WITH RECURSIVE lineage (class_id, ancestor_id, depth) AS (
                SELECT id, id, 0 FROM cmdb.ci_classes
                UNION ALL
                SELECT l.class_id, c.parent_id, l.depth + 1 FROM lineage l JOIN cmdb.ci_classes c ON c.id = l.ancestor_id
                WHERE c.parent_id IS NOT NULL AND l.depth < 64
              )
-             SELECT c.key, a.key, a.id, a.data_type, a.is_active
+             SELECT c.key, a.key, a.id, a.label, a.data_type, a.is_active
              FROM lineage l
              JOIN cmdb.ci_classes c ON c.id = l.class_id
              JOIN cmdb.ci_attribute_definitions a ON a.class_id = l.ancestor_id",
         )
         .fetch_all(&mut *conn)
         .await?;
-        for (class, key, id, data_type, is_active) in attrs {
-            cat.attributes.entry(class).or_default().insert(key, AttributeInfo { id, data_type, is_active });
+        for (class, key, id, label, data_type, is_active) in attrs {
+            cat.attributes.entry(class).or_default().insert(key, AttributeInfo { id, label, data_type, is_active });
         }
         let lists: Vec<ListRow> = sqlx::query_as(
-            "SELECT l.key, l.is_active, l.system_role IS NOT DISTINCT FROM 'criticality', v.key, v.id, v.is_active
+            "SELECT l.key, l.name, l.is_active, l.system_role IS NOT DISTINCT FROM 'criticality', v.key, v.id, v.name, v.is_active
              FROM cmdb.lookup_lists l LEFT JOIN cmdb.lookup_list_values v ON v.list_id = l.id",
         )
         .fetch_all(&mut *conn)
         .await?;
-        for (list, is_active, criticality, value, id, value_active) in lists {
-            let entry =
-                cat.lists.entry(list).or_insert_with(|| ListInfo { is_active, criticality, values: HashMap::new() });
-            if let (Some(v), Some(id), Some(a)) = (value, id, value_active) {
+        for (list, name, is_active, criticality, value, id, value_name, value_active) in lists {
+            let entry = cat.lists.entry(list).or_insert_with(|| ListInfo {
+                name,
+                is_active,
+                criticality,
+                values: HashMap::new(),
+                value_names: HashMap::new(),
+            });
+            if let (Some(v), Some(id), Some(n), Some(a)) = (value, id, value_name, value_active) {
+                entry.value_names.insert(v.clone(), n);
                 entry.values.insert(v, (id, a));
             }
         }
@@ -113,14 +124,14 @@ impl Catalogue {
 
     /// An active attribute every one of `classes` has, the same one on each
     /// (an attribute of a common ancestor).
-    fn common_attribute(&self, classes: &[&str], key: &str) -> Result<AttributeInfo, AttributeProblem> {
-        let mut found: Option<AttributeInfo> = None;
+    fn common_attribute(&self, classes: &[&str], key: &str) -> Result<&AttributeInfo, AttributeProblem> {
+        let mut found: Option<&AttributeInfo> = None;
         for c in classes {
             let a = self.attributes.get(*c).and_then(|attrs| attrs.get(key)).filter(|a| a.is_active);
             match (a, found) {
                 (None, _) => return Err(AttributeProblem::Missing((*c).to_owned())),
                 (Some(a), Some(b)) if a.id != b.id => return Err(AttributeProblem::Ambiguous),
-                (Some(a), _) => found = Some(*a),
+                (Some(a), _) => found = Some(a),
             }
         }
         found.ok_or(AttributeProblem::NoClass)
@@ -130,6 +141,16 @@ impl Catalogue {
     /// (not necessarily the same one: each row shows its own class's value).
     fn column_ok(&self, classes: &[&str], key: &str) -> bool {
         matches!(self.common_attribute(classes, key), Ok(_) | Err(AttributeProblem::Ambiguous))
+    }
+
+    /// What an issue message calls a field: the label of the attribute on the
+    /// first of `classes` that has it (archived or not), else the field as stored.
+    /// Only the caller's visible classes are passed, so no hidden label is named.
+    fn field_label(&self, classes: &[&str], field: &str) -> String {
+        field
+            .strip_prefix(ATTRIBUTE_PREFIX)
+            .and_then(|key| classes.iter().find_map(|c| self.attributes.get(*c)?.get(key)))
+            .map_or_else(|| field.to_owned(), |a| a.label.clone())
     }
 }
 
@@ -439,7 +460,7 @@ pub fn resolve(
                     r.flag(
                         format!("definition.classKeys.{i}"),
                         SavedViewIssueCode::ClassArchived,
-                        format!("CI class \"{k}\" is archived"),
+                        format!("CI class \"{}\" is archived", c.name),
                     );
                 }
                 classes.push((k, c));
@@ -474,10 +495,11 @@ pub fn resolve(
     for (list, keys) in &stored.filters.lookups {
         let p = format!("definition.filters.lookups.{list}");
         let Some(l) = cat.lists.get(list).filter(|l| l.is_active) else {
+            let name = cat.lists.get(list).map_or(list.as_str(), |l| l.name.as_str());
             r.flag(
                 p,
                 SavedViewIssueCode::LookupFilterGone,
-                format!("Lookup list \"{list}\" no longer exists or is archived; the view is not applied"),
+                format!("Lookup list \"{name}\" no longer exists or is archived; the view is not applied"),
             );
             continue;
         };
@@ -488,7 +510,11 @@ pub fn resolve(
                 _ => r.flag(
                     format!("{p}.{i}"),
                     SavedViewIssueCode::UnknownLookupValue,
-                    format!("\"{v}\" is no longer an active value of lookup list \"{list}\" and is left out"),
+                    format!(
+                        "\"{}\" is no longer an active value of lookup list \"{}\" and is left out",
+                        l.value_names.get(v).unwrap_or(v),
+                        l.name
+                    ),
                 ),
             }
         }
@@ -496,7 +522,7 @@ pub fn resolve(
             r.flag(
                 p,
                 SavedViewIssueCode::LookupFilterGone,
-                format!("No value of the \"{list}\" filter is left; the view is not applied"),
+                format!("No value of the \"{}\" filter is left; the view is not applied", l.name),
             );
         }
         if l.criticality { criticality.extend(kept) } else { values.extend(kept) }
@@ -518,7 +544,10 @@ pub fn resolve(
                 r.flag(
                     "definition.sort.field".into(),
                     SavedViewIssueCode::UnknownAttribute,
-                    format!("Sort by \"{}\" is no longer possible; the list sorts by label", s.field),
+                    format!(
+                        "Sort by \"{}\" is no longer possible; the list sorts by label",
+                        cat.field_label(&class_keys, &s.field)
+                    ),
                 );
             }
         }
@@ -527,7 +556,7 @@ pub fn resolve(
                 Some(key) if !cat.column_ok(&class_keys, key) => r.flag(
                     format!("definition.columns.{i}"),
                     SavedViewIssueCode::UnknownAttribute,
-                    format!("Column \"{c}\" no longer exists and is left out"),
+                    format!("Column \"{}\" no longer exists and is left out", cat.field_label(&class_keys, c)),
                 ),
                 _ => columns.push(c.clone()),
             }
