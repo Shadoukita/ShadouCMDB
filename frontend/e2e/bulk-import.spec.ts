@@ -501,8 +501,10 @@ test("import off: another importer cannot open the job, and the owner's earlier 
     await expect(other.getByText("This import does not exist or belongs to another user.")).toBeVisible();
     await expect(other.getByRole("table", { name: "Row problems" })).toHaveCount(0);
     await expect(other.getByRole("button", { name: "Download error report" })).toHaveCount(0);
+    // These reads need the CSRF token (GH#503); without it they answer 403 before the ownership check.
+    const headers = { "X-CSRF-Token": await csrf(other.request) };
     for (const path of [`/imports/${id}`, `/imports/${id}/issues`, `/imports/${id}/error-report`]) {
-      expect((await other.request.get(`/api/v1${path}`)).status(), path).toBe(404);
+      expect((await other.request.get(`/api/v1${path}`, { headers })).status(), path).toBe(404);
     }
     await other.context().close();
 
