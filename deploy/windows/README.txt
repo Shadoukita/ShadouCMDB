@@ -127,7 +127,22 @@ Run in an elevated PowerShell, from the folder you extracted this archive to:
 The service starts automatically at boot and restarts 10 s after a failure. Logs
 (one JSON object per line) go to C:\ProgramData\ShadouCMDB\logs\shadoucmdb.log.
 
-To let other machines connect:
+The server speaks plain HTTP only. Sign-in passwords, session cookies and API
+tokens cross the network unencrypted unless a TLS front end terminates HTTPS
+for it. For anything beyond a quick evaluation:
+
+  1. Put a TLS reverse proxy in front (IIS with Application Request Routing,
+     nginx, HAProxy or your load balancer), forwarding to
+     http://127.0.0.1:3000/ and sending X-Forwarded-Proto so session cookies
+     are marked Secure.
+  2. When the proxy runs on this machine, set API_HOST=127.0.0.1 in
+     shadoucmdb.env and open no firewall port for 3000; open only the proxy's
+     443. When it runs elsewhere, allow port 3000 from the proxy's address
+     only (-RemoteAddress <proxy address> on the rule below).
+  3. Add the proxy's address to TRUSTED_PROXIES and set PUBLIC_URL to the
+     https:// address users open.
+
+To let other machines connect directly (evaluation only, unencrypted):
 
   New-NetFirewallRule -DisplayName ShadouCMDB -Direction Inbound -Protocol TCP -LocalPort 3000 -Action Allow
 
