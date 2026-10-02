@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, RwLock};
 
 use regex::Regex;
+use regex_automata::nfa::thompson::WhichCaptures;
 use regex_automata::util::syntax;
 use regex_automata::{Input, MatchKind, meta};
 use serde_json::{Map, Value};
@@ -70,10 +71,14 @@ pub enum PatternError {
 }
 
 fn regex_config() -> meta::Config {
-    // The same engine settings as `regex::Regex`, with our limits.
+    // The same engine settings as `regex::Regex`, with our limits. Validation
+    // only asks match or no match, so no capture slots are built: with many
+    // groups the slow engine's slot table grew to tens of MiB per match
+    // (GH#430). `WhichCaptures::None` would make every search miss.
     meta::Config::new()
         .match_kind(MatchKind::LeftmostFirst)
         .utf8_empty(true)
+        .which_captures(WhichCaptures::Implicit)
         .nfa_size_limit(Some(PATTERN_SIZE_LIMIT))
         .hybrid_cache_capacity(MATCH_DFA_LIMIT)
 }
@@ -877,6 +882,13 @@ mod tests {
         for value in ["ä".repeat(4000), "aé1".repeat(1400)] {
             re.search_half_with(&mut cache, &Input::new(&value).earliest(true));
         }
+        assert!(cache.memory_usage() < 1 << 20, "{}", cache.memory_usage());
+        // Capture groups do not grow the matching cache (27 MiB with slots).
+        let re = compile_pattern(&format!("(?:{}){{80}}", "(a)".repeat(60))).unwrap();
+        assert!(matches!(config.get_which_captures(), WhichCaptures::Implicit));
+        let mut cache = re.create_cache();
+        let value = "a".repeat(10_000);
+        assert!(re.search_half_with(&mut cache, &Input::new(&value).earliest(true)).is_some());
         assert!(cache.memory_usage() < 1 << 20, "{}", cache.memory_usage());
         let c = REGEX_CACHE.read().unwrap();
         assert_eq!(c.weight, c.entries.iter().map(|(p, re)| RegexCache::weight_of(p, re.as_ref())).sum::<usize>());
