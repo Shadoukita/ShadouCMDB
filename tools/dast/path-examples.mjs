@@ -52,7 +52,7 @@ export const CREATED = ["admin/profiles", "admin/groups", "admin/users", "admin/
  * install, so they cannot be given a row.
  */
 export const LEGACY = ["statuses", "environments", "locations", "owners"];
-export const OPTIONAL = ["schema-changes", ...LEGACY, "ui-settings/versions", "admin/templates"];
+export const OPTIONAL = ["schema-changes", ...LEGACY, "ui-settings/versions", "admin/templates", "ui-settings/class-layouts"];
 
 /** Paths whose parameter names an object of another resource. */
 export const ALIASES = {
@@ -141,6 +141,8 @@ async function collect(request) {
   const version = (await request("GET", "ui-settings/versions?limit=1")).data[0]?.version;
   examples["ui-settings/versions"] = version ?? 1;
   examples["admin/templates"] = (await request("GET", "admin/templates")).data[0]?.key ?? "it_infrastructure";
+  // PUT /ui-settings/class-layouts/{key}: a class key, not an id.
+  examples["ui-settings/class-layouts"] = (await request("GET", "ci-classes?limit=1")).data[0]?.key ?? "server";
 
   const name = "DAST scan target";
   examples["admin/profiles"] = (await request("POST", "admin/profiles", { name })).id;

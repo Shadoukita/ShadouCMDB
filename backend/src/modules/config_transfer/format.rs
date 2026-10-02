@@ -39,8 +39,9 @@ pub const FORMAT: &str = "shadoucmdb.config";
 /// impact direction of relationship types, the system role of lookup lists
 /// (the criticality list) and saved import mappings, version 5 the system role
 /// of classes and relationship types (business services) and of class grants,
-/// version 6 shared saved views; versions 1 to 5 are still read.
-pub const FORMAT_VERSION: i32 = 6;
+/// version 6 shared saved views, version 7 layout templates in the UI settings (`layoutTemplates`, and
+/// `layouts[].templateKey`); versions 1 to 6 are still read (their class layouts become templates).
+pub const FORMAT_VERSION: i32 = 7;
 
 fn yes() -> bool {
     true
@@ -621,8 +622,8 @@ fn exported_at_schema() -> Schema {
 pub struct ConfigFile {
     #[schema(schema_with = format_schema)]
     pub format: String,
-    /// File format version; this server writes version 6 and reads 1 to 6
-    #[schema(minimum = 1, maximum = 6)]
+    /// File format version; this server writes version 7 and reads 1 to 7
+    #[schema(minimum = 1, maximum = 7)]
     pub format_version: i32,
     /// When and by which server version the file was written (informational)
     #[schema(schema_with = exported_at_schema)]

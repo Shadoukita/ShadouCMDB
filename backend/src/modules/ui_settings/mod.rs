@@ -10,6 +10,11 @@ pub mod assets;
 pub mod document;
 #[cfg(test)]
 mod grid_tests;
+pub mod layouts;
+#[cfg(test)]
+mod template_tests;
+
+use std::collections::HashSet;
 
 use axum::extract::RawPathParams;
 use axum::http::{HeaderName, HeaderValue, Method, StatusCode, header};
@@ -25,8 +30,8 @@ use utoipa::openapi::schema::{ObjectBuilder, Schema, Type};
 use utoipa::{IntoParams, ToSchema};
 
 use self::assets::{AssetKind, ImageType};
-use self::document::{Issue, UiSettingsDocument, UiTheme};
-use crate::api::context::{ActorType, RequestContext};
+use self::document::{Issue, UiLayoutTemplate, UiSettingsDocument, UiTheme};
+use crate::api::context::{ActorType, Count, RequestContext};
 use crate::api::route::{
     Binary, Body, Check, Either, In, Json, NoBody, NoContent, NoPath, NoQuery, PathInput, Query, Route, StatusOnly,
     WithHeaders, route,
@@ -309,7 +314,7 @@ pub fn parse_stored(v: &Value) -> UiSettingsDocument {
 async fn load(conn: &mut PgConnection) -> Result<UiSettings, AppError> {
     let row = data::current(conn, false).await?;
     let model = data::model(conn).await?;
-    let (settings, issues) = document::resolve(&parse_stored(&row.settings), &model);
+    let (settings, issues) = document::resolve(&parse_stored(&row.settings).returned(), &model);
     Ok(UiSettings {
         version: row.version,
         updated_at: row.updated_at,
@@ -334,15 +339,92 @@ fn version_conflict(current: i32, by: Option<&str>) -> AppError {
     )
 }
 
+/// What happens to templates the new document leaves out while a class or a live CI still uses them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InUse {
+    /// 409 CONFLICT naming the users (PUT: the administrator removed them)
+    Refuse,
+    /// Kept (restore of an older version, import of a configuration file: CIs keep their layout)
+    Keep,
+}
+
+fn and_list(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+/// Templates of `previous` that `doc` leaves out but a class layout of `doc` or a live CI uses: kept in
+/// `doc` or refused, see [`InUse`].
+async fn check_removed_templates(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    previous: &UiSettingsDocument,
+    doc: &mut UiSettingsDocument,
+    in_use: InUse,
+) -> Result<(), AppError> {
+    let sent: HashSet<String> = doc.layout_templates.iter().map(|t| t.key.clone()).collect();
+    let removed: Vec<&UiLayoutTemplate> = previous
+        .layout_templates
+        .iter()
+        .filter(|t| t.key != document::STANDARD_TEMPLATE && !sent.contains(&t.key))
+        .collect();
+    if removed.is_empty() {
+        return Ok(());
+    }
+    let cis = data::template_use(conn).await?;
+    let mut details = Vec::new();
+    for t in removed {
+        let classes: Vec<String> = doc
+            .layouts
+            .iter()
+            .filter(|l| l.template_key.as_deref() == Some(t.key.as_str()))
+            .map(|l| format!("class {}", l.class_key))
+            .collect();
+        let mut users = classes;
+        if let Some((n, class_ids)) = cis.get(&t.key) {
+            users.push(match Count::scoped(ctx, class_ids, *n) {
+                Count::Exact(1) => "1 configuration item".into(),
+                Count::Exact(n) => format!("{n} configuration items"),
+                Count::Withheld => "configuration items".into(),
+            });
+        }
+        if users.is_empty() {
+            continue;
+        }
+        match in_use {
+            InUse::Keep => doc.layout_templates.push(t.clone()),
+            InUse::Refuse => details.push(FieldError {
+                location: FieldLocation::Body,
+                field: "settings.layoutTemplates".into(),
+                message: format!("Template \"{}\" ({}) is used by {}", t.name, t.key, and_list(&users)),
+                code: "in_use".into(),
+            }),
+        }
+    }
+    if details.is_empty() {
+        return Ok(());
+    }
+    Err(AppError::conflict(
+        "Layout templates that classes or configuration items still use cannot be removed: give those classes \
+         another default template and reset or change the CIs' layouts first (see details)",
+    )
+    .with_details(details))
+}
+
 /// Saves `doc` as a new version in the caller's transaction, with its audit
-/// row. A document equal to the current one is not saved again. Returns
-/// whether a version was written.
+/// row: normalised, with class layouts made into templates (see
+/// [`document::contract`]). A document equal to the current one is not saved
+/// again. Returns whether a version was written.
 pub async fn save_in(
     conn: &mut PgConnection,
     ctx: &RequestContext,
     expected: Option<i32>,
     doc: &UiSettingsDocument,
     comment: Option<&str>,
+    in_use: InUse,
 ) -> Result<bool, AppError> {
     let current = data::current(conn, true).await?;
     if let Some(v) = expected
@@ -350,9 +432,16 @@ pub async fn save_in(
     {
         return Err(version_conflict(current.version, current.updated_by_name.as_deref()));
     }
-    let doc = doc.clone().normalized();
-    let new_value = serde_json::to_value(&doc).map_err(|_| AppError::internal())?;
     let old_doc = parse_stored(&current.settings);
+    let mut doc = doc.clone().normalized();
+    check_removed_templates(conn, ctx, &old_doc, &mut doc, in_use).await?;
+    let model = data::model(conn).await?;
+    let doc = document::contract(doc, &old_doc.layout_templates, &model.class_names).map_err(AppError::validation)?;
+    let problems = doc.problems("settings.");
+    if !problems.is_empty() {
+        return Err(AppError::validation(problems));
+    }
+    let new_value = serde_json::to_value(&doc).map_err(|_| AppError::internal())?;
     if old_doc == doc {
         return Ok(false);
     }
@@ -370,7 +459,7 @@ pub async fn save_in(
 
 pub async fn update(pool: &PgPool, ctx: &RequestContext, body: &UiSettingsUpdate) -> Result<UiSettings, AppError> {
     let mut tx = pool.begin().await?;
-    save_in(&mut tx, ctx, Some(body.version), &body.settings, body.comment.as_deref()).await?;
+    save_in(&mut tx, ctx, Some(body.version), &body.settings, body.comment.as_deref(), InUse::Refuse).await?;
     let out = load(&mut tx).await?;
     tx.commit().await?;
     Ok(out)
@@ -393,7 +482,7 @@ pub async fn restore(
     })?;
     let comment = body.comment.clone().unwrap_or_else(|| format!("Restored version {version}"));
     let mut tx = pool.begin().await?;
-    save_in(&mut tx, ctx, Some(body.version), &doc, Some(&comment)).await?;
+    save_in(&mut tx, ctx, Some(body.version), &doc, Some(&comment), InUse::Keep).await?;
     let out = load(&mut tx).await?;
     tx.commit().await?;
     Ok(out)
@@ -435,7 +524,7 @@ pub async fn get_version(pool: &PgPool, version: i32) -> Result<UiSettingsVersio
         actor_name: row.actor_name,
         comment: row.comment,
         is_current: row.version == current,
-        settings: parse_stored(&row.settings),
+        settings: parse_stored(&row.settings).returned(),
     })
 }
 

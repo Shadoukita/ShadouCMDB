@@ -67,6 +67,8 @@ pub enum EntityType {
     SavedViews,
     /// Configuration file downloads (`export`; entity id is the nil UUID)
     Config,
+    /// A CI's own detail page layout (entity id: the CI's id): create, update, delete
+    CiLayoutOverrides,
 }
 
 impl EntityType {
@@ -100,6 +102,7 @@ impl EntityType {
             EntityType::UserGroups => "user_groups",
             EntityType::SavedViews => "saved_views",
             EntityType::Config => "config",
+            EntityType::CiLayoutOverrides => "ci_layout_overrides",
         }
     }
 }
@@ -341,6 +344,13 @@ fn push_visible(qb: &mut QueryBuilder<Postgres>, visible: &[Uuid]) {
         qb.push("))");
     }
     qb.push("))");
+    // A CI's own layout: only with the CI (SHAA-1472).
+    qb.push(
+        " AND (entity_type <> 'ci_layout_overrides' \
+         OR entity_id IN (SELECT id FROM cmdb.configuration_items WHERE class_id = ANY(",
+    )
+    .push_bind(visible.to_vec())
+    .push(")))");
     // Import jobs and saved mappings name their class by key (T21).
     qb.push(
         " AND (entity_type NOT IN ('import_jobs', 'import_mappings') \
@@ -402,6 +412,9 @@ fn referenced_cis(rows: &[AuditEntry]) -> Vec<Uuid> {
             }
             "ci_relationships" => {
                 ids.extend(values(e).flat_map(|v| [uuid_at(v, "sourceCiId"), uuid_at(v, "targetCiId")]).flatten());
+            }
+            "ci_layout_overrides" => {
+                ids.insert(e.entity_id);
             }
             _ => {}
         }
@@ -509,6 +522,7 @@ fn redact(
             "ci_relationships" => values(e).all(|v| {
                 [uuid_at(v, "sourceCiId"), uuid_at(v, "targetCiId")].into_iter().all(|id| id.is_some_and(can_view))
             }),
+            "ci_layout_overrides" => can_view(e.entity_id),
             // Without its record there is no telling what the counts describe.
             "schema_changes" => match changes.get(&e.entity_id) {
                 Some(change) => {

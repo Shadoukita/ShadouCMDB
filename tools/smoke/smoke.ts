@@ -693,7 +693,7 @@ async function main() {
   await get('/api/v1/search', 400);
 
   await permissions({ serverClass, appClass, dbClass, server, app, database, r1, inService, adminMe });
-  await customization({ serverClass, adminMe });
+  await customization({ serverClass, server, adminMe });
   await savedViews({ serverClass });
   await realTables({ inService, infra, adminMe });
 
@@ -1619,7 +1619,7 @@ const fields = (r: { json: Json }) => (r.json?.error?.details ?? []).map((d: Jso
 
 /** UI settings (versioned, audited), logo and favicon, configuration export and import. */
 async function customization(x: Json) {
-  const { serverClass, adminMe } = x;
+  const { serverClass, server, adminMe } = x;
   const put = (url: string, body: unknown, expect = 200) => call('PUT', url, body, expect);
 
   console.log('\n# UI settings');
@@ -1671,6 +1671,30 @@ async function customization(x: Json) {
   const trail = (await get('/api/v1/audit-log?entityType=ui_settings&limit=1')).json;
   check(trail.data[0]?.newValue?.version === saved.version && trail.data[0].oldValue?.version === firstVersion && trail.data[0].actorId === adminMe.user.id, 'settings changes are audited with both versions');
 
+  console.log('\n# Layout templates');
+  const usage = (await get('/api/v1/ui-settings/layout-templates/usage')).json;
+  const serverTemplate: string = usage.classes.find((c: Json) => c.classKey === serverKey)?.templateKey;
+  check(usage.templates.some((t: Json) => t.key === 'standard') && usage.templates.find((t: Json) => t.key === serverTemplate)?.classKeys.includes(serverKey), 'every class has a default template, and the usage lists it');
+  const ciLayout = `/api/v1/configuration-items/${server.id}/layout`;
+  const shown = (await get(ciLayout)).json;
+  check(shown.source === 'class_default' && shown.templateKey === serverTemplate && shown.version === null, 'a CI shows its class\'s default template');
+  await put(ciLayout, {}, 400);
+  await put(ciLayout, { templateKey: `no_such_${RUN}` }, 400);
+  const own = (await put(ciLayout, { templateKey: 'standard' })).json;
+  check(own.source === 'template' && own.templateKey === 'standard' && own.version === 1, 'a CI can show another template');
+  await put(ciLayout, { templateKey: 'standard', version: own.version + 1 }, 409);
+  const custom = (await put(ciLayout, { layout: { tabs: [] }, version: own.version })).json;
+  check(custom.source === 'custom' && custom.templateKey === null && custom.version === 2, 'a CI can have a layout of its own');
+  check((await get('/api/v1/ui-settings/layout-templates/usage')).json.templates.find((t: Json) => t.key === 'standard').overrideCount === 0, 'a custom layout uses no template');
+  await del(ciLayout);
+  await del(ciLayout); // resetting twice is fine
+  check((await get(ciLayout)).json.source === 'class_default', 'DELETE resets the CI to its class\'s default');
+  await put(`/api/v1/ui-settings/class-layouts/no_such_class_${RUN}`, { templateKey: 'standard' }, 404);
+  await put(`/api/v1/ui-settings/class-layouts/${serverKey}`, { templateKey: `no_such_${RUN}` }, 400);
+  const byDefault = (await put(`/api/v1/ui-settings/class-layouts/${serverKey}`, { templateKey: 'standard' })).json;
+  check(byDefault.settings.layouts.find((l: Json) => l.classKey === serverKey)?.templateKey === 'standard', 'a class\'s default template can be changed');
+  await put(`/api/v1/ui-settings/class-layouts/${serverKey}`, { templateKey: serverTemplate, version: byDefault.version });
+
   console.log('\n# Logo and favicon');
   const originals: Record<string, Json> = {};
   for (const kind of ['logo', 'favicon']) {
@@ -1710,7 +1734,7 @@ async function customization(x: Json) {
   const file = exported.json;
   const raw = JSON.stringify(file);
   check(/^attachment; filename="shadoucmdb-config-/.test(exported.headers.get('content-disposition') ?? ''), 'the export downloads as a file');
-  check(file.format === 'shadoucmdb.config' && file.formatVersion === 6 && Array.isArray(file.importMappings) && Array.isArray(file.savedViews) && file.dataModel.areas.some((a: Json) => a.key === 'infrastruktur') && !('users' in file) && !raw.includes('argon2') && !raw.includes('"username"') && !raw.includes('password'), 'the export has no users or password hashes');
+  check(file.format === 'shadoucmdb.config' && file.formatVersion === 7 && Array.isArray(file.importMappings) && Array.isArray(file.savedViews) && file.dataModel.areas.some((a: Json) => a.key === 'infrastruktur') && !('users' in file) && !raw.includes('argon2') && !raw.includes('"username"') && !raw.includes('password'), 'the export has no users or password hashes');
   check(file.permissionProfiles.every((p: Json) => p.name !== 'Administrator') && file.uiSettings.logo?.data === PNG_1X1, 'the export has editable profiles and the images');
   check(file.dataModel.attributes.every((a: Json) => typeof a.class === 'string' && !('classId' in a)), 'the export refers to classes by key');
   const noop = (await post('/api/v1/admin/config/import?mode=dry_run', file, 200)).json;
@@ -1759,7 +1783,7 @@ async function customization(x: Json) {
   attr.dataType = 'text';
   const immutable = await post('/api/v1/admin/config/import?mode=dry_run', retyped, 400);
   check(immutable.json.error?.details?.some((d: Json) => d.code === 'immutable'), 'the data type of an existing attribute cannot change');
-  await post('/api/v1/admin/config/import?mode=apply', { format: 'shadoucmdb.config', formatVersion: 7 }, 400);
+  await post('/api/v1/admin/config/import?mode=apply', { format: 'shadoucmdb.config', formatVersion: 8 }, 400);
   // Format 4: saved import mappings, merged by class key and name (SHAA-714 §6.2).
   const cfgMapping = { name: `Smoke config ${RUN}`, classKey: 'server', definition: { mode: 'create_only', columns: [{ header: 'Hostname', target: { kind: 'attribute', key: 'hostname' } }, { header: 'Notes', target: { kind: 'ignore' } }] } };
   const mappingFile = { format: 'shadoucmdb.config', formatVersion: 4, importMappings: [cfgMapping] };

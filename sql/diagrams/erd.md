@@ -14,7 +14,8 @@ Generated from [`../migrations/0001_core_schema.sql`](../migrations/0001_core_sc
 [`../migrations/0018_audit_hash_chain.sql`](../migrations/0018_audit_hash_chain.sql) and
 [`../migrations/0021_stateless_oidc_start.sql`](../migrations/0021_stateless_oidc_start.sql) and
 [`../migrations/0029_bulk_import.sql`](../migrations/0029_bulk_import.sql) and
-[`../migrations/0039_saved_views.sql`](../migrations/0039_saved_views.sql)
+[`../migrations/0039_saved_views.sql`](../migrations/0039_saved_views.sql) and
+[`../migrations/0042_layout_templates.sql`](../migrations/0042_layout_templates.sql)
 (`sessions.ip_address` from [`../migrations/0006_auth_audit.sql`](../migrations/0006_auth_audit.sql); the columns
 added by [`0022`](../migrations/0022_api_token_creator.sql) to [`0026`](../migrations/0026_identity_provider_secret_encryption.sql)
 and [`0028`](../migrations/0028_schema_change_redaction.sql) on `api_tokens`, `identity_providers`, `sessions`,
@@ -74,6 +75,7 @@ erDiagram
     identity_providers ||--o{ identity_provider_group_mappings : "provider_id"
     permission_profiles ||--o{ identity_provider_group_mappings : "profile_id"
     ui_settings_versions ||--o| ui_settings : "version (current)"
+    configuration_items ||--o| ci_layout_overrides : "ci_id (PK and FK, CASCADE)"
     users |o--o{ import_jobs : "created_by_id (SET NULL)"
     import_jobs ||--o{ import_job_files : "job_id"
     import_jobs ||--o{ import_job_issues : "job_id"
@@ -365,6 +367,13 @@ erDiagram
         text actor_type
         text actor_name
         text comment
+    }
+    ci_layout_overrides {
+        uuid ci_id PK, FK
+        text template_key "a layoutTemplates key in ui_settings, or NULL"
+        jsonb layout "the CI's own layout, or NULL (exactly one is set)"
+        int version
+        text updated_by_name
     }
     import_settings {
         boolean id PK "always true: one row"
