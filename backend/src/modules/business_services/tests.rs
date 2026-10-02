@@ -84,7 +84,7 @@ impl World {
         let pool = db.pool.clone();
         reconcile(&pool).await;
         let app = app_with_business_services(pool.clone(), limits);
-        let setup = json!({ "username": "admin", "displayName": "Admin", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
+        let setup = json!({ "username": "admin", "email": "admin@example.test", "displayName": "Admin", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
         let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
         assert_eq!(status, 201, "{me}");
         let admin = session_of(&me, &headers);
@@ -230,7 +230,7 @@ impl World {
                 .await
                 .unwrap();
         }
-        let body = json!({ "username": name, "displayName": format!("User {name}"), "password": "a long enough password", "profileIds": [profile] });
+        let body = json!({ "username": name, "email": format!("{name}@example.test"), "displayName": format!("User {name}"), "password": "a long enough password", "profileIds": [profile] });
         let (status, v, _) = call(&self.app, "POST", "/api/v1/admin/users", &self.admin, Some(body)).await;
         assert_eq!(status, 201, "{v}");
         let login = json!({ "username": name, "password": "a long enough password" });

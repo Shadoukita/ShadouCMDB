@@ -2186,6 +2186,15 @@ mod tests {
     use crate::db::scratch;
 
     async fn user_ctx(pool: &PgPool, username: &str, global: &[GlobalPermission]) -> RequestContext {
+        user_ctx_with(pool, username, global, Default::default()).await
+    }
+
+    async fn user_ctx_with(
+        pool: &PgPool,
+        username: &str,
+        global: &[GlobalPermission],
+        all_classes: crate::auth::permissions::ClassRights,
+    ) -> RequestContext {
         let user_id: Uuid = sqlx::query_scalar(
             "INSERT INTO users (username, display_name, password_hash) VALUES ($1, $1, '$argon2id$v=19$test')
              RETURNING id",
@@ -2194,7 +2203,7 @@ mod tests {
         .fetch_one(pool)
         .await
         .unwrap();
-        let permissions = Permissions { global: global.iter().copied().collect(), ..Default::default() };
+        let permissions = Permissions { global: global.iter().copied().collect(), all_classes, ..Default::default() };
         let principal = Principal {
             user_id,
             username: username.into(),
@@ -2202,6 +2211,7 @@ mod tests {
                 id: Uuid::new_v4(),
                 csrf_token: String::new(),
                 mfa_enrolment_required: false,
+                email_required: false,
             },
             permissions,
         };
@@ -2269,7 +2279,9 @@ mod tests {
         assert!(import(&dst.pool, &profile_admin, &profiles_only, ImportMode::Apply).await.unwrap().applied);
         assert_eq!(profile_count().await, 1);
 
-        let full = user_ctx(
+        // Making a field of an existing type required is checked against its
+        // stored values: the built-in types' tables exist after migrate.
+        let full = user_ctx_with(
             &dst.pool,
             "configurator",
             &[
@@ -2277,6 +2289,7 @@ mod tests {
                 GlobalPermission::DatamodelManage,
                 GlobalPermission::CustomizationManage,
             ],
+            crate::auth::permissions::ClassRights { view: true, ..Default::default() },
         )
         .await;
         let res = import(&dst.pool, &full, &file, ImportMode::Apply).await.unwrap();
@@ -3094,7 +3107,10 @@ mod tests {
         let dm = exported.data_model.as_ref().unwrap();
         let roles: Vec<(&str, ClassSystemRole)> =
             dm.classes.iter().filter_map(|c| Some((c.key.as_str(), c.system_role?))).collect();
-        assert_eq!(roles, vec![("business_service", ClassSystemRole::BusinessService)]);
+        assert_eq!(
+            roles,
+            vec![("business_service", ClassSystemRole::BusinessService), ("person", ClassSystemRole::Person)]
+        );
         let roles: Vec<(&str, RelationshipTypeSystemRole)> =
             dm.relationship_types.iter().filter_map(|t| Some((t.key.as_str(), t.system_role?))).collect();
         assert_eq!(roles, vec![("business_service_member", RelationshipTypeSystemRole::BusinessServiceMember)]);
@@ -3397,7 +3413,7 @@ mod tests {
             .fetch_one(&dst.pool)
             .await
             .unwrap();
-        assert_eq!(roles, 1);
+        assert_eq!(roles, 2, "the business service and Person types");
 
         src.drop().await;
         dst.drop().await;

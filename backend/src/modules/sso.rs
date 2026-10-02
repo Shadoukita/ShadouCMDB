@@ -22,7 +22,7 @@ use utoipa::openapi::{RefOr, Required};
 use uuid::Uuid;
 
 use super::auth::Changed;
-use super::users;
+use super::{people, users};
 use crate::api::context::RequestContext;
 use crate::api::route::{In, Json, NoBody, NoPath, NoQuery, PathInput, QueryInput, Redirect, Route, route};
 use crate::api::schemas::USERNAME_PATTERN;
@@ -161,6 +161,10 @@ pub enum Refusal {
     MfaNotEnforced,
     /// The provider was disabled or deleted while the sign-in was checked (GH#250).
     ProviderDisabled,
+    /// A new account's e-mail is another account's (e-mails are unique, SHAA-1505).
+    EmailConflict,
+    /// The account has an e-mail but no linked Person (SHAA-1505 decision 8).
+    AccountIncomplete,
 }
 
 impl Refusal {
@@ -174,6 +178,8 @@ impl Refusal {
             Refusal::LastAdministrator => "last_administrator",
             Refusal::MfaNotEnforced => "mfa_not_enforced",
             Refusal::ProviderDisabled => "unavailable",
+            Refusal::EmailConflict => "email_conflict",
+            Refusal::AccountIncomplete => "account_incomplete",
         }
     }
 }
@@ -238,6 +244,13 @@ pub async fn link_account(
             return Ok(Err(Refusal::AccountConflict));
         }
         let email = usable_email(identity.email.as_deref());
+        // E-mails are unique (SHAA-1505): another account's address is refused.
+        if let Some(e) = &email
+            && !people::email_usable(&mut tx, None, e).await?
+        {
+            tracing::warn!(user = %username, provider = %provider.name, "identity provider sent an e-mail address another account or person has; account not created");
+            return Ok(Err(Refusal::EmailConflict));
+        }
         let new = data::NewLinkedUser {
             provider_id: provider.id,
             external_id: &identity.external_id,
@@ -252,6 +265,9 @@ pub async fn link_account(
             Err(e) => return Err(e),
         };
         auth_data::set_user_profiles(&mut tx, id, &mapped).await?;
+        // Its Person is linked or created (decision 4); without an e-mail the
+        // account is asked for one after signing in.
+        people::link_user(&mut tx, &actor, id).await?;
         let dto = users::load(&mut tx, id).await?;
         crud::write_audit(&mut tx, &actor, vec![user_audit(AuditAction::Create, id, None, Some(&dto))]).await?;
         tx.commit().await?;
@@ -286,11 +302,22 @@ pub async fn link_account(
         }
         None => account.username.clone(),
     };
-    let email = usable_email(identity.email.as_deref()).or(account.email.clone());
+    // A new address from the provider is taken over when no other account or
+    // person has it; otherwise the account keeps the one it has (SHAA-1505).
+    let email = match usable_email(identity.email.as_deref()) {
+        Some(e) if Some(&e) == account.email.as_ref() => Some(e),
+        Some(e) if people::email_usable(&mut tx, Some(account.id), &e).await? => Some(e),
+        Some(e) => {
+            tracing::warn!(user = %account.username, new_email = %e, "identity provider changed the user's e-mail to an address another account or person has; keeping the old one");
+            account.email.clone()
+        }
+        None => account.email.clone(),
+    };
     let name =
         if identity.display_name.is_some() { display_name(identity, &username) } else { account.display_name.clone() };
     data::refresh_linked(&mut tx, account.id, &username, &name, email.as_deref()).await?;
     auth_data::set_user_profiles(&mut tx, account.id, &mapped).await?;
+    people::link_user(&mut tx, &actor, account.id).await?;
     let after = users::load(&mut tx, account.id).await?;
     if crud::json(&after) != crud::json(&before) {
         let entry = user_audit(AuditAction::Update, account.id, Some(&before), Some(&after));
@@ -674,6 +701,7 @@ pub async fn verified_sign_in(
         // MfaEnrolled refuses password sign-ins only, MfaRemoved second-factor ones.
         Err(Changed::Account | Changed::MfaEnrolled | Changed::MfaRemoved) => return Ok(Err(Refusal::AccountDisabled)),
         Err(Changed::Provider) => return Ok(Err(Refusal::ProviderDisabled)),
+        Err(Changed::AccountIncomplete) => return Ok(Err(Refusal::AccountIncomplete)),
     };
     tracing::info!(user = %username, provider = %provider.name, ip = ?ctx.client.ip, purged_sessions = purged, provider_mfa = evidence.as_str(), "signed in through OIDC");
     Ok(Ok(cookies))
@@ -792,7 +820,7 @@ async fn sign_in_options(pool: &PgPool, auth: &AuthState) -> Result<SignInOption
 
 const TAG: &str = "Authentication";
 
-pub const SSO_ERRORS: &str = "`expired` (no pending sign-in for this browser, or older than 10 minutes), `cancelled` (the user declined at the provider), `failed` (the provider refused, or its answer did not pass the checks; see the server log), `unavailable` (provider disabled, unknown or unreachable), `not_configured` (PUBLIC_URL is not set), `not_authorised` (none of the user's groups maps to a permission profile), `account_conflict` (another account has the username), `account_disabled`, `invalid_username` (the username claim is missing or not a valid username), `last_administrator`, `mfa_not_enforced` (a permission profile of the user requires MFA and the provider, set to verify MFA, did not prove a second factor in the ID token: `amr`, or `acr` against `requiredAcr`)";
+pub const SSO_ERRORS: &str = "`expired` (no pending sign-in for this browser, or older than 10 minutes), `cancelled` (the user declined at the provider), `failed` (the provider refused, or its answer did not pass the checks; see the server log), `unavailable` (provider disabled, unknown or unreachable), `not_configured` (PUBLIC_URL is not set), `not_authorised` (none of the user's groups maps to a permission profile), `account_conflict` (another account has the username), `account_disabled`, `invalid_username` (the username claim is missing or not a valid username), `last_administrator`, `email_conflict` (the provider's e-mail address belongs to another account or person), `account_incomplete` (the account has no linked person; ask an administrator), `mfa_not_enforced` (a permission profile of the user requires MFA and the provider, set to verify MFA, did not prove a second factor in the ID token: `amr`, or `acr` against `requiredAcr`)";
 
 pub fn routes() -> Vec<Route> {
     vec![

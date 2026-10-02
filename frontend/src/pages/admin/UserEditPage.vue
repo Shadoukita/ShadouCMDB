@@ -92,7 +92,8 @@ async function submit() {
     document.getElementById(`user-${Object.keys(errs)[0]}`)?.focus();
     return;
   }
-  const email = f.email.trim() || null;
+  // Required since SHAA-1505: an empty value is refused by the API with a field error.
+  const email = f.email.trim();
   try {
     if (isNew.value) {
       const created = await create.mutateAsync({

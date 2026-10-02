@@ -1543,7 +1543,7 @@ mod tests {
         let Some(db) = scratch::database("the_admin_api_stores_provider_secrets_encrypted").await else { return };
         let (pool, app) = (&db.pool, app(db.pool.clone()));
         let ring = Keyring::for_tests();
-        let setup = json!({ "username": "admin", "displayName": "Admin", "password": "correct horse battery",
+        let setup = json!({ "username": "admin", "email": "admin@example.test", "displayName": "Admin", "password": "correct horse battery",
             "setupToken": crate::auth::setup_token::TEST_TOKEN });
         let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
         assert_eq!(status, 201, "{me}");
@@ -1714,7 +1714,7 @@ mod tests {
 
         let Some(db) = scratch::database("a_moved_provider_needs_its_secret_again").await else { return };
         let (pool, app) = (&db.pool, app(db.pool.clone()));
-        let setup = json!({ "username": "admin", "displayName": "Admin", "password": "correct horse battery",
+        let setup = json!({ "username": "admin", "email": "admin@example.test", "displayName": "Admin", "password": "correct horse battery",
             "setupToken": crate::auth::setup_token::TEST_TOKEN });
         let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
         assert_eq!(status, 201, "{me}");

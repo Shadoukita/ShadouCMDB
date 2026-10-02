@@ -648,6 +648,8 @@ pub struct Route {
     pub session_only: bool,
     /// Answers a session that must set up MFA before anything else.
     pub before_mfa_enrolment: bool,
+    /// Answers a session whose account must enter an e-mail before anything else.
+    pub before_email_entry: bool,
     /// A session request needs the X-CSRF-Token header: every method but GET
     /// and HEAD, and the reads marked [`RouteBuilder::csrf_on_read`].
     pub csrf: bool,
@@ -678,6 +680,7 @@ pub struct RouteBuilder {
     access: Access,
     session_only: bool,
     before_mfa_enrolment: bool,
+    before_email_entry: bool,
     csrf_on_read: bool,
     errors: Vec<ErrorCode>,
     also_returns: Vec<(StatusCode, String)>,
@@ -699,6 +702,7 @@ pub fn route(method: Method, path: impl Into<String>, operation_id: impl Into<St
         access: Access::Authenticated,
         session_only: false,
         before_mfa_enrolment: false,
+        before_email_entry: false,
         csrf_on_read: false,
         errors: Vec::new(),
         also_returns: Vec::new(),
@@ -768,6 +772,14 @@ impl RouteBuilder {
         self.before_mfa_enrolment = true;
         self
     }
+    /// Reachable by a session whose account has no e-mail yet (created before
+    /// e-mails were required, SHAA-1505): sign-out, the current session and
+    /// entering the e-mail. Every other route answers such a session 403
+    /// EMAIL_REQUIRED.
+    pub fn before_email_entry(mut self) -> Self {
+        self.before_email_entry = true;
+        self
+    }
     /// A GET that a session must send with X-CSRF-Token like a write (403
     /// CSRF_TOKEN_INVALID otherwise): a read with a side effect worth
     /// forging, such as an audited export. The SameSite=Lax session cookie
@@ -827,6 +839,7 @@ impl RouteBuilder {
         assert!(!unlimited || access == Access::Public, "only public routes can be unlimited");
         let session_only = self.session_only;
         let before_mfa_enrolment = self.before_mfa_enrolment;
+        let before_email_entry = self.before_email_entry;
         let csrf = self.csrf_on_read || !(self.method == Method::GET || self.method == Method::HEAD);
         let body_limit = self.body_limit.unwrap_or(match access {
             Access::Public => PUBLIC_BODY_LIMIT,
@@ -860,7 +873,7 @@ impl RouteBuilder {
                     };
                     let net = client.net;
                     let used = auth::token::Use { method: &method, path: uri.path(), operation_id: &operation_id };
-                    let rule = Rule { access, session_only, before_mfa_enrolment, csrf };
+                    let rule = Rule { access, session_only, before_mfa_enrolment, before_email_entry, csrf };
                     // Authorise before reading the body: an anonymous caller must not make
                     // the server buffer up to body_limit bytes only to be answered 401.
                     let ctx = authorise(&state, &headers, rule, client, used).await?;
@@ -932,6 +945,7 @@ impl RouteBuilder {
             access,
             session_only,
             before_mfa_enrolment,
+            before_email_entry,
             csrf,
             errors: self.errors,
             also_returns: self.also_returns,
@@ -952,6 +966,7 @@ struct Rule {
     access: Access,
     session_only: bool,
     before_mfa_enrolment: bool,
+    before_email_entry: bool,
     /// A session request must carry the CSRF token.
     csrf: bool,
 }
@@ -961,7 +976,8 @@ struct Rule {
 /// state-changing request (or a [`RouteBuilder::csrf_on_read`] GET) without
 /// the session's token, 403 FORBIDDEN without
 /// the required permission (or for a token on a session-only route), 403
-/// MFA_ENROLMENT_REQUIRED for a session that must set up MFA first.
+/// MFA_ENROLMENT_REQUIRED for a session that must set up MFA first, 403
+/// EMAIL_REQUIRED for a session whose account must enter an e-mail first.
 ///
 /// An `Authorization: Bearer` header selects token authentication and the
 /// cookies are then ignored: a bad token is 401, never a fall-back to the
@@ -992,6 +1008,12 @@ async fn authorise(
         return Err(AppError::new(
             ErrorCode::CsrfTokenInvalid,
             "Missing or wrong X-CSRF-Token header (send the csrfToken from /api/v1/auth/me)",
+        ));
+    }
+    if principal.email_required() && !rule.before_email_entry {
+        return Err(AppError::new(
+            ErrorCode::EmailRequired,
+            "Your account has no e-mail address yet: enter it first (PUT /api/v1/auth/email)",
         ));
     }
     if principal.mfa_enrolment_required() && !rule.before_mfa_enrolment {
@@ -1190,7 +1212,7 @@ mod tests {
 
     /// Runs first-run setup and returns the owner's session.
     async fn set_up_owner(app: &axum::Router) -> Creds {
-        let setup = json!({ "username": "owner", "displayName": "Owner", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
+        let setup = json!({ "username": "owner", "email": "owner@example.test", "displayName": "Owner", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
         let (status, me, headers) = call(app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
         assert_eq!(status, 201, "{me}");
         let cookie = headers

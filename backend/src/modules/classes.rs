@@ -87,9 +87,10 @@ pub struct CiClass {
     pub updated_at: DateTime<Utc>,
 }
 
-/// 409 IN_USE for a removal or change the built-in business service type does not allow (§4.10).
-pub fn system_class_refused(key: &str, what: &str) -> AppError {
-    let message = format!("The {key} type is the built-in business service type and cannot be {what}");
+/// 409 IN_USE for a removal or change a built-in type (business service
+/// §4.10, Person SHAA-1505) does not allow.
+pub fn system_class_refused(key: &str, role: ClassSystemRole, what: &str) -> AppError {
+    let message = format!("The {key} type is the {} and cannot be {what}", role.describe());
     AppError::new(ErrorCode::InUse, message.clone()).with_details(vec![FieldError {
         location: FieldLocation::Params,
         field: "id".into(),
@@ -382,10 +383,8 @@ impl Resource for CiClasses {
     /// concrete, and has no parent (SHAA-927 §1.1); the database refuses the
     /// same, this answers first with the documented code.
     fn before_change(row: &CiClass, columns: Option<&ColumnSet>) -> Result<(), AppError> {
-        if row.system_role.is_none() {
-            return Ok(());
-        }
-        let Some(columns) = columns else { return Err(system_class_refused(&row.key, "deleted")) };
+        let Some(role) = row.system_role else { return Ok(()) };
+        let Some(columns) = columns else { return Err(system_class_refused(&row.key, role, "deleted")) };
         for (column, value) in &columns.0 {
             let what = match (*column, value) {
                 ("is_active", Val::Bool(Some(false))) => "archived",
@@ -393,7 +392,7 @@ impl Resource for CiClasses {
                 ("parent_id", Val::Uuid(Some(_))) => "given a parent type",
                 _ => continue,
             };
-            return Err(system_class_refused(&row.key, what));
+            return Err(system_class_refused(&row.key, role, what));
         }
         Ok(())
     }
@@ -422,7 +421,7 @@ impl Resource for CiClasses {
             {
                 return Err(AppError::field(
                     "parentId",
-                    "The built-in business service type cannot have subtypes",
+                    "Built-in types (business service, Person) cannot have subtypes",
                     "system_class",
                 ));
             }
@@ -644,8 +643,8 @@ pub async fn purge_class_in(
     let row: CiClass = crud::select_by_id(conn, CiClasses::TABLE, CiClasses::COLUMNS, id, true)
         .await?
         .ok_or_else(|| AppError::missing(CiClasses::LABEL, id))?;
-    if row.system_role.is_some() {
-        return Err(system_class_refused(&row.key, "purged"));
+    if let Some(role) = row.system_role {
+        return Err(system_class_refused(&row.key, role, "purged"));
     }
     check_purge("type", &row.key, row.is_active, confirm)?;
     let model = Model::load(conn).await?;
@@ -795,6 +794,41 @@ pub async fn purge_class_in(
 #[sqlx(type_name = "text", rename_all = "snake_case")]
 pub enum ClassSystemRole {
     BusinessService,
+    /// The people sign-in accounts are linked to (migration 0043, SHAA-1505).
+    Person,
+}
+
+impl ClassSystemRole {
+    /// "built-in business service type", for messages.
+    pub fn describe(self) -> &'static str {
+        match self {
+            ClassSystemRole::BusinessService => "built-in business service type",
+            ClassSystemRole::Person => "built-in Person type",
+        }
+    }
+}
+
+/// What a built-in field is for (`ci_attribute_definitions.system_role`,
+/// migration 0043): the Person's Name and Email. Such a field cannot be
+/// archived, purged, made optional or change type; the Email is unique across
+/// Person CIs, ignoring case.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema, sqlx::Type)]
+#[serde(rename_all = "snake_case")]
+#[sqlx(type_name = "text", rename_all = "snake_case")]
+pub enum AttributeSystemRole {
+    PersonName,
+    PersonEmail,
+}
+
+/// 409 IN_USE for a change the Person's Name or Email field does not allow.
+fn system_attribute_refused(key: &str, what: &str) -> AppError {
+    let message = format!("The {key} field is a key field of the built-in Person type and cannot be {what}");
+    AppError::new(ErrorCode::InUse, message.clone()).with_details(vec![FieldError {
+        location: FieldLocation::Params,
+        field: "id".into(),
+        message,
+        code: "system_attribute".into(),
+    }])
 }
 
 /// What a built-in relationship type is for (`relationship_types.system_role`,
@@ -894,6 +928,11 @@ pub struct AttributeDefinition {
     pub sort_order: i32,
     /// Retired attributes keep their stored values but accept no new ones
     pub is_active: bool,
+    /// Set on the key fields of the built-in Person type (`person_name`,
+    /// `person_email`): they cannot be archived, purged, made optional or change
+    /// type. Read-only.
+    #[schema(required = true)]
+    pub system_role: Option<AttributeSystemRole>,
     #[serde(serialize_with = "ts::serialize")]
     pub created_at: DateTime<Utc>,
     #[serde(serialize_with = "ts::serialize")]
@@ -949,6 +988,9 @@ pub struct EffectiveAttribute {
     pub sort_order: i32,
     /// Retired attributes keep their stored values but accept no new ones
     pub is_active: bool,
+    /// `person_name` or `person_email` on the key fields of the built-in Person type. Read-only.
+    #[schema(required = true)]
+    pub system_role: Option<AttributeSystemRole>,
     #[serde(serialize_with = "ts::serialize")]
     pub created_at: DateTime<Utc>,
     #[serde(serialize_with = "ts::serialize")]
@@ -986,6 +1028,7 @@ impl From<data::EffectiveAttributeRow> for EffectiveAttribute {
             default_value: r.default_value,
             sort_order: r.sort_order,
             is_active: r.is_active,
+            system_role: r.system_role,
             created_at: r.created_at,
             updated_at: r.updated_at,
             inherited: r.depth > 0,
@@ -1400,7 +1443,7 @@ impl Resource for AttributeDefinitions {
     const TAG: &'static str = "Attribute definitions";
     const SINGULAR: &'static str = "attributeDefinition";
     const PLURAL: &'static str = "attributeDefinitions";
-    const COLUMNS: &'static str = "id, class_id, key, label, description, data_type, is_required, enum_values, reference_class_id, lookup_list_id, validation, group_name, help_text, default_value, sort_order, is_active, created_at, updated_at, parent_attribute_id";
+    const COLUMNS: &'static str = "id, class_id, key, label, description, data_type, is_required, enum_values, reference_class_id, lookup_list_id, validation, group_name, help_text, default_value, sort_order, is_active, system_role, created_at, updated_at, parent_attribute_id";
     const SEARCH_COLUMNS: &'static [&'static str] = &["key", "label", "description", "group_name"];
     const UPDATE_DESCRIPTION: &'static str = "`dataType` changes the column type: every stored value is converted in a dry run first, and the change is refused (422 SCHEMA_CHANGE_REFUSED, naming values that fail) if any would not convert (`type_change_failed`) or would lose information (`type_change_lossy`: datetime to date keeps the UTC day, so it is refused while any value has a time of day other than midnight UTC). Only between text, number, integer, boolean, enum, date, datetime, ip and cidr; `enumValues` is cleared when leaving enum. `isRequired: true` makes the column NOT NULL and is refused while an asset (deleted ones included) has no value. Removing enum values still stored is refused. `parentAttributeId` (lookup fields on a list with a parent list) names the field bound to the parent list, on this class or an ancestor; CI writes then only accept a value that belongs to the CI's value of that field. Preview any change with `POST /api/v1/schema-changes/preview`.";
     const ARCHIVE_ON_DELETE: bool = true;
@@ -1434,6 +1477,26 @@ impl Resource for AttributeDefinitions {
             Some(key) if create => engine::validate_name(key, NameKind::Field, "key"),
             _ => Ok(()),
         }
+    }
+
+    /// The Person's Name and Email stay active, required and of their type
+    /// (SHAA-1505 decision 1); the database refuses the same, this answers
+    /// first with the documented code.
+    fn before_change(row: &AttributeDefinition, columns: Option<&ColumnSet>) -> Result<(), AppError> {
+        if row.system_role.is_none() {
+            return Ok(());
+        }
+        let Some(columns) = columns else { return Err(system_attribute_refused(&row.key, "archived")) };
+        for (column, value) in &columns.0 {
+            let what = match (*column, value) {
+                ("is_active", Val::Bool(Some(false))) => "archived",
+                ("is_required", Val::Bool(Some(false))) => "made optional",
+                ("data_type", Val::Text(Some(t))) if t != row.data_type.as_str() => "given another data type",
+                _ => continue,
+            };
+            return Err(system_attribute_refused(&row.key, what));
+        }
+        Ok(())
     }
 
     fn before_write(conn: &mut PgConnection) -> BoxFuture<'_, Result<(), AppError>> {
@@ -2712,12 +2775,14 @@ mod tests {
         relationships::create(pool, &ctx, &body::<RelationshipCreate>(edge)).await.unwrap();
 
         let restricted = datamodel_manager(&[servers.id]);
-        // Viewing every class includes the built-in business service type (migration 0033).
-        let services: Uuid = sqlx::query_scalar("SELECT id FROM ci_classes WHERE system_role = 'business_service'")
-            .fetch_one(pool)
-            .await
-            .unwrap();
-        let viewer = datamodel_manager(&[servers.id, secrets.id, services]);
+        // Viewing every class includes the built-in business service and Person types (0033, 0043).
+        let mut viewer_classes: Vec<Uuid> =
+            sqlx::query_scalar("SELECT id FROM ci_classes WHERE system_role IS NOT NULL")
+                .fetch_all(pool)
+                .await
+                .unwrap();
+        viewer_classes.extend([servers.id, secrets.id]);
+        let viewer = datamodel_manager(&viewer_classes);
 
         // The hidden class: its CI counts are withheld, the data-model counts are not.
         let report = simple::usage::<CiClasses>(pool, &restricted, secrets.id).await.unwrap();

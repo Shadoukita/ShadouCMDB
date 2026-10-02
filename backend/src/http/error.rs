@@ -48,6 +48,9 @@ pub enum ErrorCode {
     MfaRequired,
     /// A profile the user holds requires MFA; until it is set up only the MFA set-up routes answer (403)
     MfaEnrolmentRequired,
+    /// The account has no e-mail address yet; until it is entered (PUT /api/v1/auth/email) only that route,
+    /// the current session and sign-out answer (403)
+    EmailRequired,
     /// The token's owner must use two-factor authentication, and the session creating it did not sign in with a
     /// second factor (403)
     MfaRequiredForToken,
@@ -73,6 +76,7 @@ impl ErrorCode {
             ErrorCode::Forbidden
             | ErrorCode::CsrfTokenInvalid
             | ErrorCode::MfaEnrolmentRequired
+            | ErrorCode::EmailRequired
             | ErrorCode::MfaRequiredForToken => StatusCode::FORBIDDEN,
             ErrorCode::NotFound => StatusCode::NOT_FOUND,
             ErrorCode::Gone => StatusCode::GONE,

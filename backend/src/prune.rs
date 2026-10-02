@@ -166,11 +166,10 @@ mod tests {
         err.as_database_error().and_then(|d| d.code()).unwrap_or_default().into_owned()
     }
 
+    /// Rows matching `filter`, leaving out the reconcile `migrate` recorded.
     async fn count(c: &mut PgConnection, filter: &str) -> i64 {
-        sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM audit_log WHERE {filter}")))
-            .fetch_one(c)
-            .await
-            .unwrap()
+        let sql = format!("SELECT count(*) FROM audit_log WHERE ({filter}) AND entity_type <> 'schema_changes'");
+        sqlx::query_scalar(sqlx::AssertSqlSafe(sql)).fetch_one(c).await.unwrap()
     }
 
     #[tokio::test]
@@ -296,7 +295,7 @@ mod tests {
                UNION ALL SELECT 'database', datname::text, NULL
                  FROM pg_database, r WHERE datname = current_database() AND datdba = r.oid
              ) o(kind, name, nsp)
-             WHERE nsp IS NULL OR nsp::text NOT IN (SELECT key FROM cmdb.areas)
+             WHERE nsp IS NULL OR nsp::text NOT IN (SELECT key FROM cmdb.areas UNION ALL SELECT 'pg_toast')
              ORDER BY 1",
         )
         .bind(&roles.app)

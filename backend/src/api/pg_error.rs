@@ -60,6 +60,8 @@ const CONSTRAINT_FIELDS: &[(&str, &str)] = &[
     ("users_username_format", "username"),
     ("users_display_name_not_blank", "displayName"),
     ("users_email_format", "email"),
+    ("users_email_uq", "email"),
+    ("users_person_link", "email"),
     ("permission_profiles_name_uq", "name"),
     ("permission_profiles_name_not_blank", "name"),
     ("permission_profile_class_permissions_class_id_fkey", "classPermissions"),
@@ -166,6 +168,38 @@ pub fn map(err: &sqlx::Error, field_prefix: Option<&str>) -> Option<AppError> {
                 message,
                 code: code.into(),
             }]));
+        }
+        Some("users_email_uq") => {
+            let message = "Another account already uses this e-mail address".to_owned();
+            return Some(AppError::new(ErrorCode::Conflict, message.clone()).with_details(vec![FieldError {
+                location: FieldLocation::Body,
+                field,
+                message,
+                code: "unique".into(),
+            }]));
+        }
+        // A Person linked to a sign-in account (migration 0043): items refuses
+        // first with the same code; this is the backstop.
+        Some("configuration_items_person_linked") => {
+            return Some(AppError::new(ErrorCode::Conflict, humanise(pg.message())).with_details(vec![FieldError {
+                location: FieldLocation::Body,
+                field: if pg.column() == Some("class_id") { "classId".into() } else { "id".into() },
+                message: humanise(pg.message()),
+                code: "person_linked".into(),
+            }]));
+        }
+        // The Person's Name and Email fields (migration 0043).
+        Some("ci_attribute_definitions_system_protected") => {
+            let message = humanise(pg.message());
+            return Some(AppError::new(ErrorCode::InUse, message.clone()).with_details(vec![FieldError {
+                location: FieldLocation::Params,
+                field: "id".into(),
+                message,
+                code: "system_attribute".into(),
+            }]));
+        }
+        Some("ci_attribute_definitions_system_fixed") => {
+            return Some(AppError::field(field, humanise(pg.message()), "system_attribute"));
         }
         Some("ci_classes_system_no_subclass") => {
             return Some(AppError::field("parentId", humanise(pg.message()), "system_class"));

@@ -8,7 +8,7 @@ use sqlx::PgConnection;
 use sqlx::types::Json;
 use uuid::Uuid;
 
-use crate::modules::classes::AttributeDataType;
+use crate::modules::classes::{AttributeDataType, AttributeSystemRole};
 
 /// An attribute definition of a class or one of its ancestors.
 #[derive(Debug, Clone)]
@@ -30,6 +30,8 @@ pub struct EffectiveAttributeRow {
     pub default_value: Option<Json<Value>>,
     pub sort_order: i32,
     pub is_active: bool,
+    /// The Person's Name or Email (migration 0043).
+    pub system_role: Option<AttributeSystemRole>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     /// 0 = defined on the class itself.
@@ -54,7 +56,7 @@ pub async fn effective_attributes(conn: &mut PgConnection, class_id: Uuid) -> sq
                   d.enum_values AS "enum_values: Json<Vec<String>>", d.reference_class_id, d.lookup_list_id,
                   d.parent_attribute_id, d.validation AS "validation: Json<Map<String, Value>>", d.group_name, d.help_text,
                   d.default_value AS "default_value: Json<Value>", d.sort_order,
-                  d.is_active, d.created_at, d.updated_at,
+                  d.is_active, d.system_role AS "system_role: AttributeSystemRole", d.created_at, d.updated_at,
                   l.depth AS "depth!", c.key AS defined_on_key, c.name AS defined_on_name
            FROM ci_class_lineage($1) l
            JOIN ci_attribute_definitions d ON d.class_id = l.class_id

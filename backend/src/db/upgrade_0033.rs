@@ -82,11 +82,20 @@ async fn fingerprint(pool: &PgPool) -> Vec<(String, Option<String>)> {
         ("configuration_items", "SELECT md5(string_agg(t::text, '|' ORDER BY t.id)) FROM configuration_items t"),
         ("service table", "SELECT md5(string_agg(t::text, '|' ORDER BY t.id)) FROM infrastruktur.service t"),
         ("application table", "SELECT md5(string_agg(t::text, '|' ORDER BY t.id)) FROM infrastruktur.application t"),
-        ("attributes", "SELECT md5(string_agg(t::text, '|' ORDER BY t.id)) FROM ci_attribute_definitions t"),
+        // Without what 0043 adds: the Person type, its fields and their system_role column.
+        (
+            "attributes",
+            "SELECT md5(string_agg((to_jsonb(t) - 'system_role')::text, '|' ORDER BY t.id)) FROM ci_attribute_definitions t
+             WHERE t.class_id NOT IN (SELECT c.id FROM ci_classes c WHERE to_jsonb(c) ->> 'system_role' = 'person')",
+        ),
         ("relationships", "SELECT md5(string_agg(t::text, '|' ORDER BY t.id)) FROM ci_relationships t"),
         ("rules", "SELECT md5(string_agg(t::text, '|' ORDER BY t.id)) FROM relationship_type_rules t"),
         ("grants", "SELECT md5(string_agg(t::text, '|' ORDER BY t.id)) FROM permission_profile_class_permissions t"),
-        ("classes", "SELECT md5(string_agg((to_jsonb(t) - 'system_role')::text, '|' ORDER BY t.id)) FROM ci_classes t"),
+        (
+            "classes",
+            "SELECT md5(string_agg((to_jsonb(t) - 'system_role')::text, '|' ORDER BY t.id)) FROM ci_classes t
+             WHERE (to_jsonb(t) ->> 'system_role') IS DISTINCT FROM 'person'",
+        ),
     ] {
         let hash: Option<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql)).fetch_one(pool).await.unwrap();
         out.push((name.to_owned(), hash));
@@ -130,7 +139,9 @@ async fn upgrade_adopts_the_template_service_class_and_changes_no_data() {
     let (class, key, area) = system_class(pool).await;
     assert_eq!((class.to_string().as_str(), key.as_str(), area.as_str()), (SERVICE, "service", "infrastruktur"));
     assert_eq!(fingerprint(pool).await, before, "adoption changes no data");
-    let areas_after: i64 = sqlx::query_scalar("SELECT count(*) FROM areas").fetch_one(pool).await.unwrap();
+    // Only the Person type's area (0043) is new.
+    let areas_after: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM areas WHERE key NOT LIKE 'people%'").fetch_one(pool).await.unwrap();
     assert_eq!(areas_after, areas_before, "no new area");
     let business_service: i64 =
         sqlx::query_scalar("SELECT count(*) FROM ci_classes WHERE key LIKE 'business_service%'")

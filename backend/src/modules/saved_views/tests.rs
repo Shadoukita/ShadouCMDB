@@ -27,7 +27,7 @@ async fn world(name: &str) -> Option<(scratch::Scratch, World)> {
     let app = app(db.pool.clone());
     // Random per test run, so no hard-coded credential reaches the hasher or verifier.
     let password = format!("test passphrase {}", Uuid::new_v4());
-    let setup = json!({ "username": "admin", "displayName": "Admin", "password": password,
+    let setup = json!({ "username": "admin", "email": "admin@example.test", "displayName": "Admin", "password": password,
         "setupToken": crate::auth::setup_token::TEST_TOKEN });
     let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
     assert_eq!(status, 201, "{me}");
@@ -74,7 +74,7 @@ impl World {
 
     /// A signed-in user holding these profiles.
     async fn user(&self, name: &str, profiles: &[&str]) -> (Creds, String) {
-        let body = json!({ "username": name, "displayName": name, "password": self.password, "profileIds": profiles });
+        let body = json!({ "username": name, "email": format!("{name}@example.test"), "displayName": name, "password": self.password, "profileIds": profiles });
         let (status, u) = self.call(&self.admin, "POST", "/api/v1/admin/users", Some(body)).await;
         assert_eq!(status, 201, "{u}");
         let login = json!({ "username": name, "password": self.password });

@@ -9,6 +9,7 @@ pub mod identity_providers;
 pub mod impact;
 pub mod items;
 pub mod mfa;
+pub mod people;
 pub mod relationships;
 pub mod server_keys;
 pub mod service_owners;

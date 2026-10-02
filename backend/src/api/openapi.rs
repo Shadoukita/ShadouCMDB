@@ -171,16 +171,20 @@ fn error_status(code: ErrorCode) -> (u16, &'static str) {
             "Wrong credentials (code UNAUTHENTICATED), or the password was right and the second factor is due (code \
              MFA_REQUIRED)",
         ),
-        ErrorCode::Forbidden | ErrorCode::CsrfTokenInvalid | ErrorCode::MfaEnrolmentRequired => (
+        ErrorCode::Forbidden
+        | ErrorCode::CsrfTokenInvalid
+        | ErrorCode::MfaEnrolmentRequired
+        | ErrorCode::EmailRequired => (
             403,
-            "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up \
-             first (code MFA_ENROLMENT_REQUIRED)",
+            "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up \
+             first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
         ),
         ErrorCode::MfaRequiredForToken => (
             403,
             "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first \
-             (code MFA_ENROLMENT_REQUIRED), or the token's owner must use two-factor authentication and this session \
-             did not sign in with a second factor (code MFA_REQUIRED_FOR_TOKEN)",
+             (code MFA_ENROLMENT_REQUIRED), the account must enter its e-mail first (code EMAIL_REQUIRED), or the \
+             token's owner must use two-factor authentication and this session did not sign in with a second factor \
+             (code MFA_REQUIRED_FOR_TOKEN)",
         ),
         ErrorCode::NotFound => (404, "Not found (code NOT_FOUND)"),
         ErrorCode::Gone => (410, "The operation was removed (code GONE); the message names its replacement"),
@@ -346,6 +350,9 @@ pub fn document(routes: &[Route]) -> OpenApi {
         }
         if r.access != Access::Public && !r.before_mfa_enrolment {
             codes.push(ErrorCode::MfaEnrolmentRequired);
+        }
+        if r.access != Access::Public && !r.before_email_entry {
+            codes.push(ErrorCode::EmailRequired);
         }
         codes.extend(r.errors.iter().copied());
         codes.push(ErrorCode::InternalError);

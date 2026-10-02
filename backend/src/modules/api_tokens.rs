@@ -748,7 +748,7 @@ pub(crate) mod tests {
         let app = app(db.pool.clone());
         let pool = &db.pool;
 
-        let setup = json!({ "username": "owner", "displayName": "Owner", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
+        let setup = json!({ "username": "owner", "email": "owner@example.test", "displayName": "Owner", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
         let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
         assert_eq!(status, 201, "{me}");
         let cookie = headers
@@ -924,7 +924,7 @@ pub(crate) mod tests {
         let app = app(db.pool.clone());
         let pool = &db.pool;
 
-        let setup = json!({ "username": "owner", "displayName": "Owner", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
+        let setup = json!({ "username": "owner", "email": "owner@example.test", "displayName": "Owner", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
         let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
         assert_eq!(status, 201, "{me}");
         let cookie = headers
@@ -947,7 +947,7 @@ pub(crate) mod tests {
         .execute(pool)
         .await
         .unwrap();
-        let peer = json!({ "username": "peer", "displayName": "Peer", "password": "another long passphrase" });
+        let peer = json!({ "username": "peer", "email": "peer@example.test", "displayName": "Peer", "password": "another long passphrase" });
         let (status, peer, _) = call(&app, "POST", "/api/v1/admin/users", &session, Some(peer)).await;
         assert_eq!(status, 201, "{peer}");
         let peer_id = peer["id"].as_str().unwrap().to_owned();
@@ -966,7 +966,7 @@ pub(crate) mod tests {
         assert_eq!(status, 200);
 
         // Every account write is refused.
-        let minted = json!({ "username": "minted", "displayName": "Minted", "password": "a token-made passphrase",
+        let minted = json!({ "username": "minted", "email": "minted@example.test", "displayName": "Minted", "password": "a token-made passphrase",
             "profileIds": [managers] });
         let writes = [
             ("POST", "/api/v1/admin/users".to_owned(), Some(minted)),
@@ -1030,7 +1030,7 @@ pub(crate) mod tests {
         let app = app(db.pool.clone());
         let pool = &db.pool;
 
-        let setup = json!({ "username": "admin", "displayName": "Admin", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
+        let setup = json!({ "username": "admin", "email": "admin@example.test", "displayName": "Admin", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
         let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
         assert_eq!(status, 201, "{me}");
         let admin = session_of(&me, &headers);
@@ -1039,7 +1039,7 @@ pub(crate) mod tests {
                 .fetch_one(pool)
                 .await
                 .unwrap();
-        let alice = json!({ "username": "alice", "displayName": "Alice", "password": "alice first password",
+        let alice = json!({ "username": "alice", "email": "alice@example.test", "displayName": "Alice", "password": "alice first password",
             "profileIds": [administrators] });
         let (status, v, _) = call(&app, "POST", "/api/v1/admin/users", &admin, Some(alice)).await;
         assert_eq!(status, 201, "{v}");
@@ -1134,7 +1134,7 @@ pub(crate) mod tests {
         let app = app(db.pool.clone());
         let pool = &db.pool;
 
-        let setup = json!({ "username": "admin", "displayName": "Admin", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
+        let setup = json!({ "username": "admin", "email": "admin@example.test", "displayName": "Admin", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
         let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
         assert_eq!(status, 201, "{me}");
         let admin = session_of(&me, &headers);
@@ -1145,7 +1145,7 @@ pub(crate) mod tests {
                 .unwrap();
         let mut ids = Vec::new();
         for name in ["alice", "bob"] {
-            let body = json!({ "username": name, "displayName": name, "password": format!("{name} first password"),
+            let body = json!({ "username": name, "email": format!("{name}@example.test"), "displayName": name, "password": format!("{name} first password"),
                 "profileIds": [administrators] });
             let (status, v, _) = call(&app, "POST", "/api/v1/admin/users", &admin, Some(body)).await;
             assert_eq!(status, 201, "{v}");
@@ -1258,7 +1258,7 @@ pub(crate) mod tests {
         let app = app(db.pool.clone());
         let pool = &db.pool;
 
-        let setup = json!({ "username": "admin", "displayName": "Admin", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
+        let setup = json!({ "username": "admin", "email": "admin@example.test", "displayName": "Admin", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
         let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
         assert_eq!(status, 201, "{me}");
         let admin = session_of(&me, &headers);
@@ -1269,7 +1269,7 @@ pub(crate) mod tests {
                 .unwrap();
         let mut ids = Vec::new();
         for name in ["alice", "bob"] {
-            let body = json!({ "username": name, "displayName": name, "password": format!("{name} first password"),
+            let body = json!({ "username": name, "email": format!("{name}@example.test"), "displayName": name, "password": format!("{name} first password"),
                 "profileIds": [administrators] });
             let (status, v, _) = call(&app, "POST", "/api/v1/admin/users", &admin, Some(body)).await;
             assert_eq!(status, 201, "{v}");
@@ -1346,7 +1346,7 @@ pub(crate) mod tests {
         let app = app(db.pool.clone());
         let pool = &db.pool;
 
-        let setup = json!({ "username": "admin", "displayName": "Admin", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
+        let setup = json!({ "username": "admin", "email": "admin@example.test", "displayName": "Admin", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
         let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
         assert_eq!(status, 201, "{me}");
         let admin = session_of(&me, &headers);
@@ -1369,7 +1369,7 @@ pub(crate) mod tests {
         .unwrap();
         let mut ids = Vec::new();
         for (name, profiles) in [("alice", json!([managers])), ("bob", json!([]))] {
-            let body = json!({ "username": name, "displayName": name, "password": format!("{name} first password"),
+            let body = json!({ "username": name, "email": format!("{name}@example.test"), "displayName": name, "password": format!("{name} first password"),
                 "profileIds": profiles });
             let (status, v, _) = call(&app, "POST", "/api/v1/admin/users", &admin, Some(body)).await;
             assert_eq!(status, 201, "{v}");
@@ -1438,7 +1438,7 @@ pub(crate) mod tests {
         let app = app(db.pool.clone());
         let pool = &db.pool;
 
-        let setup = json!({ "username": "admin", "displayName": "Admin", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
+        let setup = json!({ "username": "admin", "email": "admin@example.test", "displayName": "Admin", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
         let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
         assert_eq!(status, 201, "{me}");
         let admin = session_of(&me, &headers);
@@ -1461,7 +1461,7 @@ pub(crate) mod tests {
         .unwrap();
         let mut ids = Vec::new();
         for (name, profiles) in [("alice", json!([managers])), ("bob", json!([]))] {
-            let body = json!({ "username": name, "displayName": name, "password": format!("{name} first password"),
+            let body = json!({ "username": name, "email": format!("{name}@example.test"), "displayName": name, "password": format!("{name} first password"),
                 "profileIds": profiles });
             let (status, v, _) = call(&app, "POST", "/api/v1/admin/users", &admin, Some(body)).await;
             assert_eq!(status, 201, "{v}");
@@ -1569,7 +1569,7 @@ pub(crate) mod tests {
         let app = app(db.pool.clone());
         let pool = &db.pool;
 
-        let setup = json!({ "username": "admin", "displayName": "Admin", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
+        let setup = json!({ "username": "admin", "email": "admin@example.test", "displayName": "Admin", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
         let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
         assert_eq!(status, 201, "{me}");
         let admin = session_of(&me, &headers);
@@ -1578,7 +1578,7 @@ pub(crate) mod tests {
                 .fetch_one(pool)
                 .await
                 .unwrap();
-        let alice = json!({ "username": "alice", "displayName": "Alice", "password": "alice first password",
+        let alice = json!({ "username": "alice", "email": "alice@example.test", "displayName": "Alice", "password": "alice first password",
             "profileIds": [administrators] });
         let (status, v, _) = call(&app, "POST", "/api/v1/admin/users", &admin, Some(alice)).await;
         assert_eq!(status, 201, "{v}");
@@ -1641,7 +1641,7 @@ pub(crate) mod tests {
         let app = app(db.pool.clone());
         let pool = &db.pool;
 
-        let setup = json!({ "username": "admin", "displayName": "Admin", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
+        let setup = json!({ "username": "admin", "email": "admin@example.test", "displayName": "Admin", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
         let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
         assert_eq!(status, 201, "{me}");
         let admin = session_of(&me, &headers);
@@ -1652,7 +1652,7 @@ pub(crate) mod tests {
                 .unwrap();
         let mut ids = Vec::new();
         for name in ["alice", "bob", "second"] {
-            let body = json!({ "username": name, "displayName": name, "password": format!("{name} first password"),
+            let body = json!({ "username": name, "email": format!("{name}@example.test"), "displayName": name, "password": format!("{name} first password"),
                 "profileIds": [administrators] });
             let (status, v, _) = call(&app, "POST", "/api/v1/admin/users", &admin, Some(body)).await;
             assert_eq!(status, 201, "{v}");
@@ -1721,7 +1721,7 @@ pub(crate) mod tests {
         let app = app(db.pool.clone());
         let pool = &db.pool;
 
-        let setup = json!({ "username": "owner", "displayName": "Owner", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
+        let setup = json!({ "username": "owner", "email": "owner@example.test", "displayName": "Owner", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
         let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
         assert_eq!(status, 201, "{me}");
         let cookie = headers
@@ -1843,7 +1843,7 @@ pub(crate) mod tests {
         let app = app(db.pool.clone());
         let pool = &db.pool;
 
-        let setup = json!({ "username": "owner", "displayName": "Owner", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
+        let setup = json!({ "username": "owner", "email": "owner@example.test", "displayName": "Owner", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
         let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
         assert_eq!(status, 201, "{me}");
         let cookie = headers

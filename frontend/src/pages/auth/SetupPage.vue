@@ -46,7 +46,7 @@ async function submit() {
     await session.setup({
       username: f.username.trim(),
       displayName: f.displayName.trim(),
-      email: f.email.trim() || null,
+      email: f.email.trim(),
       password: f.password,
       setupToken: f.setupToken.trim(),
     });

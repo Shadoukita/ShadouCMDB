@@ -43,6 +43,7 @@ pub fn routes() -> Vec<Route> {
         modules::saved_views::routes(),
         modules::audit::routes(),
         modules::users::routes(),
+        modules::people::routes(),
         modules::groups::routes(),
         modules::profiles::routes(),
         modules::api_tokens::routes(),

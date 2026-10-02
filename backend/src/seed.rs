@@ -451,7 +451,7 @@ mod tests {
 
         let fresh = data_model_report(&data_model_counts(&db.pool).await.unwrap());
         assert!(fresh.iter().any(|l| l.starts_with(HINT)), "{fresh:#?}");
-        assert!(fresh.contains(&"  ci_classes: 1 (built-in: 1)".to_owned()), "{fresh:#?}");
+        assert!(fresh.contains(&"  ci_classes: 2 (built-in: 2)".to_owned()), "{fresh:#?}");
 
         install_template(&db.pool, "it_infrastructure").await.unwrap();
         let seeded = data_model_report(&data_model_counts(&db.pool).await.unwrap());
@@ -472,7 +472,7 @@ mod tests {
         .unwrap();
         let report = data_model_report(&data_model_counts(&db.pool).await.unwrap());
         assert!(!report.iter().any(|l| l.starts_with(HINT)), "{report:#?}");
-        assert!(report.contains(&"  ci_classes: 2 (built-in: 1)".to_owned()), "{report:#?}");
+        assert!(report.contains(&"  ci_classes: 3 (built-in: 2)".to_owned()), "{report:#?}");
         db.drop().await;
     }
 }

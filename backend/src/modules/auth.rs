@@ -14,8 +14,8 @@ use uuid::Uuid;
 
 use super::mfa::{self, MfaStatus};
 use super::profiles::ClassPermission;
-use super::sso;
-use super::users::{self, User, UserCreate, password_problem, password_schema, username_schema};
+use super::users::{self, User, UserCreate, password_problem, password_schema, required_email_schema, username_schema};
+use super::{people, sso};
 use crate::api::context::{RequestContext, unauthenticated};
 use crate::api::route::{
     Body, Check, Either, ErrorWithCookies, In, Json, NoBody, NoContent, NoPath, NoQuery, Route, WithCookies, route,
@@ -27,10 +27,9 @@ use crate::auth::secret::Secret;
 use crate::auth::throttle::{Attempt, GLOBAL_PENALTY, Gate, LoginThrottle, Net, SLOW_LANE_WAITERS};
 use crate::auth::{AuthState, Principal, password, session};
 use crate::data::auth as data;
-use crate::data::crud::AuditAction;
+use crate::data::crud::{self, AuditAction, AuditEntry};
 use crate::data::mfa as mfa_data;
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
-use crate::modules::lookups::email_schema;
 
 // ---------------------------------------------------------------------------
 // Schemas
@@ -51,9 +50,9 @@ pub struct SetupBody {
     #[schema(schema_with = name_schema)]
     #[serde(deserialize_with = "trimmed")]
     display_name: String,
-    #[schema(schema_with = email_schema)]
-    #[serde(default)]
-    email: Option<String>,
+    /// The administrator's e-mail; a Person CI is created for it
+    #[schema(schema_with = required_email_schema)]
+    email: String,
     #[schema(schema_with = password_schema)]
     password: Secret,
     /// The one-time setup token from the setup token file, or the server log
@@ -109,6 +108,18 @@ pub struct PasswordChange {
     new_password: Secret,
 }
 
+/// The e-mail an account created before e-mails were required enters at its
+/// first sign-in after the upgrade
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EmailEntry {
+    /// Unique regardless of case; the account is linked to the Person with this
+    /// e-mail, which is created when there is none
+    #[schema(schema_with = required_email_schema)]
+    email: String,
+}
+impl Check for EmailEntry {}
+
 impl Check for PasswordChange {
     fn check(&self) -> Vec<FieldError> {
         password_problem("newPassword", &self.new_password)
@@ -155,6 +166,10 @@ pub struct Session {
     pub user: User,
     pub permissions: EffectivePermissions,
     pub mfa: MfaStatus,
+    /// The account has no e-mail yet (created before e-mails were required):
+    /// enter it with PUT /api/v1/auth/email; until then every other route but
+    /// this one and sign-out answers 403 EMAIL_REQUIRED
+    pub email_required: bool,
     /// Send as the X-CSRF-Token header on every POST, PUT, PATCH and DELETE
     /// (also readable from the shadoucmdb_csrf cookie, `__Host-shadoucmdb_csrf` behind HTTPS)
     pub csrf_token: String,
@@ -169,7 +184,8 @@ async fn session_dto(pool: &PgPool, user_id: Uuid, session_id: Uuid, csrf_token:
     let user = users::load(&mut conn, user_id).await?;
     let permissions = data::load_permissions(&mut conn, user_id).await?;
     let mfa = mfa::status(&mut conn, user_id, Some(session_id)).await?;
-    Ok(Session { user, permissions: EffectivePermissions::from(&permissions), mfa, csrf_token })
+    let email_required = user.email.is_none();
+    Ok(Session { user, permissions: EffectivePermissions::from(&permissions), mfa, email_required, csrf_token })
 }
 
 /// Opens a session for the user and records `login.success`; returns its id and cookies.
@@ -233,6 +249,11 @@ pub(crate) async fn try_open_session(
             _ => None,
         };
     }
+    // An account with an e-mail but no Person cannot sign in (SHAA-1505
+    // decision 8); one without an e-mail signs in and is asked for it.
+    if changed.is_none() && !data::person_linked(&mut tx, user_id).await? {
+        changed = Some(Changed::AccountIncomplete);
+    }
     if let Some(changed) = changed {
         drop(tx);
         return Ok(Err(refused(pool, request, username, changed).await?));
@@ -272,6 +293,9 @@ pub(crate) enum Changed {
     /// The authenticator was reset or turned off after its code was checked;
     /// second-factor sign-ins only (GH#341).
     MfaRemoved,
+    /// The account has an e-mail but no linked Person (SHAA-1505 decision 8).
+    /// Answered like wrong credentials; the reason is in the audit log.
+    AccountIncomplete,
 }
 
 impl Changed {
@@ -282,6 +306,7 @@ impl Changed {
             Changed::Provider => "provider_disabled",
             Changed::MfaEnrolled => "mfa_enrolled",
             Changed::MfaRemoved => "mfa_removed",
+            Changed::AccountIncomplete => ACCOUNT_INCOMPLETE,
         }
     }
 }
@@ -289,6 +314,7 @@ impl Changed {
 impl From<Changed> for AppError {
     fn from(changed: Changed) -> Self {
         let message = match changed {
+            Changed::AccountIncomplete => return invalid_credentials(),
             Changed::Account => "The account was changed during the sign-in; enter your username and password again",
             Changed::MfaEnrolled => {
                 "Two-factor authentication was set up for this account during the sign-in; sign in again and enter the code from your authenticator app"
@@ -321,7 +347,8 @@ async fn changed_since(
 }
 
 /// A sign-in refused because the account, its provider or its second factor
-/// changed while it was checked (GH#209, GH#250, GH#303, GH#341): logged and audited.
+/// changed while it was checked (GH#209, GH#250, GH#303, GH#341), or the
+/// account is incomplete (SHAA-1505): logged and audited.
 async fn refused(pool: &PgPool, ctx: &RequestContext, username: &str, changed: Changed) -> Result<Changed, AppError> {
     tracing::warn!(user = %username, ip = ?ctx.client.ip, reason = changed.reason(), "sign-in refused: the account, its identity provider or its second factor changed while it was checked");
     record_failure(pool, ctx, username, Some(changed.reason()), None).await?;
@@ -606,6 +633,15 @@ async fn check_login(
         record_failure(pool, ctx, &b.username, Some(ACCOUNT_DISABLED), locked).await?;
         return Err(invalid_credentials());
     }
+    if !user.person_linked {
+        // An account with an e-mail but no Person (SHAA-1505 decision 8):
+        // answered and throttled like a disabled one; the reason is in the log
+        // and the audit row, and the Users page shows the account as incomplete.
+        let locked = attempt.failure();
+        tracing::warn!(username = %user.username, ip = ?ctx.client.ip, locked_secs = locked.map(|d| d.as_secs()), "sign-in to an incomplete account (no linked person)");
+        record_failure(pool, ctx, &b.username, Some(ACCOUNT_INCOMPLETE), locked).await?;
+        return Err(invalid_credentials());
+    }
     let verified = Some(user.password_changed_at);
     let attempt = attempt.into();
     password_accepted(pool, auth, headers, ctx, attempt, user.id, &user.username, LoginMethod::Password, verified).await
@@ -762,6 +798,8 @@ async fn directory_answer(
 
 /// `login.failure` reason: the right password for a disabled local account.
 const ACCOUNT_DISABLED: &str = "account_disabled";
+/// The `login.failure` reason for an account with an e-mail but no Person.
+pub(crate) const ACCOUNT_INCOMPLETE: &str = "account_incomplete";
 
 /// `login.failure` reason: the name found a directory entry whose sign-ins
 /// are locked, so the password was not checked (GH#406).
@@ -966,6 +1004,36 @@ pub(crate) async fn confirm_current_password_attempt<'a>(
     Ok(attempt)
 }
 
+/// The e-mail an account without one enters (SHAA-1505 decision 9): set once,
+/// linked to its Person in the same transaction. Changing it afterwards needs
+/// users.manage (Administration > Users).
+async fn enter_email(pool: &PgPool, ctx: &RequestContext, b: EmailEntry) -> Result<Session, AppError> {
+    let me = principal(ctx)?;
+    let session_id = me.session_id().ok_or_else(unauthenticated)?;
+    let csrf_token = me.csrf_token().ok_or_else(unauthenticated)?.to_owned();
+    let mut tx = pool.begin().await?;
+    let before = users::lock_for_update(&mut tx, me.user_id).await?;
+    if before.email.is_some() {
+        return Err(AppError::conflict(
+            "Your account already has an e-mail address; an administrator can change it (Administration > Users)",
+        ));
+    }
+    data::set_email(&mut tx, me.user_id, b.email.trim()).await.map_err(AppError::from)?;
+    people::link_user(&mut tx, ctx, me.user_id).await?;
+    let after = users::load(&mut tx, me.user_id).await?;
+    let entry = AuditEntry {
+        action: AuditAction::Update,
+        entity_type: "users",
+        entity_id: me.user_id,
+        old_value: Some(crud::json(&before)),
+        new_value: Some(crud::json(&after)),
+    };
+    crud::write_audit(&mut tx, ctx, vec![entry]).await?;
+    tx.commit().await?;
+    tracing::info!(user = %me.username, "account entered its e-mail address");
+    session_dto(pool, me.user_id, session_id, csrf_token).await
+}
+
 async fn change_password(
     pool: &PgPool,
     auth: &AuthState,
@@ -1036,6 +1104,7 @@ pub fn routes() -> Vec<Route> {
             .summary("Sign out: end this session and clear its cookies")
             .session_only()
             .before_mfa_enrolment()
+            .before_email_entry()
             .handle(|api, In(NoPath, NoQuery, NoBody): In<NoPath, NoQuery, NoBody>| async move {
                 logout(&api.pool, &api.ctx).await?;
                 let secure = session::secure_cookies(&api.auth.config, &api.headers);
@@ -1046,11 +1115,23 @@ pub fn routes() -> Vec<Route> {
             .summary("The signed-in user, their effective permissions, MFA status and the CSRF token")
             .session_only()
             .before_mfa_enrolment()
+            .before_email_entry()
             .handle(|api, In(NoPath, NoQuery, NoBody): In<NoPath, NoQuery, NoBody>| async move {
                 let me = principal(&api.ctx)?;
                 let csrf_token = me.csrf_token().ok_or_else(unauthenticated)?.to_owned();
                 let session_id = me.session_id().ok_or_else(unauthenticated)?;
                 Ok(Json(session_dto(&api.pool, me.user_id, session_id, csrf_token).await?))
+            }),
+        route(Method::PUT, "/api/v1/auth/email", "enterOwnEmail")
+            .tag(TAG)
+            .summary("Enter the e-mail address of your account (accounts without one only)")
+            .description("For an account created before e-mail addresses were required (`emailRequired` in GET /api/v1/auth/me): until it has one, every other route but GET /api/v1/auth/me and sign-out answers 403 EMAIL_REQUIRED. The address must be unique regardless of case (409 CONFLICT otherwise); the account is linked to the Person CI with this e-mail, which is created when there is none. Answers the session as GET /api/v1/auth/me does. 409 CONFLICT for an account that already has an e-mail: an administrator changes it (PATCH /api/v1/admin/users/{id}).")
+            .session_only()
+            .before_mfa_enrolment()
+            .before_email_entry()
+            .errors(&[ErrorCode::Conflict])
+            .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<EmailEntry>>| async move {
+                Ok(Json(enter_email(&api.pool, &api.ctx, b).await?))
             }),
         route(Method::PUT, "/api/v1/auth/password", "changeOwnPassword")
             .tag(TAG)
@@ -1107,7 +1188,7 @@ pub(crate) mod tests {
         SetupBody {
             username: username.into(),
             display_name: "First admin".into(),
-            email: None,
+            email: format!("{username}@example.test"),
             password: OWNER_PASSWORD.clone().into(),
             setup_token: crate::auth::setup_token::TEST_TOKEN.into(),
         }
@@ -1316,6 +1397,7 @@ pub(crate) mod tests {
                 id: Uuid::nil(),
                 csrf_token: String::new(),
                 mfa_enrolment_required: false,
+                email_required: false,
             },
             permissions,
         };
@@ -1385,7 +1467,7 @@ pub(crate) mod tests {
         let input = UserCreate {
             username: "alice".into(),
             display_name: "Alice".into(),
-            email: None,
+            email: "alice@example.test".into(),
             password: "alice correct horse".into(),
             is_active: Some(true),
             profile_ids: vec![],
@@ -1456,6 +1538,7 @@ pub(crate) mod tests {
                 id: Uuid::nil(),
                 csrf_token: String::new(),
                 mfa_enrolment_required: false,
+                email_required: false,
             },
             permissions,
         };
@@ -1502,7 +1585,7 @@ pub(crate) mod tests {
         let input = UserCreate {
             username: "gone".into(),
             display_name: "Gone".into(),
-            email: None,
+            email: "gone@example.test".into(),
             password: "gone correct horse".into(),
             is_active: Some(false),
             profile_ids: vec![],
@@ -1552,7 +1635,7 @@ pub(crate) mod tests {
         let input = UserCreate {
             username: "gone".into(),
             display_name: "Gone".into(),
-            email: None,
+            email: "gone@example.test".into(),
             password: password.as_str().into(),
             is_active: Some(false),
             profile_ids: vec![],
@@ -1877,7 +1960,7 @@ pub(crate) mod tests {
         let input = UserCreate {
             username: name.into(),
             display_name: name.into(),
-            email: None,
+            email: format!("{name}@example.test"),
             password: password.clone().into(),
             is_active: Some(true),
             profile_ids: vec![],
@@ -2196,7 +2279,7 @@ pub(crate) mod tests {
         let disabled = UserCreate {
             username: "gone".into(),
             display_name: "Gone".into(),
-            email: None,
+            email: "gone@example.test".into(),
             password: gone_password.as_str().into(),
             is_active: Some(false),
             profile_ids: vec![],
@@ -2420,7 +2503,7 @@ pub(crate) mod tests {
         };
 
         // Session A: opened over plain HTTP, so under the plain names.
-        let setup = json!({ "username": "owner", "displayName": "Owner", "password": OWNER_PASSWORD.as_str(), "setupToken": crate::auth::setup_token::TEST_TOKEN });
+        let setup = json!({ "username": "owner", "email": "owner@example.test", "displayName": "Owner", "password": OWNER_PASSWORD.as_str(), "setupToken": crate::auth::setup_token::TEST_TOKEN });
         let (status, a, set) = send("POST", "/api/v1/setup", false, None, None, Some(setup)).await;
         assert_eq!(status, 201, "{a}");
         assert!(set.iter().all(|c| !c.starts_with("__Host-")), "{set:?}");
