@@ -213,3 +213,70 @@ INSERT INTO apps.application (id, criticality) VALUES
     assert!(!active);
     db.drop().await;
 }
+
+/// A Criticality another session sets while 0036 runs wins (GH#391): 0036 read
+/// the core field as empty, but leaves the CI alone when it comes to update it,
+/// writes no audit entry for it and counts it as a kept core value.
+#[tokio::test]
+async fn a_criticality_set_while_the_migration_runs_is_kept() {
+    let Some(db) = scratch::empty("a_criticality_set_while_the_migration_runs_is_kept").await else { return };
+    let pool = &db.pool;
+    MIGRATOR.run_to(35, pool).await.expect("migrations up to 0035");
+    pool.execute(sqlx::AssertSqlSafe(BEFORE)).await.expect("data before the upgrade");
+
+    // Another session sets ci-1's Criticality and holds the row until 0036
+    // has read the core field and waits for the row.
+    let mut other = pool.begin().await.unwrap();
+    sqlx::query(
+        "UPDATE configuration_items SET version = version + 1, criticality_value_id =
+           (SELECT v.id FROM lookup_list_values v JOIN lookup_lists l ON l.id = v.list_id
+            WHERE l.system_role = 'criticality' AND v.key = 'low')
+         WHERE id = $1",
+    )
+    .bind(ci(1))
+    .execute(&mut *other)
+    .await
+    .unwrap();
+    let migration = tokio::spawn({
+        let pool = pool.clone();
+        async move { MIGRATOR.run(&pool).await }
+    });
+    let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()").fetch_one(&mut *other).await.unwrap();
+    let mut waiting = false;
+    for _ in 0..200 {
+        waiting = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT FROM pg_locks WHERE NOT granted AND $1 = ANY (pg_blocking_pids(pid)))",
+        )
+        .bind(pid)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        if waiting {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(waiting, "0036 waits for the row the other session holds");
+    other.commit().await.unwrap();
+    migration.await.unwrap().expect("migration 0036");
+
+    let s = |k: &str| Some(k.to_owned());
+    assert_eq!(&core(pool).await[..2], [(ci(1), s("low"), 2), (ci(2), s("critical"), 2)]);
+    let ci_audit: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT entity_id FROM audit_log WHERE entity_type = 'configuration_items' AND actor_name = 'migration 0036'",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    assert_eq!(ci_audit, [ci(2)]);
+    let counts: Value = sqlx::query_scalar(
+        "SELECT jsonb_build_object('criticalitySet', new_value -> 'criticalitySet', 'alreadySet', new_value -> 'alreadySet',
+                                   'keptCoreValue', new_value -> 'keptCoreValue', 'notMapped', new_value -> 'notMapped')
+         FROM audit_log WHERE entity_type = 'ci_attribute_definitions' AND action = 'update'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(counts, json!({ "criticalitySet": 1, "alreadySet": 1, "keptCoreValue": 2, "notMapped": 1 }));
+    db.drop().await;
+}
