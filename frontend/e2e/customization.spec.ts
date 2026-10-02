@@ -284,120 +284,76 @@ test("list views: a view without the Label column still shows it first, so every
   await expect(page).toHaveURL(/\/cis\/[0-9a-f-]{36}$/);
 });
 
-test("layouts: the form designer arranges tabs, sections and widths for the form and the detail page", async ({ page, request }) => {
-  // Tall enough that a dragged field and the tab it is dropped on are both in view.
-  await page.setViewportSize({ width: 1440, height: 1800 });
+test("layouts: Edit CI opens the layout editor on a Server, whose layout the detail page and the form follow", async ({ page, request }) => {
+  const serverId = await classIdByName(request, "Server");
+  const ci = (await apiGet<{ data: { id: string; label: string }[] }>(request, `/configuration-items?classId=${serverId}&sort=-updatedAt&limit=1`)).data[0];
   await page.goto("/admin/customization/layouts?class=server");
-  await page.getByRole("button", { name: "Customize the Server layout" }).click();
-  const frame = page.getByTestId("designer-frame");
-  const chip = (label: string) => frame.locator(".designer-field").filter({ has: page.locator(".designer-label", { hasText: new RegExp(`^${label}\\*?$`) }) });
-  const props = page.getByRole("complementary", { name: "Layout properties" });
-  const say = page.locator(".designer [aria-live=assertive]");
-  // The live preview is the Server form: one General tab, the core fields first.
-  await expect(frame.getByRole("tab")).toHaveText(["General"]);
-  await expect(frame.locator(".designer-section").first().locator(".designer-label").first()).toHaveText("Ident");
-  await expect(chip("Ident").locator("input")).toHaveAttribute("placeholder", "Generated");
+  await expect(page.getByTestId("layout-status")).toContainText("Server uses the built-in layout");
+  // The editor opens in its own window on the most recently updated Server.
+  const [editor] = await Promise.all([page.waitForEvent("popup"), page.getByRole("button", { name: `Edit CI: ${ci.label}` }).click()]);
+  await expect(editor).toHaveURL(new RegExp(`/cis/${ci.id}/layout-editor$`));
+  // Tall enough that a dragged field and the tab it is dropped on are both in view.
+  await editor.setViewportSize({ width: 1440, height: 2000 });
+  const bar = editor.getByRole("region", { name: "Layout editing" });
+  const tabBar = editor.getByRole("group", { name: "Tabs of the layout" });
+  const section = (label: string) => editor.getByRole("region", { name: `Section ${label}`, exact: true });
+  const field = (label: string) => editor.locator(".le-field").filter({ has: editor.getByRole("button", { name: new RegExp(`^${label}, `) }) });
+  await expect(bar).toContainText("Editing the Server layout");
 
-  // A second tab, renamed, whose section gets a two-column grid.
-  await frame.getByRole("button", { name: "+ Add tab" }).click();
-  await props.getByLabel("Tab name").fill("Hardware");
-  await expect(frame.getByRole("tab")).toHaveText(["General", "Hardware"]);
-  await frame.getByRole("button", { name: "Tab 2", exact: true }).click();
-  await props.getByLabel("Section heading").fill("Hardware facts");
-  await props.getByLabel("Columns").selectOption("2");
-  await expect(frame.locator(".designer-section").first()).toContainText("2 columns");
+  // A second tab, its section renamed and given a two-column grid.
+  await tabBar.getByRole("button", { name: "+ Tab" }).click();
+  await tabBar.getByLabel("Tab name").fill("Hardware");
+  await editor.keyboard.press("Enter");
+  await section("Hardware").getByRole("button", { name: "Hardware", exact: true }).click();
+  await editor.getByLabel("Section name").fill("Hardware facts");
+  await editor.keyboard.press("Enter");
+  await section("Hardware facts").hover();
+  await section("Hardware facts").getByLabel("Columns of Hardware facts").selectOption("2");
+  await expect(section("Hardware facts")).toContainText("2 columns");
 
-  // Drag and drop: CPU cores onto the Hardware tab, then Manufacturer before it in the section.
-  await frame.getByRole("tab", { name: "General" }).click();
-  await chip("CPU cores").dragTo(frame.getByRole("tab", { name: "Hardware" }));
-  await expect(frame.getByRole("tab", { name: "Hardware" })).toHaveAttribute("aria-selected", "true");
-  await expect(frame.locator(".designer-section").first().locator(".designer-label")).toHaveText(["CPU cores"]);
-  await frame.getByRole("tab", { name: "General" }).click();
-  await chip("Manufacturer").dragTo(frame.getByRole("tab", { name: "Hardware" }));
-  await chip("Manufacturer").dragTo(chip("CPU cores"), { targetPosition: { x: 5, y: 20 } });
-  await expect(frame.locator(".designer-section").first().locator(".designer-label")).toHaveText(["Manufacturer", "CPU cores"]);
-
-  // The keyboard alternative: select with Enter, move with the side panel and Alt+arrows, resize with Alt+arrows.
-  await frame.getByRole("tab", { name: "General" }).click();
-  await chip("Model").focus();
-  await page.keyboard.press("Enter");
-  await props.getByLabel("Section").selectOption({ label: "Hardware facts" });
-  await expect(frame.getByRole("tab", { name: "Hardware" })).toHaveAttribute("aria-selected", "true");
-  await expect(frame.locator(".designer-section").first().locator(".designer-label")).toHaveText(["Manufacturer", "CPU cores", "Model"]);
-  await chip("Model").focus();
-  await page.keyboard.press("Alt+ArrowUp");
-  await expect(say).toHaveText("Model moved to position 2 of 3 in Hardware facts.");
-  await expect(frame.locator(".designer-section").first().locator(".designer-label")).toHaveText(["Manufacturer", "Model", "CPU cores"]);
-  await expect(chip("Model")).toBeFocused();
-  await page.keyboard.press("Alt+ArrowRight");
-  await expect(chip("Model")).toHaveAttribute("aria-label", /Model, 2 of 2 columns/);
-  await page.keyboard.press("Alt+ArrowRight");
-  await expect(say).toHaveText("Model: 2 of 2 columns.");
-  // Resize with the mouse: drag CPU cores' right edge across the second column.
-  const cpu = chip("CPU cores");
-  const box = (await cpu.boundingBox())!;
-  const handle = (await cpu.locator(".resize-handle").boundingBox())!;
-  await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(handle.x + box.width, handle.y + handle.height / 2, { steps: 5 });
-  await page.mouse.up();
-  await expect(cpu).toHaveAttribute("aria-label", /CPU cores, 2 of 2 columns/);
-  await expect(cpu).toHaveClass(/lg-w-2/);
-
+  // CPU cores dragged onto the tab; Manufacturer and Model moved there from their toolbars.
+  await tabBar.getByRole("button", { name: "General", exact: true }).click();
+  await field("CPU cores").dragTo(tabBar.getByRole("button", { name: "Hardware", exact: true }));
+  await expect(section("Hardware facts").locator(".le-field")).toHaveCount(1);
+  await tabBar.getByRole("button", { name: "General", exact: true }).click();
+  await field("Manufacturer").hover();
+  await field("Manufacturer").getByLabel("Move Manufacturer to section").selectOption({ label: "Hardware facts" });
+  await tabBar.getByRole("button", { name: "General", exact: true }).click();
+  await field("Model").hover();
+  await field("Model").getByLabel("Move Model to section").selectOption({ label: "Hardware facts" });
+  await expect(section("Hardware facts").locator(".le-field")).toHaveCount(3);
   // Hiding: Delete hides a field; core fields refuse and say why.
-  await frame.getByRole("tab", { name: "General" }).click();
-  await chip("Asset tag").focus();
-  await page.keyboard.press("Delete");
-  await expect(page.getByTestId("designer-hidden").getByRole("listitem")).toHaveText([/Asset tag/]);
-  await chip("Ident").focus();
-  await page.keyboard.press("Delete");
-  await expect(say).toHaveText("Ident belongs to every CI: it can be moved, not hidden.");
-  await expect(chip("Ident")).toHaveCount(1);
-  await chip("Ident").click();
-  await expect(props.getByRole("button", { name: "Hide field" })).toBeDisabled();
-  await chip("Serial number").click();
-  await props.getByLabel("Read-only on the form").check();
-  await expect(chip("Serial number")).toContainText("read-only");
+  await tabBar.getByRole("button", { name: "General", exact: true }).click();
+  await editor.getByRole("button", { name: /^Asset tag, / }).focus();
+  await editor.keyboard.press("Delete");
+  await expect(editor.getByTestId("le-hidden").getByRole("listitem")).toHaveText([/Asset tag/]);
+  await editor.getByRole("button", { name: /^Ident, / }).focus();
+  await editor.keyboard.press("Delete");
+  await expect(editor.locator(".le-canvas [aria-live=assertive]")).toHaveText("Ident belongs to every CI: it can be moved, not hidden.");
+  await expect(field("Ident")).toHaveCount(1);
 
-  // The preview can be narrowed to check small screens: the grid falls back to one column.
-  await page.getByRole("toolbar", { name: "Preview width" }).getByRole("button", { name: "Phone 390" }).click();
-  await expect(page.getByTestId("designer-width")).toHaveText(/^3\d\d px wide$/);
-  const narrow = (await chip("Ident").boundingBox())!;
-  const next = (await chip("Valid from").boundingBox())!;
-  expect(next.y).toBeGreaterThan(narrow.y + narrow.height - 1);
-  await snap(page, "customization-layout-designer-phone");
-  await page.getByRole("toolbar", { name: "Preview width" }).getByRole("button", { name: "Full width" }).click();
-  await frame.getByRole("tab", { name: "Hardware" }).click();
-  await snap(page, "customization-layout-designer");
-
-  // Unsaved changes are guarded when leaving Customization (its sections share one draft).
-  let asked = "";
-  page.once("dialog", (d) => {
-    asked = d.message();
-    void d.dismiss();
-  });
-  await page.getByRole("navigation", { name: "Administration" }).getByRole("link", { name: "Users" }).click();
-  await expect(page).toHaveURL(/\/admin\/customization\/layouts/);
-  expect(asked).toContain("unsaved");
-  await save(page, "e2e layout");
+  await bar.getByLabel("Note for this version").fill(`e2e layout ${stamp}`);
+  await bar.getByRole("button", { name: "Save layout" }).click();
+  await expect(bar.getByRole("status")).toContainText(/Saved as version \d+/);
+  await snap(editor, "customization-layout-editor");
+  await editor.close();
+  await page.reload();
+  await expect(page.getByTestId("layout-status")).toContainText("Server has its own layout");
 
   // The detail page: the layout's tabs, then the relationship map.
-  const servers = await apiGet<{ data: { id: string; label: string }[] }>(request, `/configuration-items?classId=${await classIdByName(request, "Server")}&limit=1`);
-  const ci = servers.data[0];
   await page.goto(`/cis/${ci.id}`);
   const tabs = page.getByRole("tablist", { name: "CI sections" }).getByRole("tab");
   await expect(tabs).toHaveText(["General", "Hardware", "Relationship map", "Impact", "History"]);
-  await expect(page.locator(".layout-panels").getByText("CPU cores", { exact: true })).toHaveCount(0);
-  await expect(page.locator(".layout-panels").getByText("Asset tag", { exact: true })).toHaveCount(0);
+  await expect(page.locator(".layout-container").getByText("CPU cores", { exact: true })).toHaveCount(0);
+  await expect(page.locator(".layout-container").getByText("Asset tag", { exact: true })).toHaveCount(0);
   await tabs.filter({ hasText: "Hardware" }).click();
-  await expect(page.locator(".layout-panels > details > summary h2")).toHaveText(["Hardware facts"]);
-  await expect(page.locator(".layout-panels dt")).toHaveText(["Manufacturer", "Model", "CPU cores"]);
+  await expect(page.locator(".lg-free > details > summary h2")).toHaveText(["Hardware facts"]);
+  await expect(page.locator(".lg-free dt")).toHaveText(["CPU cores", "Manufacturer", "Model"]);
 
   // The form: the same tabs; a field on the second tab is edited and saved.
   await page.getByRole("link", { name: "Edit" }).click();
   const formTabs = page.getByRole("tablist", { name: "Form tabs" }).getByRole("tab");
   await expect(formTabs).toHaveText(["General", "Hardware"]);
-  await expect(page.getByLabel("Serial number")).toBeDisabled();
   await expect(page.getByLabel("Asset tag")).toHaveCount(0);
   await expect(page.getByLabel("Model")).toBeHidden();
   await formTabs.filter({ hasText: "Hardware" }).click();
@@ -405,7 +361,7 @@ test("layouts: the form designer arranges tabs, sections and widths for the form
   await page.getByRole("button", { name: "Save changes" }).click();
   await expect(page).toHaveURL(new RegExp(`/cis/${ci.id}$`));
   await tabs.filter({ hasText: "Hardware" }).click();
-  await expect(page.locator(".layout-panels")).toContainText(`E2E ${stamp}`);
+  await expect(page.locator(".lg-free")).toContainText(`E2E ${stamp}`);
   expect(await ciIdByName(request, ci.label)).toBe(ci.id);
   await snap(page, "customization-layout");
 });
@@ -421,7 +377,7 @@ test("history: an earlier version can be restored", async ({ page }) => {
   await expect(rows.first()).toContainText("Restored version");
   await expect(rows.first()).toContainText("current");
   await page.goto("/admin/customization/layouts?class=server");
-  await expect(page.getByRole("button", { name: "Customize the Server layout" })).toBeVisible();
+  await expect(page.getByTestId("layout-status")).toContainText("Server uses the built-in layout");
 });
 
 test("layouts: the API validates the layout document and converts the older panels format", async ({ request }) => {
@@ -453,7 +409,15 @@ test("layouts: the API validates the layout document and converts the older pane
   expect(v1.ok(), await v1.text()).toBeTruthy();
   const saved = (await v1.json()).settings.layouts[0];
   expect(saved.panels).toBeUndefined();
-  expect(saved.tabs).toEqual([{ key: "general", label: "General", sections: [{ key: "main", label: "Main", columns: 3, width: 12, collapsed: false, fields: [{ field: "attributes.model", width: 1 }] }] }]);
+  // Every tab is stored free (SHAA-1471): the section is a window at the full width.
+  expect(saved.tabs).toEqual([
+    {
+      key: "general",
+      label: "General",
+      placement: "free",
+      sections: [{ key: "main", label: "Main", columns: 3, width: 12, collapsed: false, fields: [{ field: "attributes.model", width: 1 }], frame: { x: 0, y: 0, w: 1, h: 96, z: 1 } }],
+    },
+  ]);
 });
 
 test("a concurrent save is reported, not overwritten", async ({ page, request }) => {

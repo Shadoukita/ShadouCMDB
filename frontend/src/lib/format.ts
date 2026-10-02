@@ -1,4 +1,4 @@
-import { currentLocale } from "../i18n/index";
+import { currentLocale, t } from "../i18n/index";
 
 // The browser's locale, unless a test forced the German catalog: then German dates too (GH#478).
 const formatters = new Map<string, Intl.DateTimeFormat>();
@@ -32,12 +32,12 @@ export function formatDate(iso: string | null | undefined): string {
 export function formatRelative(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
   const min = Math.round(diff / 60_000);
-  if (min < 1) return "just now";
-  if (min < 60) return `${min} min ago`;
+  if (min < 1) return t("time.justNow");
+  if (min < 60) return t("time.minutesAgo", { n: min });
   const h = Math.round(min / 60);
-  if (h < 24) return `${h} h ago`;
+  if (h < 24) return t("time.hoursAgo", { n: h });
   const d = Math.round(h / 24);
-  if (d < 30) return `${d} d ago`;
+  if (d < 30) return t("time.daysAgo", { n: d });
   return formatDate(iso);
 }
 

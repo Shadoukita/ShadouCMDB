@@ -7,6 +7,7 @@ import GlobalSearch from "./components/GlobalSearch.vue";
 import LoadingState from "./components/LoadingState.vue";
 import MainNav from "./components/MainNav.vue";
 import UserMenu from "./components/UserMenu.vue";
+import { t } from "./i18n";
 import { useMediaQuery } from "./lib/composables";
 import { applyBranding, useBrandingStore } from "./stores/branding";
 import { useSessionStore } from "./stores/session";
@@ -50,23 +51,23 @@ function retry() {
         class="nav-toggle"
         aria-controls="shell-nav"
         :aria-expanded="navOpen"
-        :aria-label="navOpen ? 'Close navigation' : 'Open navigation'"
+        :aria-label="navOpen ? t('shell.nav.close') : t('shell.nav.open')"
         @click="navOpen = !navOpen"
       >
         <span aria-hidden="true">☰</span>
       </button>
-      <RouterLink to="/" :aria-label="`${branding.effective.appName} home`"><BrandMark /></RouterLink>
+      <RouterLink to="/" :aria-label="t('shell.home', { app: branding.effective.appName })"><BrandMark /></RouterLink>
     </div>
     <header class="shell-header">
       <GlobalSearch />
       <div class="shell-actions">
-        <RouterLink v-if="session.canOnAnyClass('create')" class="btn btn-primary new-ci" to="/cis/new" title="New CI">
-          <span aria-hidden="true">+</span><span class="btn-label">New CI</span>
+        <RouterLink v-if="session.canOnAnyClass('create')" class="btn btn-primary new-ci" to="/cis/new" :title="t('shell.newCi')">
+          <span aria-hidden="true">+</span><span class="btn-label">{{ t("shell.newCi") }}</span>
         </RouterLink>
         <UserMenu />
       </div>
     </header>
-    <nav id="shell-nav" class="shell-nav" aria-label="Main">
+    <nav id="shell-nav" class="shell-nav" :aria-label="t('shell.mainNav')">
       <MainNav />
     </nav>
     <div v-if="narrow && navOpen" class="nav-scrim" aria-hidden="true" @click="navOpen = false"></div>
@@ -74,5 +75,5 @@ function retry() {
       <RouterView />
     </main>
   </div>
-  <LoadingState v-else label="Starting…" />
+  <LoadingState v-else :label="t('shell.starting')" />
 </template>

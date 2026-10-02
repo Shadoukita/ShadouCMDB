@@ -406,10 +406,10 @@ textarea {
 }
 
 /* ---------- Layout grid (tabs → sections → fields; Customization › Detail and form layout) ----------
- * A tab is a grid of 12 columns and each section spans 1–12 of them (lg-sec lg-s-N; lg-new-row starts a
- * row). A section is a grid of 1–12 columns (lg-cols-N) and each field spans 1–12 of them (lg-w-N).
- * The grids answer to the width of their container, not the window, so the designers' resizable previews
- * narrow them exactly as a small screen does. Below 820px of tab width sections stack at the full width.
+ * The sections a layout places are windows (lg-free below); the ones it leaves to the built-in placement
+ * sit on a grid of 12 columns at the full width (lg-sec lg-s-N; lg-new-row starts a row). A section is a
+ * grid of 1–12 columns (lg-cols-N) and each field spans 1–12 of them (lg-w-N). The grids answer to the
+ * width of their container, not the window. Below 820px of tab width sections stack at the full width.
  * Below 820px of section width a section's grid has at most 2 columns (a field spans lg-n-1 or lg-n-2 of
  * them); below 520px, 1. */
 .layout-container {
@@ -1468,7 +1468,7 @@ nav.tabs a[aria-current="page"] {
 }
 
 /* ---------- Layout panels (Customization › Detail and form layout) ---------- */
-/* Sections sit on the tab's 12-column grid (lg-sec above); each lays its fields out on its own grid. */
+/* The sections a layout does not place sit on a 12-column grid (lg-sec above), at the full width; each lays its fields out on its own grid. */
 .layout-panels {
   display: grid;
   grid-template-columns: repeat(12, minmax(0, 1fr));
@@ -1540,7 +1540,7 @@ nav.tabs a[aria-current="page"] {
     box-shadow: none;
   }
 }
-/* The live "6 / 12" guide on a field or section while its edge is dragged in the layout editors. */
+/* The live "2 / 3" guide on a field while its edge is dragged in the layout editor. */
 .lg-size-guide {
   position: absolute;
   top: 50%;
@@ -1555,17 +1555,6 @@ nav.tabs a[aria-current="page"] {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   pointer-events: none;
-}
-/* The 12 columns, shown while a section's edge is dragged in the layout editors. */
-.layout-panels.lg-guide {
-  --lg-track: calc((100% - 11 * var(--sp-4)) / 12);
-  background: repeating-linear-gradient(
-    to right,
-    var(--c-row-hover) 0,
-    var(--c-row-hover) var(--lg-track),
-    transparent var(--lg-track),
-    transparent calc(var(--lg-track) + var(--sp-4))
-  );
 }
 details.layout-panel > summary {
   cursor: pointer;

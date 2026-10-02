@@ -20732,6 +20732,641 @@
         ]
       }
     },
+    "/api/v1/ui-settings/layout-templates/usage": {
+      "get": {
+        "tags": [
+          "UI settings"
+        ],
+        "summary": "Which layout template each class uses, and who uses each template",
+        "description": "Requires `customization.manage`. Per template: the classes that use it as their default and the number of live CIs that show it instead of their class's default (null when some of those CIs are in classes you may not view). Per class: its default template. Templates are edited in the settings document (`layoutTemplates`, PUT /api/v1/ui-settings); one that a class or a live CI uses cannot be removed (409 CONFLICT).",
+        "operationId": "getLayoutTemplateUsage",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LayoutTemplateUsages"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/ui-settings/class-layouts/{key}": {
+      "put": {
+        "tags": [
+          "UI settings"
+        ],
+        "summary": "Set a class's default layout template (saved as a new UI settings version)",
+        "description": "Requires `customization.manage`. Every CI of the class shows the template, except CIs with a layout of their own. The same as changing `layouts[].templateKey` with PUT /api/v1/ui-settings; no template's layout changes. 404 for a class that does not exist, 400 for a template that does not.",
+        "operationId": "setClassLayoutTemplate",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Stable machine key, lower_snake_case",
+              "pattern": "^[a-z][a-z0-9_]{0,62}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "A class's default template",
+                "required": [
+                  "templateKey"
+                ],
+                "properties": {
+                  "templateKey": {
+                    "type": "string",
+                    "description": "The template (`layoutTemplates[].key`)",
+                    "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                  },
+                  "version": {
+                    "type": "integer",
+                    "format": "int32",
+                    "description": "The UI settings version you loaded (409 VERSION_CONFLICT when they were saved in between); leave it\nout to apply the change to whatever is current",
+                    "minimum": 1
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UiSettings"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large (code PAYLOAD_TOO_LARGE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/configuration-items/{id}/layout": {
+      "get": {
+        "tags": [
+          "Configuration items"
+        ],
+        "summary": "The layout a CI's detail page and form show, and where it comes from",
+        "description": "One call gives the page its layout: the CI's own (`custom`), another template chosen for it (`template`) or its class's default template (`class_default`), with attribute fields the class does not have left out. Needs view on the CI's class (404 otherwise, as for the CI). Deleted CIs keep their layout.",
+        "operationId": "getConfigurationItemLayout",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CiLayout"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "Configuration items"
+        ],
+        "summary": "Give a CI another template or a layout of its own",
+        "description": "Requires `customization.manage`. Send `templateKey` (a template of the UI settings) or `layout` (for this CI only), not both. Needs `customization.manage` and edit on the CI's class (403 otherwise; 404 for a CI that is missing, deleted or in a class you may not view). Audited (entity type ci_layout_overrides, the CI's id). Saving what the CI already has changes nothing.",
+        "operationId": "setConfigurationItemLayout",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "A CI's own layout: another template (`templateKey`) or a layout of its own (`layout`), not both",
+                "properties": {
+                  "templateKey": {
+                    "type": "string",
+                    "description": "Show this template (`layoutTemplates[].key`) instead of the class's default",
+                    "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                  },
+                  "layout": {
+                    "$ref": "#/components/schemas/UiLayout",
+                    "description": "Show this layout, for this CI only"
+                  },
+                  "version": {
+                    "type": "integer",
+                    "format": "int32",
+                    "description": "The `version` you loaded, if the CI has its own layout: when it was saved in between, the request\nfails with 409 VERSION_CONFLICT. Leave it out to overwrite.",
+                    "minimum": 1
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CiLayout"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large (code PAYLOAD_TOO_LARGE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Configuration items"
+        ],
+        "summary": "Reset a CI to its class's default layout template",
+        "description": "Requires `customization.manage`. Removes the CI's own layout (audited); 204 also when it had none. Needs `customization.manage` and edit on the CI's class.",
+        "operationId": "resetConfigurationItemLayout",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success, no content"
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
     "/api/v1/saved-views": {
       "get": {
         "tags": [
@@ -21823,7 +22458,8 @@
                 "import_mappings",
                 "user_groups",
                 "saved_views",
-                "config"
+                "config",
+                "ci_layout_overrides"
               ]
             }
           },
@@ -26754,8 +27390,8 @@
                   "formatVersion": {
                     "type": "integer",
                     "format": "int32",
-                    "description": "File format version; this server writes version 6 and reads 1 to 6",
-                    "maximum": 6,
+                    "description": "File format version; this server writes version 7 and reads 1 to 7",
+                    "maximum": 7,
                     "minimum": 1
                   },
                   "exportedAt": {
@@ -28091,6 +28727,92 @@
         },
         "additionalProperties": false
       },
+      "CiLayout": {
+        "type": "object",
+        "description": "The layout a CI's detail page and form show, and where it comes from",
+        "required": [
+          "ciId",
+          "classKey",
+          "source",
+          "templateKey",
+          "templateName",
+          "classTemplateKey",
+          "layout",
+          "issues",
+          "version",
+          "updatedAt",
+          "updatedBy"
+        ],
+        "properties": {
+          "ciId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "classKey": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "description": "Where the layout a CI shows comes from",
+            "enum": [
+              "class_default",
+              "template",
+              "custom"
+            ]
+          },
+          "templateKey": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The template shown (the class default or the one chosen for the CI); null for a custom layout"
+          },
+          "templateName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "classTemplateKey": {
+            "type": "string",
+            "description": "The class's default template: what the CI shows after DELETE"
+          },
+          "layout": {
+            "$ref": "#/components/schemas/UiLayout",
+            "description": "The layout to render. Attribute fields the class does not have are left out (see `issues`)."
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Issue"
+            },
+            "description": "What the layout leaves out or flags, with paths below \"layout\""
+          },
+          "version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Version of the CI's own layout, to send back in PUT; null when the CI uses its class's default"
+          },
+          "updatedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the CI's own layout was last saved; null without one"
+          },
+          "updatedBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "CiRef": {
         "type": "object",
         "description": "A CI as a member list shows it.",
@@ -28199,6 +28921,32 @@
         },
         "additionalProperties": false
       },
+      "ClassTemplate": {
+        "type": "object",
+        "description": "The default template of a class",
+        "required": [
+          "classKey",
+          "className",
+          "templateKey",
+          "explicit"
+        ],
+        "properties": {
+          "classKey": {
+            "type": "string"
+          },
+          "className": {
+            "type": "string"
+          },
+          "templateKey": {
+            "type": "string"
+          },
+          "explicit": {
+            "type": "boolean",
+            "description": "Whether the class has a layout entry (false: it uses Standard because it has none)"
+          }
+        },
+        "additionalProperties": false
+      },
       "ConfigFile": {
         "type": "object",
         "description": "A whole configuration: data model, lookups, permission profiles, UI settings, saved import mappings and shared saved views (no users, passwords, CIs or personal views)",
@@ -28217,8 +28965,8 @@
           "formatVersion": {
             "type": "integer",
             "format": "int32",
-            "description": "File format version; this server writes version 6 and reads 1 to 6",
-            "maximum": 6,
+            "description": "File format version; this server writes version 7 and reads 1 to 7",
+            "maximum": 7,
             "minimum": 1
           },
           "exportedAt": {
@@ -32114,11 +32862,71 @@
               "unknown_lookup_list",
               "unknown_lookup_value",
               "required_field_not_editable",
-              "core_field_hidden"
+              "core_field_hidden",
+              "unknown_template"
             ]
           },
           "message": {
             "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "LayoutTemplateUsage": {
+        "type": "object",
+        "description": "Who uses a template",
+        "required": [
+          "key",
+          "name",
+          "classKeys",
+          "overrideCount"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "classKeys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Classes that use it as their default, by key"
+          },
+          "overrideCount": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Live CIs that show it instead of their class's default; null when some of them are in classes you\nmay not view"
+          }
+        },
+        "additionalProperties": false
+      },
+      "LayoutTemplateUsages": {
+        "type": "object",
+        "description": "Which template each class uses, and who uses each template",
+        "required": [
+          "templates",
+          "classes"
+        ],
+        "properties": {
+          "templates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LayoutTemplateUsage"
+            },
+            "description": "Every template, in the order of the settings"
+          },
+          "classes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClassTemplate"
+            },
+            "description": "Every class, by name"
           }
         },
         "additionalProperties": false
@@ -35479,7 +36287,7 @@
       },
       "UiClassLayout": {
         "type": "object",
-        "description": "Detail page and form layout of one class (layout format v2): tabs of\nsections, each a grid of fields with a width. Fields the tabs do not place\n(and that are not hidden) follow at the end of the first tab, grouped by\nattribute group; so do attributes added to the class later.",
+        "description": "Detail page and form layout of one class (layout format v2): tabs of\nsections, each a grid of fields with a width. Fields the tabs do not place\n(and that are not hidden) follow at the end of the first tab, grouped by\nattribute group; so do attributes added to the class later.\n\nThe layout itself lives in a template (`layoutTemplates`): `templateKey` is the class's default\ntemplate, which its CIs use unless they have their own layout. The settings the API returns carry the\ntemplate's tabs, hidden and read-only fields here as well. Tabs or fields sent here with a\n`templateKey` replace that template's layout (every class using it changes); sent without one, they\nbecome a new template \"<class name> layout\" that the class then uses, as migration 0042 did with the\nlayouts stored before templates. A class without an entry uses the Standard template.",
         "required": [
           "classKey"
         ],
@@ -35487,6 +36295,11 @@
           "classKey": {
             "type": "string",
             "description": "Stable machine key, lower_snake_case",
+            "pattern": "^[a-z][a-z0-9_]{0,62}$"
+          },
+          "templateKey": {
+            "type": "string",
+            "description": "The class's default layout template (`layoutTemplates[].key`). Always set in stored settings.",
             "pattern": "^[a-z][a-z0-9_]{0,62}$"
           },
           "tabs": {
@@ -35543,6 +36356,41 @@
             },
             "default": null,
             "maxItems": 50
+          }
+        },
+        "additionalProperties": false
+      },
+      "UiLayout": {
+        "type": "object",
+        "description": "A detail page and form layout on its own, without a class: the body of a template and of a CI's own\nlayout. The same tabs, hidden and read-only fields as a class layout; attribute fields are resolved\nagainst the class of the CI that shows it, and ones the class does not have are left out.",
+        "properties": {
+          "tabs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UiLayoutTab"
+            },
+            "default": [],
+            "maxItems": 20
+          },
+          "hiddenFields": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^(label|ident|class|criticality|validFrom|validUntil|active|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
+            },
+            "description": "Fields not shown on the detail page or the form. Presentation only: the API still returns them; restrict access with permission profiles",
+            "maxItems": 200,
+            "uniqueItems": true
+          },
+          "readOnlyFields": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^(label|ident|class|criticality|validFrom|validUntil|active|createdAt|updatedAt|attributes\\.[a-z][a-z0-9_]{0,62})$"
+            },
+            "description": "Fields shown but not editable on the form. Presentation only: the API still accepts writes to them; restrict access with permission profiles",
+            "maxItems": 200,
+            "uniqueItems": true
           }
         },
         "additionalProperties": false
@@ -35684,7 +36532,7 @@
           },
           "frame": {
             "$ref": "#/components/schemas/UiSectionFrame",
-            "description": "Where the section sits in a tab with `placement` free. Sent in a grid tab, it converts the tab back to\nthe grid on save (see the tab's `placement`); a stored grid tab never has frames."
+            "description": "Where the section sits as a window of its tab. Optional on input: a section without one gets one\nfrom its grid position (`width`, `newRow`, `minHeight`) below the other windows; always stored."
           }
         },
         "additionalProperties": false
@@ -35710,7 +36558,7 @@
           },
           "placement": {
             "type": "string",
-            "description": "How the tab arranges its sections (absent: grid). grid: sections fill the 12-column grid row by row. free: each section is a window placed by its `frame`, and windows may overlap. On save, a free tab's sections without a frame get one from their grid position (below the existing windows), z becomes 1..n and the sections are ordered by y, then x: the reading order, used on narrow screens, in print and by screen readers. A grid tab sent with frames is converted back: sections ordered by y, then x, width from w, and the frames dropped.",
+            "description": "How the tab arranges its sections. Always free when returned: each section is a window placed by its `frame`, and windows may overlap. grid (or absent) is still accepted for older documents and exports and is converted to free: each section becomes a window where it was on the 12-column grid (`width`, `newRow`, `minHeight`). On save, sections without a frame get one from their grid position (below the existing windows), z becomes 1..n and the sections are ordered by y, then x: the reading order, used on narrow screens, in print and by screen readers.",
             "enum": [
               "grid",
               "free"
@@ -35722,6 +36570,38 @@
               "$ref": "#/components/schemas/UiLayoutSection"
             },
             "maxItems": 50
+          }
+        },
+        "additionalProperties": false
+      },
+      "UiLayoutTemplate": {
+        "type": "object",
+        "description": "A named detail page and form layout. Each class has one as its default (`layouts[].templateKey`,\nStandard when the class has no entry); a CI can use another one or a layout of its own\n(`/api/v1/configuration-items/{id}/layout`). A template that a class or a live CI uses cannot be\nremoved (409 CONFLICT naming them); renaming is always allowed.",
+        "required": [
+          "key",
+          "name"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "Stable machine key, lower_snake_case",
+            "pattern": "^[a-z][a-z0-9_]{0,62}$"
+          },
+          "name": {
+            "type": "string",
+            "description": "Unique among the templates, ignoring case",
+            "maxLength": 100,
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "layout": {
+            "$ref": "#/components/schemas/UiLayout"
           }
         },
         "additionalProperties": false
@@ -36176,7 +37056,16 @@
             "items": {
               "$ref": "#/components/schemas/UiClassLayout"
             },
-            "description": "At most one per class",
+            "description": "At most one per class: the class's default template (see `UiClassLayout`)",
+            "default": [],
+            "maxItems": 1000
+          },
+          "layoutTemplates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UiLayoutTemplate"
+            },
+            "description": "Named layouts that classes and CIs use. Stored settings always hold the Standard template\n(key \"standard\"); settings without templates (older exports and versions) are converted on save.",
             "default": [],
             "maxItems": 1000
           }

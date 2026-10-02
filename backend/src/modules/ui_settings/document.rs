@@ -13,7 +13,7 @@
 //! reports it as an [`Issue`], and the stored document keeps it in case the
 //! class comes back.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -520,8 +520,8 @@ pub struct UiLayoutSection {
     /// Start collapsed on the detail page
     #[serde(default)]
     pub collapsed: bool,
-    /// Where the section sits in a tab with `placement` free. Sent in a grid tab, it converts the tab back to
-    /// the grid on save (see the tab's `placement`); a stored grid tab never has frames.
+    /// Where the section sits as a window of its tab. Optional on input: a section without one gets one
+    /// from its grid position (`width`, `newRow`, `minHeight`) below the other windows; always stored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub frame: Option<UiSectionFrame>,
@@ -572,11 +572,13 @@ pub struct UiSectionFrame {
     pub min_h: Option<u32>,
 }
 
-/// How a tab arranges its sections. Absent means `grid`.
+/// How a tab arranges its sections. Every stored tab is free; `grid` (and an absent placement) is still
+/// accepted and converted to free on save and when stored settings are read.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum UiTabPlacement {
-    /// Sections fill the tab's 12-column grid row by row, in order (`width`, `newRow`, `minHeight`)
+    /// The earlier 12-column grid: accepted on input, converted to free (each section a window where it
+    /// was on the grid)
     #[default]
     Grid,
     /// Every section is a window placed by its `frame`; windows may overlap
@@ -591,12 +593,12 @@ fn placement_schema() -> Schema {
     string()
         .enum_values(Some(["grid", "free"]))
         .description(Some(
-            "How the tab arranges its sections (absent: grid). grid: sections fill the 12-column grid row by row. \
-             free: each section is a window placed by its `frame`, and windows may overlap. On save, a free tab's \
-             sections without a frame get one from their grid position (below the existing windows), z becomes \
-             1..n and the sections are ordered by y, then x: the reading order, used on narrow screens, in print \
-             and by screen readers. A grid tab sent with frames is converted back: sections ordered by y, then \
-             x, width from w, and the frames dropped.",
+            "How the tab arranges its sections. Always free when returned: each section is a window placed by \
+             its `frame`, and windows may overlap. grid (or absent) is still accepted for older documents and \
+             exports and is converted to free: each section becomes a window where it was on the 12-column grid \
+             (`width`, `newRow`, `minHeight`). On save, sections without a frame get one from their grid \
+             position (below the existing windows), z becomes 1..n and the sections are ordered by y, then x: \
+             the reading order, used on narrow screens, in print and by screen readers.",
         ))
         .into()
 }
@@ -674,18 +676,13 @@ pub fn grid_frames<'a>(sections: impl IntoIterator<Item = &'a UiLayoutSection>, 
 }
 
 impl UiLayoutTab {
-    /// The stored form of the tab. A free tab: every section framed (the missing frames from their grid
+    /// The stored form of the tab: free, every section framed (the missing frames from their grid
     /// position, below the existing windows), x and w rounded and within the tab, z 1..n and the sections
-    /// in reading order (y, then x). A grid tab sent with frames: back on the grid, see [`Self::convert_to_grid`].
+    /// in reading order (y, then x). A tab sent as `grid` (older exports, API clients and stored versions
+    /// from before free placement was the only one) becomes free the same way: each section a window
+    /// where it was on the grid.
     pub fn normalize(&mut self) {
-        match self.placement {
-            UiTabPlacement::Free => self.normalize_free(),
-            UiTabPlacement::Grid if self.sections.iter().any(|s| s.frame.is_some()) => self.convert_to_grid(),
-            UiTabPlacement::Grid => {}
-        }
-    }
-
-    fn normalize_free(&mut self) {
+        self.placement = UiTabPlacement::Free;
         let bottom = self.sections.iter().filter_map(|s| s.frame).map(|f| f.y + f.h).max();
         let top = bottom.map_or(0, |b| b + FRAME_GAP_PX);
         let top_z = self.sections.iter().filter_map(|s| s.frame).map(|f| f.z).max().unwrap_or(0);
@@ -715,37 +712,6 @@ impl UiLayoutTab {
             a.y.cmp(&b.y).then(a.x.total_cmp(&b.x))
         });
     }
-
-    /// Free -> grid: sections ordered by y, then x; each spans the grid columns nearest its width, and one
-    /// that starts below the bottom of the first window of the current row starts a new row. Frames are
-    /// dropped; sections without one follow at the end in their order.
-    pub fn convert_to_grid(&mut self) {
-        self.placement = UiTabPlacement::Grid;
-        let mut order: Vec<usize> = (0..self.sections.len()).collect();
-        order.sort_by(|&a, &b| match (self.sections[a].frame, self.sections[b].frame) {
-            (Some(fa), Some(fb)) => fa.y.cmp(&fb.y).then(fa.x.total_cmp(&fb.x)).then(a.cmp(&b)),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => a.cmp(&b),
-        });
-        let mut taken: Vec<Option<UiLayoutSection>> =
-            std::mem::take(&mut self.sections).into_iter().map(Some).collect();
-        let mut row_bottom: Option<u32> = None;
-        for (n, i) in order.into_iter().enumerate() {
-            let mut s = taken[i].take().expect("each section once");
-            if let Some(f) = s.frame.take() {
-                s.width = ((f.w * f64::from(GRID_COLUMNS)).round() as u8).clamp(1, GRID_COLUMNS);
-                s.new_row = match row_bottom {
-                    Some(b) if f.y < b => false,
-                    _ => {
-                        row_bottom = Some(f.y + f.h);
-                        n > 0
-                    }
-                };
-            }
-            self.sections.push(s);
-        }
-    }
 }
 
 /// A panel of the layout format before tabs (v1). Accepted on input and converted to a section of one
@@ -768,19 +734,30 @@ pub struct UiLayoutPanel {
 /// sections, each a grid of fields with a width. Fields the tabs do not place
 /// (and that are not hidden) follow at the end of the first tab, grouped by
 /// attribute group; so do attributes added to the class later.
+///
+/// The layout itself lives in a template (`layoutTemplates`): `templateKey` is the class's default
+/// template, which its CIs use unless they have their own layout. The settings the API returns carry the
+/// template's tabs, hidden and read-only fields here as well. Tabs or fields sent here with a
+/// `templateKey` replace that template's layout (every class using it changes); sent without one, they
+/// become a new template "<class name> layout" that the class then uses, as migration 0042 did with the
+/// layouts stored before templates. A class without an entry uses the Standard template.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, try_from = "ClassLayoutInput")]
 pub struct UiClassLayout {
     #[schema(schema_with = key_schema)]
     pub class_key: String,
-    #[serde(default)]
+    /// The class's default layout template (`layoutTemplates[].key`). Always set in stored settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false, pattern = "^[a-z][a-z0-9_]{0,62}$")]
+    pub template_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[schema(max_items = 20)]
     pub tabs: Vec<UiLayoutTab>,
     #[schema(schema_with = hidden_fields_schema)]
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hidden_fields: Vec<String>,
     #[schema(schema_with = read_only_fields_schema)]
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub read_only_fields: Vec<String>,
     /// Layout format v1, still accepted (older exports, API clients and saved versions): converted to
     /// one "General" tab with a section per panel and never returned. Send `tabs` instead.
@@ -794,6 +771,8 @@ pub struct UiClassLayout {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ClassLayoutInput {
     class_key: String,
+    #[serde(default)]
+    template_key: Option<String>,
     #[serde(default)]
     tabs: Vec<UiLayoutTab>,
     #[serde(default)]
@@ -814,6 +793,7 @@ impl TryFrom<ClassLayoutInput> for UiClassLayout {
         let tabs = if l.panels.is_empty() { l.tabs } else { convert_panels(l.panels) };
         Ok(UiClassLayout {
             class_key: l.class_key,
+            template_key: l.template_key,
             tabs,
             hidden_fields: l.hidden_fields,
             read_only_fields: l.read_only_fields,
@@ -844,6 +824,90 @@ pub fn convert_panels(panels: Vec<UiLayoutPanel>) -> Vec<UiLayoutTab> {
     vec![UiLayoutTab { key: "general".into(), label: "General".into(), placement: UiTabPlacement::Grid, sections }]
 }
 
+// ---------------------------------------------------------------------------
+// Layout templates
+// ---------------------------------------------------------------------------
+
+/// Key of the built-in template every class without a layout entry uses. Saving settings without it
+/// adds it again (with no tabs: the detail page's built-in arrangement); it can be renamed.
+pub const STANDARD_TEMPLATE: &str = "standard";
+pub const STANDARD_TEMPLATE_NAME: &str = "Standard";
+pub const TEMPLATE_NAME_MAX: usize = 100;
+
+/// A detail page and form layout on its own, without a class: the body of a template and of a CI's own
+/// layout. The same tabs, hidden and read-only fields as a class layout; attribute fields are resolved
+/// against the class of the CI that shows it, and ones the class does not have are left out.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+pub struct UiLayout {
+    #[schema(max_items = 20)]
+    pub tabs: Vec<UiLayoutTab>,
+    #[schema(schema_with = hidden_fields_schema)]
+    pub hidden_fields: Vec<String>,
+    #[schema(schema_with = read_only_fields_schema)]
+    pub read_only_fields: Vec<String>,
+}
+
+impl UiLayout {
+    pub fn is_empty(&self) -> bool {
+        self.tabs.is_empty() && self.hidden_fields.is_empty() && self.read_only_fields.is_empty()
+    }
+
+    /// The stored form: every tab normalised (see [`UiLayoutTab::normalize`]).
+    pub fn normalized(mut self) -> Self {
+        for tab in &mut self.tabs {
+            tab.normalize();
+        }
+        self
+    }
+
+    /// Structural problems, with field paths below `prefix` (e.g. "layout").
+    pub fn problems(&self, prefix: &str) -> Vec<FieldError> {
+        layout_problems(prefix, &self.tabs, &self.hidden_fields)
+    }
+}
+
+impl UiClassLayout {
+    /// The tabs, hidden and read-only fields sent or expanded on the class.
+    pub fn content(&self) -> UiLayout {
+        UiLayout {
+            tabs: self.tabs.clone(),
+            hidden_fields: self.hidden_fields.clone(),
+            read_only_fields: self.read_only_fields.clone(),
+        }
+    }
+
+    fn set_content(&mut self, l: UiLayout) {
+        (self.tabs, self.hidden_fields, self.read_only_fields) = (l.tabs, l.hidden_fields, l.read_only_fields);
+    }
+
+    /// The class's default template; Standard when not set.
+    pub fn template(&self) -> &str {
+        self.template_key.as_deref().unwrap_or(STANDARD_TEMPLATE)
+    }
+}
+
+/// A named detail page and form layout. Each class has one as its default (`layouts[].templateKey`,
+/// Standard when the class has no entry); a CI can use another one or a layout of its own
+/// (`/api/v1/configuration-items/{id}/layout`). A template that a class or a live CI uses cannot be
+/// removed (409 CONFLICT naming them); renaming is always allowed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UiLayoutTemplate {
+    /// Stable machine key, lower_snake_case and unique among the templates: what classes and CIs refer
+    /// to. Rename a template by changing its `name`; a new key is a new template.
+    #[schema(schema_with = key_schema)]
+    pub key: String,
+    /// Unique among the templates, ignoring case
+    #[schema(min_length = 1, max_length = 100, pattern = "\\S")]
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false, min_length = 1, max_length = 500, pattern = "\\S")]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub layout: UiLayout,
+}
+
 /// Every UI setting. All sections are optional; `{}` is the default UI.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
@@ -854,9 +918,13 @@ pub struct UiSettingsDocument {
     /// At most one per class
     #[schema(max_items = 1000)]
     pub list_views: Vec<UiListView>,
-    /// At most one per class
+    /// At most one per class: the class's default template (see `UiClassLayout`)
     #[schema(max_items = 1000)]
     pub layouts: Vec<UiClassLayout>,
+    /// Named layouts that classes and CIs use. Stored settings always hold the Standard template
+    /// (key "standard"); settings without templates (older exports and versions) are converted on save.
+    #[schema(max_items = 1000)]
+    pub layout_templates: Vec<UiLayoutTemplate>,
 }
 
 // ---------------------------------------------------------------------------
@@ -873,7 +941,8 @@ impl UiSettingsDocument {
     /// The form in which a valid document is stored: every layout tab normalised (see
     /// [`UiLayoutTab::normalize`]).
     pub fn normalized(mut self) -> Self {
-        for tab in self.layouts.iter_mut().flat_map(|l| &mut l.tabs) {
+        let templates = self.layout_templates.iter_mut().flat_map(|t| &mut t.layout.tabs);
+        for tab in self.layouts.iter_mut().flat_map(|l| &mut l.tabs).chain(templates) {
             tab.normalize();
         }
         self
@@ -1011,90 +1080,272 @@ impl UiSettingsDocument {
             if !seen.insert(l.class_key.as_str()) {
                 e.push(custom(at(format!("{p}.classKey")), "One layout per class"));
             }
-            let mut tabs = HashSet::new();
-            let mut sections = HashSet::new();
-            let mut placed = HashSet::new();
-            let mut panels = HashSet::new();
-            for (t, tab) in l.tabs.iter().enumerate() {
-                let pt = format!("{p}.tabs.{t}");
-                if !tabs.insert(tab.key.as_str()) {
-                    e.push(custom(at(format!("{pt}.key")), "Tab keys must be unique in a layout"));
+            e.extend(layout_problems(&at(p), &l.tabs, &l.hidden_fields));
+        }
+
+        let (mut keys, mut names) = (HashSet::new(), HashSet::new());
+        for (i, t) in self.layout_templates.iter().enumerate() {
+            let p = format!("layoutTemplates.{i}");
+            if !keys.insert(t.key.as_str()) {
+                e.push(custom(at(format!("{p}.key")), "Template keys must be unique"));
+            }
+            if !names.insert(t.name.trim().to_lowercase()) {
+                e.push(custom(at(format!("{p}.name")), "Another template has this name"));
+            }
+            e.extend(t.layout.problems(&at(format!("{p}.layout"))));
+        }
+        e
+    }
+
+    pub fn template(&self, key: &str) -> Option<&UiLayoutTemplate> {
+        self.layout_templates.iter().find(|t| t.key == key)
+    }
+
+    /// The default template of a class: its entry's, else Standard.
+    pub fn class_template(&self, class_key: &str) -> &str {
+        self.layouts.iter().find(|l| l.class_key == class_key).map_or(STANDARD_TEMPLATE, |l| l.template())
+    }
+
+    /// The form the API returns: [`Self::expanded`], with the Standard template when the stored settings
+    /// do not have it yet (settings never saved since templates came).
+    pub fn returned(self) -> Self {
+        self.with_standard().expanded()
+    }
+
+    /// With the Standard template, which settings saved before templates do not have yet.
+    pub fn with_standard(mut self) -> Self {
+        if self.template(STANDARD_TEMPLATE).is_none() {
+            let names = self.layout_templates.iter().map(|t| t.name.trim().to_lowercase()).collect();
+            self.layout_templates.insert(0, standard_template(&names, UiLayout::default()));
+        }
+        self
+    }
+
+    /// Each class layout carries its template's tabs, hidden and read-only fields
+    /// (see [`UiClassLayout`]). Layouts without a template (settings saved before templates) stay as they are.
+    pub fn expanded(mut self) -> Self {
+        for l in &mut self.layouts {
+            if let Some(t) = l.template_key.as_deref().and_then(|k| self.layout_templates.iter().find(|t| t.key == k)) {
+                let content = t.layout.clone();
+                l.set_content(content);
+            }
+        }
+        self
+    }
+}
+
+/// Structural problems of a layout's tabs and hidden fields, with field paths below `base` (e.g.
+/// "settings.layouts.0"; the tabs are at `{base}.tabs`).
+fn layout_problems(base: &str, tabs: &[UiLayoutTab], hidden_fields: &[String]) -> Vec<FieldError> {
+    let mut e = Vec::new();
+    let p = base;
+    let mut tab_keys = HashSet::new();
+    let mut sections = HashSet::new();
+    let mut placed = HashSet::new();
+    let mut panels = HashSet::new();
+    for (t, tab) in tabs.iter().enumerate() {
+        let pt = format!("{p}.tabs.{t}");
+        if !tab_keys.insert(tab.key.as_str()) {
+            e.push(custom(format!("{pt}.key"), "Tab keys must be unique in a layout"));
+        }
+        for (j, s) in tab.sections.iter().enumerate() {
+            let ps = format!("{pt}.sections.{j}");
+            if !sections.insert(s.key.as_str()) {
+                e.push(custom(format!("{ps}.key"), "Section keys must be unique in a layout"));
+            }
+            if s.kind.is_panel() && !panels.insert(s.kind) {
+                e.push(custom(
+                    format!("{ps}.kind"),
+                    format!("The {} panel can be placed once in a layout", s.kind.as_str()),
+                ));
+            }
+            if s.kind != UiSectionKind::Fields && !s.fields.is_empty() {
+                e.push(custom(format!("{ps}.fields"), "Only sections of kind fields hold fields"));
+            }
+            match (&s.text, s.kind) {
+                (None, UiSectionKind::Note) => e.push(custom(format!("{ps}.text"), "Required for note sections")),
+                (Some(text), UiSectionKind::Note) if text.trim().is_empty() => {
+                    e.push(custom(format!("{ps}.text"), "Required for note sections"))
                 }
-                for (j, s) in tab.sections.iter().enumerate() {
-                    let ps = format!("{pt}.sections.{j}");
-                    if !sections.insert(s.key.as_str()) {
-                        e.push(custom(at(format!("{ps}.key")), "Section keys must be unique in a layout"));
-                    }
-                    if s.kind.is_panel() && !panels.insert(s.kind) {
-                        e.push(custom(
-                            at(format!("{ps}.kind")),
-                            format!("The {} panel can be placed once in a layout", s.kind.as_str()),
-                        ));
-                    }
-                    if s.kind != UiSectionKind::Fields && !s.fields.is_empty() {
-                        e.push(custom(at(format!("{ps}.fields")), "Only sections of kind fields hold fields"));
-                    }
-                    match (&s.text, s.kind) {
-                        (None, UiSectionKind::Note) => {
-                            e.push(custom(at(format!("{ps}.text")), "Required for note sections"))
-                        }
-                        (Some(text), UiSectionKind::Note) if text.trim().is_empty() => {
-                            e.push(custom(at(format!("{ps}.text")), "Required for note sections"))
-                        }
-                        (Some(text), UiSectionKind::Note) if text.chars().count() > NOTE_MAX_CHARS => {
-                            e.push(custom(at(format!("{ps}.text")), format!("At most {NOTE_MAX_CHARS} characters")))
-                        }
-                        (Some(_), k) if k != UiSectionKind::Note => {
-                            e.push(custom(at(format!("{ps}.text")), "Only allowed for note sections"))
-                        }
-                        _ => {}
-                    }
-                    if let Some(f) = &s.frame {
-                        let pf = format!("{ps}.frame");
-                        if !f.x.is_finite() || !f.w.is_finite() {
-                            e.push(custom(at(pf.clone()), "x and w must be finite numbers"));
-                        } else if f.w < FRAME_MIN_W - FRAME_EPSILON {
-                            e.push(custom(at(format!("{pf}.w")), format!("At least {FRAME_MIN_W} of the tab's width")));
-                        } else if f.x + f.w > 1.0 + FRAME_EPSILON {
-                            e.push(custom(
-                                at(format!("{pf}.w")),
-                                "The window must end inside the tab: x + w must be at most 1",
-                            ));
-                        }
-                        if !(FRAME_MIN_H..=FRAME_MAX_H).contains(&f.h) {
-                            e.push(custom(
-                                at(format!("{pf}.h")),
-                                format!("Between {FRAME_MIN_H} and {FRAME_MAX_H} px"),
-                            ));
-                        }
-                        if f.min_h.is_some_and(|m| m > f.h) {
-                            e.push(custom(at(format!("{pf}.minH")), "At most the window's height h"));
-                        }
-                    }
-                    for (k, f) in s.fields.iter().enumerate() {
-                        if !placed.insert(f.field.as_str()) {
-                            e.push(custom(at(format!("{ps}.fields.{k}.field")), "A field can be placed once only"));
-                        }
-                        if f.width > s.columns {
-                            e.push(custom(
-                                at(format!("{ps}.fields.{k}.width")),
-                                format!("At most the section's {} column(s)", s.columns),
-                            ));
-                        }
-                    }
+                (Some(text), UiSectionKind::Note) if text.chars().count() > NOTE_MAX_CHARS => {
+                    e.push(custom(format!("{ps}.text"), format!("At most {NOTE_MAX_CHARS} characters")))
+                }
+                (Some(_), k) if k != UiSectionKind::Note => {
+                    e.push(custom(format!("{ps}.text"), "Only allowed for note sections"))
+                }
+                _ => {}
+            }
+            if let Some(f) = &s.frame {
+                let pf = format!("{ps}.frame");
+                if !f.x.is_finite() || !f.w.is_finite() {
+                    e.push(custom(pf.clone(), "x and w must be finite numbers"));
+                } else if f.w < FRAME_MIN_W - FRAME_EPSILON {
+                    e.push(custom(format!("{pf}.w"), format!("At least {FRAME_MIN_W} of the tab's width")));
+                } else if f.x + f.w > 1.0 + FRAME_EPSILON {
+                    e.push(custom(format!("{pf}.w"), "The window must end inside the tab: x + w must be at most 1"));
+                }
+                if !(FRAME_MIN_H..=FRAME_MAX_H).contains(&f.h) {
+                    e.push(custom(format!("{pf}.h"), format!("Between {FRAME_MIN_H} and {FRAME_MAX_H} px")));
+                }
+                if f.min_h.is_some_and(|m| m > f.h) {
+                    e.push(custom(format!("{pf}.minH"), "At most the window's height h"));
                 }
             }
-            for (k, f) in l.hidden_fields.iter().enumerate() {
-                if CORE_FIELDS.contains(&f.as_str()) {
+            for (k, f) in s.fields.iter().enumerate() {
+                if !placed.insert(f.field.as_str()) {
+                    e.push(custom(format!("{ps}.fields.{k}.field"), "A field can be placed once only"));
+                }
+                if f.width > s.columns {
                     e.push(custom(
-                        at(format!("{p}.hiddenFields.{k}")),
-                        "Ident, valid from and valid until belong to every CI: move them, but they cannot be hidden",
+                        format!("{ps}.fields.{k}.width"),
+                        format!("At most the section's {} column(s)", s.columns),
                     ));
                 }
             }
         }
-        e
     }
+    for (k, f) in hidden_fields.iter().enumerate() {
+        if CORE_FIELDS.contains(&f.as_str()) {
+            e.push(custom(
+                format!("{p}.hiddenFields.{k}"),
+                "Ident, valid from and valid until belong to every CI: move them, but they cannot be hidden",
+            ));
+        }
+    }
+    e
+}
+
+// ---------------------------------------------------------------------------
+// Class layouts -> templates (the stored form)
+// ---------------------------------------------------------------------------
+
+/// A template key for `class_key` that no template in `taken` has: the class key, else with `_2`, `_3`...
+/// Migration 0042 picks keys the same way.
+fn free_key(class_key: &str, taken: &HashSet<String>) -> String {
+    if !taken.contains(class_key) {
+        return class_key.to_owned();
+    }
+    (2..)
+        .map(|n| {
+            let suffix = format!("_{n}");
+            let stem: String = class_key.chars().take(63 - suffix.len()).collect();
+            format!("{stem}{suffix}")
+        })
+        .find(|k| !taken.contains(k))
+        .expect("a free key")
+}
+
+/// "<class name> layout", unique among `taken` (lower case) by " (2)", " (3)"... and at most
+/// [`TEMPLATE_NAME_MAX`] characters. Migration 0042 picks names the same way.
+fn free_name(class_name: &str, taken: &HashSet<String>) -> String {
+    (1..)
+        .map(|n| {
+            let suffix = if n == 1 { " layout".to_owned() } else { format!(" layout ({n})") };
+            let stem: String = class_name.trim().chars().take(TEMPLATE_NAME_MAX - suffix.chars().count()).collect();
+            format!("{}{suffix}", stem.trim_end())
+        })
+        .find(|name| !taken.contains(&name.to_lowercase()))
+        .expect("a free name")
+}
+
+/// The Standard template, named "Standard" unless another template has that name ("Standard (2)"...).
+fn standard_template(taken: &HashSet<String>, layout: UiLayout) -> UiLayoutTemplate {
+    let name = (1..)
+        .map(|n| if n == 1 { STANDARD_TEMPLATE_NAME.to_owned() } else { format!("{STANDARD_TEMPLATE_NAME} ({n})") })
+        .find(|n| !taken.contains(&n.to_lowercase()))
+        .expect("a free name");
+    UiLayoutTemplate { key: STANDARD_TEMPLATE.into(), name, description: None, layout }
+}
+
+/// The stored form of a (normalised) document, given the templates of the version it replaces (`previous`)
+/// and the class names (key -> name, for new templates):
+///
+/// * a class layout without `templateKey` that has tabs or fields becomes a new template
+///   "<class name> layout" (key: the class key) that the class uses; one without anything uses Standard;
+/// * tabs or fields sent with a `templateKey` replace that template's layout, unless they are the layout it
+///   has (now or in `previous`), as when the settings the API returned are sent back;
+/// * class layouts keep only `classKey` and `templateKey`;
+/// * the Standard template is added when missing.
+///
+/// A class layout naming a template that does not exist, and two different layouts sent for one
+/// template, are refused.
+pub fn contract(
+    mut doc: UiSettingsDocument,
+    previous: &[UiLayoutTemplate],
+    class_names: &HashMap<String, String>,
+) -> Result<UiSettingsDocument, Vec<FieldError>> {
+    let mut errors = Vec::new();
+    let mut keys: HashSet<String> = doc.layout_templates.iter().map(|t| t.key.clone()).collect();
+    let mut names: HashSet<String> = doc.layout_templates.iter().map(|t| t.name.trim().to_lowercase()).collect();
+    if !keys.contains(STANDARD_TEMPLATE) {
+        // Before the new templates, so that none takes its key.
+        keys.insert(STANDARD_TEMPLATE.into());
+    }
+    let sent: HashMap<String, UiLayout> =
+        doc.layout_templates.iter().map(|t| (t.key.clone(), t.layout.clone())).collect();
+    let empty = UiLayout::default();
+    let mut edited: HashMap<String, UiLayout> = HashMap::new();
+    let mut created = Vec::new();
+    for (i, l) in doc.layouts.iter_mut().enumerate() {
+        let content = l.content();
+        l.set_content(UiLayout::default());
+        let Some(key) = l.template_key.clone() else {
+            if content.is_empty() {
+                l.template_key = Some(STANDARD_TEMPLATE.into());
+                continue;
+            }
+            let key = free_key(&l.class_key, &keys);
+            let class_name = class_names.get(&l.class_key).map_or(l.class_key.as_str(), String::as_str);
+            let name = free_name(class_name, &names);
+            keys.insert(key.clone());
+            names.insert(name.to_lowercase());
+            created.push(UiLayoutTemplate { key: key.clone(), name, description: None, layout: content });
+            l.template_key = Some(key);
+            continue;
+        };
+        let Some(current) = sent.get(&key).or((key == STANDARD_TEMPLATE).then_some(&empty)) else {
+            errors.push(custom(
+                format!("settings.layouts.{i}.templateKey"),
+                format!("No layout template has the key \"{key}\""),
+            ));
+            continue;
+        };
+        let before = previous.iter().find(|t| t.key == key).map(|t| &t.layout);
+        if content.is_empty() || &content == current || before == Some(&content) {
+            continue;
+        }
+        if before.is_some_and(|b| b != current) {
+            errors.push(custom(
+                format!("settings.layouts.{i}.tabs"),
+                format!("Template \"{key}\" was changed in layoutTemplates as well; send its layout in one place"),
+            ));
+            continue;
+        }
+        match edited.get(&key) {
+            Some(other) if *other != content => errors.push(custom(
+                format!("settings.layouts.{i}.tabs"),
+                format!("Another class using template \"{key}\" sent a different layout for it"),
+            )),
+            Some(_) => {}
+            None => {
+                edited.insert(key, content);
+            }
+        }
+    }
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+    for t in &mut doc.layout_templates {
+        if let Some(l) = edited.remove(&t.key) {
+            t.layout = l;
+        }
+    }
+    if !doc.layout_templates.iter().any(|t| t.key == STANDARD_TEMPLATE) {
+        let layout = edited.remove(STANDARD_TEMPLATE).unwrap_or_default();
+        doc.layout_templates.insert(0, standard_template(&names, layout));
+    }
+    doc.layout_templates.extend(created);
+    Ok(doc)
 }
 
 // ---------------------------------------------------------------------------
@@ -1116,6 +1367,8 @@ pub enum IssueCode {
     RequiredFieldNotEditable,
     /// A core field (ident, validFrom, validUntil) is hidden, e.g. in a restored older version; it is shown anyway
     CoreFieldHidden,
+    /// The layout template chosen for a CI does not exist; the class's default is shown
+    UnknownTemplate,
 }
 
 /// A reference the effective settings ignore, or a setting worth a second look
@@ -1339,6 +1592,27 @@ pub fn resolve(doc: &UiSettingsDocument, model: &Model) -> (UiSettingsDocument, 
     }
 
     (out, r.issues)
+}
+
+/// One layout as a CI of `class_key` shows it: attribute fields the class does not have left out, and
+/// what was left out or is worth a look, with paths below "layout".
+pub fn resolve_layout(layout: &UiLayout, class_key: &str, model: &Model) -> (UiLayout, Vec<Issue>) {
+    if !model.classes.contains_key(class_key) {
+        return (layout.clone(), Vec::new());
+    }
+    let mut one = UiClassLayout {
+        class_key: class_key.into(),
+        template_key: None,
+        tabs: Vec::new(),
+        hidden_fields: Vec::new(),
+        read_only_fields: Vec::new(),
+        panels: Vec::new(),
+    };
+    one.set_content(layout.clone());
+    let doc = UiSettingsDocument { layouts: vec![one], ..Default::default() };
+    let (out, issues) = resolve(&doc, model);
+    let issues = issues.into_iter().map(|i| Issue { path: i.path.replacen("layouts.0", "layout", 1), ..i }).collect();
+    (out.layouts.into_iter().next().map(|l| l.content()).unwrap_or_default(), issues)
 }
 
 #[cfg(test)]
@@ -1676,7 +1950,7 @@ mod tests {
                 {"key": "main", "label": "Main", "columns": 2, "collapsed": false,
                  "fields": [{"field": "ident", "width": 2}, {"field": "attributes.cpu_cores", "width": 1}]},
             ]},
-        ], "hiddenFields": [], "readOnlyFields": []}]});
+        ]}]});
         let d = doc(stored.clone());
         assert_eq!(d.layouts[0].tabs[0].sections[0].kind, UiSectionKind::Fields);
         assert!(d.check().is_empty());
@@ -1751,7 +2025,7 @@ mod tests {
     }
 
     #[test]
-    fn free_tabs_round_trip_and_grid_tabs_are_written_as_before() {
+    fn free_tabs_round_trip_and_grid_tabs_are_read_as_before() {
         let stored = json!({"layouts": [{"classKey": "server", "tabs": [
             {"key": "g", "label": "Grid", "sections": [
                 {"key": "a", "label": "A", "columns": 3, "width": 12, "collapsed": false, "fields": []}]},
@@ -1761,18 +2035,21 @@ mod tests {
                 {"key": "n", "label": "N", "kind": "note", "text": "On top", "columns": 3, "width": 12,
                  "collapsed": false, "fields": [], "frame": {"x": 0.25, "y": 40, "w": 0.75, "h": 120, "z": 1}},
             ]},
-        ], "hiddenFields": [], "readOnlyFields": []}]});
+        ]}]});
         let d = doc(stored.clone());
         assert!(d.check().is_empty(), "{:?}", d.check());
         let tabs = &d.layouts[0].tabs;
         assert_eq!((tabs[0].placement, tabs[1].placement), (UiTabPlacement::Grid, UiTabPlacement::Free));
         assert_eq!(tabs[1].sections[0].frame.unwrap().min_h, Some(96));
-        // Written back exactly: no placement or frame on grid tabs, minH only when set.
+        // Read as sent: no placement or frame on the grid tab, minH only when set.
         assert_eq!(serde_json::to_value(&d).unwrap()["layouts"], stored["layouts"]);
-        // Already in stored form, so normalising changes nothing.
+        // Normalising leaves the free tab as it is and makes the grid tab free.
         let n = d.clone().normalized();
         assert_eq!(frames(&n.layouts[0].tabs[1]), [("b", 0.0, 0, 0.5, 200, 2), ("n", 0.25, 40, 0.75, 120, 1)]);
-        assert_eq!(n, d);
+        assert_eq!(n.layouts[0].tabs[1], d.layouts[0].tabs[1]);
+        assert_eq!(n.layouts[0].tabs[0].placement, UiTabPlacement::Free);
+        assert_eq!(frames(&n.layouts[0].tabs[0]), [("a", 0.0, 0, 1.0, 96, 1)]);
+        assert_eq!(serde_json::to_value(&n).unwrap()["layouts"][0]["tabs"][0]["placement"], "free");
     }
 
     #[test]
@@ -1823,59 +2100,52 @@ mod tests {
     }
 
     #[test]
-    fn grid_to_free_keeps_every_section_where_it_was() {
-        let mut tab = grid_tab();
-        tab["placement"] = json!("free");
-        let d = one_tab(tab).normalized();
-        assert!(d.check().is_empty(), "{:?}", d.check());
-        let t = &d.layouts[0].tabs[0];
+    fn grid_tabs_become_free_with_every_section_where_it_was() {
         // Rows at y 0 (a; b with 3 field rows), 208 (c: 2 field rows), 368 (d) and 480 (r, a panel).
-        assert_eq!(
-            frames(t),
-            [
-                ("a", 0.0, 0, 0.5, 96, 1),
-                ("b", 0.5, 0, 0.5, 192, 2),
-                ("c", 0.0, 208, 1.0, 144, 3),
-                ("d", 0.0, 368, 0.3333, 96, 4),
-                ("r", 0.0, 480, 1.0, FRAME_PANEL_PX, 5),
-            ]
-        );
-        // Back on the grid, every section is where it was.
-        let mut back = t.clone();
-        back.convert_to_grid();
-        let grid: Vec<(&str, u8, bool, bool)> =
-            back.sections.iter().map(|s| (s.key.as_str(), s.width, s.new_row, s.frame.is_none())).collect();
-        assert_eq!(
-            grid,
-            [
-                ("a", 6, false, true),
-                ("b", 6, false, true),
-                ("c", 12, true, true),
-                ("d", 4, true, true),
-                ("r", 12, true, true)
-            ]
-        );
-        assert_eq!(grid_frames(&back.sections, 0), grid_frames(&one_tab(grid_tab()).layouts[0].tabs[0].sections, 0));
+        let expected = [
+            ("a", 0.0, 0, 0.5, 96, 1),
+            ("b", 0.5, 0, 0.5, 192, 2),
+            ("c", 0.0, 208, 1.0, 144, 3),
+            ("d", 0.0, 368, 0.3333, 96, 4),
+            ("r", 0.0, 480, 1.0, FRAME_PANEL_PX, 5),
+        ];
+        // Free without frames, grid (still accepted, as older exports send it) and no placement at all.
+        for placement in [json!("free"), json!("grid"), serde_json::Value::Null] {
+            let mut tab = grid_tab();
+            if !placement.is_null() {
+                tab["placement"] = placement.clone();
+            }
+            let d = one_tab(tab).normalized();
+            assert!(d.check().is_empty(), "{placement}: {:?}", d.check());
+            let t = &d.layouts[0].tabs[0];
+            assert_eq!(t.placement, UiTabPlacement::Free, "{placement}");
+            assert_eq!(frames(t), expected, "{placement}");
+            assert_eq!(d.clone().normalized(), d, "{placement}: stable");
+        }
     }
 
     #[test]
-    fn free_to_grid_orders_by_y_then_x() {
-        // Sent as a grid tab that still has frames: the tab goes back on the grid on save.
-        let d = one_tab(json!({"key": "t", "label": "T", "sections": [
+    fn a_grid_tab_sent_with_frames_keeps_them() {
+        // Before free placement was the only one, frames in a grid tab meant "back on the grid"; now the
+        // tab is free and every window stays where it was sent.
+        let d = one_tab(json!({"key": "t", "label": "T", "placement": "grid", "sections": [
             {"key": "low", "label": "Low", "frame": {"x": 0.0, "y": 500, "w": 1.0, "h": 100, "z": 1}},
             {"key": "right", "label": "Right", "frame": {"x": 0.6, "y": 10, "w": 0.4, "h": 200, "z": 3}},
             {"key": "left", "label": "Left", "frame": {"x": 0.0, "y": 0, "w": 0.55, "h": 300, "z": 2}},
-            {"key": "under", "label": "Under", "frame": {"x": 0.1, "y": 150, "w": 0.2, "h": 50, "z": 4}},
+            {"key": "new", "label": "New"},
         ]}))
         .normalized();
         let t = &d.layouts[0].tabs[0];
-        assert_eq!(t.placement, UiTabPlacement::Grid);
-        let grid: Vec<(&str, u8, bool)> = t.sections.iter().map(|s| (s.key.as_str(), s.width, s.new_row)).collect();
-        // "under" starts above the bottom of "left", so it stays in that row (and wraps if it does not fit).
-        assert_eq!(grid, [("left", 7, false), ("right", 5, false), ("under", 2, false), ("low", 12, true)]);
-        assert!(t.sections.iter().all(|s| s.frame.is_none()));
-        let out = serde_json::to_value(&d).unwrap();
-        assert!(out["layouts"][0]["tabs"][0].get("placement").is_none(), "{out}");
+        assert_eq!(t.placement, UiTabPlacement::Free);
+        assert_eq!(
+            frames(t),
+            [
+                ("left", 0.0, 0, 0.55, 300, 2),
+                ("right", 0.6, 10, 0.4, 200, 3),
+                ("low", 0.0, 500, 1.0, 100, 1),
+                ("new", 0.0, 616, 1.0, 96, 4),
+            ]
+        );
     }
 
     #[test]

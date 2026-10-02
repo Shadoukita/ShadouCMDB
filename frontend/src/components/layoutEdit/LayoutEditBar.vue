@@ -1,24 +1,22 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { RouterLink } from "vue-router";
-import { isFreeTab, LAYER_ICONS, layerOf, LAYER_MOVES } from "../../lib/freeLayout";
+import { LAYER_ICONS, layerOf, LAYER_MOVES } from "../../lib/freeLayout";
 import { findSection } from "../../lib/layoutDesign";
-import { WIDTH_PRESETS, type LayoutEditor } from "../../lib/layoutEditor";
+import type { LayoutEditor } from "../../lib/layoutEditor";
 import ConfirmDialog from "../ConfirmDialog.vue";
 import ErrorAlert from "../ErrorAlert.vue";
 
 /**
  * The bar over a CI page in the layout editor: which class's layout is being
- * edited (it applies to every CI of that class), undo and redo, preview widths,
- * back to the built-in layout, and save (a new settings version with an
- * optional note) or discard, and Done (closes the editor's window). Ctrl+Z / Ctrl+Shift+Z (or Ctrl+Y) undo and redo
- * outside text fields. For the tab in view: Grid or Free placement, and on a free
- * tab whether windows snap and the layers of the selected window.
+ * edited (it applies to every CI of that class), undo and redo, back to the
+ * built-in layout, and save (a new settings version with an optional note) or
+ * discard, and Done (closes the editor's window). Ctrl+Z / Ctrl+Shift+Z (or
+ * Ctrl+Y) undo and redo outside text fields. For the tab in view: whether
+ * windows snap, and the layers of the selected window.
  */
-const props = defineProps<{ editor: LayoutEditor; className: string; classKey: string }>();
+const props = defineProps<{ editor: LayoutEditor; className: string }>();
 const comment = ref("");
-const free = computed(() => isFreeTab(props.editor.tab));
-/** The window selected on the free tab in view, with its place in the stack. */
+/** The window selected on the tab in view, with its place in the stack. */
 const picked = computed(() => {
   const l = props.editor.layout;
   const t = props.editor.tab;
@@ -63,23 +61,10 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         <button type="button" class="btn btn-sm" :disabled="!editor.canUndo" title="Undo (Ctrl+Z)" @click="editor.undo()">Undo</button>
         <button type="button" class="btn btn-sm" :disabled="!editor.canRedo" title="Redo (Ctrl+Shift+Z)" @click="editor.redo()">Redo</button>
       </span>
-      <span class="le-bar-group" role="group" aria-label="Preview width" title="Shortcuts: drag the grip on the preview's right edge to any width">
-        <span class="muted">Preview</span>
-        <button v-for="p in WIDTH_PRESETS" :key="p.label" type="button" class="btn btn-sm" :aria-pressed="editor.previewWidth === p.width" @click="editor.previewWidth = p.width">
-          {{ p.label }}
-        </button>
-        <span v-if="editor.previewWidth" class="muted" data-testid="le-preview-width">{{ editor.previewWidth }} px</span>
-      </span>
       <button type="button" class="btn btn-sm" :disabled="editor.builtIn" @click="confirmReset = true">Reset to built-in layout</button>
-      <RouterLink class="btn btn-sm" :to="{ path: '/admin/customization/layouts', query: { class: classKey } }">Open in the designer</RouterLink>
     </div>
     <div class="le-bar-row">
-      <span v-if="editor.tab" class="le-bar-group" role="group" :aria-label="`Placement of the tab ${editor.tab.label}`" title="Grid: sections fill 12 columns row by row. Free: sections are windows you place anywhere, overlapping.">
-        <span class="muted">Tab {{ editor.tab.label }}</span>
-        <button type="button" class="btn btn-sm" :aria-pressed="!free" @click="editor.setPlacement('grid')">Grid</button>
-        <button type="button" class="btn btn-sm" :aria-pressed="free" @click="editor.setPlacement('free')">Free</button>
-      </span>
-      <template v-if="free">
+      <template v-if="editor.tab">
         <button type="button" class="btn btn-sm" :aria-pressed="editor.snap" title="Snap windows to each other's edges and an 8 px grid (hold Alt while dragging to place freely)" @click="editor.snap = !editor.snap">
           Snap {{ editor.snap ? "on" : "off" }}
         </button>

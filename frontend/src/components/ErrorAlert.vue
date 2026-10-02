@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { ApiError } from "../api/client";
+import { t } from "../i18n";
 
 /** Human-readable explanation for any thrown error, with the API's details when present. */
 const props = defineProps<{ error: unknown; title?: string; onRetry?: () => void }>();
@@ -17,34 +18,34 @@ const message = computed(() => {
 });
 
 function headingFor(e: ApiError | null): string {
-  if (!e) return "Something went wrong";
+  if (!e) return t("error.generic");
   switch (e.code) {
     case "NETWORK_ERROR":
-      return "API unreachable";
+      return t("error.network");
     case "DATABASE_UNAVAILABLE":
-      return "The CMDB database is unavailable";
+      return t("error.databaseUnavailable");
     case "IDENTITY_PROVIDER_UNAVAILABLE":
-      return "The directory is unreachable";
+      return t("error.directoryUnavailable");
     case "SCHEMA_NOT_MIGRATED":
-      return "The database is not migrated yet";
+      return t("error.schemaNotMigrated");
     case "NOT_FOUND":
-      return "Not found";
+      return t("error.notFound");
     case "VALIDATION_ERROR":
-      return "The API rejected the request";
+      return t("error.validation");
     case "VERSION_CONFLICT":
-      return "Someone else changed this record";
+      return t("error.versionConflict");
     case "SCHEMA_CHANGE_REFUSED":
-      return "The database change was refused";
+      return t("error.schemaChangeRefused");
     case "INVALID_NAME":
-      return "The technical name cannot be used";
+      return t("error.invalidName");
     case "CONFLICT":
     case "IN_USE":
-      return "Conflict";
+      return t("error.conflict");
     case "FORBIDDEN":
     case "UNAUTHORIZED":
-      return "Permission denied";
+      return t("error.forbidden");
     default:
-      return `Request failed (${e.status || e.code})`;
+      return t("error.requestFailed", { status: e.status || e.code });
   }
 }
 </script>
@@ -59,8 +60,8 @@ function headingFor(e: ApiError | null): string {
       </li>
     </ul>
     <div v-if="apiError?.requestId || retry" class="meta">
-      <template v-if="apiError?.requestId">Request id <code>{{ apiError.requestId }}</code>&#32;</template>
-      <button v-if="retry" type="button" class="btn btn-sm" @click="retry()">Retry</button>
+      <template v-if="apiError?.requestId">{{ t("error.requestId") }} <code>{{ apiError.requestId }}</code>&#32;</template>
+      <button v-if="retry" type="button" class="btn btn-sm" @click="retry()">{{ t("common.retry") }}</button>
     </div>
   </div>
 </template>

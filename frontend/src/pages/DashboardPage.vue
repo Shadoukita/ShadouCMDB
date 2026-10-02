@@ -11,6 +11,7 @@ import EmptyState from "../components/EmptyState.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
 import LoadingState from "../components/LoadingState.vue";
 import CiStateBadge from "../components/CiStateBadge.vue";
+import { formatNumber, t } from "../i18n";
 import { useAppSettings } from "../lib/appSettings";
 import { useDocumentTitle } from "../lib/composables";
 import { formatRelative } from "../lib/format";
@@ -24,7 +25,7 @@ import DashboardWidgets from "./dashboard/DashboardWidgets.vue";
  * reading page.total), so they stay correct at any inventory size.
  * Customization › Dashboard can replace the built-in panels with its own widgets.
  */
-useDocumentTitle("Dashboard");
+useDocumentTitle(() => t("dashboard.title"));
 const session = useSessionStore();
 const branding = useBrandingStore();
 const settings = useAppSettings();
@@ -44,7 +45,7 @@ const classRows = computed<CountRow[]>(() =>
     label: c.name,
     count: classCounts.value[i]?.data,
     to: `/cis?classId=${c.id}`,
-    ...(c.isActive && session.canOnClass(c.id, "create") ? { newTo: `/cis/new?classId=${c.id}`, newLabel: `New ${c.name}` } : {}),
+    ...(c.isActive && session.canOnClass(c.id, "create") ? { newTo: `/cis/new?classId=${c.id}`, newLabel: t("dashboard.newIn", { class: c.name }) } : {}),
   })),
 );
 
@@ -62,15 +63,15 @@ const statusRows = computed<CountRow[]>(() =>
 <template>
   <Breadcrumbs :items="[]" />
   <template v-if="total.isError.value">
-    <div class="page-header"><h1>Dashboard</h1></div>
+    <div class="page-header"><h1>{{ t("dashboard.title") }}</h1></div>
     <ErrorAlert :error="total.error.value" :on-retry="() => total.refetch()" />
   </template>
   <template v-else>
     <div class="page-header">
-      <div class="title"><h1>Dashboard</h1></div>
+      <div class="title"><h1>{{ t("dashboard.title") }}</h1></div>
       <div class="actions">
-        <RouterLink class="btn" to="/cis">Open inventory</RouterLink>
-        <RouterLink v-if="session.canOnAnyClass('create') && !noClasses" class="btn btn-primary" to="/cis/new">+ New CI</RouterLink>
+        <RouterLink class="btn" to="/cis">{{ t("dashboard.openInventory") }}</RouterLink>
+        <RouterLink v-if="session.canOnAnyClass('create') && !noClasses" class="btn btn-primary" to="/cis/new">+ {{ t("shell.newCi") }}</RouterLink>
       </div>
     </div>
 
@@ -79,20 +80,19 @@ const statusRows = computed<CountRow[]>(() =>
       <DataModelEmpty />
     </section>
     <section v-else-if="total.data.value === 0 && classes.data.value" class="panel">
-      <EmptyState :title="`Welcome to ${branding.effective.appName} — the inventory is empty`">
-        Start with the things everything else depends on: a location, then the servers in it, then the applications and
-        databases that run on them. Relate them from each CI's detail page.
+      <EmptyState :title="t('dashboard.welcome.title', { app: branding.effective.appName })">
+        {{ t("dashboard.welcome.body") }}
         <template v-if="session.canOnAnyClass('create')" #actions>
-          <RouterLink class="btn btn-primary" to="/cis/new">+ Create your first configuration item</RouterLink>
+          <RouterLink class="btn btn-primary" to="/cis/new">+ {{ t("dashboard.welcome.create") }}</RouterLink>
         </template>
       </EmptyState>
     </section>
     <template v-if="total.data.value !== undefined && total.data.value > 0 && widgets">
       <DashboardWidgets v-if="widgets.length > 0" :widgets="widgets" />
-      <EmptyState v-else title="This dashboard has no widgets">
-        An administrator removed every widget under Administration › Customization › Dashboard.
+      <EmptyState v-else :title="t('dashboard.noWidgets.title')">
+        {{ t("dashboard.noWidgets.body") }}
         <template v-if="session.can('customization.manage')" #actions>
-          <RouterLink class="btn" to="/admin/customization/dashboard">Add widgets</RouterLink>
+          <RouterLink class="btn" to="/admin/customization/dashboard">{{ t("dashboard.noWidgets.add") }}</RouterLink>
         </template>
       </EmptyState>
     </template>
@@ -100,13 +100,13 @@ const statusRows = computed<CountRow[]>(() =>
     <template v-else-if="total.data.value !== undefined && total.data.value > 0">
       <div class="kpis">
         <div class="kpi">
-          <div class="value">{{ total.data.value.toLocaleString() }}</div>
-          <div class="label">Configuration items</div>
+          <div class="value">{{ formatNumber(total.data.value) }}</div>
+          <div class="label">{{ t("dashboard.kpi.total") }}</div>
         </div>
       </div>
       <div class="grid-2">
         <CountTable
-          title="By class"
+          :title="t('dashboard.byClass')"
           :rows="classRows"
           :total="total.data.value"
           :loading="classes.isLoading.value"
@@ -114,7 +114,7 @@ const statusRows = computed<CountRow[]>(() =>
         />
         <CountTable
           v-if="statusListId"
-          title="By status"
+          :title="t('dashboard.byStatus')"
           :rows="statusRows"
           :total="total.data.value"
           :loading="lookupLists.isLoading.value || statuses.isLoading.value"
@@ -124,8 +124,8 @@ const statusRows = computed<CountRow[]>(() =>
       <div style="height: var(--sp-4)" />
       <section class="panel">
         <div class="panel-header">
-          <h2>Recently changed</h2>
-          <RouterLink to="/cis?sort=-updatedAt">View all</RouterLink>
+          <h2>{{ t("dashboard.recent") }}</h2>
+          <RouterLink to="/cis?sort=-updatedAt">{{ t("dashboard.viewAll") }}</RouterLink>
         </div>
         <div class="panel-body flush">
           <LoadingState v-if="recent.isLoading.value" />
@@ -135,10 +135,10 @@ const statusRows = computed<CountRow[]>(() =>
           <table v-if="recent.data.value" class="data">
             <thead>
               <tr>
-                <th scope="col">Label</th>
-                <th scope="col">Ident</th>
-                <th scope="col">Class</th>
-                <th scope="col">Changed</th>
+                <th scope="col">{{ t("dashboard.col.label") }}</th>
+                <th scope="col">{{ t("dashboard.col.ident") }}</th>
+                <th scope="col">{{ t("dashboard.col.class") }}</th>
+                <th scope="col">{{ t("dashboard.col.changed") }}</th>
               </tr>
             </thead>
             <tbody>

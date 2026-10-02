@@ -836,3 +836,5 @@ mod upgrade_0036;
 mod upgrade_0039;
 #[cfg(test)]
 mod upgrade_0041;
+#[cfg(test)]
+mod upgrade_0042;

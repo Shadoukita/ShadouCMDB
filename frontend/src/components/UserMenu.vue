@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
+import { t } from "../i18n";
 import { useMediaQuery } from "../lib/composables";
 import { useBrandingStore } from "../stores/branding";
 import { useSessionStore } from "../stores/session";
@@ -31,7 +32,8 @@ function onKeydown(e: KeyboardEvent) {
 onMounted(() => document.addEventListener("click", onDocClick));
 onBeforeUnmount(() => document.removeEventListener("click", onDocClick));
 const branding = useBrandingStore();
-const THEME_NAMES = { light: "Light", dark: "Dark", system: "System" } as const;
+/** An option's text: "Theme: light" in the header's select, just "light" in the folded menu under its "Theme" label. */
+const themeOption = (name: string) => (compact.value ? name : t("userMenu.theme.option", { name }));
 /** Shown instead of the name on phone-width screens (GH#363); the name stays the button's accessible name. */
 const initials = computed(() => {
   const name = session.user?.displayName?.trim() || session.user?.username || "";
@@ -69,39 +71,39 @@ async function signOut() {
       aria-haspopup="true"
       aria-controls="user-menu-panel"
       :aria-expanded="open"
-      :title="`Signed in as ${session.user.username}`"
+      :title="t('userMenu.signedInAsName', { name: session.user.username })"
       @click="open = !open"
     >
-      <span class="sr-only">Signed in as</span>
+      <span class="sr-only">{{ t("userMenu.signedInAs") }}</span>
       <span class="who-name">{{ session.user.displayName }}</span>
       <span class="who-initials" aria-hidden="true">{{ initials }}</span>
       <span aria-hidden="true">▾</span>
     </button>
     <div v-show="!compact || open" id="user-menu-panel" class="user-menu-panel">
-      <span v-if="compact" class="menu-label menu-who">Signed in as {{ session.user.displayName }}</span>
-      <RouterLink class="who" to="/account" :title="`Signed in as ${session.user.username}: my account and two-factor authentication`">
-        <template v-if="compact">My account</template>
+      <span v-if="compact" class="menu-label menu-who">{{ t("userMenu.signedInAsName", { name: session.user.displayName }) }}</span>
+      <RouterLink class="who" to="/account" :title="t('userMenu.accountTitle', { name: session.user.username })">
+        <template v-if="compact">{{ t("account.title") }}</template>
         <template v-else>
-          <span class="sr-only">Signed in as</span>
+          <span class="sr-only">{{ t("userMenu.signedInAs") }}</span>
           <span class="who-name">{{ session.user.displayName }}</span>
-          <span v-if="session.user.isAdministrator" class="badge">Administrator</span>
+          <span v-if="session.user.isAdministrator" class="badge">{{ t("userMenu.administrator") }}</span>
         </template>
       </RouterLink>
-      <label :class="compact ? 'menu-label' : 'sr-only'" for="user-theme">Theme</label>
+      <label :class="compact ? 'menu-label' : 'sr-only'" for="user-theme">{{ t("userMenu.theme") }}</label>
       <select
         id="user-theme"
         class="theme-select"
-        title="Theme"
+        :title="t('userMenu.theme')"
         :value="branding.userTheme ?? ''"
         @change="branding.setUserTheme((($event.target as HTMLSelectElement).value || null) as 'light' | 'dark' | 'system' | null)"
       >
-        <option value="">{{ compact ? "" : "Theme: " }}default ({{ THEME_NAMES[branding.effective.defaultTheme] }})</option>
-        <option value="light">{{ compact ? "" : "Theme: " }}light</option>
-        <option value="dark">{{ compact ? "" : "Theme: " }}dark</option>
-        <option value="system">{{ compact ? "" : "Theme: " }}follow system</option>
+        <option value="">{{ themeOption(t("userMenu.theme.default", { theme: t(`userMenu.theme.name.${branding.effective.defaultTheme}`) })) }}</option>
+        <option value="light">{{ themeOption(t("userMenu.theme.light")) }}</option>
+        <option value="dark">{{ themeOption(t("userMenu.theme.dark")) }}</option>
+        <option value="system">{{ themeOption(t("userMenu.theme.system")) }}</option>
       </select>
-      <button type="button" class="btn" :disabled="busy" @click="signOut">{{ busy ? "Signing out…" : "Sign out" }}</button>
+      <button type="button" class="btn" :disabled="busy" @click="signOut">{{ busy ? t("userMenu.signingOut") : t("userMenu.signOut") }}</button>
     </div>
-    <div v-if="error" class="user-menu-error"><ErrorAlert :error="error" title="Sign-out failed" /></div>
+    <div v-if="error" class="user-menu-error"><ErrorAlert :error="error" :title="t('userMenu.signOutFailed')" /></div>
   </div>
 </template>

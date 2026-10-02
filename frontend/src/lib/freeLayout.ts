@@ -4,13 +4,13 @@ import { sectionPlaces } from "./layoutDesign";
 import { GRID_COLUMNS, SECTION_GRID, sectionKind } from "./uiSettings";
 
 /**
- * Free tabs (`placement: "free"`): every section
- * is a window with a `frame` (x and w as fractions of the tab's width, y and h in
- * px, z the stacking order) and windows may overlap. The rules here mirror the
- * API's (backend ui_settings/document.rs `grid_frames`, `convert_to_grid`), so
- * the editor shows what a save stores: switching a tab between the grid and free
- * placement, the frame limits, and the stacking order. Every function changes the
- * tab in place (it is part of the reactive draft).
+ * Layout tabs are free (`placement: "free"`): every section is a window with a
+ * `frame` (x and w as fractions of the tab's width, y and h in px, z the
+ * stacking order) and windows may overlap. The rules here mirror the API's
+ * (backend ui_settings/document.rs `grid_frames`, `UiLayoutTab::normalize`), so
+ * the editor shows what a save stores: a tab stored on the earlier 12-column
+ * grid becoming free, the frame limits, and the stacking order. Every function
+ * that takes a tab changes it in place (it is part of the reactive draft).
  */
 
 export type Frame = components["schemas"]["UiSectionFrame"];
@@ -32,8 +32,6 @@ export const STACK_BELOW_PX = 820;
 export const GUIDE_PX = 8;
 /** How close an edge has to come to another window's edge to snap to it, in px. */
 export const SNAP_PX = 6;
-
-export const isFreeTab = (t: { placement?: "grid" | "free" } | undefined) => t?.placement === "free";
 
 const round4 = (v: number) => Math.round(v * 10_000) / 10_000;
 const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
@@ -74,15 +72,11 @@ export function estimatedHeight(s: LayoutSection): number {
   return clamp(HEADER_PX + Math.max(rows, s.minHeight ?? 1, 1) * ROW_PX, FRAME_MIN_H, FRAME_MAX_H);
 }
 
-/** Where a section is on screen when it leaves the grid (px from the top of the tab), when the editor can measure it. */
-export type Measured = Map<string, { y: number; h: number }>;
-
 /**
  * Frames for sections in grid order from `top` px down: x and w from their grid
- * columns, y and h measured on screen when known (so nothing moves), else the
- * API's estimate by grid row. z is 1..n in order.
+ * columns (`width`, `newRow`), y and h the API's estimate by grid row. z is 1..n in order.
  */
-export function gridFrames(sections: readonly LayoutSection[], top: number, measured?: Measured): Frame[] {
+export function gridFrames(sections: readonly LayoutSection[], top: number): Frame[] {
   const places = sectionPlaces(sections);
   let rowY = top;
   let rowH = 0;
@@ -94,12 +88,11 @@ export function gridFrames(sections: readonly LayoutSection[], top: number, meas
       rowH = 0;
       row = p.row;
     }
-    const m = measured?.get(s.key);
-    const h = clamp(Math.round(m?.h ?? estimatedHeight(s)), FRAME_MIN_H, FRAME_MAX_H);
+    const h = estimatedHeight(s);
     rowH = Math.max(rowH, h);
     return {
       x: round4(p.start / SECTION_GRID),
-      y: clamp(Math.round(m ? m.y : rowY), 0, FRAME_MAX_Y),
+      y: clamp(rowY, 0, FRAME_MAX_Y),
       w: round4(p.width / SECTION_GRID),
       h,
       z: i + 1,
@@ -113,46 +106,31 @@ export function tabHeight(tab: LayoutTab): number {
 }
 
 /**
- * Grid → free: every section becomes a window where it is on the grid (the
- * measured positions when given, so nothing moves), stacked in its order.
- * The grid settings (`width`, `newRow`) stay until a save; switching back sets them from the frames.
+ * Makes a tab free as the API stores it: a tab from the earlier grid (or a
+ * section without a frame) gets each section as a window where it was on the
+ * grid, below the windows it already has and above them in the stack. The grid
+ * settings (`width`, `newRow`) stay; the frames decide from then on.
  */
-export function toFree(tab: LayoutTab, measured?: Measured): void {
+export function makeFree(tab: LayoutTab): void {
   const sections = tab.sections ?? [];
-  const frames = gridFrames(sections, 0, measured);
-  sections.forEach((s, i) => (s.frame = frames[i]));
+  const framed = sections.filter((s) => s.frame);
+  const top = framed.length > 0 ? tabHeight(tab) + FRAME_GAP_PX : 0;
+  const topZ = Math.max(0, ...framed.map((s) => s.frame!.z));
+  const frames = gridFrames(sections.filter((s) => !s.frame), top);
+  let i = 0;
+  for (const s of sections) {
+    if (s.frame) continue;
+    const f = frames[i++];
+    s.frame = { ...f, z: f.z + topZ };
+  }
   tab.placement = "free";
 }
 
-/**
- * Free → grid, as the API converts it: sections ordered by y, then x; each spans
- * the columns nearest its width; one that starts below the bottom of the first
- * window of the current row starts a new row; the frames are dropped.
- */
-export function toGrid(tab: LayoutTab): void {
-  const sections = tab.sections ?? [];
-  const order = sections
-    .map((s, i) => ({ s, i }))
-    .sort((a, b) => {
-      const fa = a.s.frame;
-      const fb = b.s.frame;
-      if (fa && fb) return fa.y - fb.y || fa.x - fb.x || a.i - b.i;
-      return fa ? -1 : fb ? 1 : a.i - b.i;
-    });
-  let rowBottom: number | null = null;
-  tab.sections = order.map(({ s }, n) => {
-    const f = s.frame;
-    if (f) {
-      s.width = clamp(Math.round(f.w * SECTION_GRID), 1, SECTION_GRID);
-      const continues = rowBottom !== null && f.y < rowBottom;
-      if (!continues) rowBottom = f.y + f.h;
-      if (!continues && n > 0) s.newRow = true;
-      else delete s.newRow;
-      delete s.frame;
-    }
-    return s;
-  });
-  delete tab.placement;
+/** A free copy of a tab (makeFree), leaving `tab` as it is: how the page shows a tab stored on the earlier grid. */
+export function freeCopy<T extends LayoutTab>(tab: T): T {
+  const copy = { ...tab, sections: (tab.sections ?? []).map((s) => ({ ...s })) };
+  makeFree(copy);
+  return copy;
 }
 
 /** The sections in reading order (y, then x), as the API stores a free tab and the page renders it. */
@@ -325,33 +303,13 @@ export function describeBox(b: Box): string {
 
 
 /**
- * Keeps every section of a layout framed the way its tab is placed: in a free
- * tab, a section without a frame (added, or moved from another tab) gets one
- * below the windows (frameNew); in a grid tab, a section loses the frame it
- * brought from a free one (the API would read a frame there as "convert this
- * tab to the grid").
+ * Keeps every section of a layout framed: a section without a frame (added, or
+ * moved from another tab) gets one below the windows of its tab (frameNew), and
+ * every tab is free.
  */
 export function settleFrames(tabs: readonly LayoutTab[] | undefined): void {
   for (const t of tabs ?? []) {
-    for (const s of t.sections ?? []) {
-      if (isFreeTab(t) && !s.frame) frameNew(t, s);
-      else if (!isFreeTab(t) && s.frame) delete s.frame;
-    }
+    for (const s of t.sections ?? []) if (!s.frame) frameNew(t, s);
+    t.placement = "free";
   }
-}
-
-/**
- * Where the sections of a tab's grid are on screen, from the top of the grid
- * (`[data-section-shell]` children of `grid`), so that a switch to free
- * placement keeps each where it is.
- */
-export function measureGrid(grid: Element | null): Measured {
-  const out: Measured = new Map();
-  if (!grid) return out;
-  const top = grid.getBoundingClientRect().top;
-  for (const el of grid.querySelectorAll<HTMLElement>(":scope > [data-section-shell]")) {
-    const r = el.getBoundingClientRect();
-    out.set(el.dataset.sectionShell!, { y: r.top - top, h: r.height });
-  }
-  return out;
 }

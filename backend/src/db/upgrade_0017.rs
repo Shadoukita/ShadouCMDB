@@ -50,7 +50,8 @@ async fn v1_layouts_become_tabs_as_the_api_converts_them() {
         .unwrap();
     let (before_version, _) = current(pool).await;
 
-    MIGRATOR.run(pool).await.expect("migration 0017");
+    // Up to 0017 only: 0042 moves the layouts into templates (see upgrade_0042).
+    MIGRATOR.run_to(17, pool).await.expect("migration 0017");
 
     let (version, s) = current(pool).await;
     assert_eq!(version, before_version + 1, "saved as a new version");

@@ -447,7 +447,8 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
         .collect();
 
     let current = ui_data::current(conn, false).await?;
-    let mut ui_section = UiSettingsSection { settings: ui::parse_stored(&current.settings), logo: None, favicon: None };
+    let mut ui_section =
+        UiSettingsSection { settings: ui::parse_stored(&current.settings).with_standard(), logo: None, favicon: None };
     for (kind, content_type, data) in ui_data::all_asset_data(conn).await? {
         let Some(content_type) = ImageType::parse(&content_type) else { continue };
         let asset = AssetData { content_type, data: base64::engine::general_purpose::STANDARD.encode(&data) };
@@ -1801,9 +1802,10 @@ async fn run(
         im.section("uiSettings", 0);
         let old = current.ui_settings.as_ref().map(|u| u.settings.clone()).unwrap_or_default();
         let settings = section.settings.clone().normalized();
-        let changed = ui::save_in(im.conn, im.ctx, None, &settings, Some("Imported from a configuration file"))
-            .await
-            .map_err(|e| at("uiSettings.settings", e))?;
+        let changed =
+            ui::save_in(im.conn, im.ctx, None, &settings, Some("Imported from a configuration file"), ui::InUse::Keep)
+                .await
+                .map_err(|e| at("uiSettings.settings", e))?;
         if changed {
             im.record("uiSettings", "settings".into(), Some(ChangeAction::Update), diff(&old, &settings));
         } else {
@@ -1851,7 +1853,7 @@ async fn run(
             }
         }
         let model = ui_data::model(im.conn).await?;
-        ui_settings_issues = document::resolve(&section.settings, &model).1;
+        ui_settings_issues = document::resolve(&section.settings.clone().returned(), &model).1;
     }
 
     // ---- shared saved views (merged by context and name, never deleted) ----
@@ -2578,7 +2580,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(format!("{err:?}").contains("versions 1 to 6"), "{err:?}");
+        assert!(format!("{err:?}").contains("versions 1 to 7"), "{err:?}");
         let v3 = ConfigFile { format_version: 3, import_mappings: None, ..changed };
         import(&dst.pool, &system, &v3, ImportMode::DryRun).await.unwrap();
 

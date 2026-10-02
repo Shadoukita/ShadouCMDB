@@ -9,8 +9,9 @@ import type {
   UiWidgetType,
 } from "../api/uiSettings";
 import type { components } from "../api/schema";
+import { hasMessage, t } from "../i18n/index";
 import { GENERAL_SECTION, groupAttributes } from "./attributes";
-import { readingOrder } from "./freeLayout";
+import { freeCopy, makeFree, readingOrder } from "./freeLayout";
 
 type UiSectionFrame = components["schemas"]["UiSectionFrame"];
 
@@ -30,6 +31,7 @@ export function emptyDocument(): UiSettingsDocument {
     dashboard: { widgets: null },
     listViews: [],
     layouts: [],
+    layoutTemplates: [],
   };
 }
 
@@ -50,6 +52,8 @@ export function normalizeDocument(doc: Partial<UiSettingsDocument> | undefined):
     },
     listViews: (d.listViews ?? []).map((v) => ({ columns: [], defaultSort: null, pageSize: null, ...v, defaultFilters: { ...EMPTY_FILTERS, lookups: {}, ...v.defaultFilters } })),
     layouts: (d.layouts ?? []).map(normalizeLayout),
+    // Kept as the API sent them: classes and CIs refer to them, and the API refuses to drop one in use.
+    layoutTemplates: d.layoutTemplates ?? [],
   };
 }
 
@@ -213,12 +217,13 @@ export function lookupValueIds(
 
 // ---------- Navigation ----------
 
-export const PAGES: { page: UiPage; label: string; to: string; hiddenByDefault?: boolean }[] = [
-  { page: "dashboard", label: "Dashboard", to: "/" },
-  { page: "inventory", label: "All configuration items", to: "/cis" },
-  { page: "search", label: "Search", to: "/search", hiddenByDefault: true },
-  { page: "audit_log", label: "Audit log", to: "/admin/audit", hiddenByDefault: true },
-  { page: "administration", label: "Administration", to: "/admin" },
+/** The built-in pages; their default names come from the message catalog (`nav.page.<page>`, see `pageLabel`). */
+export const PAGES: { page: UiPage; to: string; hiddenByDefault?: boolean }[] = [
+  { page: "dashboard", to: "/" },
+  { page: "inventory", to: "/cis" },
+  { page: "search", to: "/search", hiddenByDefault: true },
+  { page: "audit_log", to: "/admin/audit", hiddenByDefault: true },
+  { page: "administration", to: "/admin" },
 ];
 const PAGE = new Map(PAGES.map((p) => [p.page, p]));
 /** Pages that sit under the "System" heading. */
@@ -338,7 +343,7 @@ export function buildNav(
     if (e.type === "page" && e.page) {
       const p = PAGE.get(e.page);
       if (!p || !showPage(e.page)) continue;
-      push(SYSTEM_PAGES.has(e.page) ? "System" : null, { id: `page:${e.page}`, label: e.label || p.label, to: p.to, page: e.page });
+      push(SYSTEM_PAGES.has(e.page) ? t("nav.heading.system") : null, { id: `page:${e.page}`, label: e.label || pageLabel(e.page), to: p.to, page: e.page });
     } else if (e.type === "class" && e.classKey) {
       const item = classItem(e.classKey, e.label);
       const area = item?.cls?.areaId ? areaById.get(item.cls.areaId) : undefined;
@@ -351,7 +356,7 @@ export function buildNav(
         }
         g.items.push(item);
         open = null;
-      } else if (item) push("Browse by class", item);
+      } else if (item) push(t("nav.heading.byClass"), item);
     } else if (e.type === "section") {
       const items = (e.items ?? []).filter((i) => !i.hidden).map((i) => classItem(i.classKey, i.label)).filter((i): i is NavLinkItem => !!i);
       if (items.length === 0) continue;
@@ -367,7 +372,8 @@ export function buildNav(
 }
 
 export function pageLabel(page: UiPage): string {
-  return PAGE.get(page)?.label ?? page;
+  const key = `nav.page.${page}`;
+  return hasMessage(key) ? t(key) : page;
 }
 
 // ---------- Dashboard ----------
@@ -378,7 +384,10 @@ export const WIDGET_TYPES: { type: UiWidgetType; label: string; hint: string }[]
   { type: "recent_changes", label: "Recently changed", hint: "The latest changed CIs" },
   { type: "saved_search", label: "Saved search", hint: "CIs matching classes, filters and a sort" },
 ];
-export const widgetLabel = (t: UiWidgetType) => WIDGET_TYPES.find((w) => w.type === t)?.label ?? t;
+export function widgetLabel(type: UiWidgetType): string {
+  const key = `dashboard.widget.${type}`;
+  return hasMessage(key) ? t(key) : (WIDGET_TYPES.find((w) => w.type === type)?.label ?? type);
+}
 
 // ---------- Detail and form layouts ----------
 
@@ -420,30 +429,37 @@ export function withoutKinds(l: UiClassLayout, kinds: readonly SectionKind[]): U
   return { ...l, tabs: (l.tabs ?? []).map((t) => ({ ...t, sections: (t.sections ?? []).filter((s) => !kinds.includes(sectionKind(s))) })) };
 }
 
-/** Every optional part of a layout filled in (tabs, sections, columns, widths), without the old `panels`. */
+/**
+ * Every optional part of a layout filled in (tabs, sections, columns, widths),
+ * without the old `panels`. Every tab is free: one stored on the earlier grid
+ * gets each section as a window where it was on the grid (lib/freeLayout makeFree).
+ */
 export function normalizeLayout(l: UiClassLayout): UiClassLayout {
+  const tabs = (l.tabs ?? []).map((t) => ({
+    key: t.key,
+    label: t.label,
+    placement: "free" as const,
+    // Content blocks (a `kind` other than fields: notes, panels) are kept as stored (a copy: the draft is edited), without fields.
+    sections: (t.sections ?? []).map((s) =>
+      sectionKind(s) !== "fields"
+        ? { ...s, width: s.width ?? SECTION_GRID }
+        : {
+            ...s,
+            key: s.key,
+            label: s.label,
+            columns: s.columns ?? GRID_COLUMNS,
+            width: s.width ?? SECTION_GRID,
+            collapsed: !!s.collapsed,
+            fields: (s.fields ?? []).map((f) => ({ field: f.field, width: f.width ?? 1 })),
+          },
+    ),
+  }));
+  tabs.forEach(makeFree);
   return {
     classKey: l.classKey,
-    tabs: (l.tabs ?? []).map((t) => ({
-      key: t.key,
-      label: t.label,
-      // Kept with the sections' frames: a free tab saved without it would go back on the grid.
-      ...(t.placement ? { placement: t.placement } : {}),
-      // Content blocks (a `kind` other than fields: notes, panels) are kept as stored (a copy: the draft is edited), without fields.
-      sections: (t.sections ?? []).map((s) =>
-        sectionKind(s) !== "fields"
-          ? { ...s, width: s.width ?? SECTION_GRID }
-          : {
-              ...s,
-              key: s.key,
-              label: s.label,
-              columns: s.columns ?? GRID_COLUMNS,
-              width: s.width ?? SECTION_GRID,
-              collapsed: !!s.collapsed,
-              fields: (s.fields ?? []).map((f) => ({ field: f.field, width: f.width ?? 1 })),
-            },
-      ),
-    })),
+    // The class's default template: the tabs below are its layout, and saving them edits it.
+    ...(l.templateKey ? { templateKey: l.templateKey } : {}),
+    tabs,
     hiddenFields: l.hiddenFields ?? [],
     readOnlyFields: l.readOnlyFields ?? [],
   };
@@ -471,14 +487,13 @@ export interface ResolvedSection {
   /** A grid of `fields`, or a content block (a note's `text`, a built-in panel) without fields. */
   kind: SectionKind;
   text?: string;
-  /** Where the section sits as a window of a free tab (lib/freeLayout); absent on the grid and for the automatic sections. */
+  /** Where the section sits as a window of its tab (lib/freeLayout); absent for the automatic sections. */
   frame?: UiSectionFrame;
 }
+/** A tab: the layout's sections are windows (in reading order), the automatic ones follow below them at the full width. */
 export interface ResolvedTab {
   key: string;
   label: string;
-  /** Free: the framed sections are windows (in reading order), the rest follow below them at the full width. */
-  placement: "grid" | "free";
   sections: ResolvedSection[];
 }
 
@@ -519,14 +534,14 @@ export function resolveLayout(
     return c && usable(c) && !placed.has(c) ? c : null;
   };
   const taken = new Set<string>();
-  const tabs: ResolvedTab[] = (layout.tabs ?? []).map((t) => ({
+  // Every tab free: one stored on the earlier grid shows its sections as windows where they were on the grid.
+  const tabs: ResolvedTab[] = (layout.tabs ?? []).map(freeCopy).map((t) => ({
     key: t.key,
     label: t.label,
-    placement: t.placement === "free" ? "free" : "grid",
-    // A free tab's windows in reading order (y, then x): the order of the page, the keyboard and screen readers.
-    sections: (t.placement === "free" ? readingOrder(t.sections ?? []) : (t.sections ?? [])).map((s): ResolvedSection => {
+    // The windows in reading order (y, then x): the order of the page, the keyboard and screen readers.
+    sections: readingOrder(t.sections ?? []).map((s): ResolvedSection => {
       const kind = sectionKind(s);
-      const place = { width: sectionWidth(s), newRow: !!s.newRow, minHeight: s.minHeight ?? undefined, ...(t.placement === "free" && s.frame ? { frame: s.frame } : {}) };
+      const place = { width: sectionWidth(s), newRow: !!s.newRow, minHeight: s.minHeight ?? undefined, ...(s.frame ? { frame: s.frame } : {}) };
       if (kind !== "fields") return { key: s.key, label: s.label, collapsed: !!s.collapsed, columns: GRID_COLUMNS, ...place, fields: [], auto: false, kind, text: s.text };
       const columns = Math.min(Math.max(s.columns ?? GRID_COLUMNS, 1), MAX_COLUMNS);
       const fields: ResolvedField[] = [];
@@ -573,7 +588,7 @@ export function resolveLayout(
     ...groups.map((g) => auto(`_group:${g.group}`, g.group, g.fields)),
     auto("_record", "Record", record.filter((f) => usable(f) && !taken.has(f))),
   ];
-  if (tabs.length === 0) tabs.push({ key: "general", label: GENERAL_SECTION, placement: "grid", sections: [] });
+  if (tabs.length === 0) tabs.push({ key: "general", label: GENERAL_SECTION, sections: [] });
   tabs[0].sections.push(...trailing);
   if (keepEmpty) return tabs.map((t) => ({ ...t, sections: t.sections.filter((s) => !s.auto || s.fields.length > 0) }));
   const shown = tabs.map((t) => ({ ...t, sections: t.sections.filter((s) => s.kind !== "fields" || s.fields.length > 0) })).filter((t) => t.sections.length > 0);

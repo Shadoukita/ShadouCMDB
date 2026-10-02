@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import { formatNumber, t } from "../i18n";
 
 const SIZES = [25, 50, 100, 200];
 
@@ -17,19 +18,19 @@ const go = (offset: number, limit = props.limit) => emit("change", { limit, offs
 
 <template>
   <div class="pagination">
-    <span aria-live="polite">{{ from.toLocaleString() }}–{{ to.toLocaleString() }} of {{ total.toLocaleString() }}</span>
+    <span aria-live="polite">{{ t("pagination.range", { from: formatNumber(from), to: formatNumber(to), total: formatNumber(total) }) }}</span>
     <div class="actions">
       <label>
-        Rows
+        {{ t("pagination.rows") }}
         <select :value="limit" @change="go(0, Number(($event.target as HTMLSelectElement).value))">
           <option v-for="s in sizes" :key="s" :value="s">{{ s }}</option>
         </select>
       </label>
-      <button type="button" class="btn btn-sm" :disabled="offset === 0" @click="go(0)">« First</button>
-      <button type="button" class="btn btn-sm" :disabled="offset === 0" @click="go(Math.max(0, offset - limit))">‹ Prev</button>
-      <span>Page {{ page }} / {{ pages }}</span>
-      <button type="button" class="btn btn-sm" :disabled="offset + limit >= total" @click="go(offset + limit)">Next ›</button>
-      <button type="button" class="btn btn-sm" :disabled="offset + limit >= total" @click="go((pages - 1) * limit)">Last »</button>
+      <button type="button" class="btn btn-sm" :disabled="offset === 0" @click="go(0)">{{ t("pagination.first") }}</button>
+      <button type="button" class="btn btn-sm" :disabled="offset === 0" @click="go(Math.max(0, offset - limit))">{{ t("pagination.prev") }}</button>
+      <span>{{ t("pagination.page", { page: formatNumber(page), pages: formatNumber(pages) }) }}</span>
+      <button type="button" class="btn btn-sm" :disabled="offset + limit >= total" @click="go(offset + limit)">{{ t("pagination.next") }}</button>
+      <button type="button" class="btn btn-sm" :disabled="offset + limit >= total" @click="go((pages - 1) * limit)">{{ t("pagination.last") }}</button>
     </div>
   </div>
 </template>
