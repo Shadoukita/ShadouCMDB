@@ -455,8 +455,8 @@ fn is_sheet_part(lower: &str) -> bool {
 /// or without a prefix (calamine reads the unprefixed one).
 #[derive(Debug, Default)]
 struct Relationship {
-    types: Vec<Vec<u8>>,
-    targets: Vec<Vec<u8>>,
+    types: Vec<String>,
+    targets: Vec<String>,
 }
 
 /// What [`scan_xml`] collects from the package parts.
@@ -471,7 +471,7 @@ struct Found {
 }
 
 /// Reads an XML part as events: refuses a DOCTYPE and any encoding but UTF-8,
-/// and an event longer than [`MAX_XML_TOKEN`] (`run` counts the bytes read
+/// or invalid UTF-8, and an event longer than [`MAX_XML_TOKEN`] (`run` counts the bytes read
 /// since the last event). Collects content types and relationships into
 /// `found`. In a sheet, every `r`, `ref` and `sqref` must be a cell reference.
 fn scan_xml<R: Read>(input: R, name: &str, run: &Cell<u64>, found: &mut Found) -> Result<(), ParseError> {
@@ -507,7 +507,7 @@ fn scan_xml<R: Read>(input: R, name: &str, run: &Cell<u64>, found: &mut Found) -
             Ok(Event::Decl(d)) => {
                 if let Some(enc) = d.encoding() {
                     let enc = enc.map_err(|_| encoding_error())?;
-                    let enc = String::from_utf8_lossy(&enc).to_lowercase();
+                    let enc = enc.to_lowercase();
                     if enc != "utf-8" && enc != "utf8" {
                         return Err(encoding_error());
                     }
@@ -517,8 +517,8 @@ fn scan_xml<R: Read>(input: R, name: &str, run: &Cell<u64>, found: &mut Found) -
                 if sheet {
                     for a in e.attributes() {
                         let a = a.map_err(|_| malformed())?;
-                        if matches!(a.key.local_name().as_ref(), b"r" | b"ref" | b"sqref")
-                            && !is_cell_reference(&a.value)
+                        if matches!(a.key.local_name().as_ref(), "r" | "ref" | "sqref")
+                            && !is_cell_reference(a.value.as_bytes())
                         {
                             return Err(not_a_workbook(&format!("the part {name} has an invalid cell reference")));
                         }
@@ -526,20 +526,20 @@ fn scan_xml<R: Read>(input: R, name: &str, run: &Cell<u64>, found: &mut Found) -
                 }
                 if is_types {
                     for a in e.attributes().flatten() {
-                        if a.key.local_name().as_ref() == b"ContentType" {
-                            found.content_types.push(String::from_utf8_lossy(&a.value).to_lowercase());
+                        if a.key.local_name().as_ref() == "ContentType" {
+                            found.content_types.push(a.value.to_lowercase());
                         }
                     }
                 }
                 if let Some(rels) = rels.as_mut()
-                    && e.local_name().as_ref() == b"Relationship"
+                    && e.local_name().as_ref() == "Relationship"
                 {
                     let mut rel = Relationship::default();
                     for a in e.attributes() {
                         let a = a.map_err(|_| malformed())?;
                         match a.key.local_name().as_ref() {
-                            b"Type" => rel.types.push(a.value.into_owned()),
-                            b"Target" => rel.targets.push(a.value.into_owned()),
+                            "Type" => rel.types.push(a.value.into_owned()),
+                            "Target" => rel.targets.push(a.value.into_owned()),
                             _ => {}
                         }
                     }
@@ -548,6 +548,7 @@ fn scan_xml<R: Read>(input: R, name: &str, run: &Cell<u64>, found: &mut Found) -
             }
             Ok(_) => {}
             Err(quick_xml::Error::Io(e)) => return Err(io_err_ref(&e)),
+            Err(quick_xml::Error::Encoding(_)) => return Err(encoding_error()),
             Err(_) => return Err(malformed()),
         }
         buf.clear();
@@ -684,15 +685,14 @@ fn check_relationships(found: &Found) -> Result<(), ParseError> {
     let main: Vec<&Relationship> = found
         .package_rels
         .iter()
-        .filter(|r| r.types.iter().any(|t| t.ends_with(b"/relationships/officeDocument")))
+        .filter(|r| r.types.iter().any(|t| t.ends_with("/relationships/officeDocument")))
         .collect();
     if main.is_empty()
-        || main.iter().any(|r| r.targets.iter().any(|t| t != b"xl/workbook.xml" && t != b"/xl/workbook.xml"))
+        || main.iter().any(|r| r.targets.iter().any(|t| t != "xl/workbook.xml" && t != "/xl/workbook.xml"))
     {
         return Err(not_a_workbook("its main part is not xl/workbook.xml"));
     }
-    let is_sheet =
-        |t: &Vec<u8>| matches!(t.rsplit(|&b| b == b'/').next(), Some(b"worksheet" | b"chartsheet" | b"dialogsheet"));
+    let is_sheet = |t: &String| matches!(t.rsplit('/').next(), Some("worksheet" | "chartsheet" | "dialogsheet"));
     for rel in found.workbook_rels.iter().filter(|r| r.types.iter().any(is_sheet)) {
         if !rel.targets.iter().all(|t| is_sheet_target(t)) {
             return Err(not_a_workbook("a sheet lies outside the worksheets folder"));
@@ -704,12 +704,11 @@ fn check_relationships(found: &Found) -> Result<(), ParseError> {
 /// A sheet target as calamine resolves it (`/x` from the root, anything else
 /// under `xl/`): printable ASCII without `\`, `&` or spaces, in a sheet
 /// folder, ending in `.xml`, and with no `.`, `..` or empty segment.
-fn is_sheet_target(target: &[u8]) -> bool {
-    let path = match target.strip_prefix(b"/") {
-        Some(p) => p.to_vec(),
-        None => [b"xl/".as_slice(), target].concat(),
+fn is_sheet_target(target: &str) -> bool {
+    let lower = match target.strip_prefix('/') {
+        Some(p) => p.to_ascii_lowercase(),
+        None => format!("xl/{}", target.to_ascii_lowercase()),
     };
-    let Ok(lower) = String::from_utf8(path.to_ascii_lowercase()) else { return false };
     lower.bytes().all(|b| (0x21..=0x7e).contains(&b) && b != b'\\' && b != b'&')
         && is_sheet_part(&lower)
         && lower.ends_with(".xml")
@@ -1099,6 +1098,30 @@ mod tests {
         assert_eq!(code(parts_with(Part::new("xl/extra.xml", utf16[2..].to_vec()))), "xml_encoding");
         let latin = r#"<?xml version="1.0" encoding="ISO-8859-1"?><x/>"#;
         assert_eq!(code(parts_with(Part::new("xl/extra.xml", latin))), "xml_encoding");
+        // Declared (or defaulting to) UTF-8 but holding invalid bytes: in text,
+        // in an attribute value, in a name, and in a sheet or relationships part.
+        let invalid = |xml: &str| xml.bytes().map(|b| if b == b'~' { 0xFF } else { b }).collect::<Vec<u8>>();
+        for (part, xml) in [
+            ("xl/extra.xml", r#"<?xml version="1.0" encoding="UTF-8"?><x>a~b</x>"#),
+            ("xl/extra.xml", r#"<x a="~"/>"#),
+            ("xl/extra.xml", r#"<x~/>"#),
+            ("xl/worksheets/sheet9.xml", r#"<worksheet><c r="A1" t="~"/></worksheet>"#),
+        ] {
+            assert_eq!(code(parts_with(Part::new(part, invalid(xml)))), "xml_encoding", "{part}: {xml}");
+        }
+        use super::super::fixtures::{RELS, WORKBOOK_RELS};
+        for (name, xml) in [
+            ("_rels/.rels", RELS.replace("\"xl/workbook.xml\"", "\"xl/workbook~.xml\"")),
+            (
+                "xl/_rels/workbook.xml.rels",
+                WORKBOOK_RELS.replace("\"worksheets/sheet1.xml\"", "\"worksheets/sheet~.xml\""),
+            ),
+        ] {
+            let mut parts = workbook_parts(&sheet_xml(&[("A1", C::S("x"))]), None, false, false);
+            let i = parts.iter().position(|p| p.name == name).unwrap();
+            parts[i] = Part::new(name, invalid(&xml));
+            assert_eq!(code(zip(&parts)), "xml_encoding", "{name}");
+        }
     }
 
     #[test]
