@@ -34,7 +34,8 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 #[command(name = "shadoucmdb", version, about = "ShadouCMDB server and admin commands")]
 struct Cli {
     /// Load environment variables from this file (variables already set in the
-    /// environment win). Without it, ./.env is loaded if it exists.
+    /// environment win). Without it, only .env in the current directory is
+    /// loaded, if it exists; parent directories are never searched.
     #[arg(long, global = true, value_name = "PATH")]
     env_file: Option<PathBuf>,
 
@@ -130,22 +131,32 @@ impl Command {
     }
 }
 
-fn load_env_file(path: Option<&PathBuf>) -> anyhow::Result<()> {
+/// Loads `--env-file`, or else `.env` in the working directory. Returns the
+/// file loaded, as an absolute path, for the startup log.
+fn load_env_file(path: Option<&PathBuf>) -> anyhow::Result<Option<PathBuf>> {
     let loaded = match path {
         Some(p) => {
             dotenvy::from_path(p).with_context(|| format!("cannot read env file {}", p.display()))?;
             Some(p.clone())
         }
-        None => match dotenvy::dotenv() {
-            Ok(p) => Some(p),
-            Err(e) if e.not_found() => None,
-            Err(e) => return Err(e).context("cannot read .env"),
-        },
+        None => load_dot_env_in(&std::env::current_dir().context("cannot determine the working directory")?)?,
     };
-    if let Some(p) = loaded {
-        config::set_env_file(p);
+    let Some(p) = loaded else { return Ok(None) };
+    let p = std::path::absolute(&p).unwrap_or(p);
+    config::set_env_file(p.clone());
+    Ok(Some(p))
+}
+
+/// Loads `<dir>/.env` if it exists. Never looks in parent directories
+/// (`dotenvy::dotenv()` does): a command started in a subdirectory must not
+/// pick up another installation's database or write its setup token there.
+fn load_dot_env_in(dir: &std::path::Path) -> anyhow::Result<Option<PathBuf>> {
+    let p = dir.join(".env");
+    match dotenvy::from_path(&p) {
+        Ok(()) => Ok(Some(p)),
+        Err(e) if e.not_found() => Ok(None),
+        Err(e) => Err(e).with_context(|| format!("cannot read {}", p.display())),
     }
-    Ok(())
 }
 
 fn runtime() -> anyhow::Result<tokio::runtime::Runtime> {
@@ -153,7 +164,7 @@ fn runtime() -> anyhow::Result<tokio::runtime::Runtime> {
 }
 
 fn run(cli: Cli) -> anyhow::Result<()> {
-    load_env_file(cli.env_file.as_ref())?;
+    let env_file = load_env_file(cli.env_file.as_ref())?;
     let launch = service::LaunchOptions { env_file: cli.env_file, log_file: cli.log_file.clone() };
 
     // Generating the spec needs no configuration, database or logger.
@@ -177,6 +188,10 @@ fn run(cli: Cli) -> anyhow::Result<()> {
     // Read LOG_LEVEL leniently here so that a broken configuration is still
     // reported through the logger; Config::from_env validates it properly.
     logging::init(&std::env::var("LOG_LEVEL").unwrap_or_default(), cli.log_file.as_deref())?;
+    // The path only, never the values: it shows which installation's settings apply.
+    if let Some(p) = &env_file {
+        tracing::info!("loaded environment from {}", p.display());
+    }
 
     match cli.command {
         Command::Serve => {
@@ -283,5 +298,29 @@ fn main() -> ExitCode {
             eprintln!("{command} failed: {err:#}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // GH#482: a .env above the working directory belongs to something else.
+    #[test]
+    fn dot_env_is_read_from_the_working_directory_only() {
+        let root = std::env::temp_dir().join(format!("shadoucmdb-dotenv-{}", uuid::Uuid::new_v4()));
+        let sub = root.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(root.join(".env"), "SHADOUCMDB_TEST_GH482_PARENT=loaded\n").unwrap();
+
+        assert_eq!(load_dot_env_in(&sub).unwrap(), None);
+        assert!(std::env::var("SHADOUCMDB_TEST_GH482_PARENT").is_err(), "parent .env must not be loaded");
+
+        std::fs::write(sub.join(".env"), "SHADOUCMDB_TEST_GH482_CWD=loaded\n").unwrap();
+        assert_eq!(load_dot_env_in(&sub).unwrap(), Some(sub.join(".env")));
+        assert_eq!(std::env::var("SHADOUCMDB_TEST_GH482_CWD").as_deref(), Ok("loaded"));
+        assert!(std::env::var("SHADOUCMDB_TEST_GH482_PARENT").is_err());
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }
