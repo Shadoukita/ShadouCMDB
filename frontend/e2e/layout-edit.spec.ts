@@ -564,8 +564,9 @@ test("windows dragged, resized, overlapped and layered, saved, and shown as plac
 
   // Stored: a free tab, the frames as placed, Floating on top of General; sections in reading order (y, then x).
   type Frame = { x: number; y: number; w: number; h: number; z: number };
-  const stored = await apiGet<{ settings: { layouts: { classKey: string; tabs: { placement?: string; sections: { key: string; frame?: Frame }[] }[] }[] } }>(request, "/ui-settings");
-  const tab = stored.settings.layouts.find((l) => l.classKey === "server")!.tabs[0];
+  // Saved to the template Server uses (Standard: the class has no default of its own).
+  const stored = await apiGet<{ settings: { layoutTemplates: { key: string; layout: { tabs: { placement?: string; sections: { key: string; frame?: Frame }[] }[] } }[] } }>(request, "/ui-settings");
+  const tab = stored.settings.layoutTemplates.find((t) => t.key === "standard")!.layout.tabs[0];
   expect(tab.placement).toBe("free");
   const saved = Object.fromEntries(tab.sections.map((s) => [s.key, s.frame!]));
   expect(saved[key]).toMatchObject({ y: expected.y, h: expected.h });

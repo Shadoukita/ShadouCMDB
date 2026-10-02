@@ -60,8 +60,9 @@ test("layouts: Criticality is placed like the other fields, can be read-only and
   await page.keyboard.press("Delete");
   await expect(page.getByTestId("le-hidden").getByRole("listitem")).toHaveText([/Criticality/]);
   await saveLayout();
-  const stored = await apiGet<{ settings: { layouts: { classKey: string; hiddenFields?: string[] }[] } }>(request, "/ui-settings");
-  expect(stored.settings.layouts.find((l) => l.classKey === "server")?.hiddenFields).toContain("criticality");
+  // Saved to the template Server uses (Standard: the class has no default of its own).
+  const stored = await apiGet<{ settings: { layoutTemplates: { key: string; layout: { hiddenFields?: string[] } }[] } }>(request, "/ui-settings");
+  expect(stored.settings.layoutTemplates.find((t) => t.key === "standard")?.layout.hiddenFields).toContain("criticality");
 
   await page.goto(`/cis/new?classId=${serverId}`);
   await expect(page.getByLabel("Ident")).toBeVisible();

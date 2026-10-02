@@ -17,7 +17,7 @@ import {
   templateKeyFor,
   templateNameProblem,
 } from "../src/lib/layoutTemplates";
-import { emptyDocument } from "../src/lib/uiSettings";
+import { emptyDocument, layoutFor } from "../src/lib/uiSettings";
 
 const TABS: NonNullable<UiClassLayout["tabs"]> = [
   {
@@ -71,6 +71,21 @@ describe("class defaults", () => {
     d.layouts.push({ classKey: "legacy", tabs: TABS });
     assert.deepEqual(compactLayouts(d).layouts, [{ classKey: "server", templateKey: "hosts" }, { classKey: "legacy", tabs: TABS }]);
     assert.equal(d.layouts[0].tabs, TABS, "the document itself is not changed");
+  });
+});
+
+describe("a class's layout", () => {
+  test("its entry's (the API copies the template's layout onto it)", () => {
+    assert.equal(layoutFor(doc(), "server")?.tabs?.[0].key, "main");
+  });
+  test("a class without an entry shows the Standard template, also when Standard has a layout", () => {
+    assert.equal(layoutFor(doc(), "application"), undefined, "an empty Standard: the built-in arrangement");
+    const d = doc();
+    d.layoutTemplates[0].layout = { tabs: TABS, hiddenFields: ["criticality"] };
+    const l = layoutFor(d, "application");
+    assert.equal(l?.classKey, "application");
+    assert.deepEqual(l?.hiddenFields, ["criticality"]);
+    assert.deepEqual(l?.tabs?.map((t) => t.key), ["main"]);
   });
 });
 
