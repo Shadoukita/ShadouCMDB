@@ -38,6 +38,7 @@ use super::imports::saved;
 use super::imports::schemas::ColumnTarget;
 use super::lookups::{LookupList, LookupListValue, LookupListValues, LookupLists};
 use super::profiles::{self, ClassPermission};
+use super::saved_views;
 use super::simple_resource::{self as simple, Resource};
 use super::ui_settings::assets::{AssetKind, ImageType};
 use super::ui_settings::document::{self, Issue, UiSettingsDocument};
@@ -207,6 +208,8 @@ struct Ids {
     profiles: HashMap<String, Uuid>,
     /// (class key, lower(name)) -> id
     mappings: HashMap<(String, String), Uuid>,
+    /// (context, lower(name)) -> id of a shared saved view
+    views: HashMap<(String, String), Uuid>,
 }
 
 struct Snapshot {
@@ -467,6 +470,15 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
         })
         .collect();
 
+    let view_specs: Vec<SavedViewSpec> = saved_views::service::shared_for_config(conn)
+        .await?
+        .into_iter()
+        .map(|v| {
+            ids.views.insert((v.context.as_str().to_owned(), v.name.to_lowercase()), v.id);
+            SavedViewSpec { context: v.context, name: v.name, description: v.description, definition: v.definition }
+        })
+        .collect();
+
     let file = ConfigFile {
         format: FORMAT.into(),
         format_version: FORMAT_VERSION,
@@ -483,6 +495,7 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
         permission_profiles: Some(profile_specs),
         ui_settings: Some(ui_section),
         import_mappings: Some(mapping_specs),
+        saved_views: Some(view_specs),
     };
     Ok(Snapshot { file, ids, builtin_profile })
 }
@@ -491,12 +504,15 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
 /// read profiles on their own admin API (`profiles.manage` or `users.manage`);
 /// for anyone else it is left out of the file. Likewise saved import mappings
 /// need `cis.import`, and only those of classes the caller can view are
-/// written (SHAA-714 §6.2, D9).
+/// written (SHAA-714 §6.2, D9). Shared saved views need `views.share`; a view
+/// is written without the class keys the caller may not view, and left out
+/// when they may view none of its classes (SHAA-578 §3.2, §4).
 pub async fn export(pool: &PgPool, ctx: &RequestContext) -> Result<ConfigFile, AppError> {
     // One snapshot: REPEATABLE READ so every section comes from the same moment.
     let mut tx = pool.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY").execute(&mut *tx).await?;
     let Snapshot { mut file, ids, .. } = snapshot(&mut tx).await?;
+    let catalogue = saved_views::resolve::Catalogue::load(&mut tx).await?;
     tx.commit().await?;
     let reads_profiles =
         ctx.require(GlobalPermission::ProfilesManage).or_else(|_| ctx.require(GlobalPermission::UsersManage));
@@ -509,6 +525,19 @@ pub async fn export(pool: &PgPool, ctx: &RequestContext) -> Result<ConfigFile, A
         mappings
             .retain(|m| ids.classes.get(&m.class_key).is_some_and(|c| ctx.require_class(*c, ClassOp::View).is_ok()));
     }
+    if ctx.require(GlobalPermission::ViewsShare).is_err() {
+        file.saved_views = None;
+    } else if let Some(views) = file.saved_views.take() {
+        file.saved_views = Some(
+            views
+                .into_iter()
+                .filter_map(|v| {
+                    let definition = saved_views::service::exportable(ctx, &catalogue, &v.definition)?;
+                    Some(SavedViewSpec { definition, ..v })
+                })
+                .collect(),
+        );
+    }
 
     // GH#407: one `export` row per download, in its own transaction (the
     // snapshot is read-only). Which sections left and how many mappings,
@@ -519,6 +548,7 @@ pub async fn export(pool: &PgPool, ctx: &RequestContext) -> Result<ConfigFile, A
         ("permissionProfiles", file.permission_profiles.is_some()),
         ("uiSettings", file.ui_settings.is_some()),
         ("importMappings", file.import_mappings.is_some()),
+        ("savedViews", file.saved_views.is_some()),
     ]
     .into_iter()
     .filter_map(|(name, present)| present.then_some(name))
@@ -535,6 +565,7 @@ pub async fn export(pool: &PgPool, ctx: &RequestContext) -> Result<ConfigFile, A
             "sections": sections,
             "profilesIncluded": file.permission_profiles.is_some(),
             "mappingCount": file.import_mappings.as_ref().map_or(0, Vec::len),
+            "viewCount": file.saved_views.as_ref().map_or(0, Vec::len),
         })),
     };
     let mut tx = pool.begin().await?;
@@ -872,6 +903,11 @@ fn validate(
         validate_mappings(mappings, file, snap, ctx, &mut e, warnings);
     }
 
+    // Shared saved views
+    if let Some(views) = &file.saved_views {
+        validate_views(views, file, snap, ctx, &mut e, warnings);
+    }
+
     // Images
     let mut decoded = Decoded { logo: None, favicon: None };
     if let Some(ui_section) = &file.ui_settings {
@@ -1007,6 +1043,140 @@ fn validate_mappings(
             "importMappings".into(),
             "limit_reached",
             format!("An instance holds at most {} saved mappings; this file would exceed that", saved::MAX_SAVED),
+        );
+    }
+}
+
+/// Whether a shared view in the file refers to a class here that the caller
+/// may not view. Such a view is skipped, so an import never writes a view the
+/// importer could not save through the API (SHAA-578 §3.1).
+fn view_names_hidden_class(v: &SavedViewSpec, snap: &Snapshot, ctx: &RequestContext) -> bool {
+    v.definition
+        .class_keys
+        .iter()
+        .any(|k| snap.ids.classes.get(k).is_some_and(|c| ctx.require_class(*c, ClassOp::View).is_err()))
+}
+
+/// SHAA-578 §4: a view's class, attribute and lookup keys that do not exist
+/// (here or in the file) are warnings, and the view is still saved, as for UI
+/// settings: resolution reports them until they exist. Everything the
+/// saved-view API refuses about the definition's shape is refused here too.
+fn validate_views(
+    views: &[SavedViewSpec],
+    file: &ConfigFile,
+    snap: &Snapshot,
+    ctx: &RequestContext,
+    e: &mut Vec<FieldError>,
+    warnings: &mut Vec<ImportWarning>,
+) {
+    let (file_dm, here_dm) =
+        (file.data_model.clone().unwrap_or_default(), snap.file.data_model.clone().unwrap_or_default());
+    let parents: HashMap<&str, Option<&str>> =
+        here_dm.classes.iter().chain(file_dm.classes.iter()).map(|c| (c.key.as_str(), c.parent.as_deref())).collect();
+    let attrs: HashSet<(&str, &str)> = here_dm
+        .attributes
+        .iter()
+        .chain(file_dm.attributes.iter())
+        .map(|a| (a.class.as_str(), a.key.as_str()))
+        .collect();
+    let has_attribute = |class: &str, key: &str| {
+        let mut at = Some(class);
+        let mut hops = 0;
+        while let Some(c) = at {
+            if attrs.contains(&(c, key)) {
+                return true;
+            }
+            at = parents.get(c).copied().flatten();
+            hops += 1;
+            if hops > parents.len() {
+                break;
+            }
+        }
+        false
+    };
+    let (file_lk, here_lk) = (file.lookups.clone().unwrap_or_default(), snap.file.lookups.clone().unwrap_or_default());
+    let values: HashMap<&str, HashSet<&str>> =
+        here_lk.lists.iter().chain(file_lk.lists.iter()).fold(HashMap::new(), |mut m, l| {
+            m.entry(l.key.as_str()).or_default().extend(l.values.iter().map(|v| v.key.as_str()));
+            m
+        });
+
+    let mut seen = HashSet::new();
+    let mut creates = 0i64;
+    for (i, v) in views.iter().enumerate() {
+        let p = format!("savedViews.{i}");
+        if v.name.is_empty() {
+            problem(e, format!("{p}.name"), "required", "Required");
+        }
+        let merge_key = (v.context.as_str().to_owned(), v.name.to_lowercase());
+        if !seen.insert(merge_key.clone()) {
+            problem(
+                e,
+                format!("{p}.name"),
+                "duplicate",
+                format!("\"{}\" appears more than once for this context", v.name),
+            );
+        }
+        if view_names_hidden_class(v, snap, ctx) {
+            warnings.push(ImportWarning {
+                path: p,
+                message: format!("The shared view \"{}\" refers to a class you cannot view and was skipped", v.name),
+            });
+            continue;
+        }
+        let d = &v.definition;
+        for (j, k) in d.class_keys.iter().enumerate() {
+            if !parents.contains_key(k.as_str()) {
+                warnings.push(ImportWarning {
+                    path: format!("{p}.definition.classKeys.{j}"),
+                    message: format!("Class \"{k}\" does not exist; the view leaves it out until it does"),
+                });
+            }
+        }
+        let mut fields: Vec<(String, &str)> =
+            d.columns.iter().enumerate().map(|(j, c)| (format!("columns.{j}"), c.as_str())).collect();
+        if let Some(s) = &d.sort {
+            fields.push(("sort.field".into(), s.field.as_str()));
+        }
+        for (path, field) in fields {
+            let Some(key) = field.strip_prefix("attributes.") else { continue };
+            if let Some(c) = d.class_keys.iter().find(|c| parents.contains_key(c.as_str()) && !has_attribute(c, key)) {
+                warnings.push(ImportWarning {
+                    path: format!("{p}.definition.{path}"),
+                    message: format!("Field \"{key}\" does not exist on class \"{c}\"; the view leaves it out"),
+                });
+            }
+        }
+        for (list, keys) in &d.filters.lookups {
+            let path = format!("{p}.definition.filters.lookups.{list}");
+            match values.get(list.as_str()) {
+                None => warnings.push(ImportWarning {
+                    path,
+                    message: format!("Lookup list \"{list}\" does not exist; the view is unavailable until it does"),
+                }),
+                Some(known) => {
+                    for (j, k) in keys.iter().enumerate() {
+                        if !known.contains(k.as_str()) {
+                            warnings.push(ImportWarning {
+                                path: format!("{path}.{j}"),
+                                message: format!("\"{k}\" is not a value of lookup list \"{list}\""),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        if !snap.ids.views.contains_key(&merge_key) {
+            creates += 1;
+        }
+    }
+    let max = saved_views::service::MAX_SHARED;
+    if snap.ids.views.len() as i64 + creates > max {
+        problem(
+            e,
+            "savedViews".into(),
+            "limit_reached",
+            format!("An instance holds at most {max} shared views; this file would exceed that"),
         );
     }
 }
@@ -1653,6 +1823,66 @@ async fn run(
         ui_settings_issues = document::resolve(&section.settings, &model).1;
     }
 
+    // ---- shared saved views (merged by context and name, never deleted) ----
+    if let Some(list) = &file.saved_views {
+        let names: HashSet<String> =
+            list.iter().map(|v| format!("{}.{}", v.context.as_str(), v.name.to_lowercase())).collect();
+        let here: Vec<String> = im.ids.views.keys().map(|(c, n)| format!("{c}.{n}")).collect();
+        im.section("savedViews", not_in_file(here.iter(), &names));
+        let old: HashMap<(String, String), &SavedViewSpec> = current
+            .saved_views
+            .iter()
+            .flatten()
+            .map(|v| ((v.context.as_str().to_owned(), v.name.to_lowercase()), v))
+            .collect();
+        let catalogue = saved_views::resolve::Catalogue::load(im.conn).await?;
+        let viewer = saved_views::resolve::Viewer::of(im.ctx);
+        for (i, v) in list.iter().enumerate() {
+            let key = (v.context.as_str().to_owned(), v.name.to_lowercase());
+            if v.definition
+                .class_keys
+                .iter()
+                .any(|k| im.ids.classes.get(k).is_some_and(|c| im.ctx.require_class(*c, ClassOp::View).is_err()))
+            {
+                continue; // warned about in validate
+            }
+            let path = format!("savedViews.{i}");
+            let label = format!("{}.{}", v.context.as_str(), v.name);
+            let existing = im.ids.views.get(&key).copied();
+            let fields = match old.get(&key) {
+                // The name keeps its current spelling; the class keys the importer may not view stay.
+                Some(before) => {
+                    let definition = saved_views::resolve::merge_hidden(
+                        &viewer,
+                        &catalogue,
+                        &before.definition,
+                        v.definition.clone(),
+                    );
+                    diff(*before, &SavedViewSpec { name: before.name.clone(), definition, ..v.clone() })
+                }
+                None => Vec::new(),
+            };
+            if existing.is_some() && fields.is_empty() {
+                im.record("savedViews", label, None, Vec::new());
+                continue;
+            }
+            let id = saved_views::service::config_write(
+                im.conn,
+                im.ctx,
+                existing,
+                v.context,
+                &v.name,
+                v.description.as_deref(),
+                &v.definition,
+            )
+            .await
+            .map_err(|e| at(&path, e))?;
+            im.ids.views.insert(key, id);
+            let action = if existing.is_some() { ChangeAction::Update } else { ChangeAction::Create };
+            im.record("savedViews", label, Some(action), fields);
+        }
+    }
+
     let Importer { summary, changes, .. } = im;
     Ok(ImportResult {
         mode,
@@ -1768,7 +1998,8 @@ fn check_format(file: &ConfigFile) -> Result<(), AppError> {
 /// `config.export_import` lets a file in, not past the permission each section
 /// needs on its own admin API: the data model and lookups (which run DDL) need
 /// `datamodel.manage`, UI settings need `customization.manage`, permission
-/// profiles need `profiles.manage`, saved import mappings `cis.import`. Checked for dry runs too, before anything
+/// profiles need `profiles.manage`, saved import mappings `cis.import`, shared saved views `views.share`. Checked
+/// for dry runs too, before anything
 /// touches the database. Each profile is still bounded by what the importing
 /// user holds.
 fn check_sections(ctx: &RequestContext, file: &ConfigFile) -> Result<(), AppError> {
@@ -1797,6 +2028,9 @@ fn check_sections(ctx: &RequestContext, file: &ConfigFile) -> Result<(), AppErro
     }
     if file.import_mappings.as_ref().is_some_and(|m| !m.is_empty()) {
         ctx.require(GlobalPermission::CisImport)?;
+    }
+    if file.saved_views.as_ref().is_some_and(|v| !v.is_empty()) {
+        ctx.require(GlobalPermission::ViewsShare)?;
     }
     Ok(())
 }
@@ -1835,16 +2069,19 @@ pub fn routes() -> Vec<Route> {
             .description(
                 "Data model (classes, attributes, relationship types and rules), lookup lists and their values, \
                  permission profiles (not the built-in one), UI settings including the logo and favicon, and \
-                 saved import mappings. Never contains users, user groups, passwords, sessions, CIs, relationships, \
-                 business service members or owners, import jobs or the import switch. \
+                 saved import mappings and shared saved views. Never contains users, user groups, passwords, sessions, \
+                 CIs, relationships, business service members or owners, import jobs, the import switch, personal \
+                 saved views or anyone's default view. \
                  Everything refers to everything else by key, so the file imports into another install. Answers \
                  with `Content-Disposition: attachment`. The `permissionProfiles` key is only present when the \
                  caller also holds `profiles.manage` or `users.manage` (the permissions that read profiles on \
                  `/api/v1/admin/profiles`); for other callers it is left out, and importing that file leaves \
                  the target's profiles untouched. Likewise `importMappings` is only present when the caller holds \
-                 `cis.import`, and holds only the mappings of classes the caller can view. Every export is \
-                 recorded in the audit log as one `export` entry (entity type `config`) naming the sections \
-                 included and the number of import mappings, never their content.",
+                 `cis.import`, and holds only the mappings of classes the caller can view; `savedViews` only when \
+                 the caller holds `views.share`, without the class keys the caller may not view and without views \
+                 whose classes they may view none of. Every export is recorded in the audit log as one `export` \
+                 entry (entity type `config`) naming the sections included and the number of import mappings and \
+                 saved views, never their content.",
             )
             .requires(GlobalPermission::ConfigExportImport)
             .session_only()
@@ -1876,7 +2113,11 @@ pub fn routes() -> Vec<Route> {
                  `permissionProfiles` section `profiles.manage`, and a non-empty `importMappings` section \
                  `cis.import` (403 otherwise, dry run included). Saved import mappings are matched by class key and \
                  name (case-insensitive); an existing one gets the file's description and definition. Keys the \
-                 target lacks are warnings, and mappings of classes the caller cannot view are skipped. Profiles cannot \
+                 target lacks are warnings, and mappings of classes the caller cannot view are skipped. A non-empty \
+                 `savedViews` section (version 6) needs `views.share`; shared views are matched by context and name \
+                 (case-insensitive), an existing one gets the file's description and definition (keeping the class \
+                 keys the importer may not view), nothing is deleted, keys the target lacks are warnings, and a view \
+                 naming a class the importer cannot view is skipped. Profiles cannot \
                  grant more than the importing user holds (403). Every applied change is audited. Files of earlier \
                  versions (0.1.0-rc.1) may carry `lookups.statuses`, `environments`, `locations` and `owners` (the former \
                  tables): they are imported as the lookup lists `status`, `environment`, `location` and `owner`, \
@@ -2027,6 +2268,7 @@ mod tests {
             permission_profiles: Some(vec![profile]),
             ui_settings: None,
             import_mappings: None,
+            saved_views: None,
         };
         import(&db.pool, &RequestContext::system("test", "test"), &file, ImportMode::Apply).await.unwrap();
 
@@ -2071,6 +2313,7 @@ mod tests {
             permission_profiles: Some(vec![profile]),
             ui_settings: None,
             import_mappings: None,
+            saved_views: None,
         };
         import(&db.pool, &RequestContext::system("test", "test"), &file, ImportMode::Apply).await.unwrap();
 
@@ -2245,7 +2488,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(format!("{err:?}").contains("versions 1 to 5"), "{err:?}");
+        assert!(format!("{err:?}").contains("versions 1 to 6"), "{err:?}");
         let v3 = ConfigFile { format_version: 3, import_mappings: None, ..changed };
         import(&dst.pool, &system, &v3, ImportMode::DryRun).await.unwrap();
 
@@ -2910,7 +3153,7 @@ mod tests {
         tx.commit().await.unwrap();
 
         let file = export(&src.pool, &ctx).await.unwrap();
-        assert_eq!(file.format_version, 5);
+        assert_eq!(file.format_version, FORMAT_VERSION);
         let dm = file.data_model.as_ref().unwrap();
         assert_eq!(
             dm.classes.iter().find(|c| c.key == "service").unwrap().system_role,

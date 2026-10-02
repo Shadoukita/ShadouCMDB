@@ -6,7 +6,8 @@
 //! built-in classes and relationship types are the exception: they are matched
 //! by their system role (version 5), because their key differs between
 //! installs. Users, user groups, passwords, sessions, CIs, relationships and
-//! business services with their members and owners are never part of it.
+//! business services with their members and owners are never part of it, and
+//! neither are personal saved views or anyone's default view (user data).
 //!
 //! Identity providers are not part of it either. If they ever are, their
 //! secrets stay out: a provider carries `clientSecretSet` / `bindPasswordSet`
@@ -37,9 +38,9 @@ pub const FORMAT: &str = "shadoucmdb.config";
 /// lookup lists (the parent of a list, a value and a field), version 4 the
 /// impact direction of relationship types, the system role of lookup lists
 /// (the criticality list) and saved import mappings, version 5 the system role
-/// of classes and relationship types (business services) and of class grants;
-/// versions 1 to 4 are still read.
-pub const FORMAT_VERSION: i32 = 5;
+/// of classes and relationship types (business services) and of class grants,
+/// version 6 shared saved views; versions 1 to 5 are still read.
+pub const FORMAT_VERSION: i32 = 6;
 
 fn yes() -> bool {
     true
@@ -586,18 +587,42 @@ fn import_mappings_schema() -> Schema {
     list::<ImportMappingSpec>(crate::modules::imports::saved::MAX_SAVED as usize)
 }
 
+// ---------------------------------------------------------------------------
+// Shared saved views
+// ---------------------------------------------------------------------------
+
+/// A shared saved view (SHAA-578 §4), matched by context and name
+/// (case-insensitive). Its classes, attributes and lookup values are
+/// referenced by key, so it moves between installs.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SavedViewSpec {
+    pub context: crate::modules::saved_views::definition::SavedViewContext,
+    #[schema(min_length = 1, max_length = 100, pattern = "\\S")]
+    #[serde(deserialize_with = "trimmed")]
+    pub name: String,
+    #[schema(max_length = 500)]
+    #[serde(default)]
+    pub description: Option<String>,
+    pub definition: crate::modules::saved_views::definition::SavedViewDefinition,
+}
+
+fn saved_views_schema() -> Schema {
+    list::<SavedViewSpec>(crate::modules::saved_views::service::MAX_SHARED as usize)
+}
+
 fn exported_at_schema() -> Schema {
     schemas::nullable_string_schema(64)
 }
 
-/// A whole configuration: data model, lookups, permission profiles, UI settings and saved import mappings (no users, passwords or CIs)
+/// A whole configuration: data model, lookups, permission profiles, UI settings, saved import mappings and shared saved views (no users, passwords, CIs or personal views)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConfigFile {
     #[schema(schema_with = format_schema)]
     pub format: String,
-    /// File format version; this server writes version 5 and reads 1 to 5
-    #[schema(minimum = 1, maximum = 5)]
+    /// File format version; this server writes version 6 and reads 1 to 6
+    #[schema(minimum = 1, maximum = 6)]
     pub format_version: i32,
     /// When and by which server version the file was written (informational)
     #[schema(schema_with = exported_at_schema)]
@@ -620,13 +645,22 @@ pub struct ConfigFile {
     #[schema(schema_with = import_mappings_schema)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub import_mappings: Option<Vec<ImportMappingSpec>>,
+    /// Shared saved views (version 6); never personal ones. Left out of an export when the caller does not hold
+    /// `views.share`.
+    #[schema(schema_with = saved_views_schema)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub saved_views: Option<Vec<SavedViewSpec>>,
 }
 
 impl crate::api::route::Check for ConfigFile {
     fn check(&self) -> Vec<crate::http::error::FieldError> {
-        match &self.ui_settings {
+        let mut e = match &self.ui_settings {
             Some(ui) => ui.settings.problems("uiSettings.settings."),
             None => Vec::new(),
+        };
+        for (i, v) in self.saved_views.iter().flatten().enumerate() {
+            e.extend(v.definition.problems(v.context, &format!("savedViews.{i}.definition")));
         }
+        e
     }
 }

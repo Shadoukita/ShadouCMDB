@@ -2179,6 +2179,98 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/saved-views": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The caller's views and the shared views available to them
+         * @description Session only. Personal views first, then shared ones, each by name; not paged (at most 200 personal views per user and 500 shared views per instance, both contexts together, reported in `limits`). A shared view whose classes the caller may view none of is left out; one they may view some of comes without the others' keys, which `resolved.issues` only counts (`not_available`). Each view comes resolved against today's data model: `resolved.state` is `ok`, `degraded` (something that only narrows or presents results was dropped) or `unavailable` (a filter would disappear and widen the result, so the view has no `query` and is never applied). The stored definition is never rewritten. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        get: operations["listSavedViews"];
+        put?: never;
+        /**
+         * Save a view
+         * @description Session only. `visibility: shared` needs `views.share` (403). The definition is checked like a list request: a class the caller cannot view is `400 unknown_class`, the same as an unknown key; an attribute sort needs a class (`class_required`) and an attribute every class has (`unknown_attribute`, `ambiguous_attribute`) that is not a reference (`not_sortable`); lookup lists and values must exist and be active (`unknown_lookup`); a search view needs `filters.q` and takes neither `sort` nor `columns` (`not_allowed`); at most 16 KiB (`too_large`). Names are unique per owner and context ignoring case (shared: per context), `409 CONFLICT duplicate_name`; at most 200 personal views per user and 500 shared views (`409 CONFLICT limit_reached`). A shared view is audited as a `create` of `saved_views`; personal views are not audited. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        post: operations["createSavedView"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/saved-views/defaults": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set or clear the caller's default view for an inventory list
+         * @description Session only. `classKey` names the class list (null: the unscoped inventory); `viewId` null clears the default. The view must be readable by the caller (`404` otherwise), an inventory view (`400 not_inventory`), belong to that list (`400 home_mismatch`: its home is its class when it has exactly one, else the unscoped inventory) and not be `unavailable` (`400 unavailable`). One default per list; deleting the view removes it. Not audited. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        put: operations["setSavedViewDefault"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/saved-views/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A saved view
+         * @description Session only. Another user's personal view, and a shared view whose classes the caller may view none of, are `404`, the same as a view that does not exist. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        get: operations["getSavedView"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a view
+         * @description Session only. `?version=` is the version you loaded (`409 VERSION_CONFLICT` otherwise). A personal view is deleted by its owner, a shared view with `views.share` (403). Users who had it as their default get the standard list again. No CI is touched. A shared view is audited as a `delete` of `saved_views`. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        delete: operations["deleteSavedView"];
+        options?: never;
+        head?: never;
+        /**
+         * Rename a view or change its definition
+         * @description Session only. Send the `version` you loaded: `409 VERSION_CONFLICT` if someone saved in between. A personal view is changed by its owner, a shared view with `views.share` (403); context and visibility cannot change (copy instead). The definition is checked as on create; class keys of the stored definition the caller may not view are kept. When the view's home changes, defaults for its old home are removed. A shared view is audited as an `update` of `saved_views` with the view before and after. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        patch: operations["updateSavedView"];
+        trace?: never;
+    };
+    "/api/v1/saved-views/{id}/copy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Copy a view (save as, copy to my views, share a copy)
+         * @description Session only. Any view the caller can read; a shared copy needs `views.share` (403). The copy has the source's context and description and the part of its definition the caller may see; the source stays. Names and limits as on create. A shared copy is audited as a `create` of `saved_views` whose new value names the source in `copiedFrom`. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        post: operations["copySavedView"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/audit-log": {
         parameters: {
             query?: never;
@@ -2188,7 +2280,7 @@ export interface paths {
         };
         /**
          * Change history (read-only, paginated, newest first by default)
-         * @description Requires `audit.view`. Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. API tokens (`entityType` api_tokens) record `create` and `update` (revocation), and a `token.use` row for every request made with a known token, accepted or refused: `newValue` holds the token's name and prefix, owner, `outcome` (accepted, revoked, expired, owner_disabled, provider_disabled, mfa_required, no_scope, session_only, forbidden), method, path (first 512 characters, then `…`, with `pathLength`), `operationId`, `ipAddress` and `userAgent`; a token that can no longer authenticate (revoked, expired, owner_disabled, provider_disabled, mfa_required, no_scope) is recorded at most once a minute per outcome, the next row counting the uses left out in `unrecordedRefusals`; when no later request comes, a summary row (`actorType` system, no method or path) carries `unrecordedRefusals`, `windowStart` and `windowEnd` after the window ends or at graceful shutdown. Changes made with a token have `actorType` api_client and the owner as actor; the `token.use` row shares their `requestId`. Two-factor authentication events have `entityType` users and the user's id: `mfa.enrol`, `mfa.disable` (`reason` self_service or admin_reset), `mfa.failure` (a wrong or replayed code; `stage` login, disable or recovery_codes), `mfa.recovery_code_used` (with `recoveryCodesRemaining`) and `mfa.recovery_codes` (new codes replaced the old); sign-ins record `method` password, totp, recovery_code, setup, oidc or ldap in `login.success`. Identity providers (`entityType` identity_providers) record `create`, `update` and `delete` without their secrets; an account an identity provider creates or updates at sign-in is a `create` or `update` row on `users` with `actorType` system and `actorName` `identity provider "<name>"`, and a sign-in the provider vouched for but ShadouCMDB refused is a `login.failure`. A data model preview refused for a missing right (e.g. a field type change by a user who may not view every type storing the field) is a `schema_change.refused` row on the area, type or field previewed, `newValue` holding the operation, the body sent, `code`, `field` and `message`. A data export is an `export` row on what was exported (`entityType` configuration_items), `newValue` holding `kind`, `format`, `rowCount` and `visibility`, never the rows: the impact analysis CSV (`kind` impact, on the analysed CI, with the `parameters`, `truncated` and `truncatedReason`), a business service's member CSV (`kind` business_service_members, on the service), and the configuration file (`kind` config, `entityType` config with the nil id, `newValue` holding `format`, `formatVersion`, `sections`, `profilesIncluded` and `mappingCount`, never the content). Adding or removing business service members records one relationship `create` or `delete` per member plus one `update` on the service whose `oldValue` and `newValue` are both `{"members": {"added": [ids], "removed": [ids]}}`; replacing its owners records one `update` on the service whose `oldValue` and `newValue` are `{"owners": {"technical": [...], "business": [...]}}`, each owner as `kind`, `id` and `name`. An operator's `shadoucmdb prune-audit` leaves an `audit.purge` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the scope, window, cutoff and the number of rows deleted per action; those rows are never pruned. A caller whose profile limits the classes they may view does not get entries about a CI of another class, or of a CI that no longer exists, nor relationship entries with an endpoint in one, judged by the CIs' current classes and, for a CI, every class it had in either value: those entries are left out of the page and of `page.total` whatever the filters, so neither tells that they exist. For the same reason such a caller does not get the stored sequence number as `id`, which would show a gap where an entry was left out, but a keyed permutation of it: stable and distinct per entry, unrelated in order or distance to any other (a rotation of the encryption key changes it). In the CI entries they may see, a reference attribute into a CI they may not view keeps only its id (`attributeReferences` shows it hidden, as the item endpoints do), and a business service's membership change lists only the members they may view: one naming none of those is left out like the entries above. Counts an entry took with its writer's view are null to them unless they wrote it: `rowCount`, `truncated` and `truncatedReason` of a CI export (impact, business service members), and `created`, `updated`, `unchanged`, `skipped`, `failed` and `relationshipsAdded` of an `import.commit`, which may span classes they may not view. In `token.use` rows, the id in a `path` that names a CI (`/configuration-items/{id}`, `/configuration-items/{id}/graph`, `/configuration-items/{id}/impact`, `/configuration-items/{id}/impact/export`, `/configuration-items/{id}/business-services`, `/business-services/{id}` and every path below it, whose member in `/business-services/{id}/members/{ciId}` is judged on its own) or relationship (`/relationships/{id}`) they may not view (a relationship: both endpoints) is replaced with `{hidden}`, e.g. `/api/v1/configuration-items/{hidden}/graph`; the rest of the row stays. Schema change entries (`entityType` schema_changes) show `summary` and `impact` as getSchemaChange shows them to the caller: counts of stored data only with the view right on every type they describe. A field entry that lists values stored in CIs (`notMappedValues`, from the upgrade that archived the Application field criticality) keeps its counts but lists the values only to a caller who may view the field's type and every type below it. Passwords (local or directory), session tokens, CSRF tokens, API token secrets, TOTP secrets, authenticator or recovery codes, OIDC client secrets, authorization codes and ID tokens, and LDAP bind passwords are never recorded.
+         * @description Requires `audit.view`. Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. API tokens (`entityType` api_tokens) record `create` and `update` (revocation), and a `token.use` row for every request made with a known token, accepted or refused: `newValue` holds the token's name and prefix, owner, `outcome` (accepted, revoked, expired, owner_disabled, provider_disabled, mfa_required, no_scope, session_only, forbidden), method, path (first 512 characters, then `…`, with `pathLength`), `operationId`, `ipAddress` and `userAgent`; a token that can no longer authenticate (revoked, expired, owner_disabled, provider_disabled, mfa_required, no_scope) is recorded at most once a minute per outcome, the next row counting the uses left out in `unrecordedRefusals`; when no later request comes, a summary row (`actorType` system, no method or path) carries `unrecordedRefusals`, `windowStart` and `windowEnd` after the window ends or at graceful shutdown. Changes made with a token have `actorType` api_client and the owner as actor; the `token.use` row shares their `requestId`. Two-factor authentication events have `entityType` users and the user's id: `mfa.enrol`, `mfa.disable` (`reason` self_service or admin_reset), `mfa.failure` (a wrong or replayed code; `stage` login, disable or recovery_codes), `mfa.recovery_code_used` (with `recoveryCodesRemaining`) and `mfa.recovery_codes` (new codes replaced the old); sign-ins record `method` password, totp, recovery_code, setup, oidc or ldap in `login.success`. Identity providers (`entityType` identity_providers) record `create`, `update` and `delete` without their secrets; an account an identity provider creates or updates at sign-in is a `create` or `update` row on `users` with `actorType` system and `actorName` `identity provider "<name>"`, and a sign-in the provider vouched for but ShadouCMDB refused is a `login.failure`. A data model preview refused for a missing right (e.g. a field type change by a user who may not view every type storing the field) is a `schema_change.refused` row on the area, type or field previewed, `newValue` holding the operation, the body sent, `code`, `field` and `message`. A data export is an `export` row on what was exported (`entityType` configuration_items), `newValue` holding `kind`, `format`, `rowCount` and `visibility`, never the rows: the impact analysis CSV (`kind` impact, on the analysed CI, with the `parameters`, `truncated` and `truncatedReason`), a business service's member CSV (`kind` business_service_members, on the service), and the configuration file (`kind` config, `entityType` config with the nil id, `newValue` holding `format`, `formatVersion`, `sections`, `profilesIncluded` and `mappingCount`, never the content). Adding or removing business service members records one relationship `create` or `delete` per member plus one `update` on the service whose `oldValue` and `newValue` are both `{"members": {"added": [ids], "removed": [ids]}}`; replacing its owners records one `update` on the service whose `oldValue` and `newValue` are `{"owners": {"technical": [...], "business": [...]}}`, each owner as `kind`, `id` and `name`. An operator's `shadoucmdb prune-audit` leaves an `audit.purge` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the scope, window, cutoff and the number of rows deleted per action; those rows are never pruned. A caller whose profile limits the classes they may view does not get entries about a CI of another class, or of a CI that no longer exists, nor relationship entries with an endpoint in one, judged by the CIs' current classes and, for a CI, every class it had in either value: those entries are left out of the page and of `page.total` whatever the filters, so neither tells that they exist. For the same reason such a caller does not get the stored sequence number as `id`, which would show a gap where an entry was left out, but a keyed permutation of it: stable and distinct per entry, unrelated in order or distance to any other (a rotation of the encryption key changes it). In the CI entries they may see, a reference attribute into a CI they may not view keeps only its id (`attributeReferences` shows it hidden, as the item endpoints do), and a business service's membership change lists only the members they may view: one naming none of those is left out like the entries above. Counts an entry took with its writer's view are null to them unless they wrote it: `rowCount`, `truncated` and `truncatedReason` of a CI export (impact, business service members), and `created`, `updated`, `unchanged`, `skipped`, `failed` and `relationshipsAdded` of an `import.commit`, which may span classes they may not view. In `token.use` rows, the id in a `path` that names a CI (`/configuration-items/{id}`, `/configuration-items/{id}/graph`, `/configuration-items/{id}/impact`, `/configuration-items/{id}/impact/export`, `/configuration-items/{id}/business-services`, `/business-services/{id}` and every path below it, whose member in `/business-services/{id}/members/{ciId}` is judged on its own) or relationship (`/relationships/{id}`) they may not view (a relationship: both endpoints) is replaced with `{hidden}`, e.g. `/api/v1/configuration-items/{hidden}/graph`; the rest of the row stays. Schema change entries (`entityType` schema_changes) show `summary` and `impact` as getSchemaChange shows them to the caller: counts of stored data only with the view right on every type they describe. A field entry that lists values stored in CIs (`notMappedValues`, from the upgrade that archived the Application field criticality) keeps its counts but lists the values only to a caller who may view the field's type and every type below it. Shared saved views (`entityType` saved_views) record `create`, `update` and `delete` with the view's `name`, `description`, `context`, `visibility` and `definition` (a shared copy's `create` names its source view in `copiedFrom`; views a configuration import writes have `actorType` import); personal views and default views are not recorded. In those entries a caller whose profile limits the classes they may view does not get the keys of other classes in `definition.classKeys`: they are left out and counted in `hiddenClassKeyCount`. Passwords (local or directory), session tokens, CSRF tokens, API token secrets, TOTP secrets, authenticator or recovery codes, OIDC client secrets, authorization codes and ID tokens, and LDAP bind passwords are never recorded.
          */
         get: operations["listAuditLog"];
         put?: never;
@@ -2548,7 +2640,7 @@ export interface paths {
         };
         /**
          * Download the whole configuration as one JSON file
-         * @description Requires `config.export_import`. Data model (classes, attributes, relationship types and rules), lookup lists and their values, permission profiles (not the built-in one), UI settings including the logo and favicon, and saved import mappings. Never contains users, user groups, passwords, sessions, CIs, relationships, business service members or owners, import jobs or the import switch. Everything refers to everything else by key, so the file imports into another install. Answers with `Content-Disposition: attachment`. The `permissionProfiles` key is only present when the caller also holds `profiles.manage` or `users.manage` (the permissions that read profiles on `/api/v1/admin/profiles`); for other callers it is left out, and importing that file leaves the target's profiles untouched. Likewise `importMappings` is only present when the caller holds `cis.import`, and holds only the mappings of classes the caller can view. Every export is recorded in the audit log as one `export` entry (entity type `config`) naming the sections included and the number of import mappings, never their content. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `config.export_import`. Data model (classes, attributes, relationship types and rules), lookup lists and their values, permission profiles (not the built-in one), UI settings including the logo and favicon, and saved import mappings and shared saved views. Never contains users, user groups, passwords, sessions, CIs, relationships, business service members or owners, import jobs, the import switch, personal saved views or anyone's default view. Everything refers to everything else by key, so the file imports into another install. Answers with `Content-Disposition: attachment`. The `permissionProfiles` key is only present when the caller also holds `profiles.manage` or `users.manage` (the permissions that read profiles on `/api/v1/admin/profiles`); for other callers it is left out, and importing that file leaves the target's profiles untouched. Likewise `importMappings` is only present when the caller holds `cis.import`, and holds only the mappings of classes the caller can view; `savedViews` only when the caller holds `views.share`, without the class keys the caller may not view and without views whose classes they may view none of. Every export is recorded in the audit log as one `export` entry (entity type `config`) naming the sections included and the number of import mappings and saved views, never their content. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         get: operations["exportConfig"];
         put?: never;
@@ -2570,7 +2662,7 @@ export interface paths {
         put?: never;
         /**
          * Import a configuration file (dry run or apply)
-         * @description Requires `config.export_import`. `mode=dry_run` validates the file and runs the whole import in a transaction that is rolled back, returning the diff; `mode=apply` does the same and commits. Rows are matched by key (profiles by name) and created or updated; a class or relationship type with a `systemRole` (the built-in business service class and membership type, version 5) is matched to this install's class or type of that role whatever its key, keeps its key and area here, and is reported as a "Matched by role" warning; a grant's `classSystemRole` resolves the same way. An import never sets or clears a role; nothing is deleted, so data missing from the file is kept (counted as `notInFile`). The `uiSettings` section replaces the settings (as a new version) and the logo and favicon. All sections are optional. Problems in the file are reported together as 400 VALIDATION_ERROR with paths into the file; a change the data model does not allow (e.g. making an attribute required while CIs lack a value) fails with the same error the admin API gives, with the file path prefixed. A non-empty `dataModel` or `lookups` section also requires `datamodel.manage`, a `uiSettings` section `customization.manage`, and a non-empty `permissionProfiles` section `profiles.manage`, and a non-empty `importMappings` section `cis.import` (403 otherwise, dry run included). Saved import mappings are matched by class key and name (case-insensitive); an existing one gets the file's description and definition. Keys the target lacks are warnings, and mappings of classes the caller cannot view are skipped. Profiles cannot grant more than the importing user holds (403). Every applied change is audited. Files of earlier versions (0.1.0-rc.1) may carry `lookups.statuses`, `environments`, `locations` and `owners` (the former tables): they are imported as the lookup lists `status`, `environment`, `location` and `owner`, as migration 0016 converts those tables, or skipped when the file's lists already hold them; either way a warning names the section. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `config.export_import`. `mode=dry_run` validates the file and runs the whole import in a transaction that is rolled back, returning the diff; `mode=apply` does the same and commits. Rows are matched by key (profiles by name) and created or updated; a class or relationship type with a `systemRole` (the built-in business service class and membership type, version 5) is matched to this install's class or type of that role whatever its key, keeps its key and area here, and is reported as a "Matched by role" warning; a grant's `classSystemRole` resolves the same way. An import never sets or clears a role; nothing is deleted, so data missing from the file is kept (counted as `notInFile`). The `uiSettings` section replaces the settings (as a new version) and the logo and favicon. All sections are optional. Problems in the file are reported together as 400 VALIDATION_ERROR with paths into the file; a change the data model does not allow (e.g. making an attribute required while CIs lack a value) fails with the same error the admin API gives, with the file path prefixed. A non-empty `dataModel` or `lookups` section also requires `datamodel.manage`, a `uiSettings` section `customization.manage`, and a non-empty `permissionProfiles` section `profiles.manage`, and a non-empty `importMappings` section `cis.import` (403 otherwise, dry run included). Saved import mappings are matched by class key and name (case-insensitive); an existing one gets the file's description and definition. Keys the target lacks are warnings, and mappings of classes the caller cannot view are skipped. A non-empty `savedViews` section (version 6) needs `views.share`; shared views are matched by context and name (case-insensitive), an existing one gets the file's description and definition (keeping the class keys the importer may not view), nothing is deleted, keys the target lacks are warnings, and a view naming a class the importer cannot view is skipped. Profiles cannot grant more than the importing user holds (403). Every applied change is audited. Files of earlier versions (0.1.0-rc.1) may carry `lookups.statuses`, `environments`, `locations` and `owners` (the former tables): they are imported as the lookup lists `status`, `environment`, `location` and `owner`, as migration 0016 converts those tables, or skipped when the file's lists already hold them; either way a warning names the section. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["importConfig"];
         delete?: never;
@@ -2968,7 +3060,7 @@ export interface components {
             edit: boolean;
             delete: boolean;
         };
-        /** @description A whole configuration: data model, lookups, permission profiles, UI settings and saved import mappings (no users, passwords or CIs) */
+        /** @description A whole configuration: data model, lookups, permission profiles, UI settings, saved import mappings and shared saved views (no users, passwords, CIs or personal views) */
         ConfigFile: {
             /**
              * @description Always "shadoucmdb.config"
@@ -2977,7 +3069,7 @@ export interface components {
             format: "shadoucmdb.config";
             /**
              * Format: int32
-             * @description File format version; this server writes version 5 and reads 1 to 5
+             * @description File format version; this server writes version 6 and reads 1 to 6
              */
             formatVersion: number;
             exportedAt?: string | null;
@@ -2987,7 +3079,7 @@ export interface components {
             permissionProfiles?: {
                 name: string;
                 description?: string | null;
-                globalPermissions?: ("users.manage" | "profiles.manage" | "datamodel.manage" | "customization.manage" | "config.export_import" | "audit.view" | "cis.import")[];
+                globalPermissions?: ("users.manage" | "profiles.manage" | "datamodel.manage" | "customization.manage" | "config.export_import" | "audit.view" | "cis.import" | "views.share")[];
                 classPermissions?: {
                     class?: string | null;
                     /**
@@ -3008,6 +3100,12 @@ export interface components {
                 /** @description Stable machine key, lower_snake_case */
                 classKey: string;
                 definition: components["schemas"]["ImportMappingDefinition"];
+            }[];
+            savedViews?: {
+                context: components["schemas"]["SavedViewContext"];
+                name: string;
+                description?: string | null;
+                definition: components["schemas"]["SavedViewDefinition"];
             }[];
         };
         ConfigurationItem: {
@@ -3336,7 +3434,7 @@ export interface components {
         EffectivePermissions: {
             /** @description Holds the built-in Administrator profile (everything below is then all-true) */
             administrator: boolean;
-            global: ("users.manage" | "profiles.manage" | "datamodel.manage" | "customization.manage" | "config.export_import" | "audit.view" | "cis.import")[];
+            global: ("users.manage" | "profiles.manage" | "datamodel.manage" | "customization.manage" | "config.export_import" | "audit.view" | "cis.import" | "views.share")[];
             /** @description Rights on every class */
             allClasses: components["schemas"]["ClassRights"];
             /** @description Rights on individual classes, beyond allClasses */
@@ -4434,7 +4532,7 @@ export interface components {
              *     session only reaches the MFA set-up routes
              */
             requireMfa: boolean;
-            globalPermissions: ("users.manage" | "profiles.manage" | "datamodel.manage" | "customization.manage" | "config.export_import" | "audit.view" | "cis.import")[];
+            globalPermissions: ("users.manage" | "profiles.manage" | "datamodel.manage" | "customization.manage" | "config.export_import" | "audit.view" | "cis.import" | "views.share")[];
             classPermissions: components["schemas"]["ClassPermission"][];
             /**
              * Format: int64
@@ -4719,6 +4817,184 @@ export interface components {
             /** @description Sorted by name */
             data: components["schemas"]["SavedImportMapping"][];
         };
+        /** @description A saved view as the caller may see it */
+        SavedView: {
+            /** Format: uuid */
+            id: string;
+            context: components["schemas"]["SavedViewContext"];
+            visibility: components["schemas"]["SavedViewVisibility"];
+            name: string;
+            description?: string | null;
+            /** @description As stored, except that class keys the caller may not view are left out (counted in `resolved.issues`) */
+            definition: components["schemas"]["SavedViewDefinition"];
+            resolved: components["schemas"]["SavedViewResolution"];
+            /**
+             * @description Inventory views: the class whose list the view can be the default of; null for the unscoped inventory list
+             *     (several classes or none), for a search view, and when the class is not available to the caller
+             */
+            home?: string | null;
+            /** @description The caller's default for `home` */
+            isDefault: boolean;
+            /**
+             * Format: int64
+             * @description Shared views, for callers with `views.share`: how many users have it as their default
+             */
+            defaultCount?: number;
+            /** @description Whether the caller may change and delete it: the owner of a personal view, `views.share` for a shared one */
+            canEdit: boolean;
+            /**
+             * Format: int32
+             * @description Send it back with changes and deletes (optimistic concurrency)
+             */
+            version: number;
+            /** Format: date-time */
+            createdAt: string;
+            createdBy: components["schemas"]["SavedViewUser"];
+            /** Format: date-time */
+            updatedAt: string;
+            updatedBy: components["schemas"]["SavedViewUser"];
+        };
+        /**
+         * @description Where a view applies: the inventory list or global search
+         * @enum {string}
+         */
+        SavedViewContext: "inventory" | "search";
+        /** @description The caller's default for one inventory list */
+        SavedViewDefault: {
+            /**
+             * @description Only inventory views can be a default (D7)
+             * @enum {string}
+             */
+            context: "inventory";
+            /** @description Null: the unscoped inventory list */
+            home?: string | null;
+            /**
+             * Format: uuid
+             * @description Null: no default (the admin list view applies)
+             */
+            viewId?: string | null;
+        };
+        /**
+         * @description The query a view saves. Inventory and search views share it; a search
+         *     view needs `filters.q` and has neither `sort` nor `columns`.
+         */
+        SavedViewDefinition: {
+            /** @description CI class keys; empty: every class the user may view. The view's default slot (`home`) is its class when there is exactly one, else the unscoped inventory */
+            classKeys?: string[];
+            /** @description Include CIs of subclasses of classKeys (default true) */
+            includeSubclasses?: boolean;
+            filters?: components["schemas"]["SavedViewFilters"];
+            /** @description Inventory views: the sort; left out, the list sorts by label. Not allowed in search views (they are ranked) */
+            sort?: components["schemas"]["UiListSort"];
+            /** @description Inventory views: columns in display order, built-in fields (label, ident, class, criticality, validFrom, validUntil, active, createdAt, updatedAt) or attributes.<key> of every class in classKeys; empty: the class's admin list view columns, else the built-in ones. Not allowed in search views */
+            columns?: string[];
+            /**
+             * Format: int64
+             * @description Rows per page; left out, the list's default (50)
+             */
+            pageSize?: number;
+        };
+        /** @description The filters of a view, by key */
+        SavedViewFilters: {
+            /** @description Search text; required in search views */
+            q?: string;
+            /** @description Lookup list key -> value keys (at most 100 values in all): CIs holding one of the values of each list given, e.g. {"environment": ["production", "staging"]} */
+            lookups?: {
+                [key: string]: string[];
+            };
+            /**
+             * @description The list's `active` parameter; left out: its default (true)
+             * @enum {string}
+             */
+            active?: "true" | "false" | "all";
+            /**
+             * @description The list's `deleted` parameter; left out: its default (exclude)
+             * @enum {string}
+             */
+            deleted?: "exclude" | "include" | "only";
+            /** @description Only CIs with a value of an IP attribute inside this CIDR, e.g. 10.20.0.0/16 */
+            ipWithin?: string;
+        };
+        /** @description Something resolution dropped or flagged */
+        SavedViewIssue: {
+            /** @description Path in the stored definition, e.g. "definition.columns.2" */
+            path: string;
+            /** @enum {string} */
+            code: "class_archived" | "not_available" | "unknown_class" | "no_class_left" | "unknown_attribute" | "unknown_lookup_value" | "lookup_filter_gone";
+            /** @enum {string} */
+            severity: "info" | "warning";
+            message: string;
+        };
+        SavedViewLimit: {
+            /** Format: int64 */
+            used: number;
+            /** Format: int64 */
+            max: number;
+        };
+        /** @description Personal: the caller's views; shared: the instance's shared views. Both contexts count. */
+        SavedViewLimits: {
+            personal: components["schemas"]["SavedViewLimit"];
+            shared: components["schemas"]["SavedViewLimit"];
+        };
+        SavedViewList: {
+            /** @description The caller's personal views, then the shared views available to them, each by name (case-insensitive) */
+            data: components["schemas"]["SavedView"][];
+            limits: components["schemas"]["SavedViewLimits"];
+        };
+        /**
+         * @description The list or search parameters the view stands for, ready for the URL. The
+         *     server does not trust them: the list and search endpoints apply the
+         *     caller's class rights to every request.
+         */
+        SavedViewQuery: {
+            /** @description Class ids, comma-separated */
+            classId?: string | null;
+            /** @description "true" or "false"; present with classId */
+            includeSubclasses?: string | null;
+            q?: string | null;
+            /** @description Lookup value ids, comma-separated */
+            lookupValueId?: string | null;
+            /** @description Criticality value ids, comma-separated (a filter on the criticality list) */
+            criticalityValueId?: string | null;
+            /**
+             * @description The list's `active` parameter; left out: its default (true)
+             * @enum {string}
+             */
+            active?: "true" | "false" | "all";
+            /**
+             * @description The list's `deleted` parameter; left out: its default (exclude)
+             * @enum {string}
+             */
+            deleted?: "exclude" | "include" | "only";
+            ipWithin?: string | null;
+            /** @description Inventory views: the list's sort parameter ("-" prefix for descending) */
+            sort?: string | null;
+            /** Format: int64 */
+            limit?: number | null;
+        };
+        /** @description The view as it applies today, for the caller */
+        SavedViewResolution: {
+            /** @enum {string} */
+            state: "ok" | "degraded" | "unavailable";
+            query?: components["schemas"]["SavedViewQuery"] | null;
+            /** @description Inventory views: the columns that resolve, in order; empty: the baseline columns */
+            columns: string[];
+            issues: components["schemas"]["SavedViewIssue"][];
+        };
+        /** @description A user named on a view; the name stays when the account is deleted */
+        SavedViewUser: {
+            /**
+             * Format: uuid
+             * @description Null once the user was deleted
+             */
+            id?: string | null;
+            name: string;
+        };
+        /**
+         * @description personal: only its owner sees it; shared: every user who may view one of its classes
+         * @enum {string}
+         */
+        SavedViewVisibility: "personal" | "shared";
         /** @description One applied schema change: the exact DDL, in order, and its impact */
         SchemaChange: {
             /** Format: uuid */
@@ -19445,6 +19721,742 @@ export interface operations {
             };
         };
     };
+    listSavedViews: {
+        parameters: {
+            query?: {
+                /** @description Only the views of this context; left out: both */
+                context?: "inventory" | "search";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedViewList"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    createSavedView: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    context: components["schemas"]["SavedViewContext"];
+                    /** @description Unique per owner and context (shared views: per context), ignoring case */
+                    name: string;
+                    description?: string | null;
+                    /** @description shared needs `views.share` */
+                    visibility: components["schemas"]["SavedViewVisibility"];
+                    definition: components["schemas"]["SavedViewDefinition"];
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedView"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    setSavedViewDefault: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * @description Only inventory views can be a default (D7)
+                     * @enum {string}
+                     */
+                    context: "inventory";
+                    /** @description The class whose list the default is for; null: the unscoped inventory list */
+                    classKey?: string | null;
+                    /**
+                     * Format: uuid
+                     * @description Null clears the default
+                     */
+                    viewId: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedViewDefault"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getSavedView: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedView"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    deleteSavedView: {
+        parameters: {
+            query: {
+                /** @description The version you loaded */
+                version: number;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success, no content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    updateSavedView: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * Format: int32
+                     * @description The version you loaded; if someone saved in between, `409 VERSION_CONFLICT`
+                     */
+                    version: number;
+                    /** @description Unique per owner and context (shared views: per context), ignoring case */
+                    name?: string;
+                    description?: string | null;
+                    /** @description Replaces the definition. Class keys of the stored definition that the caller may not view are kept */
+                    definition?: components["schemas"]["SavedViewDefinition"];
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedView"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    copySavedView: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Unique per owner and context (shared views: per context), ignoring case */
+                    name: string;
+                    /** @description shared needs `views.share` */
+                    visibility: components["schemas"]["SavedViewVisibility"];
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedView"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up first (code MFA_ENROLMENT_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     listAuditLog: {
         parameters: {
             query?: {
@@ -19454,7 +20466,7 @@ export interface operations {
                 offset?: number;
                 /** @description Sort field; prefix with "-" for descending. One of: occurredAt */
                 sort?: "occurredAt" | "-occurredAt";
-                entityType?: "configuration_items" | "ci_relationships" | "ci_classes" | "ci_attribute_definitions" | "relationship_types" | "relationship_type_rules" | "statuses" | "environments" | "locations" | "owners" | "users" | "permission_profiles" | "ui_settings" | "ui_assets" | "sessions" | "audit_log" | "areas" | "schema_changes" | "api_tokens" | "identity_providers" | "lookup_lists" | "lookup_list_values" | "import_jobs" | "import_settings" | "import_mappings" | "user_groups" | "config";
+                entityType?: "configuration_items" | "ci_relationships" | "ci_classes" | "ci_attribute_definitions" | "relationship_types" | "relationship_type_rules" | "statuses" | "environments" | "locations" | "owners" | "users" | "permission_profiles" | "ui_settings" | "ui_assets" | "sessions" | "audit_log" | "areas" | "schema_changes" | "api_tokens" | "identity_providers" | "lookup_lists" | "lookup_list_values" | "import_jobs" | "import_settings" | "import_mappings" | "user_groups" | "saved_views" | "config";
                 /** @description History of these entities */
                 entityId?: string;
                 action?: "create" | "update" | "delete" | "restore" | "login.success" | "login.failure" | "login.locked" | "logout" | "session.revoke" | "audit.purge" | "token.use" | "mfa.enrol" | "mfa.disable" | "mfa.failure" | "mfa.recovery_code_used" | "mfa.recovery_codes" | "schema_change.refused" | "export" | "import.commit" | "import.report_read";
@@ -20967,7 +21979,7 @@ export interface operations {
                     name: string;
                     description?: string | null;
                     /** @description Replaces all global permissions */
-                    globalPermissions?: ("users.manage" | "profiles.manage" | "datamodel.manage" | "customization.manage" | "config.export_import" | "audit.view" | "cis.import")[];
+                    globalPermissions?: ("users.manage" | "profiles.manage" | "datamodel.manage" | "customization.manage" | "config.export_import" | "audit.view" | "cis.import" | "views.share")[];
                     /** @description Replaces all class grants. Entries granting nothing are dropped; one entry per class. */
                     classPermissions?: {
                         /**
@@ -21271,7 +22283,7 @@ export interface operations {
                     name?: string;
                     description?: string | null;
                     /** @description Replaces all global permissions */
-                    globalPermissions?: ("users.manage" | "profiles.manage" | "datamodel.manage" | "customization.manage" | "config.export_import" | "audit.view" | "cis.import")[];
+                    globalPermissions?: ("users.manage" | "profiles.manage" | "datamodel.manage" | "customization.manage" | "config.export_import" | "audit.view" | "cis.import" | "views.share")[];
                     /** @description Replaces all class grants. Entries granting nothing are dropped; one entry per class. */
                     classPermissions?: {
                         /**
@@ -22642,7 +23654,7 @@ export interface operations {
                     format: "shadoucmdb.config";
                     /**
                      * Format: int32
-                     * @description File format version; this server writes version 5 and reads 1 to 5
+                     * @description File format version; this server writes version 6 and reads 1 to 6
                      */
                     formatVersion: number;
                     exportedAt?: string | null;
@@ -22652,7 +23664,7 @@ export interface operations {
                     permissionProfiles?: {
                         name: string;
                         description?: string | null;
-                        globalPermissions?: ("users.manage" | "profiles.manage" | "datamodel.manage" | "customization.manage" | "config.export_import" | "audit.view" | "cis.import")[];
+                        globalPermissions?: ("users.manage" | "profiles.manage" | "datamodel.manage" | "customization.manage" | "config.export_import" | "audit.view" | "cis.import" | "views.share")[];
                         classPermissions?: {
                             class?: string | null;
                             /**
@@ -22673,6 +23685,12 @@ export interface operations {
                         /** @description Stable machine key, lower_snake_case */
                         classKey: string;
                         definition: components["schemas"]["ImportMappingDefinition"];
+                    }[];
+                    savedViews?: {
+                        context: components["schemas"]["SavedViewContext"];
+                        name: string;
+                        description?: string | null;
+                        definition: components["schemas"]["SavedViewDefinition"];
                     }[];
                 };
             };

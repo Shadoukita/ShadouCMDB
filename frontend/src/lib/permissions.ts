@@ -19,6 +19,7 @@ export const GLOBAL_PERMISSIONS: { key: GlobalPermission; label: string; hint: s
     label: "Bulk import",
     hint: "Import configuration items from CSV and Excel files (still limited by the class rights)",
   },
+  { key: "views.share", label: "Share views", hint: "Create, edit and delete views shared with all users" },
 ];
 
 export const CLASS_RIGHTS: ClassRight[] = ["view", "create", "edit", "delete"];

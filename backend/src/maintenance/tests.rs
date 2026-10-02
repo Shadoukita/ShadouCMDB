@@ -517,3 +517,58 @@ async fn factory_reset_returns_to_first_run_and_decommission_leaves_nothing() {
     drop(c);
     a.drop().await;
 }
+
+/// SHAA-578 §4: a backup keeps saved views (personal and shared) and every
+/// user's defaults; a restore brings them back as they were, and a factory
+/// reset clears both tables with no reset code of their own.
+#[tokio::test]
+async fn saved_views_and_defaults_survive_backup_and_restore() {
+    let Some(a) = scratch::database("saved_views_backup_a").await else { return };
+    let Some(b) = scratch::database("saved_views_backup_b").await else { return };
+    populate(&a.pool).await;
+    let mut ca = a.pool.acquire().await.unwrap();
+    let mut cb = b.pool.acquire().await.unwrap();
+    let user: uuid::Uuid = sqlx::query_scalar("SELECT id FROM cmdb.users LIMIT 1").fetch_one(&mut *ca).await.unwrap();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "INSERT INTO cmdb.saved_views (id, owner_id, context, name, definition, created_by_name, updated_by_name)
+           VALUES ('00000000-0000-4000-8000-0000000000d1', '{user}', 'inventory', 'Mine',
+                   '{{\"classKeys\": [\"server\"]}}', 'admin', 'admin'),
+                  ('00000000-0000-4000-8000-0000000000d2', NULL, 'search', 'Everyone',
+                   '{{\"classKeys\": [], \"filters\": {{\"q\": \"web\"}}}}', 'admin', 'admin');
+         INSERT INTO cmdb.saved_view_defaults (user_id, context, home, view_id)
+           VALUES ('{user}', 'inventory', 'server', '00000000-0000-4000-8000-0000000000d1');"
+    )))
+    .execute(&mut *ca)
+    .await
+    .unwrap();
+    let before = saved_views_snapshot(&mut ca).await;
+    assert_eq!(before.len(), 2);
+
+    let (buf, header) = take_backup(&mut ca).await;
+    let rows = |name: &str| header.tables.iter().find(|t| t.schema == "cmdb" && t.name == name).map(|t| t.rows);
+    assert_eq!((rows("saved_views"), rows("saved_view_defaults")), (Some(2), Some(1)));
+    restore::restore(&mut cb, buf.as_slice(), &header, true, true).await.unwrap();
+    assert_eq!(saved_views_snapshot(&mut cb).await, before);
+
+    reset::factory_reset(&mut cb).await.unwrap();
+    let left: (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM cmdb.saved_views), (SELECT count(*) FROM cmdb.saved_view_defaults)",
+    )
+    .fetch_one(&mut *cb)
+    .await
+    .unwrap();
+    assert_eq!(left, (0, 0));
+    drop((ca, cb));
+    a.drop().await;
+    b.drop().await;
+}
+
+async fn saved_views_snapshot(c: &mut sqlx::PgConnection) -> Vec<(String, Option<uuid::Uuid>, serde_json::Value, i64)> {
+    sqlx::query_as(
+        "SELECT v.name, v.owner_id, v.definition, (SELECT count(*) FROM cmdb.saved_view_defaults d WHERE d.view_id = v.id)
+         FROM cmdb.saved_views v ORDER BY v.name",
+    )
+    .fetch_all(c)
+    .await
+    .unwrap()
+}
