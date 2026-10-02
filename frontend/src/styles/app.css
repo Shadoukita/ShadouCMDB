@@ -2265,8 +2265,10 @@ fieldset.impact-direction legend {
 .impact-views {
   padding: 0 var(--sp-4);
 }
+/* Stale results while the next analysis loads: muted text, never opacity, so the text keeps AA contrast. */
 #impact-view-panel.loading {
-  opacity: 0.55;
+  cursor: progress;
+  color: var(--c-text-muted);
 }
 .impact-ident {
   margin-left: var(--sp-2);
