@@ -7519,7 +7519,7 @@
           "Bulk import"
         ],
         "summary": "Save a mapping for files with the same layout",
-        "description": "Requires `cis.import`. Needs view on the class; a class the caller cannot view is `400 unknown_class`, the same as an unknown key. Names are unique per class (`409 duplicate_name`). At most 500 per instance (`409 limit_reached`) and 64 KiB per definition (`400 too_large`). The definition's targets are checked when it is applied to a file. Audited as a `create` of `import_mappings`. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "description": "Requires `cis.import`. Needs view on the class; a class the caller cannot view is `400 unknown_class`, the same as an unknown key. Names are unique per class (`409 duplicate_name`). At most 500 per instance (`409 limit_reached`) and 64 KiB per definition (`400 too_large`). A column targeting the business service member type is refused (`400 system_relationship_type` on `definition.columns[i].target.typeKey`): members are added on the service. The other targets are checked when it is applied to a file. Audited as a `create` of `import_mappings`. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
         "operationId": "createImportMapping",
         "parameters": [],
         "requestBody": {
@@ -7903,7 +7903,7 @@
           "Bulk import"
         ],
         "summary": "Rename or change a saved mapping (creator or Administrator)",
-        "description": "Requires `cis.import`. Send the `version` you loaded; `409 VERSION_CONFLICT` if someone saved in between. The class cannot change. Only the user who saved it and administrators may change it (`403`). Audited as an `update` of `import_mappings` with the old and new definition. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "description": "Requires `cis.import`. Send the `version` you loaded; `409 VERSION_CONFLICT` if someone saved in between. The class cannot change. Only the user who saved it and administrators may change it (`403`). A definition sent with a column targeting the business service member type is refused as on create; a mapping saved before that lists the column in `problems`. Audited as an `update` of `import_mappings` with the old and new definition. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
         "operationId": "updateImportMapping",
         "parameters": [
           {
@@ -30715,7 +30715,7 @@
               "string",
               "null"
             ],
-            "description": "Why an unmapped column was left out: `ambiguous_label` (several targets have that label),\n`duplicate_target` (an earlier column took the target) or `ident_admin_only`"
+            "description": "Why an unmapped column was left out: `ambiguous_label` (several targets have that label),\n`duplicate_target` (an earlier column took the target), `ident_admin_only` or `system_relationship_type`\n(the saved mapping maps it to business service members, which are added on the service; see its `problems`)"
           }
         }
       },
@@ -33979,7 +33979,8 @@
           "createdAt",
           "createdBy",
           "updatedAt",
-          "updatedBy"
+          "updatedBy",
+          "problems"
         ],
         "properties": {
           "id": {
@@ -34020,6 +34021,13 @@
           },
           "updatedBy": {
             "$ref": "#/components/schemas/ImportOwner"
+          },
+          "problems": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SavedImportMappingProblem"
+            },
+            "description": "What keeps the mapping from being saved again as it is: a column of a\nmapping saved before an upgrade that targets the business service member\ntype (`system_relationship_type`, GH#516). The suggestion leaves such a\ncolumn unmapped; map it to `ignore` or remove it, then save. Empty when\nthere is nothing to fix."
           }
         }
       },
@@ -34035,6 +34043,29 @@
               "$ref": "#/components/schemas/SavedImportMapping"
             },
             "description": "Sorted by name"
+          }
+        }
+      },
+      "SavedImportMappingProblem": {
+        "type": "object",
+        "description": "One thing to fix in a saved mapping.",
+        "required": [
+          "field",
+          "code",
+          "message"
+        ],
+        "properties": {
+          "field": {
+            "type": "string",
+            "description": "Where, e.g. `definition.columns[2].target.typeKey`"
+          },
+          "code": {
+            "type": "string",
+            "description": "Machine-readable reason: `system_relationship_type`"
+          },
+          "message": {
+            "type": "string",
+            "description": "What to do, for the user"
           }
         }
       },
