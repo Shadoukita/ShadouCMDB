@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { RouterLink } from "vue-router";
+import { useSavedViewSources } from "../api/savedViews";
 import { useCiClasses, useSearch } from "../api/queries";
 import Breadcrumbs from "../components/Breadcrumbs.vue";
 import EmptyState from "../components/EmptyState.vue";
@@ -23,7 +24,11 @@ import { useSavedViewState } from "../lib/useSavedViewState";
  * link) saves the term and the filters; it is never a default (D7).
  */
 const classes = useCiClasses();
-const sv = useSavedViewState({ context: "search", classes: () => classes.data.value });
+const sv = useSavedViewState({
+  context: "search",
+  classes: () => classes.data.value,
+  sources: (linkedId) => useSavedViewSources("search", linkedId),
+});
 const state = useInventoryQueryState({
   context: "search",
   classes: () => classes.data.value,

@@ -688,7 +688,7 @@ table.data.loading tbody {
   padding: var(--sp-3) var(--sp-4);
   border-bottom: 1px solid var(--c-border);
 }
-/* Controls about the list itself (columns, later saved views) sit at the end of the toolbar. */
+/* A control about the list itself sits at the end of the toolbar. */
 .toolbar-end {
   margin-left: auto;
 }
@@ -778,6 +778,140 @@ fieldset.columns-more legend {
   }
   .popover,
   .toolbar-end .popover {
+    left: var(--sp-3);
+    right: var(--sp-3);
+    width: auto;
+  }
+}
+/* ---------- Saved views (View menu, Modified, Save/Revert, banners) ---------- */
+.view-bar {
+  border-bottom: 1px solid var(--c-border);
+  padding: var(--sp-2) var(--sp-4);
+}
+.view-bar-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+}
+.view-bar .view-notice {
+  margin: var(--sp-2) 0 0;
+}
+.view-bar .spaced,
+.view-dialog .spaced,
+.view-menu .spaced {
+  margin-left: var(--sp-2);
+}
+.view-menu {
+  position: relative;
+}
+.view-menu-label {
+  display: inline-block;
+  max-width: 28ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+  font-weight: 600;
+}
+.view-menu-popup {
+  width: 340px;
+  padding: var(--sp-2) 0;
+}
+.view-menu-status {
+  margin: 0 var(--sp-3) var(--sp-2);
+  font-size: var(--fs-sm);
+}
+.view-menu-heading {
+  padding: var(--sp-2) var(--sp-4) var(--sp-1);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--c-text-muted);
+}
+.view-menu-item {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  width: 100%;
+  min-height: var(--row-h);
+  padding: var(--sp-1) var(--sp-4);
+  color: var(--c-text);
+  cursor: pointer;
+}
+.view-menu-item .check {
+  display: inline-block;
+  width: 1.2em;
+  flex: none;
+}
+.view-menu-item:hover,
+.view-menu-item:focus-visible,
+.view-menu-item.active {
+  background: var(--c-row-hover);
+  outline: 2px solid var(--c-focus);
+  outline-offset: -2px;
+}
+.view-menu-item.disabled {
+  color: var(--c-text-muted);
+  cursor: not-allowed;
+}
+.view-menu-item.danger {
+  color: var(--c-danger-text);
+}
+.view-menu-separator {
+  margin: var(--sp-1) 0;
+  border-top: 1px solid var(--c-divider);
+}
+.view-menu-filter {
+  display: block;
+  width: calc(100% - 2 * var(--sp-3));
+  margin: 0 var(--sp-3) var(--sp-2);
+}
+.view-menu-list {
+  max-height: min(50vh, 420px);
+  overflow-y: auto;
+}
+.view-menu-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3) 0;
+  border-top: 1px solid var(--c-divider);
+}
+/* Text, not only colour (WCAG 1.4.1). */
+.view-modified {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--c-text);
+}
+.view-modified [aria-hidden] {
+  color: var(--c-focus);
+}
+.dialog-intro {
+  margin: 0;
+}
+dialog.manage-views {
+  width: min(1040px, 96vw);
+}
+dialog.manage-views .name-cell {
+  text-align: left;
+  font-weight: 600;
+}
+.manage-heading {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--fs-md);
+}
+@media (max-width: 480px) {
+  .view-menu {
+    position: static;
+  }
+  .view-bar {
+    position: relative;
+  }
+  .view-menu-popup {
     left: var(--sp-3);
     right: var(--sp-3);
     width: auto;

@@ -2,6 +2,7 @@
 import { computed, ref, watch } from "vue";
 import { RouterLink } from "vue-router";
 import { useAllLookupListValues, useAreas, useLookupLists } from "../api/datamodel";
+import { useSavedViewSources } from "../api/savedViews";
 import { useCiClasses, useCiList, useClassAttributes, type CiListQuery } from "../api/queries";
 import { dataModelEmpty } from "../lib/dataModel";
 import Breadcrumbs from "../components/Breadcrumbs.vue";
@@ -37,7 +38,11 @@ const settings = useAppSettings();
 const lookupLists = useLookupLists();
 const lookupValues = useAllLookupListValues();
 const attrKeys = computed(() => (attrs.data.value ? new Set(attrs.data.value.map((a) => a.key)) : null));
-const sv = useSavedViewState({ context: "inventory", classes: () => classes.data.value });
+const sv = useSavedViewState({
+  context: "inventory",
+  classes: () => classes.data.value,
+  sources: (linkedId) => useSavedViewSources("inventory", linkedId),
+});
 const state = useInventoryQueryState({
   context: "inventory",
   classes: () => classes.data.value,
