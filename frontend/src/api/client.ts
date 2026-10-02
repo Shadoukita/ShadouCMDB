@@ -58,8 +58,8 @@ export function onMfaEnrolmentRequired(handler: () => void) {
   enrolmentRequiredHandler = handler;
 }
 
-/** GETs the API treats like writes (audited CSV exports): they need the CSRF token too, so a link on another site cannot run them. */
-const CSRF_READS = /\/api\/v1\/(configuration-items\/[^/]+\/impact|business-services\/[^/]+\/members|admin\/config)\/export$/;
+/** GETs the API treats like writes (audited CSV exports, audited import job reads): they need the CSRF token too, so a link on another site cannot run them. */
+const CSRF_READS = /\/api\/v1\/((configuration-items\/[^/]+\/impact|business-services\/[^/]+\/members|admin\/config)\/export|imports\/[0-9a-f-]{36}(\/issues|\/error-report)?)$/;
 
 api.use({
   // Every state-changing request echoes the CSRF token; the API rejects it otherwise.
