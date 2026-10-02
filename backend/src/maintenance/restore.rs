@@ -185,6 +185,7 @@ pub async fn restore<R: Read>(
     if wipe {
         super::drop_app_objects(&mut tx).await?;
     }
+    crate::db::refuse_planted_code(&mut tx).await?;
     // Each migration runs in a savepoint of this transaction.
     MIGRATOR.run_to(level, &mut *tx).await.context("rebuilding the schema of the backup failed")?;
 

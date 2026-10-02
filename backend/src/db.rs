@@ -244,11 +244,62 @@ pub async fn act_as_api_role(conn: &mut sqlx::PgConnection) -> sqlx::Result<bool
     Ok(api_role.is_some())
 }
 
+/// Code the API role could have put where a migration runs it with the schema
+/// owner's rights (GH#416): on a three-role install the API role owns the area
+/// schemas and type tables, and migrations write to them (0009). ShadouCMDB
+/// creates none of these objects there, so any one found is refused:
+/// triggers, rules other than a view's `_RETURN`, row-level security and
+/// policies on tables in the API role's schemas or owned by it, and functions
+/// in those schemas or owned by it. `restore` and `factory-reset` check too,
+/// after dropping the application's objects. Nothing to check on a
+/// single-role install, where the API already runs as the owner.
+pub async fn refuse_planted_code(conn: &mut sqlx::PgConnection) -> anyhow::Result<()> {
+    let found: Vec<(String, String, String)> = sqlx::query_as(
+        "WITH api AS (
+           SELECT oid, rolname FROM pg_roles
+           WHERE rolname = COALESCE(NULLIF(current_setting('shadoucmdb.app_role', true), ''), 'shadoucmdb_app')
+             AND rolname <> current_user
+         ),
+         api_schema AS (SELECT n.oid FROM pg_namespace n JOIN api ON n.nspowner = api.oid),
+         rel AS (
+           SELECT c.oid, c.relrowsecurity, c.oid::regclass::text AS name FROM pg_class c, api
+           WHERE c.relowner = api.oid OR c.relnamespace IN (SELECT oid FROM api_schema)
+         )
+         SELECT api.rolname::text, f.kind, f.name FROM api, (
+           SELECT 'trigger' AS kind, format('%I on %s', t.tgname, rel.name) AS name
+           FROM pg_trigger t JOIN rel ON rel.oid = t.tgrelid WHERE NOT t.tgisinternal
+           UNION ALL
+           SELECT 'rule', format('%I on %s', r.rulename, rel.name)
+           FROM pg_rewrite r JOIN rel ON rel.oid = r.ev_class WHERE r.rulename <> '_RETURN'
+           UNION ALL
+           SELECT 'row-level security', rel.name FROM rel WHERE rel.relrowsecurity
+           UNION ALL
+           SELECT 'policy', format('%I on %s', p.polname, rel.name) FROM pg_policy p JOIN rel ON rel.oid = p.polrelid
+           UNION ALL
+           SELECT 'function', p.oid::regprocedure::text FROM pg_proc p, api
+           WHERE p.proowner = api.oid OR p.pronamespace IN (SELECT oid FROM api_schema)
+         ) f
+         ORDER BY 2, 3",
+    )
+    .fetch_all(conn)
+    .await?;
+    let Some((role, _, _)) = found.first() else { return Ok(()) };
+    let list: Vec<String> = found.iter().map(|(_, kind, name)| format!("  {kind} {name}")).collect();
+    bail!(
+        "refusing to change the schema: the API role \"{role}\" owns or can change these objects, and a migration \
+         would run their code with the schema owner's rights. ShadouCMDB never creates them:\n{}\nFind out who \
+         created them (they may have been planted through a compromised API role or DATABASE_URL), drop them as \
+         the schema owner, and run the command again.",
+        list.join("\n")
+    );
+}
+
 async fn migrate_with(pool: &PgPool, cfg: &DatabaseConfig, adopt_drizzle: bool) -> anyhow::Result<()> {
     let (db, version): (String, String) =
         sqlx::query_as("SELECT current_database(), current_setting('server_version')").fetch_one(pool).await?;
     println!("Connected to database \"{db}\" (PostgreSQL {version}), ssl={}", cfg.ssl.as_str());
     check_roles(pool, &cfg.roles).await?;
+    refuse_planted_code(&mut *pool.acquire().await?).await?;
 
     let mut applied = applied_versions(pool).await?;
     if applied.is_empty() && table_exists(pool, DRIZZLE_TABLE).await? {
@@ -579,6 +630,77 @@ mod tests {
         super::migrate_with(&db.pool, &cfg, false).await.expect("first migrate");
         super::migrate_with(&db.pool, &cfg, false).await.expect("second migrate");
         assert_eq!(super::applied_count(&db.pool).await.unwrap(), super::expected_count());
+        db.drop().await;
+    }
+
+    /// GH#416: a migrated three-role database with a data model passes; code
+    /// planted where the API role can put it stops `migrate`.
+    #[tokio::test]
+    async fn migrate_refuses_code_planted_in_the_api_roles_objects() {
+        use sqlx::{Connection, Executor};
+        let Some(db) = super::scratch::empty("migrate_refuses_code_planted").await else { return };
+        db.pool
+            .execute(
+                "DO $$ BEGIN CREATE ROLE shadoucmdb_app NOLOGIN;
+                 EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL; END $$",
+            )
+            .await
+            .unwrap();
+        super::MIGRATOR.run(&db.pool).await.unwrap();
+        let mut tx = db.pool.begin().await.unwrap();
+        assert!(super::act_as_api_role(&mut tx).await.unwrap(), "three-role install");
+        let ctx = crate::api::context::RequestContext::system("test", "test");
+        let template = crate::modules::templates::find("it_infrastructure").unwrap();
+        let installed = crate::modules::templates::install(&mut tx, &ctx, template).await.map_err(|e| e.message);
+        assert!(installed.unwrap().created.classes > 0);
+        tx.commit().await.unwrap();
+        let mut c = db.pool.acquire().await.unwrap();
+        let api_schemas: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_namespace WHERE nspowner = (SELECT oid FROM pg_roles WHERE rolname = 'shadoucmdb_app')",
+        )
+        .fetch_one(&mut *c)
+        .await
+        .unwrap();
+        assert!(api_schemas > 0, "the API role owns the area schemas");
+        super::refuse_planted_code(&mut c).await.expect("ShadouCMDB itself creates none of these objects");
+
+        let table: String = sqlx::query_scalar(
+            "SELECT c.oid::regclass::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+             WHERE c.relkind = 'r' AND n.nspowner = (SELECT oid FROM pg_roles WHERE rolname = 'shadoucmdb_app')
+             ORDER BY 1 LIMIT 1",
+        )
+        .fetch_one(&mut *c)
+        .await
+        .unwrap();
+        let schema = table.split('.').next().unwrap().to_owned();
+        let mut tx = c.begin().await.unwrap();
+        for sql in [
+            format!(
+                "CREATE FUNCTION {schema}.planted() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$"
+            ),
+            format!("CREATE TRIGGER planted BEFORE INSERT ON {table} FOR EACH ROW EXECUTE FUNCTION {schema}.planted()"),
+            format!("CREATE RULE planted AS ON DELETE TO {table} DO ALSO NOTIFY planted"),
+            format!("ALTER TABLE {table} ENABLE ROW LEVEL SECURITY"),
+            format!("CREATE POLICY planted ON {table} USING (true)"),
+            "CREATE FUNCTION public.planted_owned() RETURNS int LANGUAGE sql AS 'SELECT 1'".to_owned(),
+            "ALTER FUNCTION public.planted_owned() OWNER TO shadoucmdb_app".to_owned(),
+        ] {
+            tx.execute(sqlx::AssertSqlSafe(sql)).await.unwrap();
+        }
+        let err = super::refuse_planted_code(&mut tx).await.unwrap_err().to_string();
+        tx.rollback().await.unwrap();
+        for expected in [
+            "the API role \"shadoucmdb_app\"".to_owned(),
+            format!("  function {schema}.planted()"),
+            "  function planted_owned()".to_owned(),
+            format!("  trigger planted on {table}"),
+            format!("  rule planted on {table}"),
+            format!("  row-level security {table}"),
+            format!("  policy planted on {table}"),
+        ] {
+            assert!(err.contains(&expected), "{expected:?} missing from: {err}");
+        }
+        drop(c);
         db.drop().await;
     }
 

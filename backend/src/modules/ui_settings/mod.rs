@@ -12,7 +12,7 @@ pub mod document;
 mod grid_tests;
 
 use axum::extract::RawPathParams;
-use axum::http::{HeaderValue, Method, StatusCode, header};
+use axum::http::{HeaderName, HeaderValue, Method, StatusCode, header};
 use base64::Engine;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -559,6 +559,10 @@ pub async fn serve_asset(
             // would overwrite it. A new upload shows at once either way (the URL's ?v= also changes).
             (header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")),
             (header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(ASSET_CSP)),
+            // The one exception to the router's `Cross-Origin-Resource-Policy: same-origin`: a UI
+            // served from another origin (`CORS_ORIGINS`, `apiBaseUrl`) loads the logo and favicon
+            // with `<img>`, a no-cors request that policy would block. The asset is public anyway.
+            (HeaderName::from_static("cross-origin-resource-policy"), HeaderValue::from_static("cross-origin")),
         ]
     };
     let not_modified = headers

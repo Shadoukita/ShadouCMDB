@@ -62,6 +62,7 @@ pub async fn factory_reset(conn: &mut PgConnection) -> anyhow::Result<usize> {
     super::session_settings(conn).await?;
     let mut tx = conn.begin().await?;
     let dropped = super::drop_app_objects(&mut tx).await?;
+    crate::db::refuse_planted_code(&mut tx).await?;
     MIGRATOR.run(&mut *tx).await.context("rebuilding the schema failed")?;
     let (builtin, users): (i64, i64) = sqlx::query_as(
         "SELECT (SELECT count(*) FROM permission_profiles WHERE is_builtin), (SELECT count(*) FROM users)",

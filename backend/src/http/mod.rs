@@ -451,7 +451,11 @@ async fn security_headers(
 /// too. `Cross-Origin-Opener-Policy: same-origin` cuts the `window.opener` link
 /// to cross-origin pages. The layout editor's popup is same-origin with the
 /// same policy, so it keeps its opener; sign-in with OIDC is a top-level
-/// redirect, not a popup.
+/// redirect, not a popup. `Cross-Origin-Resource-Policy: same-origin` stops
+/// another site from pulling a response into its process with a no-cors
+/// `<img>` or `<script>` (Spectre-style reads); CORS requests from
+/// `CORS_ORIGINS` are not no-cors and are unaffected. A handler may set its own
+/// value: the public logo and favicon (`ui_settings::serve_asset`) do.
 fn with_security_headers(app: Router, csp: Csp) -> Router {
     app.layer(axum::middleware::from_fn_with_state(Arc::new(csp), security_headers))
         .layer(SetResponseHeaderLayer::overriding(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")))
@@ -463,6 +467,10 @@ fn with_security_headers(app: Router, csp: Csp) -> Router {
         ))
         .layer(SetResponseHeaderLayer::overriding(
             HeaderName::from_static("cross-origin-opener-policy"),
+            HeaderValue::from_static("same-origin"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            HeaderName::from_static("cross-origin-resource-policy"),
             HeaderValue::from_static("same-origin"),
         ))
 }
@@ -905,6 +913,7 @@ mod tests {
         assert_eq!(header(res, header::REFERRER_POLICY), Some("no-referrer"));
         assert_eq!(header(res, header::X_FRAME_OPTIONS), Some("DENY"));
         assert_eq!(header(res, header::HeaderName::from_static("cross-origin-opener-policy")), Some("same-origin"));
+        assert_eq!(header(res, header::HeaderName::from_static("cross-origin-resource-policy")), Some("same-origin"));
         let policy = header(res, header::HeaderName::from_static("permissions-policy")).unwrap();
         assert_eq!(policy, PERMISSIONS_POLICY);
         for feature in ["camera", "microphone", "geolocation", "payment", "usb"] {
@@ -920,6 +929,18 @@ mod tests {
         assert_eq!(header(&res, header::CACHE_CONTROL), Some(immutable));
         assert_baseline_headers(&res);
         assert!(!varies_on(&res, "cookie"), "{:?}", vary(&res));
+    }
+
+    /// `ui_settings::serve_asset` opts its public logo and favicon out of `same-origin`.
+    #[tokio::test]
+    async fn handler_may_widen_resource_policy() {
+        let corp = header::HeaderName::from_static("cross-origin-resource-policy");
+        let app = Router::new().fallback({
+            let corp = corp.clone();
+            move || async move { ([(corp, "cross-origin")], "logo") }
+        });
+        let res = get(with_security_headers(app, Csp::new(None)), "/api/v1/ui-settings/assets/logo", &[]).await;
+        assert_eq!(header(&res, corp), Some("cross-origin"));
     }
 
     #[tokio::test]

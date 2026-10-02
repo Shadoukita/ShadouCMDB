@@ -90,6 +90,17 @@ pub struct ParseError {
 }
 
 impl ParseError {
+    /// The stored upload could not be read back. The message shown to the user
+    /// (and kept in `import_jobs.error`) is fixed; the cause, which may be a
+    /// database error, goes to the log only.
+    pub fn read_failed(e: &std::io::Error) -> Self {
+        tracing::error!(error = %e, "import: the stored file could not be read");
+        ParseError::new(
+            "read_failed",
+            "The stored file could not be read. Try again; if it keeps failing, upload the file again.",
+        )
+    }
+
     pub fn new(code: &'static str, message: impl Into<String>) -> Self {
         ParseError { code, message: message.into(), row: None, column: None }
     }
@@ -208,6 +219,20 @@ pub fn group_thousands(n: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A failing read reaches `import_jobs.error` and the user; the cause must not (GH#416).
+    #[test]
+    fn read_failures_hide_the_cause() {
+        struct Failing;
+        impl std::io::Read for Failing {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("error returned from database: relation \"cmdb.secret\" does not exist"))
+            }
+        }
+        let e = csv::is_utf8(Failing).unwrap_err();
+        assert_eq!(e.code, "read_failed");
+        assert!(!e.message.contains("database") && !e.message.contains("cmdb"), "{}", e.message);
+    }
 
     #[test]
     fn helpers() {

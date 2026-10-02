@@ -396,7 +396,7 @@ fn read_some<R: Read>(input: &mut R, buf: &mut [u8]) -> Result<usize, ParseError
         match input.read(buf) {
             Ok(n) => return Ok(n),
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(e) => return Err(ParseError::new("read_failed", format!("The stored file could not be read: {e}"))),
+            Err(e) => return Err(ParseError::read_failed(&e)),
         }
     }
 }

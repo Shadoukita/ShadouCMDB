@@ -10,11 +10,12 @@
 #
 # PostgreSQL is external: point DATABASE_URL / PG* (see .env.example) at it.
 
-ARG RUST_VERSION=1.98
-ARG NODE_VERSION=22
+# Every base image is pinned by digest; Dependabot (docker ecosystem) bumps the
+# tag and digest together. The tags are written out rather than taken from an
+# ARG because Dependabot cannot resolve build arguments.
 
 # --- Web UI (architecture-independent output) --------------------------------
-FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-bookworm-slim AS ui
+FROM --platform=$BUILDPLATFORM node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS ui
 WORKDIR /src
 COPY package.json package-lock.json ./
 COPY frontend/package.json frontend/
@@ -25,7 +26,7 @@ COPY frontend frontend
 RUN npm run build --workspace frontend --if-present && mkdir -p frontend/dist
 
 # --- Rust binary, cross-compiled for $TARGETARCH --------------------------------
-FROM --platform=$BUILDPLATFORM rust:${RUST_VERSION}-bookworm AS build
+FROM --platform=$BUILDPLATFORM rust:1.98-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e AS build
 ARG TARGETARCH
 ARG BUILDARCH
 RUN set -eu; \

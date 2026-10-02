@@ -50,3 +50,8 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    ignore:
+      # The Dockerfile's node builder tracks the runtime major in .nvmrc (22);
+      # bump both together.
+      - dependency-name: node
+        update-types: [version-update:semver-major]

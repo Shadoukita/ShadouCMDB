@@ -304,7 +304,7 @@ fn read_head<R: Read>(r: &mut R, buf: &mut [u8]) -> Result<usize, ParseError> {
             Ok(0) => break,
             Ok(k) => n += k,
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(e) => return Err(ParseError::new("read_failed", format!("The stored file could not be read: {e}"))),
+            Err(e) => return Err(ParseError::read_failed(&e)),
         }
     }
     Ok(n)

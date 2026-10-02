@@ -116,7 +116,7 @@ fn io_err_ref(e: &std::io::Error) -> ParseError {
     } else if let Some(p) = e.get_ref().and_then(|i| i.downcast_ref::<ParseErrorBox>()) {
         p.0.clone()
     } else {
-        bad("read_failed", format!("The stored file could not be read: {e}"))
+        ParseError::read_failed(e)
     }
 }
 

@@ -96,7 +96,7 @@ impl SealedTable {
                 .fetch_all(&mut *conn)
                 .await?;
                 for (user_id, stored, key_id) in rows {
-                    let seed = match open_totp_secret(keyring, user_id, key_id, &stored) {
+                    let seed = match open_totp_secret_to_rewrap(keyring, user_id, key_id, &stored) {
                         Ok(seed) => seed,
                         Err(OpenError::UnknownKey(k)) => {
                             return Err(PrepareError::Refused(format!(
@@ -142,7 +142,7 @@ impl SealedTable {
                     let mut resealed: [Option<Sealed>; 2] = [None, None];
                     for (slot, column) in resealed.iter_mut().zip(ProviderSecret::ALL) {
                         let Some(stored) = row.stored(column) else { continue };
-                        let secret = match open_provider_secret(keyring, row.id, column, &stored) {
+                        let secret = match open_provider_secret_to_rewrap(keyring, row.id, column, &stored) {
                             Ok(secret) => secret,
                             Err(OpenError::UnknownKey(k)) => {
                                 return Err(PrepareError::Refused(format!(
@@ -203,10 +203,32 @@ pub fn seal_totp_secret(keyring: &Keyring, user_id: Uuid, seed: &[u8]) -> Sealed
     keyring.seal(Purpose::TotpSecret, &totp_ad(user_id), seed)
 }
 
-/// The seed in a `user_totp` row. `key_id` NULL is a seed stored before
-/// encryption (0025); start-up encrypts those. The previous release cannot
-/// read encrypted seeds, so it must not run next to this one.
+/// The seed in a `user_totp` row, for sign-in. A seed with `key_id` NULL is
+/// refused (GH#416): start-up encrypts every such row before the server
+/// listens, so one seen here was written to the database directly, or by an
+/// older release running next to this one, and is not trusted.
 pub fn open_totp_secret(
+    keyring: &Keyring,
+    user_id: Uuid,
+    key_id: Option<i32>,
+    stored: &[u8],
+) -> Result<Secret, OpenError> {
+    match key_id {
+        None => {
+            tracing::warn!(
+                user_id = %user_id,
+                "the authenticator secret of this user is stored unencrypted and is refused; a restart encrypts \
+                 it. Find out how it was written: this release encrypts every secret it stores"
+            );
+            Err(OpenError::Invalid)
+        }
+        Some(k) => keyring.open(Purpose::TotpSecret, KeyId(k), &totp_ad(user_id), stored),
+    }
+}
+
+/// [`open_totp_secret`], also reading a seed stored before encryption (0025):
+/// only for the start-up step that encrypts it.
+fn open_totp_secret_to_rewrap(
     keyring: &Keyring,
     user_id: Uuid,
     key_id: Option<i32>,
@@ -215,7 +237,7 @@ pub fn open_totp_secret(
     match key_id {
         None if stored.len() == 20 => Ok(Secret::new(stored.to_vec())),
         None => Err(OpenError::Invalid),
-        Some(k) => keyring.open(Purpose::TotpSecret, KeyId(k), &totp_ad(user_id), stored),
+        Some(_) => open_totp_secret(keyring, user_id, key_id, stored),
     }
 }
 
@@ -296,7 +318,8 @@ pub fn seal_provider_secret(keyring: &Keyring, provider_id: Uuid, column: Provid
     keyring.seal(Purpose::IdentityProviderSecret, &provider_ad(provider_id, column), secret.as_bytes())
 }
 
-/// The secret in clear, to present to the provider.
+/// The secret in clear, to present to the provider. An unencrypted one is
+/// refused, as in [`open_totp_secret`].
 pub fn open_provider_secret(
     keyring: &Keyring,
     provider_id: Uuid,
@@ -304,13 +327,35 @@ pub fn open_provider_secret(
     stored: &StoredSecret,
 ) -> Result<crate::auth::secret::Secret, OpenError> {
     match stored {
-        StoredSecret::Plain(s) => Ok(s.as_str().into()),
+        StoredSecret::Plain(_) => {
+            tracing::warn!(
+                provider_id = %provider_id,
+                "the {} of this identity provider is stored unencrypted and is refused; a restart encrypts it. \
+                 Find out how it was written: this release encrypts every secret it stores",
+                column.label()
+            );
+            Err(OpenError::Invalid)
+        }
         StoredSecret::Encrypted { key_id, bytes } => {
             let plain =
                 keyring.open(Purpose::IdentityProviderSecret, *key_id, &provider_ad(provider_id, column), bytes)?;
             let text = std::str::from_utf8(&plain).map_err(|_| OpenError::Invalid)?;
             Ok(text.into())
         }
+    }
+}
+
+/// [`open_provider_secret`], also reading a secret stored before encryption
+/// (0026): only for the start-up step that encrypts it.
+fn open_provider_secret_to_rewrap(
+    keyring: &Keyring,
+    provider_id: Uuid,
+    column: ProviderSecret,
+    stored: &StoredSecret,
+) -> Result<crate::auth::secret::Secret, OpenError> {
+    match stored {
+        StoredSecret::Plain(s) => Ok(s.as_str().into()),
+        StoredSecret::Encrypted { .. } => open_provider_secret(keyring, provider_id, column, stored),
     }
 }
 
@@ -461,6 +506,26 @@ pub fn refusal(counts: &[KeyCount], active: KeyId, previous: Option<KeyId>) -> O
         "{what}, but ENCRYPTION_KEY_FILE holds key {active} (and {previous}). Configure the key this database was \
          encrypted with. If that key is lost, run {}.",
         reset_advice(&tables)
+    ))
+}
+
+/// For `verify` and `migrate` (GH#416): secrets stored unencrypted. Sign-in
+/// refuses them; `serve` encrypts them at start-up. `None` when there are none.
+pub fn unencrypted_warning(unencrypted: &[(SealedTable, i64)]) -> Option<String> {
+    let parts: Vec<String> = unencrypted.iter().filter(|(_, n)| *n > 0).map(|&(t, n)| t.describe(n)).collect();
+    if parts.is_empty() {
+        return None;
+    }
+    let one = unencrypted.iter().map(|(_, n)| n).sum::<i64>() == 1;
+    Some(format!(
+        "{} {} stored unencrypted. Sign-in refuses {} until `serve` encrypts {} at start-up. This is expected only \
+         after an upgrade from a release that stored secrets unencrypted; otherwise find out how {} written, \
+         because this release encrypts every secret it stores.",
+        parts.join(" and "),
+        if one { "is" } else { "are" },
+        if one { "it" } else { "them" },
+        if one { "it" } else { "them" },
+        if one { "it was" } else { "they were" },
     ))
 }
 
@@ -701,6 +766,48 @@ mod tests {
         ad.extend_from_slice(p.as_bytes());
         ad.extend_from_slice(b":bind_password");
         assert_eq!(provider_ad(p, ProviderSecret::BindPassword), ad);
+    }
+
+    #[test]
+    fn unencrypted_warning_counts_both_tables() {
+        use SealedTable::{IdentityProviders, UserTotp};
+        assert_eq!(unencrypted_warning(&[(UserTotp, 0), (IdentityProviders, 0)]), None);
+        assert_eq!(unencrypted_warning(&[]), None);
+        let msg = unencrypted_warning(&[(UserTotp, 1), (IdentityProviders, 0)]).unwrap();
+        assert!(msg.starts_with("1 authenticator secret is stored unencrypted. Sign-in refuses it until"), "{msg}");
+        let msg = unencrypted_warning(&[(UserTotp, 3), (IdentityProviders, 1)]).unwrap();
+        assert!(
+            msg.starts_with(
+                "3 authenticator secrets and 1 identity provider secret are stored unencrypted. Sign-in refuses them"
+            ),
+            "{msg}"
+        );
+    }
+
+    /// GH#416: only the start-up step that encrypts them reads unencrypted secrets.
+    #[test]
+    fn unencrypted_secrets_open_only_to_be_encrypted() {
+        let ring = Keyring::random();
+        let (user, provider) = (Uuid::new_v4(), Uuid::new_v4());
+        let seed = [7u8; 20];
+        assert_eq!(open_totp_secret(&ring, user, None, &seed).err(), Some(OpenError::Invalid));
+        assert_eq!(open_totp_secret_to_rewrap(&ring, user, None, &seed).unwrap().to_vec(), seed);
+        assert_eq!(open_totp_secret_to_rewrap(&ring, user, None, &seed[..19]).err(), Some(OpenError::Invalid));
+        let sealed = seal_totp_secret(&ring, user, &seed);
+        for open in [open_totp_secret, open_totp_secret_to_rewrap] {
+            assert_eq!(open(&ring, user, Some(sealed.key_id.0), &sealed.bytes).unwrap().to_vec(), seed);
+        }
+
+        let plain = StoredSecret::Plain("hunter2".into());
+        let column = ProviderSecret::BindPassword;
+        assert_eq!(open_provider_secret(&ring, provider, column, &plain).err(), Some(OpenError::Invalid));
+        let opened = open_provider_secret_to_rewrap(&ring, provider, column, &plain).unwrap();
+        assert_eq!(opened.expose(), "hunter2");
+        let s = seal_provider_secret(&ring, provider, column, "hunter2");
+        let sealed = StoredSecret::Encrypted { key_id: s.key_id, bytes: s.bytes };
+        for open in [open_provider_secret, open_provider_secret_to_rewrap] {
+            assert_eq!(open(&ring, provider, column, &sealed).unwrap().expose(), "hunter2");
+        }
     }
 
     #[test]
