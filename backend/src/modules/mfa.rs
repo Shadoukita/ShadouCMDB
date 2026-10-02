@@ -1022,7 +1022,8 @@ pub(crate) mod tests {
                 .await
                 .unwrap();
         // Right after signing in, the owner creates a colleague: allowed.
-        let body = json!({ "username": "bob", "displayName": "Bob", "password": PASSWORD, "profileIds": [administrators] });
+        let body =
+            json!({ "username": "bob", "displayName": "Bob", "password": PASSWORD, "profileIds": [administrators] });
         let (status, v, _) = call(&app, "POST", "/api/v1/admin/users", &session, Some(body)).await;
         assert_eq!(status, 201, "{v}");
         let bob = v["id"].as_str().unwrap().to_owned();
@@ -1045,7 +1046,12 @@ pub(crate) mod tests {
             ),
             ("DELETE", format!("/api/v1/admin/users/{bob}/mfa"), None, "resetUserMfa"),
             ("POST", "/api/v1/admin/api-tokens".to_owned(), Some(json!({})), "createApiToken"),
-            ("POST", "/api/v1/admin/profiles".to_owned(), Some(json!({ "name": "Managers" })), "createPermissionProfile"),
+            (
+                "POST",
+                "/api/v1/admin/profiles".to_owned(),
+                Some(json!({ "name": "Managers" })),
+                "createPermissionProfile",
+            ),
         ];
         for (method, path, body, _) in &refused {
             let (status, v, _) = call(&app, method, path, &session, body.clone()).await;

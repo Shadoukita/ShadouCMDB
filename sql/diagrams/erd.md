@@ -16,7 +16,8 @@ Generated from [`../migrations/0001_core_schema.sql`](../migrations/0001_core_sc
 [`../migrations/0029_bulk_import.sql`](../migrations/0029_bulk_import.sql) and
 [`../migrations/0039_saved_views.sql`](../migrations/0039_saved_views.sql) and
 [`../migrations/0042_layout_templates.sql`](../migrations/0042_layout_templates.sql)
-(`sessions.ip_address` from [`../migrations/0006_auth_audit.sql`](../migrations/0006_auth_audit.sql); the columns
+(`sessions.ip_address` from [`../migrations/0006_auth_audit.sql`](../migrations/0006_auth_audit.sql) and
+`sessions.credentials_confirmed_at` from [`../migrations/0043_session_reauthentication.sql`](../migrations/0043_session_reauthentication.sql); the columns
 added by [`0022`](../migrations/0022_api_token_creator.sql) to [`0026`](../migrations/0026_identity_provider_secret_encryption.sql)
 and [`0028`](../migrations/0028_schema_change_redaction.sql) on `api_tokens`, `identity_providers`, `sessions`,
 `user_totp` and `schema_changes`).

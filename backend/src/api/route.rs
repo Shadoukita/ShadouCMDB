@@ -1039,7 +1039,11 @@ async fn authorise(
 /// 403 REAUTHENTICATION_REQUIRED, audited, unless the session's owner
 /// confirmed their credentials recently (see
 /// [`RouteBuilder::recent_reauthentication`]).
-async fn reauthentication_gate(pool: &PgPool, ctx: &RequestContext, used: &auth::token::Use<'_>) -> Result<(), AppError> {
+async fn reauthentication_gate(
+    pool: &PgPool,
+    ctx: &RequestContext,
+    used: &auth::token::Use<'_>,
+) -> Result<(), AppError> {
     let Some(me) = ctx.principal() else { return Err(unauthenticated()) };
     if me.recently_confirmed() {
         return Ok(());

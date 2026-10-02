@@ -111,15 +111,17 @@ pub async fn resolve_session(pool: &PgPool, token_hash: &[u8], idle: Duration) -
     .bind(interval(crate::auth::REAUTHENTICATION_WINDOW))
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|(session_id, user_id, username, csrf_token, needs_touch, required, oidc, proven, recent)| LiveSession {
-        session_id,
-        user_id,
-        username,
-        csrf_token,
-        needs_touch,
-        mfa_enrolment_required: required && !oidc && !proven,
-        mfa_not_enforced: required && oidc,
-        recently_confirmed: recent,
+    Ok(row.map(|(session_id, user_id, username, csrf_token, needs_touch, required, oidc, proven, recent)| {
+        LiveSession {
+            session_id,
+            user_id,
+            username,
+            csrf_token,
+            needs_touch,
+            mfa_enrolment_required: required && !oidc && !proven,
+            mfa_not_enforced: required && oidc,
+            recently_confirmed: recent,
+        }
     }))
 }
 
