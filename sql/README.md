@@ -61,6 +61,26 @@ Credentials never go into this folder or anywhere else in git; they belong in `.
   `shadoucmdb_app`. The one
   exception is 0016, which moves the fixed CI columns into type tables; it runs as the schema owner,
   a member of `shadoucmdb_app`, so the tables keep their owner.
+- On a three-role install `shadoucmdb_app` owns the area schemas, so whatever runs when a row is
+  written there (triggers, rules, defaults, checks, domains) or a view is read there is code the API
+  role controls. A migration that writes rows in an area schema, or reads an area view, therefore
+  switches to the API role first, for the rest of its transaction:
+
+  ```sql
+  DO $$
+  DECLARE
+    app_role name := COALESCE(NULLIF(current_setting('shadoucmdb.app_role', true), ''), 'shadoucmdb_app');
+  BEGIN
+    IF EXISTS (SELECT FROM pg_roles WHERE rolname = app_role) AND current_user <> app_role THEN
+      PERFORM set_config('role', app_role, true);  -- SET LOCAL ROLE
+    END IF;
+  END $$;
+  ```
+
+  `RESET ROLE` switches back. Reading area tables (as 0036 does) needs no switch. `migrate` also refuses to start while the API
+  role's objects carry triggers, rules, row-level security, functions, or defaults, checks or domains
+  that call anything but the engine's enum checks do (`refuse_planted_code` in `backend/src/db.rs`);
+  that check is the second line, not a reason to skip the switch.
 - Bulk import stores classes, attributes and relationship types **by key** in `import_mappings.definition`
   and `import_jobs.mapping`/`class_key` (0029). A migration that renames keys or field references (as
   0020 did for UI settings) must rewrite those too.

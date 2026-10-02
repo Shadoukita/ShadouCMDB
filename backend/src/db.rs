@@ -244,15 +244,26 @@ pub async fn act_as_api_role(conn: &mut sqlx::PgConnection) -> sqlx::Result<bool
     Ok(api_role.is_some())
 }
 
+/// The only functions a default, check or domain expression on the API role's
+/// objects may call: the DDL engine's enum check is `col = ANY ('{…}'::text[])`.
+pub const PLANTED_CODE_ALLOWED_FUNCTIONS: &[&str] = &["pg_catalog.texteq(text,text)"];
+
 /// Code the API role could have put where a migration runs it with the schema
 /// owner's rights (GH#416): on a three-role install the API role owns the area
 /// schemas and type tables, and migrations write to them (0009). ShadouCMDB
 /// creates none of these objects there, so any one found is refused:
 /// triggers, rules other than a view's `_RETURN`, row-level security and
 /// policies on tables in the API role's schemas or owned by it, and functions
-/// in those schemas or owned by it. `restore` and `factory-reset` check too,
-/// after dropping the application's objects. Nothing to check on a
-/// single-role install, where the API already runs as the owner.
+/// in those schemas or owned by it. Column defaults, check constraints and
+/// domains run built-in functions too (GH#464), so their expressions may call
+/// only [`PLANTED_CODE_ALLOWED_FUNCTIONS`] (the engine's enum checks). Views in
+/// those schemas are the API role's code as well; this check does not cover
+/// them, so a migration never reads them as the owner. A migration that writes
+/// rows in an area schema first switches to the API role (`SET LOCAL ROLE`, as
+/// [`act_as_api_role`] does; see `sql/README.md`), and this check is the
+/// second line. `restore` and `factory-reset` check too, after dropping the
+/// application's objects. Nothing to check on a single-role install, where the
+/// API already runs as the owner.
 pub async fn refuse_planted_code(conn: &mut sqlx::PgConnection) -> anyhow::Result<()> {
     let found: Vec<(String, String, String)> = sqlx::query_as(
         "WITH api AS (
@@ -264,6 +275,32 @@ pub async fn refuse_planted_code(conn: &mut sqlx::PgConnection) -> anyhow::Resul
          rel AS (
            SELECT c.oid, c.relrowsecurity, c.oid::regclass::text AS name FROM pg_class c, api
            WHERE c.relowner = api.oid OR c.relnamespace IN (SELECT oid FROM api_schema)
+         ),
+         dom AS (
+           SELECT t.oid, t.typdefaultbin, t.oid::regtype::text AS name FROM pg_type t, api
+           WHERE t.typtype = 'd' AND (t.typowner = api.oid OR t.typnamespace IN (SELECT oid FROM api_schema))
+         ),
+         expr AS (
+           SELECT 'column default' AS kind, format('%s.%I', rel.name, a.attname) AS name, d.adbin::text AS bin
+           FROM pg_attrdef d JOIN rel ON rel.oid = d.adrelid
+           JOIN pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum
+           UNION ALL
+           SELECT 'check constraint', format('%I on %s', c.conname, rel.name), c.conbin::text
+           FROM pg_constraint c JOIN rel ON rel.oid = c.conrelid WHERE c.contype = 'c'
+           UNION ALL
+           SELECT 'domain constraint', format('%I on %s', c.conname, dom.name), c.conbin::text
+           FROM pg_constraint c JOIN dom ON dom.oid = c.contypid WHERE c.conbin IS NOT NULL
+           UNION ALL
+           SELECT 'domain default', dom.name, dom.typdefaultbin::text FROM dom WHERE dom.typdefaultbin IS NOT NULL
+         ),
+         -- Every function an expression calls: directly, or as an operator's
+         -- implementation (an operator node may leave its function unresolved).
+         called AS (
+           SELECT expr.kind, expr.name, m[2]::oid AS fn FROM expr,
+             regexp_matches(expr.bin, ':(funcid|opfuncid) ([0-9]+)', 'g') m WHERE m[2] <> '0'
+           UNION ALL
+           SELECT expr.kind, expr.name, o.oprcode::oid FROM expr,
+             regexp_matches(expr.bin, ':opno ([0-9]+)', 'g') m JOIN pg_operator o ON o.oid = m[1]::oid
          )
          SELECT api.rolname::text, f.kind, f.name FROM api, (
            SELECT 'trigger' AS kind, format('%I on %s', t.tgname, rel.name) AS name
@@ -278,9 +315,12 @@ pub async fn refuse_planted_code(conn: &mut sqlx::PgConnection) -> anyhow::Resul
            UNION ALL
            SELECT 'function', p.oid::regprocedure::text FROM pg_proc p, api
            WHERE p.proowner = api.oid OR p.pronamespace IN (SELECT oid FROM api_schema)
+           UNION
+           SELECT kind, name FROM called WHERE fn <> ALL ($1::regprocedure[]::oid[])
          ) f
          ORDER BY 2, 3",
     )
+    .bind(PLANTED_CODE_ALLOWED_FUNCTIONS)
     .fetch_all(conn)
     .await?;
     let Some((role, _, _)) = found.first() else { return Ok(()) };
@@ -662,6 +702,14 @@ mod tests {
         .await
         .unwrap();
         assert!(api_schemas > 0, "the API role owns the area schemas");
+        let enum_checks: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid
+             WHERE c.contype = 'c' AND t.relowner = (SELECT oid FROM pg_roles WHERE rolname = 'shadoucmdb_app')",
+        )
+        .fetch_one(&mut *c)
+        .await
+        .unwrap();
+        assert!(enum_checks > 0, "the template's enum fields have checks, and they pass");
         super::refuse_planted_code(&mut c).await.expect("ShadouCMDB itself creates none of these objects");
 
         let table: String = sqlx::query_scalar(
@@ -684,6 +732,16 @@ mod tests {
             format!("CREATE POLICY planted ON {table} USING (true)"),
             "CREATE FUNCTION public.planted_owned() RETURNS int LANGUAGE sql AS 'SELECT 1'".to_owned(),
             "ALTER FUNCTION public.planted_owned() OWNER TO shadoucmdb_app".to_owned(),
+            // GH#464: expressions that run built-ins as whoever writes the row.
+            format!(
+                "ALTER TABLE {table} ADD COLUMN planted_default text DEFAULT query_to_xml('SELECT 1', true, true, '')::text"
+            ),
+            format!("ALTER TABLE {table} ADD COLUMN planted_constant text DEFAULT 'harmless'"),
+            format!("ALTER TABLE {table} ADD CONSTRAINT planted_check CHECK (set_config('a.b', 'c', true) <> '')"),
+            "CREATE OPERATOR public.=== (FUNCTION = pg_catalog.pg_notify, LEFTARG = text, RIGHTARG = text)".to_owned(),
+            "ALTER OPERATOR public.=== (text, text) OWNER TO shadoucmdb_app".to_owned(),
+            format!("ALTER TABLE {table} ADD CONSTRAINT planted_operator CHECK ((id::text === 'x') IS NULL)"),
+            format!("CREATE DOMAIN {schema}.planted_domain AS text DEFAULT now()::text CHECK (VALUE ~ 'x')"),
         ] {
             tx.execute(sqlx::AssertSqlSafe(sql)).await.unwrap();
         }
@@ -697,9 +755,16 @@ mod tests {
             format!("  rule planted on {table}"),
             format!("  row-level security {table}"),
             format!("  policy planted on {table}"),
+            format!("  column default {table}.planted_default"),
+            format!("  check constraint planted_check on {table}"),
+            format!("  check constraint planted_operator on {table}"),
+            format!("  domain default {schema}.planted_domain"),
+            format!("  domain constraint planted_domain_check on {schema}.planted_domain"),
         ] {
             assert!(err.contains(&expected), "{expected:?} missing from: {err}");
         }
+        assert!(!err.contains("planted_constant"), "a constant default calls nothing: {err}");
+        assert!(!err.contains("constraint ck_"), "the engine's enum checks pass: {err}");
         drop(c);
         db.drop().await;
     }
