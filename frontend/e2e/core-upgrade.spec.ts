@@ -102,7 +102,9 @@ test("the CI is labelled by its former name in the inventory, search and referen
   await page.goto(`/cis?classId=${snapshot.ids.classes.server}`);
   const labels = page.locator("table tbody tr td:first-child");
   const live = seeded.filter((c) => c.classId === snapshot.ids.classes.server).map((c) => c.name!);
-  await expect(labels).toHaveText(live.sort());
+  // In any order: the administrator's list view that upgrade-check.ts seeds sorts the list by creation date.
+  await expect(labels).toHaveCount(live.length);
+  expect((await labels.allInnerTexts()).sort()).toEqual(live.sort());
   // The CI deleted before the upgrade stays deleted.
   await expect(page.getByRole("link", { name: deleted().name })).toHaveCount(0);
 
