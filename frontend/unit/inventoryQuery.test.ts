@@ -101,4 +101,10 @@ describe("writing the URL", () => {
     assert.deepEqual(clearedQuery({ ...q, sort: "attributes.os" }), { limit: "100", columns: "label,ident" });
     assert.deepEqual(clearedQuery({ q: "web", classId: "c1" }, ["q"]), { q: "web" });
   });
+
+  test("clearing the filters keeps the saved view named, unless view=<id> would be left alone", () => {
+    assert.deepEqual(clearedQuery({ view: "v1", classId: "c1", sort: "label", limit: "50" }), { view: "v1", sort: "label", limit: "50" });
+    assert.deepEqual(clearedQuery({ view: "v1", q: "web", classId: "c1", limit: "50" }, ["q"], "search"), { view: "v1", q: "web", limit: "50" });
+    assert.deepEqual(clearedQuery({ view: "v1", classId: "c1" }), {}, "view=<id> alone would apply the view again");
+  });
 });

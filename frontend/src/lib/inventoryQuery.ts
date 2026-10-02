@@ -161,8 +161,11 @@ export function patchQuery(query: LocationQuery | LocationQueryRaw, patch: Recor
 /**
  * The query after "Clear filters": sort, page size and columns stay, unless the
  * sort or a column needs the class. `keep` names filters that stay too (the search term).
+ * The saved view shown stays named, as when its filters are removed one by one: the
+ * list shows as Modified and Revert brings the filters back. Not when nothing else is
+ * left, as `view=<id>` alone would apply the view again.
  */
-export function clearedQuery(query: LocationQuery | LocationQueryRaw, keep: readonly string[] = []): LocationQueryRaw {
+export function clearedQuery(query: LocationQuery | LocationQueryRaw, keep: readonly string[] = [], context: QueryContext = "inventory"): LocationQueryRaw {
   const next: LocationQueryRaw = {};
   for (const k of keep) if (param(query, k)) next[k] = param(query, k);
   const sort = param(query, "sort");
@@ -170,5 +173,6 @@ export function clearedQuery(query: LocationQuery | LocationQueryRaw, keep: read
   if (param(query, "limit")) next.limit = param(query, "limit");
   const columns = parseColumns(param(query, "columns")).filter((f) => attributeKey(f) === null);
   if (columns.length > 0) next.columns = columnsParam(columns);
+  if (param(query, "view") && hasUrlState(next, context)) next.view = param(query, "view");
   return next;
 }
