@@ -134,11 +134,13 @@ impl CachedRegex {
         if idle.len() >= IDLE_MATCH_CACHES {
             return;
         }
-        let reserved = IDLE_MATCH_CACHE_BYTES.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
-            (used + bytes <= IDLE_MATCH_CACHE_BUDGET).then_some(used + bytes)
-        });
-        if reserved.is_ok() {
+        // Reserve, then give the bytes back if that overshot the budget. The
+        // counter may read high for a moment, but no cache is kept over budget.
+        let used = IDLE_MATCH_CACHE_BYTES.fetch_add(bytes, Ordering::Relaxed) + bytes;
+        if used <= IDLE_MATCH_CACHE_BUDGET {
             idle.push((cache, bytes));
+        } else {
+            IDLE_MATCH_CACHE_BYTES.fetch_sub(bytes, Ordering::Relaxed);
         }
     }
 }
