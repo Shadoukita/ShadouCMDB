@@ -358,6 +358,9 @@ test("11: groups admin: create a group, add a member, delete it while it owns se
   }
   await page.goto("/admin/groups");
   await page.getByRole("searchbox", { name: "Search", exact: true }).fill(GROUP11);
+  // The group is on the unfiltered first page too: wait for the search itself to land before the scan.
+  await expect(page).toHaveURL(/[?&]q=/);
+  await expect(page.locator("table.data.loading")).toHaveCount(0);
   await expect(page.getByRole("link", { name: GROUP11 })).toBeVisible();
   await checkA11y(page, testInfo, "groups list", { strict: true });
 

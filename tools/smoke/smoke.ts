@@ -122,8 +122,8 @@ function checkResponse(op: Op, status: number, json: unknown): void {
   }
 }
 
-/** The audited exports are GETs that still need the CSRF token: `.csrf_on_read()` in the backend, `CSRF_READS` in `frontend/src/api/client.ts`. */
-const CSRF_READS = /\/api\/v1\/(configuration-items\/[^/]+\/impact|business-services\/[^/]+\/members|admin\/config)\/export$/;
+/** The audited exports and import job reads are GETs that still need the CSRF token: `.csrf_on_read()` in the backend, `CSRF_READS` in `frontend/src/api/client.ts`. */
+const CSRF_READS = /\/api\/v1\/((configuration-items\/[^/]+\/impact|business-services\/[^/]+\/members|admin\/config)\/export|imports\/[0-9a-f-]{36}(\/issues|\/error-report)?)$/;
 
 async function call(
   method: string,

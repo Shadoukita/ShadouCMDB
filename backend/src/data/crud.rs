@@ -370,8 +370,36 @@ pub struct AuditEntry {
 /// Audit rows per INSERT; a type purge can audit tens of thousands of CIs.
 pub const AUDIT_BATCH: usize = 1000;
 
+#[cfg(debug_assertions)]
+tokio::task_local! {
+    /// The operation id of the GET running without the CSRF check, if any.
+    static CSRF_FREE_READ: std::sync::Arc<str>;
+}
+
+/// Runs a route handler; `csrf_free_read` is its operation id when it is a GET
+/// without [`csrf_on_read`](crate::api::route::RouteBuilder::csrf_on_read).
+/// In debug builds (every test run) [`write_audit`] then refuses to record
+/// anything for a session: the SameSite=Lax cookie travels with a cross-site
+/// navigation, so a link on another site could write the row in the user's
+/// name (GH#414, GH#503). Release builds just run the handler.
+pub async fn run_handler<F: std::future::Future>(csrf_free_read: Option<std::sync::Arc<str>>, f: F) -> F::Output {
+    #[cfg(debug_assertions)]
+    if let Some(op) = csrf_free_read {
+        return CSRF_FREE_READ.scope(op, f).await;
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = csrf_free_read;
+    f.await
+}
+
 /// Append audit rows in the caller's transaction so a change and its audit commit together.
 pub async fn write_audit(conn: &mut PgConnection, ctx: &RequestContext, entries: Vec<AuditEntry>) -> sqlx::Result<()> {
+    #[cfg(debug_assertions)]
+    if let (Ok(op), Some(p)) = (CSRF_FREE_READ.try_with(Clone::clone), ctx.principal())
+        && matches!(p.credential, crate::auth::Credential::Session { .. })
+    {
+        panic!("{op} is a GET without csrf_on_read() but writes an audit row for a session (GH#503)");
+    }
     let mut rest = entries;
     while !rest.is_empty() {
         let batch: Vec<AuditEntry> = rest.drain(..rest.len().min(AUDIT_BATCH)).collect();

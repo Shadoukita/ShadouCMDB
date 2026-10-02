@@ -66,7 +66,8 @@ async function call(method: string, url: string, body?: unknown, headers: Record
     method,
     headers: {
       ...(cookie ? { cookie } : {}),
-      ...(csrf && method !== 'GET' ? { 'x-csrf-token': csrf } : {}),
+      // Also on GETs: the job read is audited for an administrator and needs the token (GH#503).
+      ...(csrf ? { 'x-csrf-token': csrf } : {}),
       ...(body !== undefined && !(body instanceof Uint8Array) ? { 'content-type': 'application/json' } : {}),
       ...headers,
     },

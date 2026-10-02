@@ -167,6 +167,19 @@ const BUILT_IN_SETTINGS = {
   layouts: [],
 };
 
+/**
+ * Saves the layout editor's draft to the template it edits: Save to template opens a confirmation that
+ * says who the change reaches, with an optional note for the settings version.
+ */
+export async function saveLayout(page: Page, note?: string) {
+  const bar = page.getByRole("region", { name: "Layout editing" });
+  await bar.getByTestId("le-save").click();
+  const dialog = page.getByRole("dialog", { name: /^Save to the template/ });
+  if (note) await dialog.getByLabel("Note for this version").fill(note);
+  await dialog.getByRole("button", { name: "Save to template", exact: true }).click();
+  await expect(bar.getByRole("status")).toContainText(/settings version \d+/);
+}
+
 /** Back to the built-in UI settings (Customization) and no images, so other specs see the stock UI. */
 export async function resetUiSettings(request: APIRequestContext) {
   const s = await apiGet<{ version: number; settings: unknown; assets: { logo: unknown; favicon: unknown } }>(request, "/ui-settings");

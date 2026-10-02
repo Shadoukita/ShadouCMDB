@@ -159,11 +159,12 @@ pub fn routes() -> Vec<Route> {
             .description(
                 "The caller's job, or any job for an administrator; `404` otherwise, the same as for a job that \
                  does not exist. An administrator's read of another user's job is audited as `import.report_read` \
-                 (once per 15 minutes). Poll every 1 s for the first 10 s, then every 2 s, then every 5 s after a \
-                 minute.",
+                 (once per 15 minutes), so a signed-in session must send X-CSRF-Token as on a write. Poll every \
+                 1 s for the first 10 s, then every 2 s, then every 5 s after a minute.",
             )
             .requires(GlobalPermission::CisImport)
             .session_only()
+            .csrf_on_read()
             .errors(&[ErrorCode::NotFound])
             .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
                 Ok(Json(jobs::get(&api.pool, &api.ctx, id).await?))
@@ -240,10 +241,12 @@ pub fn routes() -> Vec<Route> {
                 "In row order. `value` is the cell, cut to 200 characters. At most 10,000 problems are stored per \
                  job; `summary.issuesTotal` counts them all. Empty once the file was deleted (24 h after the last \
                  activity). Also while bulk import is off. An administrator's read of another user's job is audited \
-                 as `import.report_read` (once per 15 minutes).",
+                 as `import.report_read` (once per 15 minutes), so a signed-in session must send X-CSRF-Token as on a \
+                 write.",
             )
             .requires(GlobalPermission::CisImport)
             .session_only()
+            .csrf_on_read()
             .errors(&[ErrorCode::NotFound])
             .handle(
                 |api, In(IdPath(id), Query(q), NoBody): In<IdPath, Query<schemas::ListImportIssuesQuery>, NoBody>| async move {
@@ -260,13 +263,15 @@ pub fn routes() -> Vec<Route> {
                  read as a formula (starting with `=` `+` `-` `@`, a tab or a line break) or starting with `'` gets \
                  a leading `'`; a file uploaded again is recognised as a report by its first five headers and the \
                  `'` is taken off. At most the 10,000 stored problems. `404` when the job has no problems or its file \
-                 expired. A download by anyone other than the job's owner is audited as `import.report_read`. \
-                 `429` when the caller already downloads 2 reports, `503` when the server sends 8; a client that \
-                 reads nothing for 30 s, or takes more than 15 minutes, is cut off. Also while bulk import is off, \
+                 expired. A download by anyone other than the job's owner is audited as `import.report_read`, \
+                 so a signed-in session must send X-CSRF-Token as on a write. `429` when the caller already \
+                 downloads 2 reports, `503` when the server sends 8; a client that reads nothing for 30 s, or takes \
+                 more than 15 minutes, is cut off. Also while bulk import is off, \
                  so the report can be kept before the job is deleted.",
             )
             .requires(GlobalPermission::CisImport)
             .session_only()
+            .csrf_on_read()
             .errors(&[ErrorCode::NotFound, ErrorCode::RateLimited, ErrorCode::ServerBusy])
             .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
                 report::download(&api.pool, &api.ctx, &api.imports, id).await

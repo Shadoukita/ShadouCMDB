@@ -199,6 +199,39 @@ pub async fn template_use(conn: &mut PgConnection) -> sqlx::Result<HashMap<Strin
     Ok(rows.into_iter().map(|(k, n, classes)| (k, (n, classes))).collect())
 }
 
+/// class key -> (class id, live CIs of exactly that class with a layout of their own, template or custom)
+pub async fn own_layout_counts(conn: &mut PgConnection) -> sqlx::Result<HashMap<String, (Uuid, i64)>> {
+    let rows: Vec<(String, Uuid, i64)> = sqlx::query_as(
+        "SELECT c.key, c.id, count(ci.id)
+         FROM ci_classes c
+         LEFT JOIN configuration_items ci ON ci.class_id = c.id AND ci.deleted_at IS NULL
+           AND EXISTS (SELECT 1 FROM ci_layout_overrides o WHERE o.ci_id = ci.id)
+         GROUP BY c.key, c.id",
+    )
+    .fetch_all(conn)
+    .await?;
+    Ok(rows.into_iter().map(|(k, id, n)| (k, (id, n))).collect())
+}
+
+/// template key -> a live CI in `visible` (None: any class) that shows it as its own layout: the first by
+/// label, then id.
+pub async fn template_samples(
+    conn: &mut PgConnection,
+    visible: Option<&[Uuid]>,
+) -> sqlx::Result<HashMap<String, Uuid>> {
+    let rows: Vec<(String, Uuid)> = sqlx::query_as(
+        "SELECT DISTINCT ON (o.template_key) o.template_key, ci.id
+         FROM ci_layout_overrides o JOIN configuration_items ci ON ci.id = o.ci_id
+         WHERE o.template_key IS NOT NULL AND ci.deleted_at IS NULL
+           AND ($1::uuid[] IS NULL OR ci.class_id = ANY($1))
+         ORDER BY o.template_key, lower(ci.label), ci.id",
+    )
+    .bind(visible)
+    .fetch_all(conn)
+    .await?;
+    Ok(rows.into_iter().collect())
+}
+
 // ---------------------------------------------------------------------------
 // Assets
 // ---------------------------------------------------------------------------

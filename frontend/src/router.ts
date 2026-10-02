@@ -35,7 +35,7 @@ import AccountPage from "./pages/account/AccountPage.vue";
 import TwoFactorSetupPage from "./pages/account/TwoFactorSetupPage.vue";
 import LoginPage from "./pages/auth/LoginPage.vue";
 import SetupPage from "./pages/auth/SetupPage.vue";
-import { EDITOR_SUFFIX, OPENED_HERE_QUERY, pageOfEditor } from "./lib/layoutEditor";
+import { EDITOR_SUFFIX, OPENED_HERE_QUERY, pageOfEditor, TEMPLATE_QUERY } from "./lib/layoutEditor";
 import { trackNavigations } from "./lib/navigation";
 import { safeRedirect } from "./lib/signIn";
 import { useSessionStore } from "./stores/session";
@@ -168,6 +168,7 @@ router.beforeEach(async (to) => {
   if (to.meta.layoutEditor && !session.can("customization.manage")) {
     const query = { ...to.query };
     delete query[OPENED_HERE_QUERY];
+    delete query[TEMPLATE_QUERY];
     return { path: pageOfEditor(to.path), query, replace: true };
   }
   return true;
