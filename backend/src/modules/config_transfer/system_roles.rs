@@ -250,11 +250,24 @@ pub(super) fn match_by_role(
             g.class_system_role = g.class.as_deref().and_then(|k| role_of_class.get(k).copied());
         }
     }
-    for m in file.import_mappings.iter_mut().flatten() {
+    for (i, m) in file.import_mappings.iter_mut().flatten().enumerate() {
         rename(&mut m.class_key, &classes);
-        for c in &mut m.definition.columns {
+        for (j, c) in m.definition.columns.iter_mut().enumerate() {
             if let ColumnTarget::Relationship { type_key, .. } = &mut c.target {
                 rename(type_key, &types);
+                // Members are added on the service, never imported (GH#410); a
+                // mapping saved before that keeps the column, ignored (GH#516).
+                if role_of_type.contains_key(type_key.as_str()) {
+                    warnings.push(ImportWarning {
+                        path: format!("importMappings.{i}.definition.columns.{j}.target"),
+                        message: format!(
+                            "Business service members cannot be imported; column \"{}\" of mapping \"{}\" is saved as ignored",
+                            c.header, m.name
+                        ),
+                    });
+                    c.target = ColumnTarget::Ignore;
+                    c.options = None;
+                }
             }
         }
     }

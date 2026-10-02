@@ -346,7 +346,9 @@ pub fn routes() -> Vec<Route> {
             .description(
                 "Needs view on the class; a class the caller cannot view is `400 unknown_class`, the same as an \
                  unknown key. Names are unique per class (`409 duplicate_name`). At most 500 per instance \
-                 (`409 limit_reached`) and 64 KiB per definition (`400 too_large`). The definition's targets are \
+                 (`409 limit_reached`) and 64 KiB per definition (`400 too_large`). A column targeting the business \
+                 service member type is refused (`400 system_relationship_type` on \
+                 `definition.columns[i].target.typeKey`): members are added on the service. The other targets are \
                  checked when it is applied to a file. Audited as a `create` of `import_mappings`.",
             )
             .requires(GlobalPermission::CisImport)
@@ -373,8 +375,10 @@ pub fn routes() -> Vec<Route> {
             .summary("Rename or change a saved mapping (creator or Administrator)")
             .description(
                 "Send the `version` you loaded; `409 VERSION_CONFLICT` if someone saved in between. The class cannot \
-                 change. Only the user who saved it and administrators may change it (`403`). Audited as an \
-                 `update` of `import_mappings` with the old and new definition.",
+                 change. Only the user who saved it and administrators may change it (`403`). A definition sent with \
+                 a column targeting the business service member type is refused as on create; a mapping saved \
+                 before that lists the column in `problems`. Audited as an `update` of `import_mappings` with the \
+                 old and new definition.",
             )
             .requires(GlobalPermission::CisImport)
             .session_only()

@@ -29,13 +29,16 @@ pub const SEARCH_PATH: &str = "cmdb, public";
 /// builds, never in a release: (version, SHA-384 of that text). 0007 to 0009
 /// granted to the default role names only (GH#42); for those names the result
 /// is the same. 0036 could overwrite a Criticality set while it ran (GH#391);
-/// where nothing was written meanwhile the result is the same. `migrate` records the current checksum over these and `restore`
+/// where nothing was written meanwhile the result is the same. 0041 removed the
+/// member type's rules without an audit row (GH#515); the rules are removed
+/// either way. `migrate` records the current checksum over these and `restore`
 /// accepts backups that carry them.
 pub const SUPERSEDED_CHECKSUMS: &[(i64, &str)] = &[
     (7, "3b8728b4ac11de7d08e7ed9a8946be7ca8cb75d95506da572a9c3de69b7d52df159a4b3650acc6c5aed15803d7b73766"),
     (8, "b747f291dc6282d181e8ed1350318a82b442995542594e29da589acd37586929e8da3886ded145b5519a0c8c109d2767"),
     (9, "874f895b5878b4e1dd0d2c3cd841b099e500a70bd7d7a5f3cd6d7f030a8da10adc55ecfc4e8d337beeb326ac88e7f1d4"),
     (36, "8dbe56aa7993fca7f71cf8f21ea87b98d2d55e7f6a5a182f535901b7cddef7fac5da4f28d2626539ebe07ee43d1079cd"),
+    (41, "e2ffb21d9512840ba47272874a7f4a40283229c97babc907664966091c3aced38749ec518e3ed48ef30e1e56e2ec20c0"),
 ];
 
 /// Whether `checksum` (hex) is this binary's migration `version` or a superseded text of it.

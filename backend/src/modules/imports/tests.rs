@@ -2284,3 +2284,80 @@ async fn a_mapping_cannot_write_business_service_members() {
     .unwrap();
     assert_eq!(edges, 0);
 }
+
+/// GH#516: a saved mapping cannot name the member type either. One saved
+/// before that was refused stays readable, lists what to fix, and its member
+/// column is left out of the suggestion, so the suggestion is accepted.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_saved_mapping_cannot_name_the_member_type_and_an_old_one_says_what_to_fix() {
+    let Some(db) = scratch::database("import_saved_mapping_member_type").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    server_class(&e).await;
+    let alice = user(&e, "alice", &["cis.import"]).await;
+    let member_type: String =
+        sqlx::query_scalar("SELECT key FROM relationship_types WHERE system_role = 'business_service_member'")
+            .fetch_one(&e.pool)
+            .await
+            .unwrap();
+    let member = json!([{ "header": "Service", "target": {
+        "kind": "relationship", "typeKey": member_type, "direction": "incoming", "match": { "by": "label" }
+    } }]);
+    let bad = definition(&["hostname", "Cores"], member);
+    let fixed = definition(&["hostname", "Cores", "Service"], json!([]));
+    let refused = |v: &Value| (detail(v).to_owned(), v["error"]["details"][0]["field"].as_str().map(str::to_owned));
+    let expected = ("system_relationship_type".to_owned(), Some("definition.columns[2].target.typeKey".to_owned()));
+
+    let body = json!({ "name": "Services", "classKey": "srv", "definition": bad });
+    let (status, v, _) = call(&e.app, "POST", "/api/v1/import-mappings", &alice, Some(body)).await;
+    assert_eq!((status, refused(&v)), (400, expected.clone()), "{v}");
+    assert!(v["error"]["details"][0]["message"].as_str().unwrap().contains("\"Service\""), "{v}");
+
+    // As saved before the upgrade.
+    let alice_id: Uuid =
+        sqlx::query_scalar("SELECT id FROM users WHERE username = 'alice'").fetch_one(&e.pool).await.unwrap();
+    let id: Uuid = sqlx::query_scalar(
+        "INSERT INTO import_mappings
+           (name, class_key, definition, created_by_id, created_by_name, updated_by_id, updated_by_name)
+         VALUES ('Services', 'srv', $1, $2, 'alice', $2, 'alice') RETURNING id",
+    )
+    .bind(&bad)
+    .bind(alice_id)
+    .fetch_one(&e.pool)
+    .await
+    .unwrap();
+    let one = format!("/api/v1/import-mappings/{id}");
+    let (status, m, _) = call(&e.app, "GET", &one, &alice, None).await;
+    assert_eq!(status, 200, "{m}");
+    assert_eq!(m["definition"]["columns"], bad["columns"]);
+    assert_eq!(m["problems"].as_array().map(Vec::len), Some(1), "{m}");
+    assert_eq!(
+        (m["problems"][0]["field"].as_str(), m["problems"][0]["code"].as_str()),
+        (expected.1.as_deref(), Some(expected.0.as_str()))
+    );
+    let (_, list, _) = call(&e.app, "GET", "/api/v1/import-mappings?classKey=srv", &alice, None).await;
+    assert_eq!(list["data"][0]["problems"], m["problems"], "{list}");
+
+    // Picked by its headers; the member column is left unmapped and the job takes the rest.
+    let file = "Hostname;Cores;Service\nweb01;8;Shop\n";
+    let (status, v, _) = upload(&e.app, &alice, CSV_TYPE, Some("members.csv"), &[], file.as_bytes().to_vec()).await;
+    assert_eq!(status, 202, "{v}");
+    let job = v["id"].as_str().unwrap().to_owned();
+    drain(&e.pool).await;
+    let (status, s, _) =
+        call(&e.app, "GET", &format!("/api/v1/imports/{job}/mapping-suggestion?classKey=srv"), &alice, None).await;
+    assert_eq!(status, 200, "{s}");
+    assert_eq!(s["savedMapping"]["id"], json!(id), "{s}");
+    assert_eq!(s["matchedBy"][2], json!({ "column": 2, "via": null, "hint": "system_relationship_type" }), "{s}");
+    assert!(s["mapping"]["columns"].as_array().unwrap().iter().all(|c| c["index"] != 2), "{s}");
+    let (status, j, _) =
+        call(&e.app, "PUT", &format!("/api/v1/imports/{job}/mapping"), &alice, Some(s["mapping"].clone())).await;
+    assert_eq!(status, 200, "{j}");
+
+    // A rename leaves the definition (and its problem); saving it as it is is refused; fixed, it saves.
+    let (status, m, _) = call(&e.app, "PATCH", &one, &alice, Some(json!({ "version": 1, "name": "Old" }))).await;
+    assert_eq!((status, m["problems"].as_array().map(Vec::len)), (200, Some(1)), "{m}");
+    let (status, v, _) = call(&e.app, "PATCH", &one, &alice, Some(json!({ "version": 2, "definition": bad }))).await;
+    assert_eq!((status, refused(&v)), (400, expected), "{v}");
+    let (status, m, _) = call(&e.app, "PATCH", &one, &alice, Some(json!({ "version": 2, "definition": fixed }))).await;
+    assert_eq!((status, &m["problems"]), (200, &json!([])), "{m}");
+}

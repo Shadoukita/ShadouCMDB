@@ -127,6 +127,35 @@ pub struct SavedImportMapping {
     pub created_by: JobOwner,
     pub updated_at: DateTime<Utc>,
     pub updated_by: JobOwner,
+    /// What keeps the mapping from being saved again as it is: a column of a
+    /// mapping saved before an upgrade that targets the business service member
+    /// type (`system_relationship_type`, GH#516). The suggestion leaves such a
+    /// column unmapped; map it to `ignore` or remove it, then save. Empty when
+    /// there is nothing to fix.
+    pub problems: Vec<SavedImportMappingProblem>,
+}
+
+/// One thing to fix in a saved mapping.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedImportMappingProblem {
+    /// Where, e.g. `definition.columns[2].target.typeKey`
+    pub field: String,
+    /// Machine-readable reason: `system_relationship_type`
+    pub code: String,
+    /// What to do, for the user
+    pub message: String,
+}
+
+impl SavedImportMapping {
+    /// The mapping with [`Self::problems`] filled in.
+    fn checked(mut self, system: &HashSet<String>) -> Self {
+        self.problems = system_type_problems(&self.definition, system, "definition")
+            .into_iter()
+            .map(|e| SavedImportMappingProblem { field: e.field, code: e.code, message: e.message })
+            .collect();
+        self
+    }
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -247,6 +276,7 @@ impl Row {
             created_by: JobOwner { id: self.created_by_id, name: self.created_by_name.clone() },
             updated_at: self.updated_at,
             updated_by: JobOwner { id: self.updated_by_id, name: self.updated_by_name.clone() },
+            problems: Vec::new(),
         })
     }
 
@@ -290,6 +320,42 @@ async fn visible_class(conn: &mut PgConnection, ctx: &RequestContext, key: &str)
     Ok(id.filter(|c| ctx.require_class(*c, ClassOp::View).is_ok()))
 }
 
+/// The keys of the built-in relationship types (the business service member
+/// type), which no mapping may target (GH#410, GH#516).
+pub async fn system_type_keys(conn: &mut PgConnection) -> sqlx::Result<HashSet<String>> {
+    let keys: Vec<String> = sqlx::query_scalar("SELECT key FROM cmdb.relationship_types WHERE system_role IS NOT NULL")
+        .fetch_all(conn)
+        .await?;
+    Ok(keys.into_iter().collect())
+}
+
+/// What a definition column targeting a built-in type is told, under `prefix`
+/// (e.g. `definition`): members change only on the business service.
+pub fn system_type_problems(definition: &MappingDefinition, system: &HashSet<String>, prefix: &str) -> Vec<FieldError> {
+    definition
+        .columns
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| matches!(&c.target, ColumnTarget::Relationship { type_key, .. } if system.contains(type_key)))
+        .map(|(i, c)| {
+            body_field(
+                &format!("{prefix}.columns[{i}].target.typeKey"),
+                &format!(
+                    "Business service members cannot be imported. Map the column \"{}\" to ignore or remove it, \
+                     and add members on the business service",
+                    c.header
+                ),
+                "system_relationship_type",
+            )
+        })
+        .collect()
+}
+
+async fn refuse_system_types(conn: &mut PgConnection, definition: &MappingDefinition) -> Result<(), AppError> {
+    let problems = system_type_problems(definition, &system_type_keys(conn).await?, "definition");
+    if problems.is_empty() { Ok(()) } else { Err(AppError::validation(problems)) }
+}
+
 async fn fetch(conn: &mut PgConnection, id: Uuid, lock: bool) -> sqlx::Result<Option<Row>> {
     let sql = format!("{SELECT} WHERE m.id = $1{}", if lock { " FOR UPDATE OF m" } else { "" });
     sqlx::query_as(sqlx::AssertSqlSafe(sql)).bind(id).fetch_optional(conn).await
@@ -302,7 +368,7 @@ pub async fn fetch_visible(
     id: Uuid,
 ) -> Result<SavedImportMapping, AppError> {
     match fetch(conn, id, false).await? {
-        Some(r) if r.visible(ctx) => r.dto(),
+        Some(r) if r.visible(ctx) => Ok(r.dto()?.checked(&system_type_keys(conn).await?)),
         _ => Err(not_found(id)),
     }
 }
@@ -317,9 +383,10 @@ pub async fn visible_of(
         "{SELECT} WHERE ($1::text IS NULL OR m.class_key = $1) ORDER BY lower(m.name), m.name, m.id"
     )))
     .bind(class_key)
-    .fetch_all(conn)
+    .fetch_all(&mut *conn)
     .await?;
-    rows.iter().filter(|r| r.visible(ctx)).map(Row::dto).collect()
+    let system = system_type_keys(conn).await?;
+    rows.iter().filter(|r| r.visible(ctx)).map(|r| Ok(r.dto()?.checked(&system))).collect()
 }
 
 pub async fn list(
@@ -347,6 +414,7 @@ pub async fn create(
     if visible_class(&mut tx, ctx, &input.class_key).await?.is_none() {
         return Err(unknown_class(&input.class_key));
     }
+    refuse_system_types(&mut tx, &input.definition).await?;
     // Serialises creates, so the instance limit holds under concurrency.
     sqlx::query("LOCK TABLE cmdb.import_mappings IN SHARE ROW EXCLUSIVE MODE").execute(&mut *tx).await?;
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM cmdb.import_mappings").fetch_one(&mut *tx).await?;
@@ -423,6 +491,9 @@ pub async fn update(
     let mut tx = pool.begin().await?;
     require_enabled(&mut tx, cfg).await?;
     let before = for_change(&mut tx, ctx, id, input.version).await?;
+    if let Some(d) = &input.definition {
+        refuse_system_types(&mut tx, d).await?;
+    }
     let description = match &input.description {
         None => before.description.clone(),
         Some(d) => d.clone().filter(|d| !d.is_empty()),
@@ -457,8 +528,9 @@ pub async fn update(
         new_value: Some(after.audit_value()),
     };
     crud::write_audit(&mut tx, ctx, vec![entry]).await?;
+    let system = system_type_keys(&mut tx).await?;
     tx.commit().await?;
-    after.dto()
+    Ok(after.dto()?.checked(&system))
 }
 
 /// Deletes a saved mapping. Jobs that used it keep their own copy.

@@ -13,6 +13,7 @@ import {
 import ErrorAlert from "../../components/ErrorAlert.vue";
 import LoadingState from "../../components/LoadingState.vue";
 import QrCode from "../../components/QrCode.vue";
+import { t } from "../../i18n";
 import { vAutofocus } from "../../lib/directives";
 import { useSessionStore } from "../../stores/session";
 import FormField from "../form/FormField.vue";
@@ -59,8 +60,8 @@ const generalError = computed(() => {
 /** The account's identity provider: a directory account confirms with its directory password, an OIDC account has none here. */
 const provider = computed(() => session.user?.identityProvider ?? null);
 const directory = computed(() => provider.value?.kind === "ldap");
-const passwordLabel = computed(() => (directory.value ? "Directory password" : "Current password"));
-const passwordHint = computed(() => (directory.value ? `The password you sign in with, checked against ${provider.value!.name}` : undefined));
+const passwordLabel = computed(() => (directory.value ? t("account.mfa.directoryPassword") : t("account.mfa.currentPassword")));
+const passwordHint = computed(() => (directory.value ? t("account.mfa.directoryPasswordHint", { provider: provider.value!.name }) : undefined));
 /** The secret in groups of four, as authenticator apps display and accept it. */
 const groupedSecret = computed(() => enrolment.value?.secret.match(/.{1,4}/g)?.join(" ") ?? "");
 
@@ -86,8 +87,8 @@ function cancel() {
 
 function need(fields: { password?: boolean; code?: boolean }) {
   const errs: Record<string, string> = {};
-  if (fields.password && !password.value) errs.currentPassword = "Required";
-  if (fields.code && !normaliseCode(code.value)) errs.code = "Required";
+  if (fields.password && !password.value) errs.currentPassword = t("common.required");
+  if (fields.code && !normaliseCode(code.value)) errs.code = t("common.required");
   local.value = errs;
   const first = Object.keys(errs)[0];
   if (first) document.getElementById(`mfa-${first}`)?.focus();
@@ -143,9 +144,7 @@ async function turnOff() {
     await disable.mutateAsync({ currentPassword: password.value, code: normaliseCode(code.value) });
     clearForm();
     mode.value = "idle";
-    notice.value = required.value
-      ? "Two-factor authentication is off. A permission profile you hold requires it: set it up again to continue working."
-      : "Two-factor authentication is off. Sign-in asks for your password only.";
+    notice.value = required.value ? t("account.mfa.offRequired") : t("account.mfa.offDone");
   } catch (e) {
     error.value = e;
     code.value = "";
@@ -171,7 +170,7 @@ async function renewCodes() {
 function codesSaved() {
   const reason = codesReason.value;
   codes.value = null;
-  notice.value = reason === "enrolled" ? "Two-factor authentication is on. From now on sign-in asks for a code after your password." : "New recovery codes saved. The old ones no longer work.";
+  notice.value = reason === "enrolled" ? t("account.mfa.onDone") : t("account.mfa.codesRenewed");
   if (reason === "enrolled") emit("enrolled");
 }
 </script>
@@ -179,14 +178,14 @@ function codesSaved() {
 <template>
   <section class="panel" aria-labelledby="mfa-title">
     <div class="panel-header">
-      <h2 id="mfa-title">Two-factor authentication</h2>
+      <h2 id="mfa-title">{{ t("account.mfa.title") }}</h2>
       <span v-if="status.data.value" class="badges">
-        <span v-if="enabled" class="badge ok">On</span>
-        <span v-else class="badge off">Off</span>
-        <span v-if="required" class="badge warn" title="A permission profile you hold requires two-factor authentication">Required</span>
+        <span v-if="enabled" class="badge ok">{{ t("account.mfa.on") }}</span>
+        <span v-else class="badge off">{{ t("account.mfa.off") }}</span>
+        <span v-if="required" class="badge warn" :title="t('account.mfa.requiredTitle')">{{ t("account.mfa.required") }}</span>
       </span>
     </div>
-    <LoadingState v-if="status.isLoading.value" label="Loading two-factor status…" />
+    <LoadingState v-if="status.isLoading.value" :label="t('account.mfa.loading')" />
     <div v-else-if="status.isError.value" class="panel-body">
       <ErrorAlert :error="status.error.value" :on-retry="() => status.refetch()" />
     </div>
@@ -195,48 +194,47 @@ function codesSaved() {
 
       <template v-else>
         <div v-if="notice" class="alert" role="status">{{ notice }}</div>
-        <ErrorAlert v-if="generalError" :error="generalError" title="Two-factor authentication not changed" />
+        <ErrorAlert v-if="generalError" :error="generalError" :title="t('account.mfa.failed')" />
 
         <!-- Off: set up an authenticator app -->
         <p v-if="!enabled && provider && !directory" class="muted flush">
-          You sign in through {{ provider.name }}, which asks for your second factor. There is nothing to set up here.
+          {{ t("account.mfa.viaProvider", { provider: provider.name }) }}
         </p>
         <template v-else-if="!enabled && mode !== 'scan'">
           <div v-if="forced" class="alert alert-warn" role="note">
-            A permission profile you hold requires two-factor authentication. Set up an authenticator app to continue.
+            {{ t("account.mfa.forced") }}
           </div>
           <p class="muted flush">
-            Protect your account with a second step at sign-in: a 6-digit code from an authenticator app on your phone
-            (Microsoft Authenticator, Google Authenticator, 1Password, Aegis or any other TOTP app).
+            {{ t("account.mfa.intro") }}
           </p>
           <form class="stack" novalidate @submit.prevent="begin">
             <div class="form-grid">
-              <FormField id="mfa-currentPassword" :label="passwordLabel" required :error="fieldErrors.currentPassword" :hint="passwordHint ?? 'Confirms it is you'">
+              <FormField id="mfa-currentPassword" :label="passwordLabel" required :error="fieldErrors.currentPassword" :hint="passwordHint ?? t('account.mfa.confirmsItsYou')">
                 <template #default="{ id, invalid, describedBy }">
                   <input :id="id" v-model="password" v-autofocus="forced" type="password" autocomplete="current-password" :aria-invalid="invalid" :aria-describedby="describedBy" />
                 </template>
               </FormField>
             </div>
-            <div><button type="submit" class="btn btn-primary" :disabled="busy">{{ start.isPending.value ? "Starting…" : "Set up authenticator app" }}</button></div>
+            <div><button type="submit" class="btn btn-primary" :disabled="busy">{{ start.isPending.value ? t("account.mfa.starting") : t("account.mfa.start") }}</button></div>
           </form>
         </template>
 
         <!-- Scan the QR code and confirm with a code -->
         <form v-else-if="!enabled && enrolment" class="stack" novalidate @submit.prevent="finish">
           <ol class="steps flush">
-            <li>Open your authenticator app and add an account.</li>
-            <li>Scan this QR code, or enter the key by hand (time-based, {{ enrolment.digits }} digits, every {{ enrolment.period }} seconds).</li>
-            <li>Enter the code the app shows to finish.</li>
+            <li>{{ t("account.mfa.step.add") }}</li>
+            <li>{{ t("account.mfa.step.scan", { digits: enrolment.digits, period: enrolment.period }) }}</li>
+            <li>{{ t("account.mfa.step.enter") }}</li>
           </ol>
           <div class="enrol">
-            <QrCode :value="enrolment.otpauthUri" label="QR code to add ShadouCMDB to your authenticator app" />
+            <QrCode :value="enrolment.otpauthUri" :label="t('account.mfa.qr')" />
             <div class="stack">
               <div class="field">
-                <label for="mfa-secret">Setup key</label>
+                <label for="mfa-secret">{{ t("account.mfa.setupKey") }}</label>
                 <input id="mfa-secret" class="mono" type="text" readonly spellcheck="false" autocomplete="off" :value="groupedSecret" @focus="($event.target as HTMLInputElement).select()" />
-                <span class="hint">Spaces do not matter.</span>
+                <span class="hint">{{ t("account.mfa.setupKeyHint") }}</span>
               </div>
-              <FormField id="mfa-code" label="Code from the app" required :error="fieldErrors.code">
+              <FormField id="mfa-code" :label="t('account.mfa.codeFromApp')" required :error="fieldErrors.code">
                 <template #default="{ id, invalid, describedBy }">
                   <input
                     :id="id"
@@ -252,8 +250,8 @@ function codesSaved() {
                 </template>
               </FormField>
               <div class="actions">
-                <button type="submit" class="btn btn-primary" :disabled="busy">{{ confirm.isPending.value ? "Verifying…" : "Verify and turn on" }}</button>
-                <button type="button" class="btn" :disabled="busy" @click="cancel">Cancel</button>
+                <button type="submit" class="btn btn-primary" :disabled="busy">{{ confirm.isPending.value ? t("account.mfa.confirming") : t("account.mfa.confirm") }}</button>
+                <button type="button" class="btn" :disabled="busy" @click="cancel">{{ t("common.cancel") }}</button>
               </div>
             </div>
           </div>
@@ -262,26 +260,26 @@ function codesSaved() {
         <!-- On -->
         <template v-else-if="enabled">
           <dl class="props">
-            <dt>Authenticator app</dt>
-            <dd>Set up — sign-in asks for a code after your password.</dd>
-            <dt>Recovery codes</dt>
+            <dt>{{ t("account.mfa.app") }}</dt>
+            <dd>{{ t("account.mfa.appSetUp") }}</dd>
+            <dt>{{ t("account.mfa.recoveryCodes") }}</dt>
             <dd>
-              <span :class="{ 'error-text': remaining <= 3 }">{{ remaining }} unused</span>
-              <span v-if="remaining <= 3" class="muted"> — create new ones before you run out.</span>
+              <span :class="{ 'error-text': remaining <= 3 }">{{ t("account.mfa.unused", { n: remaining }) }}</span>
+              <span v-if="remaining <= 3" class="muted">{{ t("account.mfa.runningOut") }}</span>
             </dd>
           </dl>
           <div v-if="mode === 'idle'" class="actions">
-            <button type="button" class="btn" @click="open('regenerate')">New recovery codes</button>
-            <button type="button" class="btn btn-danger" @click="open('disable')">Turn off</button>
+            <button type="button" class="btn" @click="open('regenerate')">{{ t("account.mfa.newCodes") }}</button>
+            <button type="button" class="btn btn-danger" @click="open('disable')">{{ t("account.mfa.turnOff") }}</button>
           </div>
           <form v-else class="stack mfa-confirm" novalidate @submit.prevent="mode === 'disable' ? turnOff() : renewCodes()">
-            <h3 class="flush">{{ mode === "disable" ? "Turn off two-factor authentication" : "Create new recovery codes" }}</h3>
+            <h3 class="flush">{{ mode === "disable" ? t("account.mfa.disableTitle") : t("account.mfa.regenerateTitle") }}</h3>
             <p class="flush">
               <template v-if="mode === 'disable'">
-                Removes your authenticator and your recovery codes; sign-in then asks for your password only.
-                <strong v-if="required">A permission profile you hold requires two-factor authentication: you will have to set it up again before you can continue working.</strong>
+                {{ t("account.mfa.disableBody") }}
+                <strong v-if="required">{{ t("account.mfa.disableRequired") }}</strong>
               </template>
-              <template v-else>You get 10 new codes; the {{ remaining }} you have now stop working.</template>
+              <template v-else>{{ t("account.mfa.regenerateBody", { n: remaining }) }}</template>
             </p>
             <div class="form-grid">
               <FormField id="mfa-currentPassword" :label="passwordLabel" required :error="fieldErrors.currentPassword" :hint="passwordHint">
@@ -289,7 +287,7 @@ function codesSaved() {
                   <input :id="id" v-model="password" v-autofocus type="password" autocomplete="current-password" :aria-invalid="invalid" :aria-describedby="describedBy" />
                 </template>
               </FormField>
-              <FormField id="mfa-code" label="Authentication code" required :error="fieldErrors.code" hint="From your app, or a recovery code">
+              <FormField id="mfa-code" :label="t('account.mfa.code')" required :error="fieldErrors.code" :hint="t('account.mfa.codeHint')">
                 <template #default="{ id, invalid, describedBy }">
                   <input :id="id" v-model="code" class="mono" type="text" autocomplete="one-time-code" spellcheck="false" :aria-invalid="invalid" :aria-describedby="describedBy" />
                 </template>
@@ -297,9 +295,9 @@ function codesSaved() {
             </div>
             <div class="actions">
               <button type="submit" :class="['btn', mode === 'disable' ? 'btn-danger' : 'btn-primary']" :disabled="busy">
-                {{ busy ? "Working…" : mode === "disable" ? "Turn off two-factor authentication" : "Create new recovery codes" }}
+                {{ busy ? t("account.mfa.working") : mode === "disable" ? t("account.mfa.disableTitle") : t("account.mfa.regenerateTitle") }}
               </button>
-              <button type="button" class="btn" :disabled="busy" @click="cancel">Cancel</button>
+              <button type="button" class="btn" :disabled="busy" @click="cancel">{{ t("common.cancel") }}</button>
             </div>
           </form>
         </template>

@@ -3,6 +3,7 @@ import { computed, ref } from "vue";
 import { useChangeOwnPassword } from "../../api/admin";
 import { ApiError } from "../../api/client";
 import ErrorAlert from "../../components/ErrorAlert.vue";
+import { t, tAround } from "../../i18n";
 import { useSessionStore } from "../../stores/session";
 import FormField from "../form/FormField.vue";
 
@@ -15,6 +16,7 @@ const session = useSessionStore();
 const change = useChangeOwnPassword();
 const provider = computed(() => session.user?.identityProvider ?? null);
 
+const providerNote = computed(() => tAround("account.password.provider", "provider"));
 const current = ref("");
 const pw = ref("");
 const pw2 = ref("");
@@ -38,9 +40,9 @@ function submit() {
   done.value = false;
   change.reset();
   const errs: Record<string, string> = {};
-  if (!current.value) errs.currentPassword = "Required";
-  if ([...pw.value].length < 12) errs.newPassword = "Too short";
-  if (pw.value !== pw2.value) errs.confirm = "The passwords do not match";
+  if (!current.value) errs.currentPassword = t("common.required");
+  if ([...pw.value].length < 12) errs.newPassword = t("auth.password.tooShort");
+  if (pw.value !== pw2.value) errs.confirm = t("auth.password.mismatch");
   local.value = errs;
   const first = Object.keys(errs)[0];
   if (first) {
@@ -66,39 +68,39 @@ function submit() {
 
 <template>
   <section class="panel" aria-labelledby="own-pw-title">
-    <div class="panel-header"><h2 id="own-pw-title">Password</h2></div>
+    <div class="panel-header"><h2 id="own-pw-title">{{ t("account.password.title") }}</h2></div>
     <div v-if="provider" class="panel-body">
       <p class="muted no-margin" data-testid="own-provider-credentials">
-        You sign in through <strong>{{ provider.name }}</strong> and have no password in ShadouCMDB. Change your password there.
+        {{ providerNote[0] }}<strong>{{ provider.name }}</strong>{{ providerNote[1] }}
       </p>
     </div>
     <form v-else class="panel-body stack" novalidate @submit.prevent="submit">
       <p class="muted no-margin">
-        Changing your password signs you out on every other browser and device. This session stays signed in.
+        {{ t("account.password.intro") }}
       </p>
-      <div v-if="done" class="alert" role="status">Password changed. Your other sessions were ended.</div>
-      <ErrorAlert v-if="generalError" :error="generalError" title="Password not changed" />
+      <div v-if="done" class="alert" role="status">{{ t("account.password.changed") }}</div>
+      <ErrorAlert v-if="generalError" :error="generalError" :title="t('account.password.failed')" />
       <div class="form-grid">
-        <FormField id="own-current-password" label="Current password" required :error="fieldErrors.currentPassword">
+        <FormField id="own-current-password" :label="t('account.password.current')" required :error="fieldErrors.currentPassword">
           <template #default="{ id, invalid, describedBy }">
             <input :id="id" v-model="current" type="password" autocomplete="current-password" :aria-invalid="invalid" :aria-describedby="describedBy" />
           </template>
         </FormField>
       </div>
       <div class="form-grid">
-        <FormField id="own-new-password" label="New password" required :error="fieldErrors.newPassword" hint="At least 12 characters">
+        <FormField id="own-new-password" :label="t('account.password.new')" required :error="fieldErrors.newPassword" :hint="t('auth.password.minLengthHint')">
           <template #default="{ id, invalid, describedBy }">
             <input :id="id" v-model="pw" type="password" autocomplete="new-password" :aria-invalid="invalid" :aria-describedby="describedBy" />
           </template>
         </FormField>
-        <FormField id="own-confirm-password" label="Repeat new password" required :error="fieldErrors.confirm">
+        <FormField id="own-confirm-password" :label="t('account.password.repeat')" required :error="fieldErrors.confirm">
           <template #default="{ id, invalid, describedBy }">
             <input :id="id" v-model="pw2" type="password" autocomplete="new-password" :aria-invalid="invalid" :aria-describedby="describedBy" />
           </template>
         </FormField>
       </div>
       <div>
-        <button type="submit" class="btn btn-primary" :disabled="change.isPending.value">{{ change.isPending.value ? "Changing…" : "Change password" }}</button>
+        <button type="submit" class="btn btn-primary" :disabled="change.isPending.value">{{ change.isPending.value ? t("account.password.submitting") : t("account.password.submit") }}</button>
       </div>
     </form>
   </section>

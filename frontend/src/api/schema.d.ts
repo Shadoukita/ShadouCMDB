@@ -966,7 +966,7 @@ export interface paths {
         put?: never;
         /**
          * Save a mapping for files with the same layout
-         * @description Requires `cis.import`. Needs view on the class; a class the caller cannot view is `400 unknown_class`, the same as an unknown key. Names are unique per class (`409 duplicate_name`). At most 500 per instance (`409 limit_reached`) and 64 KiB per definition (`400 too_large`). The definition's targets are checked when it is applied to a file. Audited as a `create` of `import_mappings`. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `cis.import`. Needs view on the class; a class the caller cannot view is `400 unknown_class`, the same as an unknown key. Names are unique per class (`409 duplicate_name`). At most 500 per instance (`409 limit_reached`) and 64 KiB per definition (`400 too_large`). A column targeting the business service member type is refused (`400 system_relationship_type` on `definition.columns[i].target.typeKey`): members are added on the service. The other targets are checked when it is applied to a file. Audited as a `create` of `import_mappings`. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["createImportMapping"];
         delete?: never;
@@ -998,7 +998,7 @@ export interface paths {
         head?: never;
         /**
          * Rename or change a saved mapping (creator or Administrator)
-         * @description Requires `cis.import`. Send the `version` you loaded; `409 VERSION_CONFLICT` if someone saved in between. The class cannot change. Only the user who saved it and administrators may change it (`403`). Audited as an `update` of `import_mappings` with the old and new definition. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `cis.import`. Send the `version` you loaded; `409 VERSION_CONFLICT` if someone saved in between. The class cannot change. Only the user who saved it and administrators may change it (`403`). A definition sent with a column targeting the business service member type is refused as on create; a mapping saved before that lists the column in `problems`. Audited as an `update` of `import_mappings` with the old and new definition. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         patch: operations["updateImportMapping"];
         trace?: never;
@@ -3787,7 +3787,8 @@ export interface components {
             via?: components["schemas"]["ImportMatchVia"] | null;
             /**
              * @description Why an unmapped column was left out: `ambiguous_label` (several targets have that label),
-             *     `duplicate_target` (an earlier column took the target) or `ident_admin_only`
+             *     `duplicate_target` (an earlier column took the target), `ident_admin_only` or `system_relationship_type`
+             *     (the saved mapping maps it to business service members, which are added on the service; see its `problems`)
              */
             hint?: string | null;
         };
@@ -4816,10 +4817,27 @@ export interface components {
             /** Format: date-time */
             updatedAt: string;
             updatedBy: components["schemas"]["ImportOwner"];
+            /**
+             * @description What keeps the mapping from being saved again as it is: a column of a
+             *     mapping saved before an upgrade that targets the business service member
+             *     type (`system_relationship_type`, GH#516). The suggestion leaves such a
+             *     column unmapped; map it to `ignore` or remove it, then save. Empty when
+             *     there is nothing to fix.
+             */
+            problems: components["schemas"]["SavedImportMappingProblem"][];
         };
         SavedImportMappingList: {
             /** @description Sorted by name */
             data: components["schemas"]["SavedImportMapping"][];
+        };
+        /** @description One thing to fix in a saved mapping. */
+        SavedImportMappingProblem: {
+            /** @description Where, e.g. `definition.columns[2].target.typeKey` */
+            field: string;
+            /** @description Machine-readable reason: `system_relationship_type` */
+            code: string;
+            /** @description What to do, for the user */
+            message: string;
         };
         /** @description A saved view as the caller may see it */
         SavedView: {

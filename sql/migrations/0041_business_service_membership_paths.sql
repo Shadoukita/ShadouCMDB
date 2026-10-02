@@ -16,6 +16,27 @@
 --
 -- Chains already deeper than the limit (made through either path) are left as
 -- they are: nothing is deleted from them, and new edges onto them are refused.
+--
+-- Each removed rule gets a `delete` row in the audit log (GH#515), written in
+-- this transaction so the hash chain continues through it as for any other
+-- write: `actorType` system, `actorName` migration 0041, `oldValue` the rule
+-- as the API shows it, `newValue` the reason.
+
+INSERT INTO cmdb.audit_log (actor_type, actor_name, action, entity_type, entity_id, old_value, new_value)
+SELECT 'system', 'migration 0041', 'delete', 'relationship_type_rules', r.id,
+       jsonb_build_object(
+         'id', r.id, 'relationshipTypeId', r.relationship_type_id,
+         'sourceClassId', r.source_class_id, 'targetClassId', r.target_class_id,
+         'createdAt', r.created_at, 'updatedAt', r.updated_at),
+       jsonb_build_object(
+         'reason', 'The built-in business service membership type takes no rules: any CI can be a member, '
+                   'added on the business service',
+         'migration', '0041')
+FROM cmdb.relationship_type_rules r
+JOIN cmdb.relationship_types t ON t.id = r.relationship_type_id
+WHERE t.system_role IS NOT NULL
+ORDER BY r.created_at, r.id;
+--> statement-breakpoint
 
 DELETE FROM cmdb.relationship_type_rules r
 USING cmdb.relationship_types t
