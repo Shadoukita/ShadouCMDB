@@ -278,7 +278,7 @@ export interface paths {
         post?: never;
         /**
          * Turn a user's two-factor authentication off (lost authenticator and recovery codes)
-         * @description Requires `users.manage`. Deletes the user's authenticator and recovery codes (audited as `mfa.disable`, reason admin_reset) and ends every session of the user (`session.revoke`, reason mfa_reset; your own is kept when you reset yourself). Does nothing if none is set up. If a profile they hold requires MFA, they set it up again after signing in with their password. A non-administrator can only reset users whose permissions they hold themselves (403). Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `users.manage`. Deletes the user's authenticator and recovery codes (audited as `mfa.disable`, reason admin_reset) and ends every session of the user (`session.revoke`, reason mfa_reset). Does nothing if none is set up. If a profile they hold requires MFA, they set it up again after signing in with their password. A non-administrator can only reset users whose permissions they hold themselves (403). 409 for your own account: turn your own MFA off with `disableTotp` (DELETE /api/v1/auth/mfa/totp), which asks for your current password and a code. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         delete: operations["resetUserMfa"];
         options?: never;
@@ -2353,7 +2353,7 @@ export interface paths {
         get?: never;
         /**
          * Set a new password for a user, end their sessions and revoke their API tokens
-         * @description Requires `users.manage`. Every API token of the user that still works is revoked (`revokedBy` is the caller), so a token minted with a stolen password does not outlive the reset. So is every working token the user created for another owner (`createdByUserId`), since the account may have been compromised. 409 for an account that signs in through an identity provider (it has no password here). Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `users.manage`. Every API token of the user that still works is revoked (`revokedBy` is the caller), so a token minted with a stolen password does not outlive the reset. So is every working token the user created for another owner (`createdByUserId`), since the account may have been compromised. 409 for an account that signs in through an identity provider (it has no password here), and for your own account: change your own password with `changeOwnPassword` (PUT /api/v1/auth/password), which asks for your current password. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         put: operations["resetUserPassword"];
         post?: never;
@@ -7079,6 +7079,15 @@ export interface operations {
             };
             /** @description Request not completed in time (code REQUEST_TIMEOUT) */
             408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
