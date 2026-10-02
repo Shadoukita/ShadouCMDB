@@ -22,7 +22,7 @@ use crate::auth::{Credential, Principal};
 use crate::config::ImpactConfig;
 use crate::db::scratch;
 use crate::http::error::ErrorCode;
-use crate::modules::api_tokens::tests::{Creds, app, call};
+use crate::modules::api_tokens::tests::{Creds, app, call, code};
 
 // ---------------------------------------------------------------------------
 // Fixture: classes, relationship types (one per impact direction) and CIs
@@ -704,9 +704,19 @@ async fn non_directional_types_propagate_both_ways_or_not_at_all() {
 // ---------------------------------------------------------------------------
 
 async fn raw(app: &Router, path: &str, creds: &Creds) -> (u16, String, HeaderMap) {
+    raw_with(app, path, creds, &[]).await
+}
+
+async fn raw_with(app: &Router, path: &str, creds: &Creds, extra: &[(&str, &str)]) -> (u16, String, HeaderMap) {
     let mut req = Request::builder().method("GET").uri(path);
+    for (name, value) in extra {
+        req = req.header(*name, *value);
+    }
     if let Some(c) = &creds.cookie {
         req = req.header(header::COOKIE, c);
+    }
+    if let Some(c) = &creds.csrf {
+        req = req.header("x-csrf-token", c);
     }
     if let Some(b) = &creds.bearer {
         req = req.header(header::AUTHORIZATION, format!("Bearer {b}"));
@@ -841,6 +851,56 @@ async fn export_uses_the_shared_csv_safe_rule() {
     }
     assert!(body.contains(",\"Rack A\nSlot 4\","), "{body:?}");
     assert!(!body.contains("Rack A Slot 4"), "{body:?}");
+    db.drop().await;
+}
+
+/// GH#414: the export is audited, so a session must send the CSRF token. The
+/// SameSite=Lax cookie travels with a cross-site top-level navigation, which
+/// sends no custom header: refused before any work, and nothing is recorded.
+/// The UI's fetch and an API token still export.
+#[tokio::test]
+async fn export_needs_the_csrf_token_from_a_session() {
+    let Some(db) = scratch::database("impact_export_needs_the_csrf_token_from_a_session").await else { return };
+    let f = fixture(&db).await;
+    let root = f.ci("app").await;
+    let a = f.ci("app").await;
+    f.affects(root, a).await;
+    let path = format!("/api/v1/configuration-items/{root}/impact/export?depth=10");
+    let exports = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM audit_log WHERE action = 'export'")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap()
+    };
+
+    let navigation = [("sec-fetch-site", "cross-site"), ("sec-fetch-mode", "navigate"), ("sec-fetch-dest", "document")];
+    let no_csrf = Creds { csrf: None, ..f.session.clone() };
+    for extra in [&navigation[..], &[]] {
+        let (status, body, _) = raw_with(&f.app, &path, &no_csrf, extra).await;
+        assert_eq!(status, 403, "{body}");
+        assert_eq!(code(&serde_json::from_str(&body).unwrap()), "CSRF_TOKEN_INVALID");
+    }
+    let wrong = Creds { csrf: Some("not-the-token".into()), ..f.session.clone() };
+    assert_eq!(raw(&f.app, &path, &wrong).await.0, 403);
+    assert_eq!(exports().await, 0, "a refused export is not recorded");
+
+    // The UI: same-origin fetch with the token.
+    let same_origin = [("sec-fetch-site", "same-origin"), ("sec-fetch-mode", "cors")];
+    let (status, body, _) = raw_with(&f.app, &path, &f.session, &same_origin).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(exports().await, 1);
+
+    // An API token needs no CSRF token.
+    let admins: Uuid =
+        sqlx::query_scalar("SELECT id FROM permission_profiles WHERE is_builtin").fetch_one(&f.pool).await.unwrap();
+    let expires = (chrono::Utc::now() + chrono::Duration::days(1)).to_rfc3339();
+    let create = json!({ "name": "export script", "profileId": admins, "expiresAt": expires });
+    let (status, created, _) = call(&f.app, "POST", "/api/v1/admin/api-tokens", &f.session, Some(create)).await;
+    assert_eq!(status, 201, "{created}");
+    let token = Creds { bearer: created["secret"].as_str().map(str::to_owned), ..Creds::default() };
+    let (status, body, _) = raw_with(&f.app, &path, &token, &navigation).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(exports().await, 2);
     db.drop().await;
 }
 

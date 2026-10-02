@@ -107,7 +107,7 @@ const DESCRIPTION: &str = "REST API for ShadouCMDB. This API is the only databas
 - `sort=field` ascending, `sort=-field` descending. `q` searches. Filters that take ids accept comma-separated lists.
 - Every error uses the `ErrorEnvelope` shape; invalid input is always 400 `VALIDATION_ERROR` with per-field `details`.
 - Sign in with `POST /api/v1/auth/login`; the session travels in the `shadoucmdb_session` cookie (`__Host-shadoucmdb_session` behind HTTPS). Without a live session every operation answers 401 `UNAUTHENTICATED`, except these public ones: {public}.
-- POST, PUT, PATCH and DELETE also need the `X-CSRF-Token` header (the `csrfToken` from login or `/api/v1/auth/me`, also in the `shadoucmdb_csrf` cookie, `__Host-shadoucmdb_csrf` behind HTTPS); without it: 403 `CSRF_TOKEN_INVALID`.
+- POST, PUT, PATCH and DELETE also need the `X-CSRF-Token` header (the `csrfToken` from login or `/api/v1/auth/me`, also in the `shadoucmdb_csrf` cookie, `__Host-shadoucmdb_csrf` behind HTTPS); without it: 403 `CSRF_TOKEN_INVALID`. So do the audited CSV exports (`exportConfigurationItemImpact`, `exportBusinessServiceMembers`, `exportConfig`), although they are GETs, so a link on another site cannot run them as the signed-in user.
 - Scripts and services use an API token instead (`Authorization: Bearer scmdb_...`, created under `/api/v1/admin/api-tokens`). With that header the cookies are ignored and no CSRF token is needed; an invalid, expired or revoked token is 401. A token may do what both its owner and its permission profile allow. Operations that need a signed-in session say so in their description and answer 403 `FORBIDDEN` to a token. Every request made with a token is recorded in the audit log.
 - Permissions come from the permission profiles a user holds. A missing global permission (named in each operation's description) or class permission (view/create/edit/delete) answers 403 `FORBIDDEN`. Lists only contain CIs of classes the user may view.
 - Writes are recorded in the audit log (`/api/v1/audit-log`) with the signed-in user as the actor.
@@ -251,9 +251,7 @@ fn security(r: &Route) -> Vec<SecurityRequirement> {
     let none = Vec::<String>::new;
     let mut alternatives = match r.access {
         Access::Public => return Vec::new(),
-        _ if r.method == Method::GET || r.method == Method::HEAD => {
-            vec![SecurityRequirement::new(SESSION_SCHEME, none())]
-        }
+        _ if !r.csrf => vec![SecurityRequirement::new(SESSION_SCHEME, none())],
         _ => vec![SecurityRequirement::new(SESSION_SCHEME, none()).add(CSRF_SCHEME, none())],
     };
     if !r.session_only {
@@ -343,7 +341,7 @@ pub fn document(routes: &[Route]) -> OpenApi {
             Access::Authenticated => codes.push(ErrorCode::Unauthenticated),
             Access::Permission(_) => codes.extend([ErrorCode::Unauthenticated, ErrorCode::Forbidden]),
         }
-        if r.access != Access::Public && r.method != Method::GET {
+        if r.access != Access::Public && r.csrf {
             codes.push(ErrorCode::CsrfTokenInvalid);
         }
         if r.access != Access::Public && !r.before_mfa_enrolment {
@@ -424,7 +422,7 @@ pub fn document(routes: &[Route]) -> OpenApi {
             CSRF_SCHEME,
             SecurityScheme::ApiKey(ApiKey::Header(ApiKeyValue::with_description(
                 "X-CSRF-Token",
-                "The session's csrfToken; required on POST, PUT, PATCH and DELETE",
+                "The session's csrfToken; required on POST, PUT, PATCH and DELETE, and on the audited CSV export GETs",
             ))),
         )
         .security_scheme(

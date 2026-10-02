@@ -203,10 +203,11 @@ pub fn routes() -> Vec<Route> {
                  is a comment with the root, the parameters, whether the result was truncated and the visibility \
                  note; then the columns ci_id, ident, name, class, criticality, direction, hops, via_relationship, \
                  via_ci_ident, path_idents, active, status. Each export is recorded in the audit log (action \
-                 `export` on the CI, with the parameters and the row count, never the rows). Needs view on the CI's \
-                 class.",
+                 `export` on the CI, with the parameters and the row count, never the rows), so a signed-in session \
+                 must send X-CSRF-Token as on a write. Needs view on the CI's class.",
             )
             .errors(&[ErrorCode::NotFound, ErrorCode::RateLimited, ErrorCode::ServerBusy])
+            .csrf_on_read()
             .class_checked()
             .handle(|api, In(IdPath(id), Query(q), NoBody): In<IdPath, Query<ImpactQuery>, NoBody>| async move {
                 let (name, body) = service::export(&api.pool, &api.ctx, &api.impact, id, &q).await?;

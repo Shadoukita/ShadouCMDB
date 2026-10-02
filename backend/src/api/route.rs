@@ -648,6 +648,9 @@ pub struct Route {
     pub session_only: bool,
     /// Answers a session that must set up MFA before anything else.
     pub before_mfa_enrolment: bool,
+    /// A session request needs the X-CSRF-Token header: every method but GET
+    /// and HEAD, and the reads marked [`RouteBuilder::csrf_on_read`].
+    pub csrf: bool,
     /// Error codes beyond VALIDATION_ERROR / INTERNAL_ERROR / DATABASE_UNAVAILABLE
     /// (and the 401/403 implied by `access`).
     pub errors: Vec<ErrorCode>,
@@ -675,6 +678,7 @@ pub struct RouteBuilder {
     access: Access,
     session_only: bool,
     before_mfa_enrolment: bool,
+    csrf_on_read: bool,
     errors: Vec<ErrorCode>,
     also_returns: Vec<(StatusCode, String)>,
     body_limit: Option<usize>,
@@ -695,6 +699,7 @@ pub fn route(method: Method, path: impl Into<String>, operation_id: impl Into<St
         access: Access::Authenticated,
         session_only: false,
         before_mfa_enrolment: false,
+        csrf_on_read: false,
         errors: Vec::new(),
         also_returns: Vec::new(),
         body_limit: None,
@@ -763,6 +768,16 @@ impl RouteBuilder {
         self.before_mfa_enrolment = true;
         self
     }
+    /// A GET that a session must send with X-CSRF-Token like a write (403
+    /// CSRF_TOKEN_INVALID otherwise): a read with a side effect worth
+    /// forging, such as an audited export. The SameSite=Lax session cookie
+    /// travels with a cross-site top-level navigation, so without the header
+    /// a link on another site could run the export as the signed-in user
+    /// (GH#414). API tokens need no CSRF token, as everywhere.
+    pub fn csrf_on_read(mut self) -> Self {
+        self.csrf_on_read = true;
+        self
+    }
     /// The service checks per-class permissions, so the route can answer 403.
     pub fn class_checked(self) -> Self {
         self.errors(&[ErrorCode::Forbidden])
@@ -812,7 +827,7 @@ impl RouteBuilder {
         assert!(!unlimited || access == Access::Public, "only public routes can be unlimited");
         let session_only = self.session_only;
         let before_mfa_enrolment = self.before_mfa_enrolment;
-        let safe_method = self.method == Method::GET || self.method == Method::HEAD;
+        let csrf = self.csrf_on_read || !(self.method == Method::GET || self.method == Method::HEAD);
         let body_limit = self.body_limit.unwrap_or(match access {
             Access::Public => PUBLIC_BODY_LIMIT,
             _ => BODY_LIMIT,
@@ -845,7 +860,7 @@ impl RouteBuilder {
                     };
                     let net = client.net;
                     let used = auth::token::Use { method: &method, path: uri.path(), operation_id: &operation_id };
-                    let rule = Rule { access, session_only, before_mfa_enrolment, safe_method };
+                    let rule = Rule { access, session_only, before_mfa_enrolment, csrf };
                     // Authorise before reading the body: an anonymous caller must not make
                     // the server buffer up to body_limit bytes only to be answered 401.
                     let ctx = authorise(&state, &headers, rule, client, used).await?;
@@ -917,6 +932,7 @@ impl RouteBuilder {
             access,
             session_only,
             before_mfa_enrolment,
+            csrf,
             errors: self.errors,
             also_returns: self.also_returns,
             path_params: P::params(),
@@ -936,12 +952,14 @@ struct Rule {
     access: Access,
     session_only: bool,
     before_mfa_enrolment: bool,
-    safe_method: bool,
+    /// A session request must carry the CSRF token.
+    csrf: bool,
 }
 
 /// Resolves the caller and enforces the route's access rule: 401 without a
 /// live session or a valid API token, 403 CSRF_TOKEN_INVALID for a
-/// state-changing request without the session's token, 403 FORBIDDEN without
+/// state-changing request (or a [`RouteBuilder::csrf_on_read`] GET) without
+/// the session's token, 403 FORBIDDEN without
 /// the required permission (or for a token on a session-only route), 403
 /// MFA_ENROLMENT_REQUIRED for a session that must set up MFA first.
 ///
@@ -970,7 +988,7 @@ async fn authorise(
     let Some(principal) = auth::authenticate(&state.pool, &state.auth.config, headers, &client).await? else {
         return Err(unauthenticated());
     };
-    if !rule.safe_method && !auth::csrf_ok(&principal, headers) {
+    if rule.csrf && !auth::csrf_ok(&principal, headers) {
         return Err(AppError::new(
             ErrorCode::CsrfTokenInvalid,
             "Missing or wrong X-CSRF-Token header (send the csrfToken from /api/v1/auth/me)",
