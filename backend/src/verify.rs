@@ -403,6 +403,10 @@ async fn run_check(i: usize, c: &mut PgConnection) -> anyhow::Result<String> {
             )
             .execute(&mut *c)
             .await?;
+            // That row queued a deferred audit_log_chain_commit event (0040), and PostgreSQL refuses
+            // TRUNCATE on a table with pending trigger events (55006) before it checks privileges.
+            // Fire it now so the probe below reaches the privilege check and the guard trigger.
+            c.execute("SET CONSTRAINTS cmdb.audit_log_chain_commit IMMEDIATE").await?;
             // As the API role of a three-role install the privilege check refuses first; as the
             // owner (single-role install, CI) the trigger does. Both are insufficient_privilege.
             let mut outcomes = Vec::new();
