@@ -675,8 +675,13 @@ table.data tr.deleted td {
   color: var(--c-text-muted);
   text-decoration: line-through;
 }
+/* Stale rows while the next page loads: a wash and muted text, never opacity, so the text keeps AA contrast. */
 table.data.loading tbody {
-  opacity: 0.55;
+  cursor: progress;
+}
+table.data.loading tbody td {
+  background: var(--c-surface-alt);
+  color: var(--c-text-muted);
 }
 
 /* ---------- Toolbar / filters / pagination ---------- */
