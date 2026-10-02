@@ -520,8 +520,8 @@ pub struct UiLayoutSection {
     /// Start collapsed on the detail page
     #[serde(default)]
     pub collapsed: bool,
-    /// Where the section sits in a tab with `placement` free. Sent in a grid tab, it converts the tab back to
-    /// the grid on save (see the tab's `placement`); a stored grid tab never has frames.
+    /// Where the section sits as a window of its tab. Optional on input: a section without one gets one
+    /// from its grid position (`width`, `newRow`, `minHeight`) below the other windows; always stored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub frame: Option<UiSectionFrame>,
@@ -572,11 +572,13 @@ pub struct UiSectionFrame {
     pub min_h: Option<u32>,
 }
 
-/// How a tab arranges its sections. Absent means `grid`.
+/// How a tab arranges its sections. Every stored tab is free; `grid` (and an absent placement) is still
+/// accepted and converted to free on save and when stored settings are read.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum UiTabPlacement {
-    /// Sections fill the tab's 12-column grid row by row, in order (`width`, `newRow`, `minHeight`)
+    /// The earlier 12-column grid: accepted on input, converted to free (each section a window where it
+    /// was on the grid)
     #[default]
     Grid,
     /// Every section is a window placed by its `frame`; windows may overlap
@@ -591,12 +593,12 @@ fn placement_schema() -> Schema {
     string()
         .enum_values(Some(["grid", "free"]))
         .description(Some(
-            "How the tab arranges its sections (absent: grid). grid: sections fill the 12-column grid row by row. \
-             free: each section is a window placed by its `frame`, and windows may overlap. On save, a free tab's \
-             sections without a frame get one from their grid position (below the existing windows), z becomes \
-             1..n and the sections are ordered by y, then x: the reading order, used on narrow screens, in print \
-             and by screen readers. A grid tab sent with frames is converted back: sections ordered by y, then \
-             x, width from w, and the frames dropped.",
+            "How the tab arranges its sections. Always free when returned: each section is a window placed by \
+             its `frame`, and windows may overlap. grid (or absent) is still accepted for older documents and \
+             exports and is converted to free: each section becomes a window where it was on the 12-column grid \
+             (`width`, `newRow`, `minHeight`). On save, sections without a frame get one from their grid \
+             position (below the existing windows), z becomes 1..n and the sections are ordered by y, then x: \
+             the reading order, used on narrow screens, in print and by screen readers.",
         ))
         .into()
 }
@@ -674,18 +676,13 @@ pub fn grid_frames<'a>(sections: impl IntoIterator<Item = &'a UiLayoutSection>, 
 }
 
 impl UiLayoutTab {
-    /// The stored form of the tab. A free tab: every section framed (the missing frames from their grid
+    /// The stored form of the tab: free, every section framed (the missing frames from their grid
     /// position, below the existing windows), x and w rounded and within the tab, z 1..n and the sections
-    /// in reading order (y, then x). A grid tab sent with frames: back on the grid, see [`Self::convert_to_grid`].
+    /// in reading order (y, then x). A tab sent as `grid` (older exports, API clients and stored versions
+    /// from before free placement was the only one) becomes free the same way: each section a window
+    /// where it was on the grid.
     pub fn normalize(&mut self) {
-        match self.placement {
-            UiTabPlacement::Free => self.normalize_free(),
-            UiTabPlacement::Grid if self.sections.iter().any(|s| s.frame.is_some()) => self.convert_to_grid(),
-            UiTabPlacement::Grid => {}
-        }
-    }
-
-    fn normalize_free(&mut self) {
+        self.placement = UiTabPlacement::Free;
         let bottom = self.sections.iter().filter_map(|s| s.frame).map(|f| f.y + f.h).max();
         let top = bottom.map_or(0, |b| b + FRAME_GAP_PX);
         let top_z = self.sections.iter().filter_map(|s| s.frame).map(|f| f.z).max().unwrap_or(0);
@@ -714,37 +711,6 @@ impl UiLayoutTab {
             let (a, b) = (a.frame.expect("framed"), b.frame.expect("framed"));
             a.y.cmp(&b.y).then(a.x.total_cmp(&b.x))
         });
-    }
-
-    /// Free -> grid: sections ordered by y, then x; each spans the grid columns nearest its width, and one
-    /// that starts below the bottom of the first window of the current row starts a new row. Frames are
-    /// dropped; sections without one follow at the end in their order.
-    pub fn convert_to_grid(&mut self) {
-        self.placement = UiTabPlacement::Grid;
-        let mut order: Vec<usize> = (0..self.sections.len()).collect();
-        order.sort_by(|&a, &b| match (self.sections[a].frame, self.sections[b].frame) {
-            (Some(fa), Some(fb)) => fa.y.cmp(&fb.y).then(fa.x.total_cmp(&fb.x)).then(a.cmp(&b)),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => a.cmp(&b),
-        });
-        let mut taken: Vec<Option<UiLayoutSection>> =
-            std::mem::take(&mut self.sections).into_iter().map(Some).collect();
-        let mut row_bottom: Option<u32> = None;
-        for (n, i) in order.into_iter().enumerate() {
-            let mut s = taken[i].take().expect("each section once");
-            if let Some(f) = s.frame.take() {
-                s.width = ((f.w * f64::from(GRID_COLUMNS)).round() as u8).clamp(1, GRID_COLUMNS);
-                s.new_row = match row_bottom {
-                    Some(b) if f.y < b => false,
-                    _ => {
-                        row_bottom = Some(f.y + f.h);
-                        n > 0
-                    }
-                };
-            }
-            self.sections.push(s);
-        }
     }
 }
 
@@ -2059,7 +2025,7 @@ mod tests {
     }
 
     #[test]
-    fn free_tabs_round_trip_and_grid_tabs_are_written_as_before() {
+    fn free_tabs_round_trip_and_grid_tabs_are_read_as_before() {
         let stored = json!({"layouts": [{"classKey": "server", "tabs": [
             {"key": "g", "label": "Grid", "sections": [
                 {"key": "a", "label": "A", "columns": 3, "width": 12, "collapsed": false, "fields": []}]},
@@ -2075,12 +2041,15 @@ mod tests {
         let tabs = &d.layouts[0].tabs;
         assert_eq!((tabs[0].placement, tabs[1].placement), (UiTabPlacement::Grid, UiTabPlacement::Free));
         assert_eq!(tabs[1].sections[0].frame.unwrap().min_h, Some(96));
-        // Written back exactly: no placement or frame on grid tabs, minH only when set.
+        // Read as sent: no placement or frame on the grid tab, minH only when set.
         assert_eq!(serde_json::to_value(&d).unwrap()["layouts"], stored["layouts"]);
-        // Already in stored form, so normalising changes nothing.
+        // Normalising leaves the free tab as it is and makes the grid tab free.
         let n = d.clone().normalized();
         assert_eq!(frames(&n.layouts[0].tabs[1]), [("b", 0.0, 0, 0.5, 200, 2), ("n", 0.25, 40, 0.75, 120, 1)]);
-        assert_eq!(n, d);
+        assert_eq!(n.layouts[0].tabs[1], d.layouts[0].tabs[1]);
+        assert_eq!(n.layouts[0].tabs[0].placement, UiTabPlacement::Free);
+        assert_eq!(frames(&n.layouts[0].tabs[0]), [("a", 0.0, 0, 1.0, 96, 1)]);
+        assert_eq!(serde_json::to_value(&n).unwrap()["layouts"][0]["tabs"][0]["placement"], "free");
     }
 
     #[test]
@@ -2131,59 +2100,52 @@ mod tests {
     }
 
     #[test]
-    fn grid_to_free_keeps_every_section_where_it_was() {
-        let mut tab = grid_tab();
-        tab["placement"] = json!("free");
-        let d = one_tab(tab).normalized();
-        assert!(d.check().is_empty(), "{:?}", d.check());
-        let t = &d.layouts[0].tabs[0];
+    fn grid_tabs_become_free_with_every_section_where_it_was() {
         // Rows at y 0 (a; b with 3 field rows), 208 (c: 2 field rows), 368 (d) and 480 (r, a panel).
-        assert_eq!(
-            frames(t),
-            [
-                ("a", 0.0, 0, 0.5, 96, 1),
-                ("b", 0.5, 0, 0.5, 192, 2),
-                ("c", 0.0, 208, 1.0, 144, 3),
-                ("d", 0.0, 368, 0.3333, 96, 4),
-                ("r", 0.0, 480, 1.0, FRAME_PANEL_PX, 5),
-            ]
-        );
-        // Back on the grid, every section is where it was.
-        let mut back = t.clone();
-        back.convert_to_grid();
-        let grid: Vec<(&str, u8, bool, bool)> =
-            back.sections.iter().map(|s| (s.key.as_str(), s.width, s.new_row, s.frame.is_none())).collect();
-        assert_eq!(
-            grid,
-            [
-                ("a", 6, false, true),
-                ("b", 6, false, true),
-                ("c", 12, true, true),
-                ("d", 4, true, true),
-                ("r", 12, true, true)
-            ]
-        );
-        assert_eq!(grid_frames(&back.sections, 0), grid_frames(&one_tab(grid_tab()).layouts[0].tabs[0].sections, 0));
+        let expected = [
+            ("a", 0.0, 0, 0.5, 96, 1),
+            ("b", 0.5, 0, 0.5, 192, 2),
+            ("c", 0.0, 208, 1.0, 144, 3),
+            ("d", 0.0, 368, 0.3333, 96, 4),
+            ("r", 0.0, 480, 1.0, FRAME_PANEL_PX, 5),
+        ];
+        // Free without frames, grid (still accepted, as older exports send it) and no placement at all.
+        for placement in [json!("free"), json!("grid"), serde_json::Value::Null] {
+            let mut tab = grid_tab();
+            if !placement.is_null() {
+                tab["placement"] = placement.clone();
+            }
+            let d = one_tab(tab).normalized();
+            assert!(d.check().is_empty(), "{placement}: {:?}", d.check());
+            let t = &d.layouts[0].tabs[0];
+            assert_eq!(t.placement, UiTabPlacement::Free, "{placement}");
+            assert_eq!(frames(t), expected, "{placement}");
+            assert_eq!(d.clone().normalized(), d, "{placement}: stable");
+        }
     }
 
     #[test]
-    fn free_to_grid_orders_by_y_then_x() {
-        // Sent as a grid tab that still has frames: the tab goes back on the grid on save.
-        let d = one_tab(json!({"key": "t", "label": "T", "sections": [
+    fn a_grid_tab_sent_with_frames_keeps_them() {
+        // Before free placement was the only one, frames in a grid tab meant "back on the grid"; now the
+        // tab is free and every window stays where it was sent.
+        let d = one_tab(json!({"key": "t", "label": "T", "placement": "grid", "sections": [
             {"key": "low", "label": "Low", "frame": {"x": 0.0, "y": 500, "w": 1.0, "h": 100, "z": 1}},
             {"key": "right", "label": "Right", "frame": {"x": 0.6, "y": 10, "w": 0.4, "h": 200, "z": 3}},
             {"key": "left", "label": "Left", "frame": {"x": 0.0, "y": 0, "w": 0.55, "h": 300, "z": 2}},
-            {"key": "under", "label": "Under", "frame": {"x": 0.1, "y": 150, "w": 0.2, "h": 50, "z": 4}},
+            {"key": "new", "label": "New"},
         ]}))
         .normalized();
         let t = &d.layouts[0].tabs[0];
-        assert_eq!(t.placement, UiTabPlacement::Grid);
-        let grid: Vec<(&str, u8, bool)> = t.sections.iter().map(|s| (s.key.as_str(), s.width, s.new_row)).collect();
-        // "under" starts above the bottom of "left", so it stays in that row (and wraps if it does not fit).
-        assert_eq!(grid, [("left", 7, false), ("right", 5, false), ("under", 2, false), ("low", 12, true)]);
-        assert!(t.sections.iter().all(|s| s.frame.is_none()));
-        let out = serde_json::to_value(&d).unwrap();
-        assert!(out["layouts"][0]["tabs"][0].get("placement").is_none(), "{out}");
+        assert_eq!(t.placement, UiTabPlacement::Free);
+        assert_eq!(
+            frames(t),
+            [
+                ("left", 0.0, 0, 0.55, 300, 2),
+                ("right", 0.6, 10, 0.4, 200, 3),
+                ("low", 0.0, 500, 1.0, 100, 1),
+                ("new", 0.0, 616, 1.0, 96, 4),
+            ]
+        );
     }
 
     #[test]

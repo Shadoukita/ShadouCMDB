@@ -262,7 +262,9 @@ fn effective(
     let mut issues = Vec::new();
     let (source, template_key, layout) = match own.as_ref() {
         Some(OverrideRow { layout: Some(l), .. }) => {
-            (CiLayoutSource::Custom, None, serde_json::from_value::<UiLayout>(l.clone()).unwrap_or_default())
+            // Normalised like the settings document: one stored on the earlier grid comes back free.
+            let layout = serde_json::from_value::<UiLayout>(l.clone()).unwrap_or_default().normalized();
+            (CiLayoutSource::Custom, None, layout)
         }
         Some(OverrideRow { template_key: Some(k), .. }) if doc.template(k).is_some() => {
             (CiLayoutSource::Template, Some(k.clone()), UiLayout::default())

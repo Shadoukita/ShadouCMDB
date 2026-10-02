@@ -1,7 +1,6 @@
 /**
- * Resizing by dragging an edge on a CSS grid (the form designer and the in-page
- * layout editor): a field on its section's grid, a section on its tab's grid of
- * 12 columns. The size snaps to whole grid columns while the pointer moves;
+ * Resizing a field by dragging its right edge on its section's CSS grid (the
+ * layout editor). The size snaps to whole grid columns while the pointer moves;
  * `onEnd` runs once the pointer is released (one undo step per drag).
  */
 
@@ -56,27 +55,6 @@ export function startGridResize(e: PointerEvent, cell: HTMLElement | undefined, 
       const w = Math.round((ev.clientX - left + m.gap) / (m.track + m.gap));
       const next = Math.max(1, Math.min(w, m.tracks, columns));
       if (next !== width()) onWidth(next);
-    },
-    onEnd,
-  );
-}
-
-/**
- * Drags an edge of a section on its tab's grid: `onLine` gets the grid line
- * nearest to the pointer (0 at the left edge of the grid, `columns` at its right
- * edge) whenever it changes.
- */
-export function startLineDrag(e: PointerEvent, grid: HTMLElement | null | undefined, columns: number, onLine: (line: number) => void, onEnd?: () => void) {
-  if (!grid) return;
-  const m = measure(grid, columns);
-  let last = -1;
-  follow(
-    e,
-    (ev) => {
-      const line = Math.max(0, Math.min(Math.round((ev.clientX - m.left + m.gap / 2) / (m.track + m.gap)), m.tracks));
-      if (line === last) return;
-      last = line;
-      onLine(line);
     },
     onEnd,
   );

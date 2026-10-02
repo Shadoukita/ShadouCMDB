@@ -59,7 +59,8 @@ async fn sections_side_by_side_are_validated_and_stored() {
         call(&app, "PUT", "/api/v1/ui-settings", &s, Some(json!({"version": version, "settings": bad}))).await;
     assert_eq!((status, errors(&v)), (400, vec!["settings.layouts.0.tabs.0.sections.0.fields.0.width"]), "{v}");
 
-    // Two half-width sections, then one forced onto a new row; an old-style section keeps its meaning.
+    // Two half-width sections, then one forced onto a new row; an old-style section keeps its meaning. Each
+    // becomes a window where the grid puts it (SHAA-1471: every tab is free).
     let good = layout(json!([
         {"key": "a", "label": "A", "width": 6, "columns": 12, "minHeight": 3,
          "fields": [{"field": "ident", "width": 12}]},
@@ -77,14 +78,16 @@ async fn sections_side_by_side_are_validated_and_stored() {
         stored["settings"]["layouts"][0]["tabs"][0]["sections"],
         json!([
             {"key": "a", "label": "A", "columns": 12, "width": 6, "minHeight": 3, "collapsed": false,
-             "fields": [{"field": "ident", "width": 12}]},
+             "fields": [{"field": "ident", "width": 12}], "frame": {"x": 0.0, "y": 0, "w": 0.5, "h": 192, "z": 1}},
             {"key": "b", "label": "B", "columns": 4, "width": 6, "collapsed": false,
-             "fields": [{"field": "label", "width": 4}]},
-            {"key": "c", "label": "C", "columns": 3, "width": 6, "newRow": true, "collapsed": false, "fields": []},
+             "fields": [{"field": "label", "width": 4}], "frame": {"x": 0.5, "y": 0, "w": 0.5, "h": 96, "z": 2}},
+            {"key": "c", "label": "C", "columns": 3, "width": 6, "newRow": true, "collapsed": false, "fields": [],
+             "frame": {"x": 0.0, "y": 208, "w": 0.5, "h": 96, "z": 3}},
             {"key": "d", "label": "D", "columns": 2, "width": 12, "collapsed": false,
-             "fields": [{"field": "validFrom", "width": 1}]},
+             "fields": [{"field": "validFrom", "width": 1}], "frame": {"x": 0.0, "y": 320, "w": 1.0, "h": 96, "z": 4}},
         ])
     );
+    assert_eq!(stored["settings"]["layouts"][0]["tabs"][0]["placement"], "free");
     // The row holds the same layout the version endpoint shows, in the class's template (SHAA-1472).
     let raw: Value = sqlx::query_scalar("SELECT settings FROM ui_settings").fetch_one(&db.pool).await.unwrap();
     assert_eq!(raw["layouts"][0], json!({"classKey": "server", "templateKey": "server"}));
@@ -203,22 +206,66 @@ async fn free_tabs_are_validated_normalised_audited_and_exported() {
     let version = current["version"].as_i64().unwrap();
     assert_eq!(stored(&app, &s, version).await["settings"]["layouts"], saved["layouts"]);
 
-    // Back to the grid: frames dropped, sections in reading order, widths from w.
+    // "grid" is still accepted (SHAA-1471): the tab stays free with its windows where they were.
     let mut grid = saved.clone();
     grid["layouts"][0]["tabs"][0]["placement"] = json!("grid");
     let (status, v, _) =
         call(&app, "PUT", "/api/v1/ui-settings", &s, Some(json!({"version": version, "settings": grid}))).await;
     assert_eq!(status, 200, "{v}");
-    let v = stored(&app, &s, v["version"].as_i64().unwrap()).await;
-    let tab = &v["settings"]["layouts"][0]["tabs"][0];
-    assert!(tab.get("placement").is_none(), "{tab}");
-    let got: Vec<(&str, &Value, bool)> = tab["sections"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|s| (s["key"].as_str().unwrap(), &s["width"], s.get("frame").is_some()))
-        .collect();
-    assert_eq!(got, [("b", &json!(9), false), ("a", &json!(6), false), ("r", &json!(12), false)], "{tab}");
+    assert_eq!(v["version"].as_i64().unwrap(), version, "the same document: no new version");
+    assert_eq!(stored(&app, &s, version).await["settings"]["layouts"], saved["layouts"]);
+
+    // A grid layout stored before free placement was the only one reads back free, every section a window
+    // where it was on the grid; so does an older export holding one when it is imported.
+    let old = layout(json!([
+        {"key": "a", "label": "A", "width": 6, "fields": [{"field": "ident"}]},
+        {"key": "b", "label": "B", "width": 6, "fields": [{"field": "label"}]},
+        {"key": "c", "label": "C", "fields": [{"field": "validFrom"}]},
+    ]));
+    let expected = json!([
+        {"key": "a", "frame": {"x": 0.0, "y": 0, "w": 0.5, "h": 96, "z": 1}},
+        {"key": "b", "frame": {"x": 0.5, "y": 0, "w": 0.5, "h": 96, "z": 2}},
+        {"key": "c", "frame": {"x": 0.0, "y": 112, "w": 1.0, "h": 96, "z": 3}},
+    ]);
+    let frames_of = |settings: &Value| {
+        let tab = &settings["layouts"][0]["tabs"][0];
+        assert_eq!(tab["placement"], "free", "{tab}");
+        Value::Array(
+            tab["sections"].as_array().unwrap().iter().map(|s| json!({"key": s["key"], "frame": s["frame"]})).collect(),
+        )
+    };
+    sqlx::query(
+        "INSERT INTO ui_settings_versions (version, settings, actor_type) \
+         SELECT max(version) + 1, $1, 'user' FROM ui_settings_versions",
+    )
+    .bind(&old)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE ui_settings SET version = (SELECT max(version) FROM ui_settings_versions), settings = $1")
+        .bind(&old)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let version = version + 1;
+    assert_eq!(frames_of(&stored(&app, &s, version).await["settings"]), expected);
+    let (status, mut file, _) = call(&app, "GET", "/api/v1/admin/config/export", &s, None).await;
+    assert_eq!(status, 200, "{file}");
+    assert_eq!(frames_of(&file["uiSettings"]["settings"]), expected);
+
+    file["uiSettings"]["settings"] = old.clone();
+    let (status, v, _) =
+        call(&app, "PUT", "/api/v1/ui-settings", &s, Some(json!({"version": version, "settings": {}}))).await;
+    assert_eq!(status, 200, "{v}");
+    let (status, v, _) = call(&app, "POST", "/api/v1/admin/config/import?mode=apply", &s, Some(file)).await;
+    assert_eq!(status, 200, "{v}");
+    let (_, current, _) = call(&app, "GET", "/api/v1/ui-settings", &s, None).await;
+    let version = current["version"].as_i64().unwrap();
+    let (raw,): (Value,) = sqlx::query_as("SELECT settings FROM ui_settings").fetch_one(&db.pool).await.unwrap();
+    // Stored in the class's template (SHAA-1472).
+    let template = raw["layoutTemplates"].as_array().unwrap().iter().find(|t| t["key"] == "server").unwrap();
+    assert_eq!(frames_of(&json!({"layouts": [template["layout"]]})), expected, "stored free");
+    assert_eq!(frames_of(&stored(&app, &s, version).await["settings"]), expected);
 
     db.drop().await;
 }

@@ -56,7 +56,7 @@ import FormField from "./FormField.vue";
  * Every class starts with a General section: ident, valid from, valid until and
  * the attributes without a group; the other attribute groups follow as sections.
  * A class layout (Administration › Customization › Detail and form layout) arranges
- * the fields in tabs and sections on a grid, hides fields and makes fields
+ * the fields in tabs and sections (windows), hides fields and makes fields
  * read-only. Required fields stay editable on a new CI whatever the layout says,
  * or it could never be saved. Every tab stays in the page (only one is shown),
  * so the whole form is submitted and a tab holding an error says so.
@@ -130,7 +130,7 @@ const tabs = computed(() => {
   const l = withoutKinds(layout.value ?? builtInLayout(""), PANELS.map((p) => p.kind));
   return resolveLayout({ ...l, hiddenFields: (l.hiddenFields ?? []).filter((f) => !keepEditable(f)) }, defs.value, CORE_FIELDS);
 });
-/** A tab's sections: the windows of a free tab (lib/freeLayout), then everything on the grid. */
+/** A tab's sections: the windows (lib/freeLayout), then everything the layout does not place. */
 function sectionGroups(sections: readonly ResolvedSection[]) {
   const windows = sections.filter((sec) => sec.frame);
   const flow = sections.filter((sec) => !sec.frame);
@@ -363,7 +363,7 @@ function referenceNames(ci: Ci | undefined): Record<string, string> {
       </fieldset>
     </FormField>
   </DefineField>
-  <LayoutEditView v-if="editor?.active && classKey" :editor="editor" :class-name="className" :class-key="classKey" :attrs="activeAttrs" :attrs-error="attrs.error.value" form>
+  <LayoutEditView v-if="editor?.active && classKey" :editor="editor" :class-name="className" :attrs="activeAttrs" :attrs-error="attrs.error.value" form>
     <template #field="{ field }"><FormCell :f="field" /></template>
   </LayoutEditView>
   <form v-else novalidate :aria-label="mode === 'create' ? `New ${className}` : `Edit ${ci?.label}`" @submit.prevent="onSubmit">
