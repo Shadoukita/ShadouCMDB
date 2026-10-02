@@ -37,7 +37,10 @@ const classes = useCiClasses();
 /** A fresh install: no classes but the built-in ones yet, so the first step is the data model, not a CI. */
 const noClasses = computed(() => !!classes.data.value && dataModelEmpty(classes.data.value));
 // Only classes the user may view: the API leaves the others out of every count, which would read as 0.
-const concrete = computed(() => (classes.data.value ?? []).filter((c) => !c.isAbstract && session.canOnClass(c.id, "view")));
+// Process types (change requests and the like) are not part of the inventory.
+const concrete = computed(() =>
+  (classes.data.value ?? []).filter((c) => !c.isAbstract && c.kind === "asset" && session.canOnClass(c.id, "view")),
+);
 const classCounts = useQueries({ queries: computed(() => concrete.value.map((c) => ciCountQuery({ classId: c.id }))) });
 const classRows = computed<CountRow[]>(() =>
   concrete.value.map((c, i) => ({

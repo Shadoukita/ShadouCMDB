@@ -161,6 +161,8 @@ pub struct ItemFilters {
     pub own_layout: Option<bool>,
     /// Only CIs whose own layout is this template
     pub layout_template: Option<String>,
+    /// CIs of these classes are left out (process types, unless asked for).
+    pub excluded_class_ids: Option<Vec<Uuid>>,
     /// Type tables searched by `q` (see [`search_tables`]).
     pub search_tables: Vec<SearchTable>,
 }
@@ -255,6 +257,9 @@ pub(crate) fn push_filters(w: &mut Where<'_>, f: &ItemFilters) {
         if let Some(ids) = ids {
             w.and().push(column).push(" = ANY(").push_bind(ids.clone()).push(")");
         }
+    }
+    if let Some(ids) = f.excluded_class_ids.as_ref().filter(|ids| !ids.is_empty()) {
+        w.and().push("NOT ci.class_id = ANY(").push_bind(ids.clone()).push(")");
     }
     for (values, columns) in &f.lookups {
         push_in_columns(w, columns, |qb, c| {

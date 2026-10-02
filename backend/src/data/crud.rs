@@ -328,6 +328,30 @@ pub enum AuditAction {
     #[serde(rename = "session.reauthentication_required")]
     #[sqlx(rename = "session.reauthentication_required")]
     SessionReauthenticationRequired,
+    /// A workflow version was published (entity type `workflow_definitions`; the version and graph in new_value).
+    #[serde(rename = "workflow.publish")]
+    #[sqlx(rename = "workflow.publish")]
+    WorkflowPublish,
+    /// A workflow instance was started on a CI (entity type `configuration_items`, the CI's id).
+    #[serde(rename = "workflow.start")]
+    #[sqlx(rename = "workflow.start")]
+    WorkflowStart,
+    /// A workflow instance was cancelled (entity type `configuration_items`, the CI's id).
+    #[serde(rename = "workflow.cancel")]
+    #[sqlx(rename = "workflow.cancel")]
+    WorkflowCancel,
+    /// A CI's workflow instance moved along a transition (entity type `configuration_items`; before and after).
+    #[serde(rename = "workflow.transition")]
+    #[sqlx(rename = "workflow.transition")]
+    WorkflowTransition,
+    /// A workflow instance was moved to another version of its workflow (before and after).
+    #[serde(rename = "workflow.migrate")]
+    #[sqlx(rename = "workflow.migrate")]
+    WorkflowMigrate,
+    /// An administrator forced a workflow instance into a state (before and after, with the reason).
+    #[serde(rename = "workflow.force")]
+    #[sqlx(rename = "workflow.force")]
+    WorkflowForce,
 }
 
 impl AuditAction {
@@ -355,6 +379,12 @@ impl AuditAction {
             AuditAction::ImportReportRead => "import.report_read",
             AuditAction::SessionReauthenticate => "session.reauthenticate",
             AuditAction::SessionReauthenticationRequired => "session.reauthentication_required",
+            AuditAction::WorkflowPublish => "workflow.publish",
+            AuditAction::WorkflowStart => "workflow.start",
+            AuditAction::WorkflowCancel => "workflow.cancel",
+            AuditAction::WorkflowTransition => "workflow.transition",
+            AuditAction::WorkflowMigrate => "workflow.migrate",
+            AuditAction::WorkflowForce => "workflow.force",
         }
     }
 }

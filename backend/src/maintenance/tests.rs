@@ -573,3 +573,67 @@ async fn saved_views_snapshot(c: &mut sqlx::PgConnection) -> Vec<(String, Option
     .await
     .unwrap()
 }
+
+/// The workflow tables (SHAA-1422): a backup holds every row of every one of
+/// them, a restore brings them back value for value (published versions and
+/// append-only events included, which only a restore with the triggers off can
+/// write), and a factory reset empties them with no reset code of their own.
+#[tokio::test]
+async fn workflows_survive_backup_and_restore_and_go_with_a_factory_reset() {
+    const TABLES: [&str; 9] = [
+        "workflow_definitions",
+        "workflow_versions",
+        "workflow_states",
+        "workflow_transitions",
+        "workflow_transition_fields",
+        "workflow_version_attribute_refs",
+        "workflow_transition_grants",
+        "workflow_instances",
+        "workflow_instance_events",
+    ];
+    let Some(a) = scratch::database("workflows_backup_a").await else { return };
+    let Some(b) = scratch::database("workflows_backup_b").await else { return };
+    populate(&a.pool).await;
+    let (class, ci, attribute): (uuid::Uuid, uuid::Uuid, uuid::Uuid) = sqlx::query_as(
+        "SELECT ci.class_id, ci.id, d.id FROM configuration_items ci
+         JOIN ci_attribute_definitions d ON d.class_id = ci.class_id
+         ORDER BY ci.ident, d.key LIMIT 1",
+    )
+    .fetch_one(&a.pool)
+    .await
+    .unwrap();
+    crate::db::upgrade_0046::workflow_fixture(&a.pool, "lifecycle", class, ci, Some(attribute)).await;
+    let mut ca = a.pool.acquire().await.unwrap();
+    let mut cb = b.pool.acquire().await.unwrap();
+
+    let (buf, header) = take_backup(&mut ca).await;
+    for name in TABLES {
+        let rows = header.tables.iter().find(|t| t.schema == "cmdb" && t.name == name).map(|t| t.rows);
+        let expected = if name == "workflow_transition_grants" || name == "workflow_instance_events" { 2 } else { 1 };
+        let expected = if name == "workflow_states" { 2 } else { expected };
+        assert_eq!(rows, Some(expected), "{name}");
+    }
+    restore::restore(&mut cb, buf.as_slice(), &header, true, true).await.unwrap();
+    for name in TABLES {
+        let table = Table::new("cmdb", name);
+        assert_eq!(fingerprint(&mut ca, &table).await, fingerprint(&mut cb, &table).await, "{name}");
+    }
+    // The restored rows are protected again: the triggers are back on.
+    let err =
+        sqlx::query("UPDATE cmdb.workflow_instance_events SET comment = 'x'").execute(&mut *cb).await.unwrap_err();
+    assert!(err.to_string().contains("append-only"), "{err}");
+    let err = sqlx::query("UPDATE cmdb.workflow_states SET name = 'x'").execute(&mut *cb).await.unwrap_err();
+    assert!(err.to_string().contains("only a draft"), "{err}");
+
+    reset::factory_reset(&mut cb).await.unwrap();
+    for name in TABLES {
+        let n: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM cmdb.{name}")))
+            .fetch_one(&mut *cb)
+            .await
+            .unwrap();
+        assert_eq!(n, 0, "{name}");
+    }
+    drop((ca, cb));
+    a.drop().await;
+    b.drop().await;
+}

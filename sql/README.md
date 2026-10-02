@@ -92,7 +92,15 @@ Credentials never go into this folder or anywhere else in git; they belong in `.
   must rewrite those too.
 - A migration that adds a global permission re-creates `permission_profile_global_permissions_valid` with
   the full list from the latest migration and extends `GlobalPermission::ALL`; the upgrade test of that
-  migration calls `assert_permissions_match` (see `backend/src/db/upgrade_0039.rs`).
+  migration calls `assert_permissions_match` (see `backend/src/db/upgrade_0046.rs`).
+- A migration that adds audit actions (or otherwise changes `audit_log_action_valid` or
+  `audit_log_values_present`) re-adds the constraint `NOT VALID`, and the *next* migration file
+  does nothing but `ALTER TABLE cmdb.audit_log VALIDATE CONSTRAINT …` (see 0046 and 0047). Re-adding
+  a CHECK takes an `ACCESS EXCLUSIVE` lock that lasts until the transaction commits, so a plain
+  re-add, or a `VALIDATE` in the same file, scans the whole audit log while every audited write
+  waits; on a large install that is minutes of downtime. `VALIDATE` in its own transaction takes
+  only `SHARE UPDATE EXCLUSIVE`. 0027, 0029 and 0032 predate this rule. Add the new actions to the
+  Rust `AuditAction` enum and to the `prune_audit_log()` scope they belong to as well.
 - Adding areas, CI types, fields or relationship types is data, not a migration: do it through the
   API or a starter template (`backend/src/modules/templates/`). The DDL engine creates the matching
   schema, table or column; never create or alter type tables by hand.
