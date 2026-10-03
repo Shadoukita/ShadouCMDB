@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref, useId, watch } from "vue";
+import { t } from "../i18n";
 
 /**
  * Modal confirmation for destructive actions. Uses <dialog> for focus trapping and Esc handling.
@@ -44,9 +45,9 @@ function onCancel(e: Event) {
       <h2 :id="titleId">{{ title }}</h2>
       <div class="body"><slot /></div>
       <div class="footer">
-        <button type="button" class="btn" :disabled="busy" autofocus @click="emit('cancel')">{{ cancelLabel ?? "Cancel" }}</button>
+        <button type="button" class="btn" :disabled="busy" autofocus @click="emit('cancel')">{{ cancelLabel ?? t("common.cancel") }}</button>
         <button type="button" :class="['btn', tone === 'primary' ? 'btn-primary' : 'btn-danger']" :disabled="busy || confirmDisabled" @click="emit('confirm')">
-          {{ busy ? (busyLabel ?? "Working…") : confirmLabel }}
+          {{ busy ? (busyLabel ?? t("common.working")) : confirmLabel }}
         </button>
       </div>
     </dialog>

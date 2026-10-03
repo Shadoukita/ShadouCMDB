@@ -159,7 +159,7 @@ function openEdit(a: Area) {
     (<code>bestand.v_netzwerk</code>).
   </p>
 
-  <div v-if="notice" class="alert" role="status">{{ notice }}</div>
+  <div v-if="notice" class="alert alert-success" role="status">{{ notice }}</div>
   <ErrorAlert v-if="failure" :error="failure" />
   <ErrorAlert v-if="reorder.isError.value" :error="reorder.error.value" title="The new order was not saved completely" />
 

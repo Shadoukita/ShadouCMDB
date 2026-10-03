@@ -176,7 +176,7 @@ const sectionName = (s: string) => SECTION_NAMES[s] ?? s;
       </div>
       <ErrorAlert v-else-if="error" :error="error" :title="dryRun ? 'Import failed; nothing was changed' : 'The dry run failed; nothing was changed'" />
 
-      <div v-if="applied" class="alert" role="status">
+      <div v-if="applied" class="alert alert-success" role="status">
         <strong>Imported {{ fileName }}.</strong>
         {{ plural(totals(applied).created, "row") }} created, {{ plural(totals(applied).updated, "row") }} updated. Every change is in the audit log.
       </div>

@@ -1,0 +1,120 @@
+/*
+ * Buttons (design document §2.7). `.btn` is the secondary button; variants are modifiers:
+ *   .btn-primary  solid primary, at most one per region
+ *   .btn-ghost    no border: toolbars, the rail, row actions
+ *   .btn-danger   solid danger, inside confirmation dialogs
+ *   .btn-quiet-danger  danger text on a secondary button (row-level delete; the dialog carries the red button)
+ *   .btn-link     looks like a link
+ * Sizes: --control-h, and .btn-sm at --control-h-sm (never below 24 px, WCAG 2.5.8).
+ * A leading <Icon> sits 6 px before the label. Disabled buttons change colour, never opacity,
+ * so their label keeps its contrast (audit X15).
+ */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1_5);
+  height: var(--control-h);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--c-border-control);
+  border-radius: var(--radius-md);
+  background: var(--c-surface-alt);
+  color: var(--c-text);
+  font: inherit;
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+  text-decoration: none;
+}
+.btn:hover {
+  background: var(--c-surface-sunken);
+  border-color: var(--c-border-control-hover);
+  text-decoration: none;
+}
+.btn:active {
+  background: var(--c-border);
+}
+.btn-primary {
+  background: var(--c-primary);
+  border-color: var(--c-primary);
+  color: var(--c-primary-text);
+}
+.btn-primary:hover,
+.btn-primary:active {
+  background: var(--c-primary-hover);
+  border-color: var(--c-primary-hover);
+}
+.btn-danger {
+  background: var(--c-danger-solid);
+  border-color: var(--c-danger-solid);
+  color: var(--c-on-solid);
+}
+.btn-danger:hover,
+.btn-danger:active {
+  background: var(--c-danger-solid-hover);
+  border-color: var(--c-danger-solid-hover);
+}
+.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+}
+.btn-ghost:hover {
+  background: var(--c-row-hover);
+  border-color: transparent;
+}
+.btn-quiet-danger {
+  color: var(--c-danger-text);
+}
+.btn-quiet-danger:hover {
+  border-color: var(--c-danger-text);
+}
+.btn:disabled,
+.btn[aria-disabled="true"] {
+  background: var(--c-surface-sunken);
+  border-color: var(--c-border);
+  color: var(--c-text-tertiary);
+  cursor: not-allowed;
+}
+.btn-sm {
+  height: var(--control-h-sm);
+  padding: 0 var(--space-2);
+  font-size: var(--fs-sm);
+}
+/* Icon-only button: square, the icon centred. The button carries the aria-label. */
+.btn-icon {
+  width: var(--control-h);
+  padding: 0;
+}
+.btn-sm.btn-icon {
+  width: var(--control-h-sm);
+}
+.btn.block {
+  width: 100%;
+}
+.btn-link {
+  height: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--c-link);
+  font: inherit;
+  cursor: pointer;
+}
+.btn-link:hover {
+  text-decoration: underline;
+}
+.btn-link.danger {
+  color: var(--c-danger-text);
+}
+.btn-link:disabled {
+  color: var(--c-text-tertiary);
+  cursor: not-allowed;
+  text-decoration: none;
+}
+/* Inline icons (components/Icon.vue) sit on the text's x-height; in flex rows they never shrink. */
+.icon {
+  flex: none;
+  vertical-align: -0.2em;
+}

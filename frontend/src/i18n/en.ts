@@ -203,6 +203,7 @@ export const en = {
   "common.error": "Error",
   "common.loading": "Loading…",
   "common.saving": "Saving…",
+  "common.working": "Working…",
   "common.refreshing": "Refreshing",
   "common.yes": "Yes",
   "common.no": "No",

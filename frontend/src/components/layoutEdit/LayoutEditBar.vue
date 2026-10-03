@@ -198,7 +198,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
     <div v-if="editor.openedHere" class="alert" role="note">
       Your browser blocked the new window, so the layout editor opened in this tab. Done takes you back to the page.
     </div>
-    <div v-if="editor.saved && !editor.dirty" class="alert" role="status">{{ editor.saved }}</div>
+    <div v-if="editor.saved && !editor.dirty" class="alert alert-success" role="status">{{ editor.saved }}</div>
     <div v-if="editor.conflict || (editor.stale && editor.dirty)" class="alert alert-warn" role="alert">
       <strong>{{ t("layoutEditor.conflictTitle") }}</strong>
       <div>

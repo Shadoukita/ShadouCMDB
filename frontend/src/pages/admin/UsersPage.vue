@@ -80,7 +80,7 @@ function clearFilters() {
     </div>
   </div>
 
-  <div v-if="flashText" class="alert" role="status" data-testid="users-flash">{{ flashText }}</div>
+  <div v-if="flashText" class="alert alert-success" role="status" data-testid="users-flash">{{ flashText }}</div>
 
   <section class="panel" aria-label="Users">
     <form class="toolbar" role="search" @submit.prevent>

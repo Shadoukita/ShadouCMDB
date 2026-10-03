@@ -1,0 +1,108 @@
+/* Document defaults: box model, type, links, focus and the small text utilities every page uses. */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+html,
+body,
+#root,
+#app {
+  height: 100%;
+}
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-md);
+  line-height: var(--lh-body);
+  color: var(--c-text);
+  background: var(--c-bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+a {
+  color: var(--c-link);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+/* A link inside running text is told apart by more than its colour (WCAG 1.4.1). */
+p a:not(.btn),
+.hint a:not(.btn),
+.alert a:not(.btn) {
+  text-decoration: underline;
+}
+/* One focus ring everywhere: 2 px, offset 2 px, at least 5.5:1 on every surface in both themes. */
+:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: 2px;
+}
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-tight);
+}
+h1 {
+  font-size: var(--fs-h1);
+}
+h2 {
+  font-size: var(--fs-h2);
+}
+h3 {
+  font-size: var(--fs-h3);
+}
+/* Identifiers (idents, hostnames, IPs, keys, timestamps): JetBrains Mono, sized to Inter's x-height. */
+code,
+kbd,
+.mono {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+}
+kbd {
+  display: inline-block;
+  min-width: 18px;
+  padding: 0 var(--space-1);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  background: var(--c-surface-alt);
+  color: var(--c-text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 16px;
+  text-align: center;
+}
+.num,
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+.muted {
+  color: var(--c-text-muted);
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/*
+ * The small uppercase label: table headers, stat-tile labels, nav and menu group titles, form
+ * legends. One style for all of them (audit X4); German strings stay normal case in the i18n files.
+ */
+.overline,
+.shell-nav h2,
+.admin-nav h2,
+fieldset.group legend,
+dl.props .group-title,
+.view-menu-heading,
+table.attributes tr.section-row th {
+  font-size: var(--fs-overline);
+  font-weight: var(--fw-semibold);
+  line-height: 16px;
+  text-transform: uppercase;
+  letter-spacing: var(--ls-overline);
+}

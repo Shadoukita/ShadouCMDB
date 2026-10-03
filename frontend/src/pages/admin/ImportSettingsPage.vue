@@ -71,7 +71,7 @@ async function save() {
           remaining imports, so uploaded files can be removed.
         </p>
         <ErrorAlert v-if="update.isError.value" :error="update.error.value" title="The setting was not saved" />
-        <p v-if="saved && !dirty" class="alert" role="status">{{ saved }}</p>
+        <p v-if="saved && !dirty" class="alert alert-success" role="status">{{ saved }}</p>
         <div>
           <button type="submit" class="btn btn-primary" :disabled="!dirty || locked || update.isPending.value">
             {{ update.isPending.value ? "Saving…" : "Save" }}

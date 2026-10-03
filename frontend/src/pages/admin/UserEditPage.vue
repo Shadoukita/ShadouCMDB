@@ -188,14 +188,14 @@ const notFound = computed(() => {
         </RouterLink>
       </div>
     </div>
-    <div v-if="flashText" class="alert" role="status">{{ flashText }}</div>
+    <div v-if="flashText" class="alert alert-success" role="status">{{ flashText }}</div>
 
     <div class="grid-2">
       <form class="panel" aria-labelledby="user-form-title" novalidate @submit.prevent="submit">
         <div class="panel-header"><h2 id="user-form-title">Account</h2></div>
         <div class="panel-body stack">
           <FormErrorBanner v-if="error" :error="error" :unplaced="unplaced" />
-          <div v-if="saved" class="alert" role="status">{{ saved }}</div>
+          <div v-if="saved" class="alert alert-success" role="status">{{ saved }}</div>
           <div v-if="provider" class="alert alert-warn" role="note" data-testid="provider-notice">
             <strong>This account belongs to {{ provider.name }}.</strong>
             <div>

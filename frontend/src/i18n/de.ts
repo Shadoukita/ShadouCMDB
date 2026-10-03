@@ -207,6 +207,7 @@ export const de: { [K in MessageKey]: string } = {
   "common.error": "Fehler",
   "common.loading": "Wird geladen…",
   "common.saving": "Wird gespeichert…",
+  "common.working": "Wird ausgeführt…",
   "common.refreshing": "Wird aktualisiert",
   "common.yes": "Ja",
   "common.no": "Nein",

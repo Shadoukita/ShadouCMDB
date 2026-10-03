@@ -1,0 +1,106 @@
+/*
+ * Tabs and the segmented control (design document §2.7). One tab style for both kinds of tab:
+ * buttons in a tablist (.tabs button) and links in a sub-navigation (nav.tabs a). The current tab
+ * is told apart by weight and a 2 px primary underline, not by colour alone (audit X14).
+ */
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-1);
+  border-bottom: 1px solid var(--c-border);
+  margin-bottom: var(--space-4);
+}
+.tabs button,
+nav.tabs a {
+  all: unset;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1_5);
+  min-height: 36px;
+  padding: 0 var(--space-3);
+  margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  color: var(--c-text-secondary);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tabs button:hover,
+nav.tabs a:hover {
+  color: var(--c-text);
+  border-bottom-color: var(--c-border-control);
+  text-decoration: none;
+}
+.tabs button[aria-selected="true"],
+nav.tabs a[aria-current="page"] {
+  color: var(--c-text);
+  font-weight: var(--fw-semibold);
+  border-bottom-color: var(--c-primary);
+}
+.tabs button:focus-visible,
+nav.tabs a:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: -2px;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+}
+/* A count in a tab: a mono count badge. */
+.tabs .count {
+  padding: 0 var(--space-1_5);
+  border-radius: var(--radius-full);
+  background: var(--badge-neutral-bg);
+  color: var(--badge-neutral-fg);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 18px;
+}
+
+/*
+ * Segmented control: a radio group drawn as joined buttons (1 hop / 2 hops / Impact, time ranges,
+ * view modes). Markup: .segmented > label > input[type=radio] + text. Arrow keys move between
+ * segments, as in any radio group. The checked segment is tinted, underlined and set in 600.
+ */
+.segmented {
+  display: inline-flex;
+}
+.segmented label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1_5);
+  margin: 0;
+  padding: 0 var(--space-3);
+  min-height: var(--control-h-sm);
+  border: 1px solid var(--c-border-control);
+  background: var(--c-surface);
+  color: var(--c-text-secondary);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.segmented label + label {
+  border-left: 0;
+}
+.segmented label:first-child {
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+}
+.segmented label:last-child {
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+}
+.segmented label:hover {
+  color: var(--c-text);
+  background: var(--c-surface-alt);
+}
+.segmented label:has(input:checked) {
+  background: var(--c-primary-subtle);
+  color: var(--c-text);
+  font-weight: var(--fw-semibold);
+  box-shadow: inset 0 -2px 0 var(--c-primary);
+}
+.segmented label:has(input:focus-visible) {
+  outline: 2px solid var(--c-focus);
+  outline-offset: 2px;
+  position: relative;
+  z-index: var(--z-raised);
+}

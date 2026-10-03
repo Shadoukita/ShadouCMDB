@@ -1,0 +1,122 @@
+/*
+ * Badges, status dots and chips (design document §2.7). Status is never colour alone: a dot or an
+ * icon always sits next to a word.
+ */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 20px;
+  padding: 0 var(--space-1_5);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  line-height: 1;
+  background: var(--badge-neutral-bg);
+  color: var(--badge-neutral-fg);
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.badge.ok {
+  background: var(--badge-ok-bg);
+  color: var(--badge-ok-fg);
+}
+.badge.warn {
+  background: var(--badge-warn-bg);
+  color: var(--badge-warn-fg);
+}
+.badge.off {
+  background: var(--badge-off-bg);
+  color: var(--badge-off-fg);
+}
+.badge.danger {
+  background: var(--badge-danger-bg);
+  color: var(--badge-danger-fg);
+}
+.badge.info {
+  background: var(--badge-info-bg);
+  color: var(--badge-info-fg);
+}
+/* The parent's gap already spaces a badge in a flex row (a button, a title row); this is for running text. */
+.badge.spaced {
+  margin-left: var(--space-1_5);
+}
+:is(.btn, .actions, .title) > .badge.spaced {
+  margin-left: 0;
+}
+
+/* ---------- Status: a dot and the status word ---------- */
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1_5);
+  white-space: nowrap;
+}
+.status-dot {
+  flex: none;
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--c-neutral);
+}
+.status-dot.ok {
+  background: var(--c-success);
+}
+.status-dot.warn {
+  background: var(--c-warning);
+}
+.status-dot.danger {
+  background: var(--c-danger-solid);
+}
+.status-dot.info {
+  background: var(--c-info);
+}
+
+/* ---------- Chips: key:value facts and filters; a removable chip ends in a clear button ---------- */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: var(--control-h-sm);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  background: var(--c-surface-alt);
+  color: var(--c-text);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+.chip .key {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  color: var(--c-primary);
+}
+.chip .value {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+}
+.chip.selected {
+  background: var(--c-primary-subtle);
+  border-color: var(--c-primary);
+}
+.chip .chip-clear {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-right: calc(-1 * var(--space-1));
+  border-radius: var(--radius-sm);
+  color: var(--c-text-secondary);
+  cursor: pointer;
+}
+.chip .chip-clear:hover {
+  background: var(--c-row-hover);
+  color: var(--c-text);
+}
+.chip .chip-clear:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: 0;
+}

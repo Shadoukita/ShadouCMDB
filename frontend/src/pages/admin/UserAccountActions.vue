@@ -133,7 +133,7 @@ function resetPassword() {
       <p class="muted" style="margin: 0">
         Sets a new password for {{ user.username }}, signs them out everywhere and revokes their API tokens.
       </p>
-      <div v-if="pwDone" class="alert" role="status">Password changed. {{ user.username }}'s sessions were ended.</div>
+      <div v-if="pwDone" class="alert alert-success" role="status">Password changed. {{ user.username }}'s sessions were ended.</div>
       <ErrorAlert v-if="setPassword.isError.value && !pwFieldErrors.password" :error="setPassword.error.value" title="Password not changed" />
       <div class="form-grid">
         <FormField id="reset-password" label="New password" required :error="pwFieldErrors.password" hint="At least 12 characters">
@@ -154,7 +154,7 @@ function resetPassword() {
   <section v-if="!provider || user.mfaEnabled" class="panel" aria-labelledby="mfa-admin-title">
     <div class="panel-header"><h2 id="mfa-admin-title">Two-factor authentication</h2></div>
     <div class="panel-body stack">
-      <div v-if="mfaDone" class="alert" role="status">
+      <div v-if="mfaDone" class="alert alert-success" role="status">
         Two-factor authentication reset. {{ user.username }} signs in with their password only, or sets it up again if a profile requires it.
       </div>
       <p class="muted" style="margin: 0">
