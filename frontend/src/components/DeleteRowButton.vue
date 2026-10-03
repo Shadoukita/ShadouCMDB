@@ -71,7 +71,8 @@ const confirmLabel = computed(() => {
     :open="open"
     :title="`Delete ${label}?`"
     :confirm-label="confirmLabel"
-    :busy="del.isPending.value || usage.isLoading.value"
+    :busy="del.isPending.value"
+    :confirm-disabled="usage.isLoading.value"
     @cancel="cancel"
     @confirm="confirm"
   >

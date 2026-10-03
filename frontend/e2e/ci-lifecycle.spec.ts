@@ -2,7 +2,7 @@ import type { Page } from "@playwright/test";
 import { apiGet, apiSend, ciIdByName, classIdByName, pickCi, snap, expect, test } from "./support";
 
 // One CI walks the whole lifecycle: create (with validation) → find in the inventory
-// → edit → version conflict → relate → navigate → delete.
+// → edit on its page → version conflict → relate → navigate → delete.
 test.describe.configure({ mode: "serial" });
 
 const stamp = Date.now();
@@ -65,11 +65,12 @@ test("create a Server from its class attributes, with field-level validation", a
   await expect(page.getByRole("status").filter({ hasText: `Created ${name}.` })).toBeVisible();
   ciId = page.url().split("/").pop()!;
   // General panel first: ident, validity and the ungrouped attributes; class and timestamps last.
+  // The page opens with the fields as inputs (SHAA-1644).
   const generalPanel = page.locator(".layout-panels > details").first();
   await expect(generalPanel.locator("summary h2")).toHaveText("General");
-  await expect(generalPanel.locator("dt").first()).toHaveText("Ident");
-  await expect(generalPanel).toContainText(/CI-/);
-  await expect(generalPanel).toContainText(`${name}.example.internal`);
+  await expect(generalPanel.locator(".field").first().locator("label, .label")).toHaveText("Ident");
+  await expect(generalPanel.locator("#f-ident")).toHaveValue(/CI-/);
+  await expect(generalPanel.locator("#attr-hostname")).toHaveValue(`${name}.example.internal`);
   await expect(page.locator(".layout-panels > details > summary h2").last()).toHaveText("Record");
   await snap(page, "05-created-detail");
 });
@@ -107,19 +108,34 @@ test("inventory: search and class filter live in the URL and survive a reload", 
   await expect(page.getByRole("columnheader", { name: /^Label/ })).toHaveAttribute("aria-sort", "ascending");
 });
 
-test("edit: changes are saved with the version and shown in History", async ({ page }) => {
+test("edit: the CI opens editable; Save appears once something changed and the page stays as it is", async ({ page }) => {
   await page.goto(`/cis/${ciId}`);
-  await page.getByRole("link", { name: "Edit", exact: true }).click();
-  await expect(page).toHaveURL(`/cis/${ciId}/edit`);
+  // No separate edit mode: the values are inputs, and with nothing changed there is nothing to save.
+  await expect(page.getByRole("link", { name: "Edit", exact: true })).toHaveCount(0);
   await expect(page.locator("#attr-name")).toHaveValue(name);
   await expect(page.locator("#attr-cpu_cores")).toHaveValue("16");
+  const bar = page.getByRole("region", { name: "Unsaved changes" });
+  await expect(bar).toHaveCount(0);
+
+  // Typing a value back to what it was leaves nothing to save.
+  await page.locator("#attr-cpu_cores").fill("17");
+  await expect(bar).toBeVisible();
+  await page.locator("#attr-cpu_cores").fill("16");
+  await expect(bar).toHaveCount(0);
+
   await page.locator("#attr-hostname").fill(`${name}-renamed.example.internal`);
   await page.locator("#attr-cpu_cores").fill("32");
-  await submit(page, "Save changes");
-  await expect(page).toHaveURL(`/cis/${ciId}`);
+  await expect(bar).toContainText("Unsaved changes");
+  await snap(page, "07a-unsaved-changes");
+  await bar.getByRole("button", { name: "Save" }).click();
   await expect(page.getByRole("status").filter({ hasText: `Saved ${name}.` })).toBeVisible();
-  await expect(page.locator(".layout-panels")).toContainText(`${name}-renamed.example.internal`);
-  await expect(page.locator(".layout-panels")).toContainText("32");
+  await expect(bar).toHaveCount(0);
+  await expect(page).toHaveURL(`/cis/${ciId}`);
+  await expect(page.locator("#attr-hostname")).toHaveValue(`${name}-renamed.example.internal`);
+  await expect(page.locator("#attr-cpu_cores")).toHaveValue("32");
+  // The saved values are what a reload shows.
+  await page.reload();
+  await expect(page.locator("#attr-cpu_cores")).toHaveValue("32");
 
   await page.getByRole("tab", { name: "History" }).click();
   const diff = page.locator("ul.diff").first();
@@ -131,22 +147,60 @@ test("edit: changes are saved with the version and shown in History", async ({ p
   await snap(page, "07-history-diff");
 });
 
+test("edit: Discard restores the values; leaving with unsaved changes asks first", async ({ page }) => {
+  await page.goto(`/cis/${ciId}`);
+  const bar = page.getByRole("region", { name: "Unsaved changes" });
+  await page.locator("#attr-serial_number").fill("SN-DISCARD");
+  await bar.getByRole("button", { name: "Discard" }).click();
+  await expect(bar).toHaveCount(0);
+  await expect(page.locator("#attr-serial_number")).toHaveValue("");
+
+  // A required field emptied is flagged before any request.
+  await page.locator("#attr-name").fill("");
+  await bar.getByRole("button", { name: "Save" }).click();
+  await expect(page.locator("#attr-name-err")).toHaveText("Required");
+  await expect(page.locator("#attr-name")).toBeFocused();
+  await page.locator("#attr-name").fill(name);
+  await expect(bar).toHaveCount(0);
+
+  // Another tab of the same CI keeps the changes; leaving the CI asks, and staying keeps them.
+  await page.locator("#attr-serial_number").fill("SN-KEEP");
+  await page.getByRole("tab", { name: "Relationship map" }).click();
+  await page.getByRole("tab", { name: "Overview" }).click();
+  await expect(page.locator("#attr-serial_number")).toHaveValue("SN-KEEP");
+  page.once("dialog", (d) => {
+    expect(d.message()).toBe(`Discard your unsaved changes to ${name}?`);
+    void d.dismiss();
+  });
+  await page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: "Inventory" }).click();
+  await expect(page).toHaveURL(`/cis/${ciId}`);
+  await expect(page.locator("#attr-serial_number")).toHaveValue("SN-KEEP");
+  page.once("dialog", (d) => void d.accept());
+  await page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: "Inventory" }).click();
+  await expect(page).toHaveURL(/\/cis(\?|$)/);
+  await page.goto(`/cis/${ciId}`);
+  await expect(page.locator("#attr-serial_number")).toHaveValue("");
+});
+
 test("edit: a concurrent change shows the 409 VERSION_CONFLICT banner", async ({ page, request }) => {
-  await page.goto(`/cis/${ciId}/edit`);
+  await page.goto(`/cis/${ciId}`);
   await expect(page.locator("#attr-name")).toHaveValue(name);
   // Someone else saves first.
   const current = await apiGet<{ version: number }>(request, `/configuration-items/${ciId}`);
   await apiSend(request, "PATCH", `/configuration-items/${ciId}`, { attributes: { notes: "changed elsewhere" }, version: current.version });
 
   await page.locator("#attr-serial_number").fill("SN-CONFLICT");
-  await submit(page, "Save changes");
+  await page.getByRole("region", { name: "Unsaved changes" }).getByRole("button", { name: "Save" }).click();
   const banner = page.getByRole("alert").filter({ hasText: "Someone else saved this CI while you were editing." });
   await expect(banner).toBeVisible();
   await expect(banner).toContainText("Your changes were not saved.");
+  await expect(page.locator("#attr-serial_number")).toHaveValue("SN-CONFLICT");
   await snap(page, "08-version-conflict");
-  await banner.getByRole("link", { name: "Open the current version" }).click();
-  await expect(page).toHaveURL(`/cis/${ciId}`);
-  await expect(page.locator(".layout-panels")).toContainText("changed elsewhere");
+  await banner.getByRole("button", { name: "Load the current version" }).click();
+  await expect(banner).toHaveCount(0);
+  await expect(page.locator("#attr-notes")).toHaveValue("changed elsewhere");
+  await expect(page.locator("#attr-serial_number")).toHaveValue("");
+  await expect(page.getByRole("region", { name: "Unsaved changes" })).toHaveCount(0);
 });
 
 test("relationships: add in both directions; illegal pairs offer no type", async ({ page }) => {
@@ -262,5 +316,7 @@ test("delete: the confirmation lists the relationships that will break", async (
 
   await page.goto(`/cis/${ciId}`);
   await expect(page.getByText(/This CI was deleted on/)).toBeVisible();
-  await expect(page.getByRole("link", { name: "Edit", exact: true })).toHaveCount(0);
+  // A deleted CI is shown read-only, in the same place: no inputs.
+  await expect(page.locator("#attr-name")).toHaveCount(0);
+  await expect(page.locator(".field-ro", { hasText: "Name" }).first()).toContainText(name);
 });

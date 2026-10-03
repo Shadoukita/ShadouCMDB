@@ -3,6 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use serde_json::{Map, Value};
 use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
@@ -11,9 +12,10 @@ use ipnetwork::IpNetwork;
 
 use super::plan::{self, DbResolver, Needs, is_visible};
 use super::schemas::{
-    ActiveQuery, AttributeReference, ConfigurationItem, ConfigurationItemSummary, CreateItemBody, CriticalityRef,
-    Graph, GraphDirection, GraphEdge, GraphEdgeType, GraphNode, GraphQuery, ItemFilterQuery, KindQuery, ListItemsQuery,
-    SearchHit, SearchMatch, SearchQuery, SearchResults, UpdateItemBody,
+    ActiveQuery, AttributeReference, ChangeHistogram, ChangeHistogramBucket, ChangeHistogramQuery, ConfigurationItem,
+    ConfigurationItemSummary, CreateItemBody, CriticalityRef, Graph, GraphDirection, GraphEdge, GraphEdgeType,
+    GraphNode, GraphQuery, HistogramBucket, ItemFilterQuery, KindQuery, ListItemsQuery, SearchHit, SearchMatch,
+    SearchQuery, SearchResults, UpdateItemBody,
 };
 use crate::api::context::{Caller, RequestContext};
 use crate::api::route::InvalidBody;
@@ -278,16 +280,7 @@ pub async fn list(
     let mut conn = pool.acquire().await?;
     let model = Model::load(&mut conn).await?;
     let sort = list_sort(&model, q)?;
-    if let Some(key) = &q.layout_template
-        && !validate::cached_regex(KEY_PATTERN).is_some_and(|r| r.is_match(key))
-    {
-        return Err(AppError::validation(vec![FieldError {
-            location: FieldLocation::Query,
-            field: "layoutTemplate".into(),
-            message: "Not a layout template key (lower_snake_case)".into(),
-            code: "invalid_string".into(),
-        }]));
-    }
+    check_layout_template(q.layout_template.as_deref())?;
     let f = ItemFilters {
         q: q.q.clone(),
         visible_class_ids: ctx.class_scope(ClassOp::View),
@@ -298,6 +291,98 @@ pub async fn list(
     let (rows, total) = data::list(&mut conn, &f, sort, q.sort.desc, q.limit, q.offset).await?;
     let data = with_attributes(&mut conn, &model, rows, f.visible_class_ids.as_deref()).await?;
     Ok(Page { data, page: q.page_meta(total) })
+}
+
+fn check_layout_template(key: Option<&str>) -> Result<(), AppError> {
+    match key {
+        Some(key) if !validate::cached_regex(KEY_PATTERN).is_some_and(|r| r.is_match(key)) => {
+            Err(query_error("layoutTemplate", "Not a layout template key (lower_snake_case)", "invalid_string"))
+        }
+        _ => Ok(()),
+    }
+}
+
+fn query_error(field: &str, message: &str, code: &str) -> AppError {
+    AppError::validation(vec![FieldError {
+        location: FieldLocation::Query,
+        field: field.into(),
+        message: message.into(),
+        code: code.into(),
+    }])
+}
+
+/// Changes per bucket to the CIs the list would return for the same filters,
+/// counted from the audit log entries the caller may read there.
+pub async fn change_histogram(
+    pool: &PgPool,
+    ctx: &RequestContext,
+    q: &ChangeHistogramQuery,
+) -> Result<ChangeHistogram, AppError> {
+    let (width, cap) = q.bucket.width_and_cap();
+    let to = q.to.unwrap_or_else(Utc::now);
+    let from = q.from.unwrap_or_else(|| match q.bucket {
+        HistogramBucket::Hour => to - TimeDelta::hours(24),
+        HistogramBucket::Day => to - TimeDelta::days(30),
+    });
+    if from >= to {
+        return Err(query_error("from", "Must be before `to`", "invalid_range"));
+    }
+    if to - from > cap {
+        let message = format!("The range may span at most {} days with {} buckets", cap.num_days(), unit(q.bucket));
+        return Err(query_error("from", &message, "range_too_large"));
+    }
+    check_layout_template(q.layout_template.as_deref())?;
+
+    let mut conn = pool.acquire().await?;
+    let model = Model::load(&mut conn).await?;
+    let scope = ctx.class_scope(ClassOp::View);
+    let f = ItemFilters {
+        q: q.q.clone(),
+        visible_class_ids: scope.clone(),
+        own_layout: q.own_layout.map(bool::from),
+        layout_template: q.layout_template.clone(),
+        ..filters(&mut conn, &model, q).await?
+    };
+    let counts = data::change_counts(&mut conn, &f, scope.as_deref(), unit(q.bucket), from, to).await?;
+
+    let buckets = histogram_buckets(q.bucket, from, to, width, counts);
+    let total = buckets.iter().map(|b| b.created + b.updated + b.status_changed).sum();
+    Ok(ChangeHistogram { from, to, bucket: q.bucket, buckets, total })
+}
+
+fn unit(bucket: HistogramBucket) -> &'static str {
+    match bucket {
+        HistogramBucket::Hour => "hour",
+        HistogramBucket::Day => "day",
+    }
+}
+
+/// Every bucket from `from` (rounded down) up to `to`, filled from the non-empty ones.
+fn histogram_buckets(
+    bucket: HistogramBucket,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+    width: TimeDelta,
+    counts: Vec<data::ChangeCounts>,
+) -> Vec<ChangeHistogramBucket> {
+    let mut start = match bucket {
+        HistogramBucket::Hour => from.duration_trunc(TimeDelta::hours(1)),
+        HistogramBucket::Day => from.duration_trunc(TimeDelta::days(1)),
+    }
+    .unwrap_or(from);
+    let mut counts = counts.into_iter().peekable();
+    let mut out = Vec::new();
+    while start < to {
+        let mut b = ChangeHistogramBucket { start, created: 0, updated: 0, status_changed: 0 };
+        while let Some(c) = counts.next_if(|c| c.start < start + width) {
+            b.created += c.created;
+            b.updated += c.updated;
+            b.status_changed += c.status_changed;
+        }
+        out.push(b);
+        start += width;
+    }
+    out
 }
 
 pub async fn search(pool: &PgPool, ctx: &RequestContext, q: &SearchQuery) -> Result<SearchResults, AppError> {
@@ -1398,5 +1483,117 @@ mod tests {
         let (mut budget, mut truncated) = (3, false);
         assert_eq!(spend_edge_budget((0..4).map(row).collect(), &mut budget, &mut truncated).len(), 3);
         assert_eq!((budget, truncated), (0, true));
+    }
+
+    fn histogram_query(raw: &str) -> ChangeHistogramQuery {
+        use crate::api::route::{Query, QueryInput};
+        match Query::<ChangeHistogramQuery>::parse(Some(raw)) {
+            Ok(Query(q)) => q,
+            Err(e) => panic!("{raw}: {:?}", e.details),
+        }
+    }
+
+    /// SHAA-1687: audit entries per bucket on the CIs of the list query, split
+    /// into created / statusChanged / updated, with the audit log's visibility.
+    #[tokio::test]
+    async fn change_histogram_counts_ci_history_per_bucket() {
+        let Some(db) = scratch::database("items_change_histogram").await else { return };
+        let pool = &db.pool;
+        crate::seed::install_template(pool, "it_infrastructure").await.unwrap();
+        crate::seed::seed_demo_data(pool).await.unwrap();
+        let ci = |label: &'static str| async move {
+            sqlx::query_as::<_, (Uuid, Uuid)>("SELECT id, class_id FROM configuration_items WHERE label = $1")
+                .bind(label)
+                .fetch_one(pool)
+                .await
+                .unwrap()
+        };
+        let (srv, server) = ci("fra1-esx-01").await;
+        let (vm, vm_class) = ci("crm-app-01").await;
+        let (in_service, retired) = (status(pool, "in_service").await, status(pool, "retired").await);
+        let with_status = |s: Uuid| json!({ "classId": server, "attributes": { "status": s, "name": "x" } });
+        let insert = |at: &'static str, action: &'static str, ci: Uuid, old: Option<Value>, new: Option<Value>| async move {
+            sqlx::query(
+                "INSERT INTO audit_log (occurred_at, actor_type, actor_name, action, entity_type, entity_id, old_value, new_value)
+                 VALUES ($1::timestamptz, 'user', 'admin', $2, 'configuration_items', $3, $4, $5)",
+            )
+            .bind(at)
+            .bind(action)
+            .bind(ci)
+            .bind(old)
+            .bind(new)
+            .execute(pool)
+            .await
+            .unwrap();
+        };
+        insert("2026-01-05T10:15:00Z", "create", srv, None, Some(with_status(in_service))).await;
+        insert("2026-01-05T10:30:00Z", "update", srv, Some(with_status(in_service)), Some(with_status(retired))).await;
+        insert(
+            "2026-01-05T10:20:00Z",
+            "update",
+            vm,
+            Some(json!({ "classId": vm_class })),
+            Some(json!({ "classId": vm_class })),
+        )
+        .await;
+        insert("2026-01-05T11:05:00Z", "update", srv, Some(with_status(retired)), Some(with_status(retired))).await;
+        insert("2026-01-05T11:10:00Z", "export", srv, None, Some(json!({ "kind": "impact" }))).await;
+        insert("2026-01-05T09:59:59Z", "update", srv, Some(with_status(retired)), Some(with_status(in_service))).await;
+        insert("2026-01-05T13:00:00Z", "delete", srv, Some(with_status(retired)), None).await;
+
+        let range = "from=2026-01-05T10:00:00Z&to=2026-01-05T13:00:00Z&active=all";
+        let counts = |h: &ChangeHistogram| -> Vec<(i64, i64, i64)> {
+            h.buckets.iter().map(|b| (b.created, b.updated, b.status_changed)).collect()
+        };
+        let admin = RequestContext::system("test", "test");
+        let all = change_histogram(pool, &admin, &histogram_query(range)).await.unwrap();
+        assert_eq!(all.bucket, HistogramBucket::Hour);
+        assert_eq!(
+            all.buckets.iter().map(|b| b.start.to_rfc3339()).collect::<Vec<_>>(),
+            ["2026-01-05T10:00:00+00:00", "2026-01-05T11:00:00+00:00", "2026-01-05T12:00:00+00:00"]
+        );
+        assert_eq!(counts(&all), [(1, 1, 1), (0, 1, 0), (0, 0, 0)]);
+        assert_eq!(all.total, 4);
+
+        // The list filters choose the CIs.
+        let vms =
+            change_histogram(pool, &admin, &histogram_query(&format!("{range}&classId={vm_class}"))).await.unwrap();
+        assert_eq!((counts(&vms), vms.total), (vec![(0, 1, 0), (0, 0, 0), (0, 0, 0)], 1));
+
+        // A caller limited to some classes counts only those CIs.
+        let restricted = crate::modules::audit::tests::viewer(&[server]);
+        let mine = change_histogram(pool, &restricted, &histogram_query(range)).await.unwrap();
+        assert_eq!((counts(&mine), mine.total), (vec![(1, 0, 1), (0, 1, 0), (0, 0, 0)], 3));
+
+        // Day buckets start at midnight UTC; the partial first day counts only from `from`.
+        let day = "from=2026-01-05T10:00:00Z&to=2026-01-06T10:00:00Z&bucket=day&active=all";
+        let days = change_histogram(pool, &admin, &histogram_query(day)).await.unwrap();
+        assert_eq!(
+            days.buckets.iter().map(|b| b.start.to_rfc3339()).collect::<Vec<_>>(),
+            ["2026-01-05T00:00:00+00:00", "2026-01-06T00:00:00+00:00"]
+        );
+        assert_eq!((counts(&days), days.total), (vec![(1, 3, 1), (0, 0, 0)], 5));
+
+        // Defaults: the last 24 hours, hourly.
+        let recent = change_histogram(pool, &admin, &histogram_query("")).await.unwrap();
+        assert_eq!(recent.to - recent.from, TimeDelta::hours(24));
+        assert!(matches!(recent.buckets.len(), 24 | 25), "{}", recent.buckets.len());
+
+        // The range is capped per bucket width, and must not be empty.
+        for (raw, code) in [
+            ("from=2026-01-01T00:00:00Z&to=2026-01-08T00:00:01Z", "range_too_large"),
+            ("from=2026-01-01T00:00:00Z&to=2026-04-02T00:00:00Z&bucket=day", "range_too_large"),
+            ("from=2026-01-02T00:00:00Z&to=2026-01-02T00:00:00Z", "invalid_range"),
+        ] {
+            let err = change_histogram(pool, &admin, &histogram_query(raw)).await.unwrap_err();
+            assert_eq!(fields(&err), ["from"], "{raw}");
+            assert_eq!(err.details.iter().flatten().next().unwrap().code, code, "{raw}");
+        }
+        assert!(
+            change_histogram(pool, &admin, &histogram_query("from=2026-01-01T00:00:00Z&to=2026-01-08T00:00:00Z"))
+                .await
+                .is_ok()
+        );
+        db.drop().await;
     }
 }

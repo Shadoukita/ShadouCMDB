@@ -98,8 +98,14 @@ test("the Person shows its sign-in account, a read-only Email, and cannot be del
   await expect(confirm.getByRole("button", { name: /^Delete CI/ })).toBeDisabled();
   await confirm.getByRole("button", { name: "Cancel" }).click();
 
-  // The Email follows the account: read-only on the form, saying who manages it. Other fields stay editable.
-  await page.getByRole("link", { name: "Edit" }).click();
+  // The Email follows the account: read-only on the CI page, saying who manages it. Other fields stay editable.
+  const shown = page.locator(".field-ro[data-field='attributes.email']");
+  await expect(shown.locator(".ro-value")).toHaveText(EMAIL);
+  await expect(shown.locator(".hint")).toHaveText(`Managed by user ${USERNAME}`);
+  await expect(page.locator("#attr-name")).toBeEnabled();
+  await snap(page, "people-03a-person-email-read-only-detail");
+  // So it is on the edit form.
+  await page.goto(`/cis/${personId}/edit`);
   const email = page.locator("#attr-email");
   await expect(email).toHaveValue(EMAIL);
   await expect(email).toBeDisabled();

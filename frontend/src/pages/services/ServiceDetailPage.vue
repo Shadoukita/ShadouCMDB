@@ -152,7 +152,7 @@ watch(
         <DeleteServiceButton v-if="canDelete" :service="s" />
       </div>
     </div>
-    <div v-if="flashText" class="alert" role="status">{{ flashText }}</div>
+    <div v-if="flashText" class="alert alert-success" role="status">{{ flashText }}</div>
 
     <div class="tabs" role="tablist" :aria-label="t('services.tabsLabel')">
       <button

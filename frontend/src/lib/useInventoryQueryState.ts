@@ -186,7 +186,6 @@ export function useInventoryQueryState(options: QueryStateOptions) {
     return currentClass.value && sortable(a) ? field : undefined;
   }
   const toggleSort = (field: string) => update({ sort: sort.value === field ? `-${field}` : field });
-  const sortIndicator = (field: string) => (sort.value === field ? "▲" : sort.value === `-${field}` ? "▼" : "");
   const ariaSort = (field: string): "ascending" | "descending" | "none" =>
     sort.value === field ? "ascending" : sort.value === `-${field}` ? "descending" : "none";
 
@@ -215,7 +214,6 @@ export function useInventoryQueryState(options: QueryStateOptions) {
     onPage,
     columnSort,
     toggleSort,
-    sortIndicator,
     ariaSort,
   };
 }

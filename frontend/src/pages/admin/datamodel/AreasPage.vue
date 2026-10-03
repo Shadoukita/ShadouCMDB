@@ -16,6 +16,7 @@ import { moveItem, useDragReorder } from "../../../lib/reorder";
 import { useSchemaChangeFlow } from "../../../lib/schemaChange";
 import AreaDialog from "./AreaDialog.vue";
 import SchemaChangesPanel from "./SchemaChangesPanel.vue";
+import Icon from "../../../components/Icon.vue";
 
 /**
  * Administration › Data model › Areas. An area is a menu tab and a PostgreSQL
@@ -158,7 +159,7 @@ function openEdit(a: Area) {
     (<code>bestand.v_netzwerk</code>).
   </p>
 
-  <div v-if="notice" class="alert" role="status">{{ notice }}</div>
+  <div v-if="notice" class="alert alert-success" role="status">{{ notice }}</div>
   <ErrorAlert v-if="failure" :error="failure" />
   <ErrorAlert v-if="reorder.isError.value" :error="reorder.error.value" title="The new order was not saved completely" />
 
@@ -203,7 +204,7 @@ function openEdit(a: Area) {
         </thead>
         <tbody>
           <tr v-for="(a, i) in rows" :key="a.id" v-bind="dnd.row(a.id)" :class="{ disabled: !a.isActive }">
-            <td class="drag-handle" aria-hidden="true" title="Drag to reorder">⠿</td>
+            <td class="drag-handle" aria-hidden="true" title="Drag to reorder"><Icon name="grip-vertical" /></td>
             <td>
               <button type="button" class="btn-link" :title="`Edit ${a.name}`" @click="openEdit(a)">
                 <ClassBadge :icon="a.icon" :color="a.color" :name="a.name" />
@@ -223,8 +224,8 @@ function openEdit(a: Area) {
               <span v-else class="badge off">Archived</span>
             </td>
             <td class="order-buttons">
-              <button type="button" class="btn btn-sm" :disabled="reorder.isPending.value || i === 0" :aria-label="`Move ${a.name} up`" @click="step(a, -1)">↑</button>
-              <button type="button" class="btn btn-sm" :disabled="reorder.isPending.value || i === rows.length - 1" :aria-label="`Move ${a.name} down`" @click="step(a, 1)">↓</button>
+              <button type="button" class="btn btn-sm btn-icon" :disabled="reorder.isPending.value || i === 0" :aria-label="`Move ${a.name} up`" @click="step(a, -1)"><Icon name="arrow-up" /></button>
+              <button type="button" class="btn btn-sm btn-icon" :disabled="reorder.isPending.value || i === rows.length - 1" :aria-label="`Move ${a.name} down`" @click="step(a, 1)"><Icon name="arrow-down" /></button>
             </td>
             <td class="row-actions">
               <button type="button" class="btn btn-sm" @click="openEdit(a)">Edit</button>

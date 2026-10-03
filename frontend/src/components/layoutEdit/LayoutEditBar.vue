@@ -9,6 +9,7 @@ import ConfirmDialog from "../ConfirmDialog.vue";
 import ErrorAlert from "../ErrorAlert.vue";
 import FormDialog from "../FormDialog.vue";
 import RowMenu, { type RowMenuItem } from "../RowMenu.vue";
+import Icon from "../Icon.vue";
 
 /**
  * The bar over a CI page in the layout editor: what is being edited (a layout
@@ -179,7 +180,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
             :disabled="!picked || (m.move === 'front' || m.move === 'forward' ? picked.index >= picked.count : picked.index <= 1)"
             @click="editor.layer(m.move)"
           >
-            {{ LAYER_ICONS[m.move] }}
+            <Icon :name="LAYER_ICONS[m.move]" />
           </button>
         </span>
       </template>
@@ -197,7 +198,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
     <div v-if="editor.openedHere" class="alert" role="note">
       Your browser blocked the new window, so the layout editor opened in this tab. Done takes you back to the page.
     </div>
-    <div v-if="editor.saved && !editor.dirty" class="alert" role="status">{{ editor.saved }}</div>
+    <div v-if="editor.saved && !editor.dirty" class="alert alert-success" role="status">{{ editor.saved }}</div>
     <div v-if="editor.conflict || (editor.stale && editor.dirty)" class="alert alert-warn" role="alert">
       <strong>{{ t("layoutEditor.conflictTitle") }}</strong>
       <div>

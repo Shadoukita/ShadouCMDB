@@ -16,6 +16,7 @@
 pub mod format;
 mod legacy;
 mod system_roles;
+mod workflows;
 
 use std::collections::{HashMap, HashSet};
 
@@ -508,6 +509,7 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
         ui_settings: Some(ui_section),
         import_mappings: Some(mapping_specs),
         saved_views: Some(view_specs),
+        workflows: Some(workflows::snapshot(conn).await?),
     };
     let views_catalogue = saved_views::resolve::Catalogue::load(conn).await?;
     Ok(Snapshot { file, ids, builtin_profile, views_catalogue })
@@ -552,6 +554,10 @@ pub async fn export(pool: &PgPool, ctx: &RequestContext) -> Result<ConfigFile, A
         );
     }
 
+    if ctx.require(GlobalPermission::WorkflowsManage).is_err() {
+        file.workflows = None;
+    }
+
     // GH#407: one `export` row per download, in its own transaction (the
     // snapshot is read-only). Which sections left and how many mappings,
     // never the content.
@@ -562,6 +568,7 @@ pub async fn export(pool: &PgPool, ctx: &RequestContext) -> Result<ConfigFile, A
         ("uiSettings", file.ui_settings.is_some()),
         ("importMappings", file.import_mappings.is_some()),
         ("savedViews", file.saved_views.is_some()),
+        ("workflows", file.workflows.is_some()),
     ]
     .into_iter()
     .filter_map(|(name, present)| present.then_some(name))
@@ -579,6 +586,7 @@ pub async fn export(pool: &PgPool, ctx: &RequestContext) -> Result<ConfigFile, A
             "profilesIncluded": file.permission_profiles.is_some(),
             "mappingCount": file.import_mappings.as_ref().map_or(0, Vec::len),
             "viewCount": file.saved_views.as_ref().map_or(0, Vec::len),
+            "workflowCount": file.workflows.as_ref().map_or(0, Vec::len),
         })),
     };
     let mut tx = pool.begin().await?;
@@ -919,6 +927,18 @@ fn validate(
     // Shared saved views
     if let Some(views) = &file.saved_views {
         validate_views(views, file, snap, ctx, &mut e, warnings);
+    }
+
+    // Workflows: their types and the profiles granted their transitions
+    if let Some(list) = &file.workflows {
+        let profiles: HashSet<String> = file
+            .permission_profiles
+            .iter()
+            .flatten()
+            .map(|p| p.name.to_lowercase())
+            .chain(ids.profiles.keys().cloned())
+            .collect();
+        workflows::validate(list, &classes, &profiles, &mut e);
     }
 
     // Images
@@ -1757,6 +1777,11 @@ async fn run(
         }
     }
 
+    // ---- workflows (after the data model, lookups and profiles they refer to) ----
+    if let Some(list) = &file.workflows {
+        im.workflows(list, current.workflows.as_deref().unwrap_or_default(), &mut warnings).await?;
+    }
+
     // ---- saved import mappings (merged by class key and name, never deleted) ----
     if let Some(list) = &file.import_mappings {
         let names: HashSet<String> =
@@ -2058,11 +2083,12 @@ fn check_format(file: &ConfigFile) -> Result<(), AppError> {
         ("permissionProfiles", file.permission_profiles.as_ref().map_or(0, Vec::len)),
         ("importMappings", file.import_mappings.as_ref().map_or(0, Vec::len)),
         ("savedViews", file.saved_views.as_ref().map_or(0, Vec::len)),
+        ("workflows", file.workflows.as_ref().map_or(0, Vec::len)),
     ];
     let total: usize = sections.iter().map(|s| s.1).sum();
     if total > MAX_ENTRIES {
         // Reported at the largest section, the one to split.
-        let (field, _) = sections.iter().max_by_key(|s| s.1).expect("five sections");
+        let (field, _) = sections.iter().max_by_key(|s| s.1).expect("six sections");
         let held: Vec<String> =
             sections.iter().filter(|s| s.1 > 0).map(|(section, n)| format!("{section}: {n}")).collect();
         return Err(AppError::field(
@@ -2114,6 +2140,9 @@ fn check_sections(ctx: &RequestContext, file: &ConfigFile) -> Result<(), AppErro
     }
     if file.saved_views.as_ref().is_some_and(|v| !v.is_empty()) {
         ctx.require(GlobalPermission::ViewsShare)?;
+    }
+    if file.workflows.as_ref().is_some_and(|w| !w.is_empty()) {
+        ctx.require(GlobalPermission::WorkflowsManage)?;
     }
     Ok(())
 }
@@ -2382,6 +2411,7 @@ mod tests {
             ui_settings: None,
             import_mappings: None,
             saved_views: None,
+            workflows: None,
         };
         import(&db.pool, &RequestContext::system("test", "test"), &file, ImportMode::Apply).await.unwrap();
 
@@ -2427,6 +2457,7 @@ mod tests {
             ui_settings: None,
             import_mappings: None,
             saved_views: None,
+            workflows: None,
         };
         import(&db.pool, &RequestContext::system("test", "test"), &file, ImportMode::Apply).await.unwrap();
 
@@ -2651,7 +2682,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(format!("{err:?}").contains("versions 1 to 7"), "{err:?}");
+        assert!(format!("{err:?}").contains("versions 1 to 8"), "{err:?}");
         let v3 = ConfigFile { format_version: 3, import_mappings: None, ..changed };
         import(&dst.pool, &system, &v3, ImportMode::DryRun).await.unwrap();
 

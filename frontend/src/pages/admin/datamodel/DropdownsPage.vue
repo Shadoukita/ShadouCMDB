@@ -161,7 +161,7 @@ const valuesEmptyHint = computed(() => {
       <button type="button" class="btn btn-primary btn-sm" style="margin-left: auto" @click="open(null)">+ New list</button>
     </div>
     <div v-if="notice || patch.isError.value" class="panel-body">
-      <div v-if="notice" class="alert" role="status">{{ notice }}</div>
+      <div v-if="notice" class="alert alert-success" role="status">{{ notice }}</div>
       <ErrorAlert v-if="patch.isError.value" :error="patch.error.value" title="Not saved" />
     </div>
     <div v-if="lists.isError.value" class="panel-body"><ErrorAlert :error="lists.error.value" :on-retry="() => lists.refetch()" /></div>

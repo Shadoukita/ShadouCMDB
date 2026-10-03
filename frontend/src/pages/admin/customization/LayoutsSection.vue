@@ -27,6 +27,7 @@ import {
 import { useListQuery } from "../../../lib/listQuery";
 import ClassCiEditor from "./ClassCiEditor.vue";
 import TemplateDialog from "./TemplateDialog.vue";
+import SortIcon from "../../../components/SortIcon.vue";
 
 /**
  * Customization › Layouts: layout templates (SHAA-1472) and which one each
@@ -234,7 +235,7 @@ async function edit(key: string) {
               <thead>
                 <tr>
                   <th v-for="c in CLASS_COLUMNS" :key="c.key" scope="col" :class="{ num: c.key === 'owned' }" :aria-sort="c.sort ? lq.ariaSort(c.sort) : undefined">
-                    <button v-if="c.sort" type="button" class="sort" @click="lq.toggleSort(c.sort)">{{ c.label() }} {{ lq.sortIndicator(c.sort) }}</button>
+                    <button v-if="c.sort" type="button" class="sort" @click="lq.toggleSort(c.sort)">{{ c.label() }} <SortIcon :dir="lq.ariaSort(c.sort)" /></button>
                     <template v-else>{{ c.label() }}</template>
                   </th>
                 </tr>

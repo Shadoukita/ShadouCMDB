@@ -50,6 +50,7 @@ import ConfirmDialog from "../ConfirmDialog.vue";
 import NoteText from "../NoteText.vue";
 import EditableField, { type SectionOption } from "./EditableField.vue";
 import FreeWindow from "./FreeWindow.vue";
+import Icon from "../Icon.vue";
 
 /**
  * The CI page's fields in layout edit mode: the class layout's tabs, sections
@@ -540,10 +541,10 @@ function onHiddenDrop(e: DragEvent) {
               {{ t.label }}
             </button>
             <span v-if="t === activeTab && !(renaming?.kind === 'tab' && renaming.key === t.key)" class="le-tab-tools" role="toolbar" :aria-label="`Tab ${t.label}: layout`">
-              <button type="button" class="btn btn-sm" :aria-label="`Rename tab ${t.label}`" title="Rename" @click="startRename('tab', t.key, t.label)">✎</button>
-              <button type="button" class="btn btn-sm" :aria-label="`Move tab ${t.label} left`" title="Move left" :disabled="tabs.indexOf(t) === 0" @click="onMoveTab(t, -1)">←</button>
-              <button type="button" class="btn btn-sm" :aria-label="`Move tab ${t.label} right`" title="Move right" :disabled="tabs.indexOf(t) === tabs.length - 1" @click="onMoveTab(t, 1)">→</button>
-              <button type="button" class="btn btn-sm" :aria-label="`Remove tab ${t.label}`" title="Remove" :disabled="!layout || !canRemoveTab(layout, t)" @click="confirmRemove = { tab: t }">×</button>
+              <button type="button" class="btn btn-sm btn-icon" :aria-label="`Rename tab ${t.label}`" title="Rename" @click="startRename('tab', t.key, t.label)"><Icon name="pencil" /></button>
+              <button type="button" class="btn btn-sm btn-icon" :aria-label="`Move tab ${t.label} left`" title="Move left" :disabled="tabs.indexOf(t) === 0" @click="onMoveTab(t, -1)"><Icon name="arrow-left" /></button>
+              <button type="button" class="btn btn-sm btn-icon" :aria-label="`Move tab ${t.label} right`" title="Move right" :disabled="tabs.indexOf(t) === tabs.length - 1" @click="onMoveTab(t, 1)"><Icon name="arrow-right" /></button>
+              <button type="button" class="btn btn-sm btn-icon" :aria-label="`Remove tab ${t.label}`" title="Remove" :disabled="!layout || !canRemoveTab(layout, t)" @click="confirmRemove = { tab: t }"><Icon name="x" /></button>
             </span>
           </div>
           <button type="button" class="btn btn-sm le-add" @click="onAddTab">+ Tab</button>
@@ -607,7 +608,7 @@ function onHiddenDrop(e: DragEvent) {
                     :disabled="m.move === 'front' || m.move === 'forward' ? layerAt(s).index >= layerAt(s).count : layerAt(s).index <= 1"
                     @click="onLayer(s, m.move)"
                   >
-                    {{ LAYER_ICONS[m.move] }}
+                    <Icon :name="LAYER_ICONS[m.move]" />
                   </button>
                   <button type="button" class="btn btn-sm" :aria-pressed="!!s.collapsed" :aria-label="`Section ${s.label} starts collapsed on the detail page`" @click="onSection(s.key, (_, own) => (own.collapsed = !own.collapsed))">
                     Collapsed

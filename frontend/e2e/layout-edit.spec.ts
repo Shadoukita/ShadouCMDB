@@ -1,5 +1,5 @@
 import type { Browser, Locator, Page } from "@playwright/test";
-import { apiGet, apiSend, classIdByName, csrf, expect, resetUiSettings, saveLayout, snap, test } from "./support";
+import { apiGet, apiSend, classIdByName, csrf, expect, fieldLabels, resetUiSettings, saveLayout, snap, test } from "./support";
 
 // Edit layout: the Server layout edited on a real Server CI (the demo seed) in the layout editor's
 // own window, saved as a settings version, and seen by a user who may only view servers. The walk starts from and ends
@@ -170,7 +170,9 @@ test("the editor window: add a tab and a section, move fields, save, and a viewe
   await expect(viewer.getByRole("button", { name: "Edit layout" })).toHaveCount(0);
   await vtabs.filter({ hasText: "Hardware" }).click();
   await expect(viewer.locator(".lg-free > details > summary h2")).toHaveText(["Hardware facts"]);
-  await expect(viewer.locator(".lg-free dt")).toHaveText(["Model", "CPU cores"]);
+  await expect(fieldLabels(viewer.locator(".lg-free"))).toHaveText(["Model", "CPU cores"]);
+  // Read-only for them, in the same place.
+  await expect(viewer.locator(".lg-free .field-ro")).toHaveCount(2);
   // The editor's URL is just the page for them.
   await viewer.goto(`/cis/${ci.id}/layout-editor`);
   await expect(viewer).toHaveURL(new RegExp(`/cis/${ci.id}$`));
@@ -335,9 +337,9 @@ test("a layout sent on the grid (an older export or API client) opens as windows
   expect(b.x).toBeGreaterThan(a.x + a.width - 1);
   expect(c.y).toBeGreaterThan(Math.max(a.y + a.height, b.y + b.height) - 1);
   // Active follows Valid until wherever that is placed.
-  await expect(onPage("general").locator("dt")).toHaveText(["Ident", "Valid from", "Valid until", "Active"]);
-  await expect(onPage("side").locator("dt")).toHaveText(["Serial number", "Manufacturer"]);
-  await expect(onPage("below").locator("dt")).toHaveText(["Model"]);
+  await expect(fieldLabels(onPage("general"))).toHaveText(["Ident", /^Valid from/, "Valid until", "Active"]);
+  await expect(fieldLabels(onPage("side"))).toHaveText([/^Serial number/, /^Manufacturer/]);
+  await expect(fieldLabels(onPage("below"))).toHaveText([/^Model/]);
 
   // The editor: the same windows, nothing to switch.
   const page = await openEditor(origin);

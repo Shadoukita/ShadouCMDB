@@ -7,6 +7,7 @@ import ErrorAlert from "../../../components/ErrorAlert.vue";
 import LoadingState from "../../../components/LoadingState.vue";
 import RecordDialog, { type FieldSpec } from "../../../components/RecordDialog.vue";
 import { moveItem, useDragReorder } from "../../../lib/reorder";
+import Icon from "../../../components/Icon.vue";
 
 /**
  * The values of a lookup list, short and ordered: drag or arrow to reorder
@@ -121,7 +122,7 @@ async function save(body: Record<string, unknown>, isNew: boolean): Promise<stri
       <button type="button" class="btn btn-primary btn-sm" style="margin-left: auto" @click="open(null)">+ Add {{ noun }}</button>
     </div>
     <div v-if="notice || reorder.isError.value || patch.isError.value" class="panel-body">
-      <div v-if="notice" class="alert" role="status">{{ notice }}</div>
+      <div v-if="notice" class="alert alert-success" role="status">{{ notice }}</div>
       <ErrorAlert v-if="reorder.isError.value" :error="reorder.error.value" title="The new order was not saved completely" />
       <ErrorAlert v-if="patch.isError.value" :error="patch.error.value" title="Not saved" />
     </div>
@@ -151,7 +152,7 @@ async function save(body: Record<string, unknown>, isNew: boolean): Promise<stri
         </thead>
         <tbody>
           <tr v-for="r in list" :key="r.id" v-bind="dnd.row(r.id)" :class="{ disabled: !r.isActive }">
-            <td class="drag-handle" aria-hidden="true" title="Drag to reorder">⠿</td>
+            <td class="drag-handle" aria-hidden="true" title="Drag to reorder"><Icon name="grip-vertical" /></td>
             <td><button type="button" class="btn-link" @click="open(r)">{{ r.name }}</button></td>
             <td class="mono">{{ r.key }}</td>
             <td v-for="c in columns ?? []" :key="c.key">
@@ -164,8 +165,8 @@ async function save(body: Record<string, unknown>, isNew: boolean): Promise<stri
               <span v-else class="badge off">Archived</span>
             </td>
             <td class="order-buttons">
-              <button type="button" class="btn btn-sm" :disabled="reorder.isPending.value || list.indexOf(r) === 0" :aria-label="`Move ${r.name} up`" @click="step(r, -1)">↑</button>
-              <button type="button" class="btn btn-sm" :disabled="reorder.isPending.value || list.indexOf(r) === list.length - 1" :aria-label="`Move ${r.name} down`" @click="step(r, 1)">↓</button>
+              <button type="button" class="btn btn-sm btn-icon" :disabled="reorder.isPending.value || list.indexOf(r) === 0" :aria-label="`Move ${r.name} up`" @click="step(r, -1)"><Icon name="arrow-up" /></button>
+              <button type="button" class="btn btn-sm btn-icon" :disabled="reorder.isPending.value || list.indexOf(r) === list.length - 1" :aria-label="`Move ${r.name} down`" @click="step(r, 1)"><Icon name="arrow-down" /></button>
             </td>
             <td class="row-actions">
               <button type="button" class="btn btn-sm" :aria-label="`Edit ${r.name}`" @click="open(r)">Edit</button>

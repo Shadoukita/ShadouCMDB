@@ -1,5 +1,5 @@
 import type { APIRequestContext, APIResponse, Browser, Page } from "@playwright/test";
-import { apiGet, apiSend, at, ciIdByName, classIdByName, expect, lookupValueId, snap, test } from "./support";
+import { apiGet, apiSend, at, ciIdByName, classIdByName, expect, lookupValueId, roValue, saveCi, snap, test } from "./support";
 
 // What a restricted user can reach, checked at the API as well as in the UI: the UI hiding a button is
 // not the claim under test, the server refusing the call is. Every refused write is re-read as the
@@ -240,11 +240,12 @@ test("the UI shows a restricted user only what they may do", async ({ browser, r
   await expect(page.getByRole("link", { name: "crm-db", exact: true })).toHaveCount(0);
   await snap(page, "30-restricted-inventory");
 
-  // A Server: readable, no Edit, no Delete; the edit URL refuses.
+  // A Server: readable with its values read-only, no Delete; the edit URL refuses.
   const esx = await ciIdByName(request, "fra1-esx-01");
   await page.goto(`/cis/${esx}`);
   await expect(page.getByRole("heading", { level: 1, name: "fra1-esx-01" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Edit", exact: true })).toHaveCount(0);
+  await expect(roValue(page, "attributes.name")).toHaveText("fra1-esx-01");
+  await expect(page.locator("#attr-name")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Delete" })).toHaveCount(0);
   await expect(page.getByRole("tab", { name: "History" })).toHaveCount(0); // no audit.view
   await page.goto(`/cis/${esx}/edit`);
@@ -260,15 +261,16 @@ test("the UI shows a restricted user only what they may do", async ({ browser, r
   await expect(page.getByRole("heading", { level: 1, name: "crm-db" })).toHaveCount(0);
   await snap(page, "31-restricted-denied");
 
-  // An Application: Edit is offered and works end to end; Delete is not offered.
+  // An Application: editable on its page and saved end to end; Delete is not offered.
   const app = await ciIdByName(request, `e2e-app-${stamp}`);
   await page.goto(`/cis/${app}`);
   await expect(page.getByRole("button", { name: "Delete" })).toHaveCount(0);
-  await page.getByRole("link", { name: "Edit", exact: true }).click();
   // The ident is generated and only administrators may change it.
-  await expect(page.locator("#f-ident")).toBeDisabled();
+  await expect(roValue(page, "ident")).toHaveText(/\S/);
+  await expect(page.locator("#f-ident")).toHaveCount(0);
   await page.locator("#attr-version").fill(`e2e-${stamp}`);
-  await page.getByRole("button", { name: "Save changes" }).click();
+  await saveCi(page);
+  await expect(page.getByRole("status").filter({ hasText: "Saved" })).toBeVisible();
   await expect(page).toHaveURL(at(`/cis/${app}`));
   expect((await apiGet<{ attributes: Record<string, unknown> }>(request, `/configuration-items/${app}`)).attributes.version).toBe(`e2e-${stamp}`);
   await page.context().close();
@@ -299,13 +301,13 @@ test("a reference into a class the user may not view shows a placeholder, not a 
     await restrictedPage.goto(`/cis/${crm}`);
     await expect(restrictedPage.getByRole("heading", { level: 1, name: "CRM" })).toBeVisible();
     await hiddenIn("detail");
-    await restrictedPage.getByRole("link", { name: "Edit", exact: true }).click();
+    // The CI page is its form: the hidden reference's input says so too.
     await expect(restrictedPage.getByRole("button", { name: "Clear Hidden CI" })).toBeVisible();
-    await hiddenIn("edit");
     // Saving other fields keeps the hidden reference as it was.
     await restrictedPage.locator("#attr-notes").fill(`edited around a hidden reference ${stamp}`);
-    await restrictedPage.getByRole("button", { name: "Save changes" }).click();
-    await expect(restrictedPage).toHaveURL(at(`/cis/${crm}`));
+    await saveCi(restrictedPage);
+    await expect(restrictedPage.getByRole("status").filter({ hasText: "Saved" })).toBeVisible();
+    await hiddenIn("after saving");
     await restrictedPage.context().close();
     const after = await apiGet<{ attributes: Record<string, unknown> }>(request, `/configuration-items/${crm}`);
     expect(after.attributes.primary_database).toBe(await ciIdByName(request, "crm-db"));

@@ -37,7 +37,7 @@ test("Administration has its own sub-navigation", async ({ page }) => {
   await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Administration", exact: true }).click();
   await expect(page).toHaveURL(/\/admin\/users$/);
   const sub = page.getByRole("navigation", { name: "Administration" });
-  await expect(sub.getByRole("link")).toHaveText(["Users", "Groups", "Permission profiles", "API tokens", "Identity providers", "Areas", "CI classes", "Relationship types", "Dropdowns", "Templates", "Customization", "Import", "Export / import", "Audit log"]);
+  await expect(sub.getByRole("link")).toHaveText(["Users", "Groups", "Permission profiles", "API tokens", "Identity providers", "Areas", "CI classes", "Relationship types", "Dropdowns", "Templates", "Workflows", "Customization", "Import", "Export / import", "Audit log"]);
   await expect(page.getByRole("heading", { level: 1, name: "Users" })).toBeVisible();
   await expect(page.getByRole("cell", { name: E2E_USER.username, exact: true })).toBeVisible();
 });
@@ -136,7 +136,9 @@ test("the user sees only the actions their profile allows", async ({ browser, re
   // Server: may edit, may not delete.
   await page.goto(`/cis/${await ciIdByName(request, "fra1-esx-01")}`);
   await expect(page.getByRole("heading", { level: 1, name: "fra1-esx-01" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Edit", exact: true })).toBeVisible();
+  // The page opens with the fields as inputs (SHAA-1644); no separate edit mode.
+  await expect(page.locator("#attr-name")).toBeEnabled();
+  await expect(page.getByRole("link", { name: "Edit", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Delete" })).toHaveCount(0);
   await expect(page.getByRole("tab", { name: "History" })).toBeVisible(); // audit.view
   await snap(page, "25-limited-user-ci");
@@ -144,7 +146,11 @@ test("the user sees only the actions their profile allows", async ({ browser, re
   // Database: view only.
   await page.goto(`/cis/${await ciIdByName(request, "crm-db")}`);
   await expect(page.getByRole("heading", { level: 1, name: "crm-db" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Edit", exact: true })).toHaveCount(0);
+  // The same fields, read-only: values where the inputs would be.
+  await expect(page.locator(".field-ro[data-field='attributes.name'] .ro-value")).toHaveText("crm-db");
+  await expect(page.locator("#attr-name")).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Unsaved changes" })).toHaveCount(0);
+  await snap(page, "25b-view-only-ci");
   await page.goto(`/cis/${await ciIdByName(request, "crm-db")}/edit`);
   await expect(page.getByRole("heading", { name: "Permission denied" })).toBeVisible();
 

@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, ref } from "vue";
 import { dragBox, describeBox, fromBox, LAYER_MOVES, minHeightOf, MOVE, toBox, type Box, type Edges, type Frame, type LayerMove, type SnapLine } from "../../lib/freeLayout";
 import type { LayoutSection } from "../../lib/layoutDesign";
+import Icon from "../Icon.vue";
 
 /**
  * A section of a free tab in the layout editor, as a desktop window (the section
@@ -251,7 +252,7 @@ const canLower = computed(() => props.layer.index > 1);
       :title="stacked ? 'Windows stack on narrow screens: widen the preview to move them' : 'Drag to move the window; right-click for the layers'"
       @keydown="onKey"
     >
-      <span aria-hidden="true">⠿⠿</span>
+      <Icon name="grip-horizontal" :size="14" />
     </span>
     <template v-if="!stacked">
       <span v-for="h in HANDLES" :key="h.key" :class="['win-edge', h.key]" aria-hidden="true" :title="h.title" :data-testid="`window-edge-${h.key}`" @pointerdown="onEdgeDown($event, h.edges)" />
@@ -312,10 +313,10 @@ const canLower = computed(() => props.layer.index > 1);
   top: -9px;
   left: var(--sp-5);
   z-index: 3;
-  padding: 0 var(--sp-2);
-  line-height: 16px;
-  font-size: var(--fs-xs);
-  letter-spacing: -1px;
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 var(--sp-3);
   border: 1px solid var(--c-border-strong);
   border-radius: 8px;
   background: var(--c-surface);

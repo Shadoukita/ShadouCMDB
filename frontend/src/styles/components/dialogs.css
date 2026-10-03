@@ -1,0 +1,64 @@
+/*
+ * Dialogs on native <dialog> (design document §2.7): ConfirmDialog, FormDialog and the dialogs built
+ * on their .confirm class. Widths 440 (.narrow), 560 (default) and 800 (.wide). A title with a
+ * divider under it, a scrolling body, and a right-aligned footer with the primary action last.
+ */
+dialog.confirm {
+  width: min(560px, 92vw);
+  padding: 0;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  background: var(--c-surface);
+  box-shadow: var(--shadow-lg);
+  color: var(--c-text);
+}
+:root[data-theme="dark"] dialog.confirm {
+  border-color: var(--c-border-control);
+}
+dialog.confirm.narrow {
+  width: min(440px, 92vw);
+}
+dialog.confirm.wide,
+dialog.form-dialog.wide {
+  width: min(800px, 96vw);
+}
+dialog.confirm::backdrop {
+  background: var(--c-scrim);
+}
+dialog.confirm > h2,
+dialog.confirm > form > h2 {
+  padding: var(--space-4) var(--space-5) var(--space-3);
+  border-bottom: 1px solid var(--c-border);
+  font-size: var(--fs-h2);
+}
+dialog.confirm .body {
+  padding: var(--space-4) var(--space-5);
+  max-height: 60vh;
+  overflow-y: auto;
+}
+dialog.confirm .body > :first-child {
+  margin-top: 0;
+}
+dialog.confirm .body > :last-child {
+  margin-bottom: 0;
+}
+/* A loading or empty state inside a dialog does not keep its page-level padding. */
+dialog.confirm .body .state {
+  padding: var(--space-4) 0;
+}
+dialog.confirm .footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-5);
+  border-top: 1px solid var(--c-border);
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+}
+
+dialog.form-dialog .body {
+  max-height: 70vh;
+}
+dialog.form-dialog .body > .alert {
+  margin-bottom: var(--space-4);
+}

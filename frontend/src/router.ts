@@ -30,6 +30,8 @@ import UserEditPage from "./pages/admin/UserEditPage.vue";
 import UsersPage from "./pages/admin/UsersPage.vue";
 import GroupEditPage from "./pages/admin/GroupEditPage.vue";
 import GroupsPage from "./pages/admin/GroupsPage.vue";
+import WorkflowEditPage from "./pages/admin/workflows/WorkflowEditPage.vue";
+import WorkflowsPage from "./pages/admin/workflows/WorkflowsPage.vue";
 import { ADMIN_SECTIONS, visibleSections } from "./pages/admin/sections";
 import AccountPage from "./pages/account/AccountPage.vue";
 import EmailEntryPage from "./pages/account/EmailEntryPage.vue";
@@ -128,6 +130,9 @@ export const router = createRouter({
         // /admin/lookups/lists?list=… keeps its list.
         { path: "lookups/:kind?", redirect: (to) => ({ path: "/admin/dropdowns", query: to.params.kind === "lists" ? to.query : {} }) },
         { path: "templates", component: TemplatesPage, meta: { permissions: section("templates") } },
+        { path: "workflows", component: WorkflowsPage, meta: { permissions: section("workflows") } },
+        { path: "workflows/new", component: WorkflowEditPage, meta: { permissions: section("workflows") } },
+        { path: "workflows/:id", component: WorkflowEditPage, meta: { permissions: section("workflows") } },
         { path: "customization", redirect: "/admin/customization/branding" },
         { path: "customization/:section", component: CustomizationPage, meta: { permissions: section("customization") } },
         { path: "import", component: ImportSettingsPage, meta: { administratorOnly: true } },

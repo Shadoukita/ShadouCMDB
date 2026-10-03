@@ -1,0 +1,122 @@
+/*
+ * Alerts and page states (design document §2.7). An alert has a tone (info by default; success,
+ * warning, danger), an icon, the subtle background and a 3 px left accent in the solid colour, so
+ * the tone never rests on colour alone (audit F1, F4).
+ *   .alert              info: notes and neutral messages
+ *   .alert-success      a change was saved (the flash after Save)
+ *   .alert-warn         needs attention, nothing failed
+ *   .alert-error        failed; ErrorAlert renders it with the API's message and request ID
+ */
+.alert {
+  --alert-accent: var(--c-info);
+  --alert-icon: var(--icon-info);
+  position: relative;
+  margin-bottom: var(--space-4);
+  padding: var(--space-2) var(--space-3) var(--space-2) calc(var(--space-3) + 24px);
+  border: 1px solid var(--c-border);
+  border-left: 3px solid var(--alert-accent);
+  border-radius: var(--radius-md);
+  background: var(--c-surface);
+  color: var(--c-text);
+  line-height: 20px;
+}
+.alert::before {
+  content: "";
+  position: absolute;
+  left: var(--space-3);
+  top: calc(var(--space-2) + 2px);
+  width: 16px;
+  height: 16px;
+  background: var(--alert-accent);
+  mask: var(--alert-icon) center / contain no-repeat;
+}
+.alert-success {
+  --alert-accent: var(--c-success);
+  --alert-icon: var(--icon-circle-check);
+  border-color: var(--c-success-subtle);
+  background: var(--c-success-subtle);
+  color: var(--c-success-text);
+}
+.alert-warn {
+  --alert-accent: var(--c-warning);
+  --alert-icon: var(--icon-triangle-alert);
+  border-color: var(--c-warn-border);
+  background: var(--c-warning-subtle);
+  color: var(--c-warning-text);
+}
+.alert-error {
+  --alert-accent: var(--c-danger-text);
+  --alert-icon: var(--icon-circle-alert);
+  border-color: var(--c-danger-border);
+  background: var(--c-danger-subtle);
+  color: var(--c-danger-text);
+}
+/* The message itself stays in the text colour; the tone colours the heading line and the icon. */
+.alert-success > :not(strong:first-child),
+.alert-warn > :not(strong:first-child),
+.alert-error > :not(strong:first-child) {
+  color: var(--c-text);
+}
+.alert strong:first-child {
+  font-weight: var(--fw-semibold);
+}
+.alert ul {
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-5);
+}
+.alert .meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  font-size: var(--fs-sm);
+  color: var(--c-text-secondary);
+}
+
+/* ---------- Page states: loading, empty, error, permission denied ---------- */
+.state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-8) var(--space-5);
+  text-align: center;
+  color: var(--c-text-secondary);
+}
+.state[role="status"] {
+  flex-direction: row;
+  justify-content: center;
+}
+.state .state-icon {
+  color: var(--c-text-tertiary);
+}
+.state h2 {
+  color: var(--c-text);
+  font-size: var(--fs-h2);
+}
+.state .actions {
+  justify-content: center;
+  margin-top: var(--space-2);
+}
+.spinner {
+  display: inline-block;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--c-border);
+  border-top-color: var(--c-primary);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  vertical-align: -2px;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation-duration: 2.4s;
+  }
+}

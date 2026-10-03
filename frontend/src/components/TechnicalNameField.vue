@@ -3,6 +3,7 @@ import { computed, ref, watch } from "vue";
 import { useTechnicalName, type TechnicalNameKind } from "../api/schemaChanges";
 import { useDebounced } from "../lib/composables";
 import { suggestKey } from "../lib/keys";
+import Icon from "./Icon.vue";
 
 /**
  * The technical name of an area, type or field: its PostgreSQL schema, table or
@@ -98,7 +99,7 @@ const describedBy = computed(() => [shownError.value ? `${props.id}-err` : "", `
         @input="onInput"
       />
       <span v-if="editable && check.isFetching.value" class="spinner" aria-label="Checking the name" />
-      <span v-else-if="editable && current?.valid" class="tn-ok" aria-hidden="true">✓</span>
+      <Icon v-else-if="editable && current?.valid" name="check" class="tn-ok" />
       <button v-if="editable && touched" type="button" class="btn btn-sm" @click="useDerived">From name</button>
     </div>
     <span v-if="shownError" :id="`${id}-err`" class="error">{{ shownError }}</span>

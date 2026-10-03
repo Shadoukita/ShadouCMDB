@@ -21,6 +21,7 @@ import ConfirmDialog from "../ConfirmDialog.vue";
 import ErrorAlert from "../ErrorAlert.vue";
 import ManageViewsDialog from "./ManageViewsDialog.vue";
 import SavedViewDialog, { type SavedViewDialogMode, type SavedViewDialogValues } from "./SavedViewDialog.vue";
+import Icon from "../Icon.vue";
 
 /**
  * The View menu of the inventory and the search page (saved-views spec §1.2):
@@ -438,10 +439,10 @@ const dropped = computed(() => {
       >
         <span :id="`${menuId}-button-text`" class="view-menu-name">{{ buttonLabel }}</span>
         <span v-if="current?.isDefault" class="badge spaced">Default</span>
-        <span aria-hidden="true"> ▾</span>
+        <Icon name="chevron-down" />
       </button>
       <template v-if="modified">
-        <span class="view-modified"><span aria-hidden="true">✎</span> Modified</span>
+        <span class="view-modified"><Icon name="pencil" :size="14" /> Modified</span>
         <button v-if="current?.canEdit" type="button" class="btn btn-sm" :disabled="update.isPending.value" @click="saveCurrent">
           {{ update.isPending.value ? "Saving…" : "Save" }}
         </button>
@@ -486,7 +487,7 @@ const dropped = computed(() => {
                   :title="v.resolved.state === 'unavailable' ? 'This view refers to a filter that no longer exists.' : (v.description ?? undefined)"
                   @click="pick(v)"
                 >
-                  <span class="check" aria-hidden="true">{{ v.id === current?.id ? "✓" : "" }}</span>
+                  <span class="check"><Icon v-if="v.id === current?.id" name="check" /></span>
                   <span class="view-menu-name">{{ v.name }}</span>
                   <span v-if="v.isDefault" class="badge">Default</span>
                   <span v-if="v.resolved.state === 'unavailable'" class="muted">(unavailable)</span>

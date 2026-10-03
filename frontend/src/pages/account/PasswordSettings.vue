@@ -78,7 +78,7 @@ function submit() {
       <p class="muted no-margin">
         {{ t("account.password.intro") }}
       </p>
-      <div v-if="done" class="alert" role="status">{{ t("account.password.changed") }}</div>
+      <div v-if="done" class="alert alert-success" role="status">{{ t("account.password.changed") }}</div>
       <ErrorAlert v-if="generalError" :error="generalError" :title="t('account.password.failed')" />
       <div class="form-grid">
         <FormField id="own-current-password" :label="t('account.password.current')" required :error="fieldErrors.currentPassword">

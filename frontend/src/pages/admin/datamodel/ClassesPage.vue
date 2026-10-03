@@ -15,6 +15,7 @@ import { moveItem, useDragReorder } from "../../../lib/reorder";
 import { useSchemaChangeFlow } from "../../../lib/schemaChange";
 import { bySortOrder, flattenTree } from "../../../lib/tree";
 import { useFlashStore } from "../../../stores/flash";
+import Icon from "../../../components/Icon.vue";
 
 /**
  * Administration › Data model › CI classes. The class tree in the order menus and
@@ -136,7 +137,7 @@ async function setActive(c: CiClass, isActive: boolean) {
     </div>
   </div>
 
-  <div v-if="notice" class="alert" role="status">{{ notice }}</div>
+  <div v-if="notice" class="alert alert-success" role="status">{{ notice }}</div>
   <ErrorAlert v-if="reorder.isError.value" :error="reorder.error.value" title="The new order was not saved completely" />
   <ErrorAlert v-if="failure" :error="failure" title="Not saved" />
 
@@ -196,7 +197,7 @@ async function setActive(c: CiClass, isActive: boolean) {
         </thead>
         <tbody>
           <tr v-for="{ item: c, depth } in rows" :key="c.id" v-bind="dnd.row(c.id)" :class="{ disabled: !c.isActive }">
-            <td class="drag-handle" aria-hidden="true" title="Drag to reorder">⠿</td>
+            <td class="drag-handle" aria-hidden="true" title="Drag to reorder"><Icon name="grip-vertical" /></td>
             <td>
               <span :style="{ paddingLeft: `${depth * 18}px` }">
                 <RouterLink :to="`/admin/classes/${c.id}`"><ClassBadge :icon="c.icon" :color="c.color" :name="c.name" /></RouterLink>
@@ -218,8 +219,8 @@ async function setActive(c: CiClass, isActive: boolean) {
               <span v-else class="badge off">Archived</span>
             </td>
             <td class="order-buttons">
-              <button type="button" class="btn btn-sm" :disabled="reorder.isPending.value || !canStep(c, -1)" :aria-label="`Move ${c.name} up`" @click="step(c, -1)">↑</button>
-              <button type="button" class="btn btn-sm" :disabled="reorder.isPending.value || !canStep(c, 1)" :aria-label="`Move ${c.name} down`" @click="step(c, 1)">↓</button>
+              <button type="button" class="btn btn-sm btn-icon" :disabled="reorder.isPending.value || !canStep(c, -1)" :aria-label="`Move ${c.name} up`" @click="step(c, -1)"><Icon name="arrow-up" /></button>
+              <button type="button" class="btn btn-sm btn-icon" :disabled="reorder.isPending.value || !canStep(c, 1)" :aria-label="`Move ${c.name} down`" @click="step(c, 1)"><Icon name="arrow-down" /></button>
             </td>
             <td class="row-actions">
               <RouterLink class="btn btn-sm" :to="`/admin/classes/${c.id}`">Edit</RouterLink>

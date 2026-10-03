@@ -19,6 +19,7 @@ test("an archived field's value is listed apart on the detail page, labelled as 
   await expect(archived.locator("dd")).toHaveText("kept value");
   await expect(page.getByRole("heading", { name: "Not defined by this class" })).toHaveCount(0);
   // Not among the active fields of the layout either.
-  await expect(page.locator(".layout-panel dt", { hasText: `Retired ${stamp}` })).toHaveCount(0);
+  await expect(page.locator(".layout-panel").getByText(`Retired ${stamp}`)).toHaveCount(0);
+  await expect(page.locator(`#attr-${key}`)).toHaveCount(0);
   await snap(page, "archived-field-detail");
 });

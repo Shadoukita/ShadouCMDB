@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from "vue";
+import { t } from "../i18n";
 
 /**
  * Modal form (create/edit a row) on <dialog>, like ConfirmDialog: focus stays
@@ -31,8 +32,8 @@ function onCancel(e: Event) {
       <h2>{{ title }}</h2>
       <div v-if="open" class="body"><slot /></div>
       <div class="footer">
-        <button type="button" class="btn" :disabled="busy" @click="emit('cancel')">Cancel</button>
-        <button type="submit" class="btn btn-primary" :disabled="busy">{{ busy ? "Saving…" : submitLabel }}</button>
+        <button type="button" class="btn" :disabled="busy" @click="emit('cancel')">{{ t("common.cancel") }}</button>
+        <button type="submit" class="btn btn-primary" :disabled="busy">{{ busy ? t("common.saving") : submitLabel }}</button>
       </div>
     </form>
   </dialog>

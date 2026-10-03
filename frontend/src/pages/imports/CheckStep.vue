@@ -19,6 +19,8 @@ import { plural } from "../../lib/format";
 import { columnLetter, refusalCode } from "../../lib/imports";
 import ChangeValue from "./ChangeValue.vue";
 import ImportProgress from "./ImportProgress.vue";
+import Icon from "../../components/Icon.vue";
+import type { IconName } from "../../icons/lucide";
 
 /**
  * Step 3: the dry run. While it runs: progress, elapsed time and Cancel. Then the counts, a sample of the
@@ -148,11 +150,11 @@ async function download() {
 }
 
 const OUTCOME = {
-  create: { icon: "+", label: "Create" },
-  update: { icon: "✎", label: "Update" },
-  unchanged: { icon: "=", label: "Unchanged" },
-  error: { icon: "!", label: "Error" },
-} as const;
+  create: { icon: "plus", label: "Create" },
+  update: { icon: "pencil", label: "Update" },
+  unchanged: { icon: "equal", label: "Unchanged" },
+  error: { icon: "circle-alert", label: "Error" },
+} as const satisfies Record<string, { icon: IconName; label: string }>;
 // Changed fields are named by key (`attributes.os`); show the class's labels.
 const classes = useCiClasses();
 const classId = computed(() => classes.data.value?.find((c) => c.key === props.job.classKey)?.id);
@@ -206,15 +208,15 @@ const fieldLabel = (f: string) => {
         </div>
 
         <ul class="import-counts" aria-label="Check result">
-          <li><span aria-hidden="true">+</span> <strong>Create</strong> {{ summary.create.toLocaleString() }}</li>
-          <li><span aria-hidden="true">✎</span> <strong>Update</strong> {{ summary.update.toLocaleString() }}</li>
-          <li><span aria-hidden="true">=</span> <strong>Unchanged</strong> {{ summary.unchanged.toLocaleString() }}</li>
+          <li><Icon name="plus" /> <strong>Create</strong> {{ summary.create.toLocaleString() }}</li>
+          <li><Icon name="pencil" /> <strong>Update</strong> {{ summary.update.toLocaleString() }}</li>
+          <li><Icon name="equal" /> <strong>Unchanged</strong> {{ summary.unchanged.toLocaleString() }}</li>
           <li :class="{ 'import-count-error': summary.errorRows > 0 }">
-            <span aria-hidden="true">!</span> <strong>Errors</strong> {{ summary.errorRows.toLocaleString() }}
+            <Icon name="circle-alert" /> <strong>Errors</strong> {{ summary.errorRows.toLocaleString() }}
             {{ summary.errorRows === 1 ? "row" : "rows" }}
           </li>
-          <li><span aria-hidden="true">↔</span> <strong>Relationships to add</strong> {{ summary.relationshipsToAdd.toLocaleString() }}</li>
-          <li><span aria-hidden="true">⚠</span> <strong>Warnings</strong> {{ summary.warnings.toLocaleString() }}</li>
+          <li><Icon name="arrow-left-right" /> <strong>Relationships to add</strong> {{ summary.relationshipsToAdd.toLocaleString() }}</li>
+          <li><Icon name="triangle-alert" /> <strong>Warnings</strong> {{ summary.warnings.toLocaleString() }}</li>
         </ul>
         <p v-if="summary.issuesTotal > 10000" class="muted">
           Showing the first 10,000 of {{ summary.issuesTotal.toLocaleString() }} problems. Fix the mapping or the file.
@@ -247,7 +249,7 @@ const fieldLabel = (f: string) => {
           <tbody>
             <tr v-for="r in job.preview" :key="r.row">
               <th scope="row" class="num">{{ r.row }}</th>
-              <td><span aria-hidden="true">{{ OUTCOME[r.outcome].icon }} </span>{{ OUTCOME[r.outcome].label }}</td>
+              <td><Icon :name="OUTCOME[r.outcome].icon" /> {{ OUTCOME[r.outcome].label }}</td>
               <td>
                 <RouterLink v-if="r.ciId" :to="`/cis/${r.ciId}`">{{ r.ciLabel ?? r.ciId }}</RouterLink>
                 <template v-else>{{ r.ciLabel ?? "–" }}</template>
@@ -336,7 +338,7 @@ const fieldLabel = (f: string) => {
               <td>{{ columnName(p.column, p.header) }}</td>
               <td :title="p.value ?? undefined"><span class="cell-clip">{{ p.value ?? "" }}</span></td>
               <td class="wrap">
-                <span aria-hidden="true">{{ p.severity === "error" ? "✕ " : "⚠ " }}</span>
+                <Icon :name="p.severity === 'error' ? 'circle-x' : 'triangle-alert'" /> 
                 <span class="sr-only">{{ p.severity === "error" ? "Error: " : "Warning: " }}</span>{{ p.message }}
               </td>
               <td><code>{{ p.code }}</code></td>

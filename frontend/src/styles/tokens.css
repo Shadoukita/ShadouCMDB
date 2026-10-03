@@ -101,12 +101,17 @@
   --z-dialog: 50;
   --z-toast: 60;
 
-  /* ---------- Sizes (compact density: today's values) ---------- */
-  --row-h: 28px;
-  --control-h: 28px;
-  --control-h-sm: 24px;
+  /* ---------- Density (standard; comfortable below, on <html data-density="comfortable">) ---------- */
+  --row-h: 28px; /* table and facet rows */
+  --control-h: 30px; /* buttons, inputs, selects */
+  --control-h-sm: 24px; /* row actions, chips, pagination: never below 24 (WCAG 2.5.8) */
+  --menu-item-h: 30px;
+  --cell-px: 8px; /* table cell inline padding */
+  --panel-p: 14px; /* panel body padding */
+  --header-h: 48px;
   --sidebar-w: 200px;
-  --header-h: 44px;
+
+  --ls-overline: 0.04em;
 
   /* ---------- Colour: surfaces, borders, text ---------- */
   --c-bg: var(--gray-50);
@@ -150,8 +155,10 @@
   --c-danger-subtle: #ffebe9;
   --c-danger-text: #a40e26; /* on the surface, the subtle background and a hovered row */
   --c-danger-border: #ffaba8;
+  --c-info: #0969da; /* 5.2:1 */
   --c-info-subtle: #ddf4ff;
   --c-info-text: #0550ae; /* 6.7:1 on the subtle background */
+  --c-neutral: #6e7781; /* retired, unknown: dots only, always next to a word */
   /* Older names. */
   --c-danger: var(--c-danger-solid);
   --c-danger-hover: var(--c-danger-solid-hover);
@@ -168,8 +175,6 @@
   --c-sidebar-text-muted: #9aa3b2; /* 7.2:1, 6.0:1 on the active row: section labels, counts */
   --c-sidebar-text-strong: #ffffff;
   --c-sidebar-link: var(--cyan-300);
-  /* Class icons are drawn in colours meant for light backgrounds: on the rail they sit on this chip. */
-  --c-sidebar-chip: #eef1f5;
 
   /* ---------- Badges ---------- */
   --badge-neutral-bg: var(--gray-100);
@@ -184,6 +189,9 @@
   --badge-danger-fg: var(--c-danger-text);
   --badge-info-bg: var(--c-info-subtle);
   --badge-info-fg: var(--c-info-text);
+
+  /* The chevron of a single-line <select>, in --c-text-secondary (a background image cannot use currentColor). */
+  --select-chevron: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%234b5563%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22m6%209%206%206%206-6%22%2F%3E%3C%2Fsvg%3E");
 
   color-scheme: light;
 }
@@ -224,8 +232,10 @@
   --c-danger-subtle: #3d1a19;
   --c-danger-text: #ff6b5f; /* 6.3:1 on the surface */
   --c-danger-border: #7a2e29;
+  --c-info: #58a6ff;
   --c-info-subtle: #132a45;
   --c-info-text: #a5d6ff;
+  --c-neutral: #8a93a3;
   --c-danger: #ff6b5f;
   --c-danger-hover: #ff8a80;
   --c-warn-border: #8a6d1f;
@@ -252,5 +262,17 @@
   --shadow-md: 0 4px 12px rgb(0 0 0 / 45%);
   --shadow-lg: 0 16px 40px rgb(0 0 0 / 55%);
   --c-scrim: rgb(0 0 0 / 60%);
+  --select-chevron: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%23a3acba%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22m6%209%206%206%206-6%22%2F%3E%3C%2Fsvg%3E");
   color-scheme: dark;
+}
+
+/* Comfortable density: the operator's choice (stores/density.ts). Text sizes do not change. */
+:root[data-density="comfortable"] {
+  --row-h: 34px;
+  --control-h: 34px;
+  --control-h-sm: 28px;
+  --menu-item-h: 34px;
+  --cell-px: 12px;
+  --panel-p: 20px;
+  --header-h: 52px;
 }

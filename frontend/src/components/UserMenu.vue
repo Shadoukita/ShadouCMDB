@@ -6,6 +6,7 @@ import { useMediaQuery } from "../lib/composables";
 import { useBrandingStore } from "../stores/branding";
 import { useSessionStore } from "../stores/session";
 import ErrorAlert from "./ErrorAlert.vue";
+import Icon from "./Icon.vue";
 
 /**
  * The acting user, theme and "Sign out" in the header. Below 960 px they fold into a
@@ -77,7 +78,7 @@ async function signOut() {
       <span class="sr-only">{{ t("userMenu.signedInAs") }}</span>
       <span class="who-name">{{ session.user.displayName }}</span>
       <span class="who-initials" aria-hidden="true">{{ initials }}</span>
-      <span aria-hidden="true">▾</span>
+      <Icon name="chevron-down" />
     </button>
     <div v-show="!compact || open" id="user-menu-panel" class="user-menu-panel">
       <span v-if="compact" class="menu-label menu-who">{{ t("userMenu.signedInAsName", { name: session.user.displayName }) }}</span>

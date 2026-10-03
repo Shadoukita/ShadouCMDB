@@ -5,6 +5,7 @@ import CiStateBadge from "../../components/CiStateBadge.vue";
 import CriticalityBadge from "../../components/CriticalityBadge.vue";
 import { parentIndex, visibleRows, type TreeRow } from "../../lib/graphTree";
 import type { TrailStep } from "../../lib/trail";
+import Icon from "../../components/Icon.vue";
 
 /**
  * An indented tree of CIs under a root: the relationship map (lib/graphTree `graphRows`) and the
@@ -108,7 +109,7 @@ function onKey(e: KeyboardEvent, r: TreeRow) {
           :aria-label="collapsed.has(r.key) ? `Expand ${r.node.label}` : `Collapse ${r.node.label}`"
           @click="toggle(r)"
         >
-          {{ collapsed.has(r.key) ? "▸" : "▾" }}
+          <Icon :name="collapsed.has(r.key) ? 'chevron-right' : 'chevron-down'" :size="14" />
         </button>
         <span v-else class="tree-toggle" aria-hidden="true" />
         <span class="muted"><bdi>{{ r.edgeLabel }}</bdi> → </span>

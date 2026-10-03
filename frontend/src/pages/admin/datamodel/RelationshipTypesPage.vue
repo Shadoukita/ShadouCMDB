@@ -23,6 +23,7 @@ import { useDocumentTitle } from "../../../lib/composables";
 import { useListQuery } from "../../../lib/listQuery";
 import { moveItem, useDragReorder } from "../../../lib/reorder";
 import { flattenTree } from "../../../lib/tree";
+import Icon from "../../../components/Icon.vue";
 
 /**
  * Administration › Data model › Relationship types. A type names an edge in both
@@ -196,7 +197,7 @@ const ruleLabel = (r: { sourceClassId: string; targetClassId: string }) =>
       <button type="button" class="btn btn-primary" @click="openType(null)">+ New relationship type</button>
     </div>
   </div>
-  <div v-if="notice" class="alert" role="status">{{ notice }}</div>
+  <div v-if="notice" class="alert alert-success" role="status">{{ notice }}</div>
   <ErrorAlert v-if="reorder.isError.value" :error="reorder.error.value" title="The new order was not saved completely" />
   <ErrorAlert v-if="patchType.isError.value" :error="patchType.error.value" title="Not saved" />
 
@@ -237,7 +238,7 @@ const ruleLabel = (r: { sourceClassId: string; targetClassId: string }) =>
             :class="{ disabled: !t.isActive, selected: t.id === selectedId }"
             :aria-selected="t.id === selectedId"
           >
-            <td class="drag-handle" aria-hidden="true" title="Drag to reorder">⠿</td>
+            <td class="drag-handle" aria-hidden="true" title="Drag to reorder"><Icon name="grip-vertical" /></td>
             <td>
               <RouterLink :to="{ query: { type: t.id } }">{{ t.name }}</RouterLink>
               <span v-if="!t.isDirectional" class="badge" title="Both ends mean the same (e.g. connected to)">symmetric</span>
@@ -255,8 +256,8 @@ const ruleLabel = (r: { sourceClassId: string; targetClassId: string }) =>
               <span v-else class="badge off">Archived</span>
             </td>
             <td class="order-buttons">
-              <button type="button" class="btn btn-sm" :disabled="reorder.isPending.value || rows.indexOf(t) === 0" :aria-label="`Move ${t.name} up`" @click="step(t, -1)">↑</button>
-              <button type="button" class="btn btn-sm" :disabled="reorder.isPending.value || rows.indexOf(t) === rows.length - 1" :aria-label="`Move ${t.name} down`" @click="step(t, 1)">↓</button>
+              <button type="button" class="btn btn-sm btn-icon" :disabled="reorder.isPending.value || rows.indexOf(t) === 0" :aria-label="`Move ${t.name} up`" @click="step(t, -1)"><Icon name="arrow-up" /></button>
+              <button type="button" class="btn btn-sm btn-icon" :disabled="reorder.isPending.value || rows.indexOf(t) === rows.length - 1" :aria-label="`Move ${t.name} down`" @click="step(t, 1)"><Icon name="arrow-down" /></button>
             </td>
             <td class="row-actions">
               <button type="button" class="btn btn-sm" :aria-label="`Edit ${t.name}`" @click="openType(t)">Edit</button>

@@ -1,4 +1,4 @@
-import { apiGet, apiSend, applySchemaChange, classIdByName, createCi, csrf, snap, expect, test } from "./support";
+import { apiGet, apiSend, applySchemaChange, classIdByName, createCi, csrf, saveCi, snap, expect, test } from "./support";
 
 // Multi-line text attributes (GH#109): a text attribute flagged validation.multiline is a text
 // area on the CI form that keeps line breaks and indentation exactly, and the detail page shows
@@ -21,27 +21,25 @@ interface Attr {
 
 test("Notes: entered with line breaks, saved and reloaded unchanged", async ({ page, request }) => {
   const ci = await createCi(request, await classIdByName(request, "Application"), `e2e-multiline-${stamp}`);
-  await page.goto(`/cis/${ci.id}/edit`);
+  // Entered on the CI page itself, which keeps the line breaks.
+  await page.goto(`/cis/${ci.id}`);
   const notes = page.locator("#attr-notes");
   await expect(notes).toHaveJSProperty("tagName", "TEXTAREA");
   await notes.fill(RUNBOOK);
-  await page.getByRole("button", { name: "Save changes" }).click();
-  await expect(page).toHaveURL(new RegExp(`/cis/${ci.id}$`));
+  await saveCi(page);
+  await expect(page.getByRole("status").filter({ hasText: "Saved" })).toBeVisible();
 
   expect((await apiGet<Ci>(request, `/configuration-items/${ci.id}`)).attributes.notes).toBe(RUNBOOK);
-  // The detail page keeps the line breaks.
-  const shown = page.locator(".prop", { has: page.locator("dt", { hasText: /^Notes$/ }) }).locator(".multiline");
-  await expect(shown).toHaveJSProperty("textContent", RUNBOOK);
-  await expect(shown).toHaveCSS("white-space", "pre-wrap");
+  await expect(notes).toHaveValue(RUNBOOK);
   await snap(page, "multiline-detail");
 
-  // Reloaded into the form, and saved again with another field changed: the notes stay as they are.
-  await page.goto(`/cis/${ci.id}/edit`);
-  await expect(page.locator("#attr-notes")).toHaveValue(RUNBOOK);
-  await page.locator("#attr-notes").press("ControlOrMeta+End");
-  await page.locator("#attr-notes").pressSequentially("Checked.");
-  await page.getByRole("button", { name: "Save changes" }).click();
-  await expect(page).toHaveURL(new RegExp(`/cis/${ci.id}$`));
+  // Reloaded, and saved again with the notes extended: the line breaks stay as they are.
+  await page.reload();
+  await expect(notes).toHaveValue(RUNBOOK);
+  await notes.press("ControlOrMeta+End");
+  await notes.pressSequentially("Checked.");
+  await saveCi(page);
+  await expect(page.getByRole("region", { name: "Unsaved changes" })).toHaveCount(0);
   expect((await apiGet<Ci>(request, `/configuration-items/${ci.id}`)).attributes.notes).toBe(`${RUNBOOK}Checked.`);
 });
 

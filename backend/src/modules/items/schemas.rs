@@ -6,7 +6,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use utoipa::openapi::RefOr;
-use utoipa::openapi::schema::{AdditionalProperties, AnyOfBuilder, Object, ObjectBuilder, Schema, SchemaType, Type};
+use utoipa::openapi::schema::{
+    AdditionalProperties, AnyOfBuilder, KnownFormat, Object, ObjectBuilder, Schema, SchemaFormat, SchemaType, Type,
+};
 use utoipa::{IntoParams, PartialSchema, ToSchema};
 use uuid::Uuid;
 
@@ -683,6 +685,123 @@ pub struct SearchQuery {
 }
 paged!(SearchQuery);
 item_filters!(SearchQuery);
+
+/// Width of a change histogram bucket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum HistogramBucket {
+    Hour,
+    Day,
+}
+
+impl HistogramBucket {
+    /// The bucket width, and the longest range one request may cover.
+    pub fn width_and_cap(self) -> (chrono::TimeDelta, chrono::TimeDelta) {
+        match self {
+            HistogramBucket::Hour => (chrono::TimeDelta::hours(1), chrono::TimeDelta::days(7)),
+            HistogramBucket::Day => (chrono::TimeDelta::days(1), chrono::TimeDelta::days(90)),
+        }
+    }
+}
+
+fn bucket_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .enum_values(Some(["hour", "day"]))
+        .default(Some("hour".into()))
+        .description(Some(
+            "Bucket width, aligned to UTC hours or days. hour covers at most 7 days per request, day at most 90 days.",
+        ))
+        .into()
+}
+
+fn histogram_from_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .format(Some(SchemaFormat::KnownFormat(KnownFormat::DateTime)))
+        .description(Some(
+            "Start of the range (ISO 8601, inclusive). Default: 24 hours before `to` for hour buckets, 30 days before \
+             for day buckets.",
+        ))
+        .into()
+}
+
+fn histogram_to_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .format(Some(SchemaFormat::KnownFormat(KnownFormat::DateTime)))
+        .description(Some("End of the range (ISO 8601, exclusive). Default: now."))
+        .into()
+}
+
+/// The list filters of `listConfigurationItems`, plus the time range and bucket width.
+#[derive(Debug, Deserialize, IntoParams)]
+#[serde(rename_all = "camelCase")]
+#[into_params(parameter_in = Query)]
+pub struct ChangeHistogramQuery {
+    #[param(schema_with = histogram_from_schema)]
+    pub from: Option<DateTime<Utc>>,
+    #[param(schema_with = histogram_to_schema)]
+    pub to: Option<DateTime<Utc>>,
+    #[param(required = false, schema_with = bucket_schema)]
+    pub bucket: HistogramBucket,
+    #[param(schema_with = list_q_schema)]
+    #[serde(default, deserialize_with = "schemas::trimmed_opt")]
+    pub q: Option<String>,
+    #[param(schema_with = class_filter_schema)]
+    pub class_id: Option<UuidList>,
+    #[param(required = false, schema_with = include_subclasses_schema)]
+    pub include_subclasses: QueryBool,
+    #[param(required = false, schema_with = active_schema)]
+    pub active: ActiveQuery,
+    #[param(schema_with = lookup_value_filter_schema)]
+    pub lookup_value_id: Option<UuidList>,
+    #[param(schema_with = ip_within_schema)]
+    pub ip_within: Option<String>,
+    #[param(schema_with = criticality_filter_schema)]
+    pub criticality_value_id: Option<UuidList>,
+    #[param(required = false, schema_with = deleted_items_schema)]
+    pub deleted: Deleted,
+    #[param(schema_with = own_layout_schema)]
+    pub own_layout: Option<QueryBool>,
+    #[param(schema_with = layout_template_schema)]
+    pub layout_template: Option<String>,
+    #[param(schema_with = kind_schema)]
+    pub kind: Option<KindQuery>,
+}
+item_filters!(ChangeHistogramQuery);
+
+/// Changes to the CIs of one bucket. The three counts do not overlap.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChangeHistogramBucket {
+    /// Start of the bucket (UTC)
+    #[serde(serialize_with = "ts::serialize")]
+    pub start: DateTime<Utc>,
+    /// CIs created
+    pub created: i64,
+    /// Other changes: updates that leave the status as it was, deletions and restores
+    pub updated: i64,
+    /// Updates that changed the CI's `status` attribute
+    pub status_changed: i64,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChangeHistogram {
+    /// The range counted, as sent or defaulted: `from` inclusive, `to` exclusive
+    #[serde(serialize_with = "ts::serialize")]
+    pub from: DateTime<Utc>,
+    #[serde(serialize_with = "ts::serialize")]
+    pub to: DateTime<Utc>,
+    #[schema(inline)]
+    pub bucket: HistogramBucket,
+    /// Every bucket of the range in order, empty ones included. The first starts at `from` rounded down to the
+    /// bucket width and may count only part of its hour or day; so may the last.
+    pub buckets: Vec<ChangeHistogramBucket>,
+    /// Sum of all counts over all buckets
+    pub total: i64,
+}
 
 fn direction_schema() -> Schema {
     ObjectBuilder::new()

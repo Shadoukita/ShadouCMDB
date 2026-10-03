@@ -1,4 +1,4 @@
-import { apiGet, apiSend, applySchemaChange, at, classIdByName, snap, expect, test } from "./support";
+import { apiGet, apiSend, applySchemaChange, at, classIdByName, shownValue, snap, expect, test } from "./support";
 
 // Administration › Data model › Dropdowns: a list that depends on a parent list
 // (Model on Manufacturer), the attribute that names its parent field, and the
@@ -161,7 +161,7 @@ test("the CI form: the child dropdown follows its parent", async ({ page, reques
   await snap(page, "36-ci-form-cascading-dropdown");
   await page.getByRole("button", { name: `Create ${CLASS}` }).click();
   await expect(page).toHaveURL(/\/cis\/[0-9a-f-]{36}$/);
-  await expect(page.getByText("Nexus 9000")).toBeVisible();
+  await expect.poll(() => shownValue(page, "Maker model")).toBe("Nexus 9000");
 
   const ciId = page.url().split("/").pop()!;
   const ci = await apiGet<{ attributes: Record<string, unknown> }>(request, `/configuration-items/${ciId}`);
@@ -179,7 +179,7 @@ test("the CI form: the child dropdown follows its parent", async ({ page, reques
   await page.locator("#attr-maker_model").selectOption({ label: "ProLiant DL380" });
   await page.getByRole("button", { name: "Save changes" }).click();
   await expect(page).toHaveURL(at(`/cis/${ciId}`));
-  await expect(page.getByText("ProLiant DL380")).toBeVisible();
+  await expect.poll(() => shownValue(page, "Maker model")).toBe("ProLiant DL380");
 });
 
 test("the row actions fit at a 1280 px viewport, however long the description (GH#110)", async ({ page, request }) => {

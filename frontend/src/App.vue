@@ -11,13 +11,17 @@ import UserMenu from "./components/UserMenu.vue";
 import { t } from "./i18n";
 import { useMediaQuery } from "./lib/composables";
 import { applyBranding, useBrandingStore } from "./stores/branding";
+import { applyDensity, useDensityStore } from "./stores/density";
 import { useSessionStore } from "./stores/session";
+import Icon from "./components/Icon.vue";
 
 const route = useRoute();
 const session = useSessionStore();
 const branding = useBrandingStore();
 // Theme, brand colours and favicon follow the saved branding (or the editor's live preview).
 watchEffect(() => applyBranding(branding.effective, branding.theme));
+const density = useDensityStore();
+watchEffect(() => applyDensity(density.density));
 
 // Below 820 px the sidebar becomes a drawer behind a toggle in the brand cell (breakpoint also in app.css).
 const narrow = useMediaQuery("(max-width: 820px)");
@@ -55,7 +59,7 @@ function retry() {
         :aria-label="navOpen ? t('shell.nav.close') : t('shell.nav.open')"
         @click="navOpen = !navOpen"
       >
-        <span aria-hidden="true">☰</span>
+        <Icon name="menu" :size="20" />
       </button>
       <RouterLink to="/" :aria-label="t('shell.home', { app: branding.effective.appName })"><BrandMark /></RouterLink>
     </div>
@@ -63,7 +67,7 @@ function retry() {
       <GlobalSearch />
       <div class="shell-actions">
         <RouterLink v-if="session.canOnAnyClass('create')" class="btn btn-primary new-ci" to="/cis/new" :title="t('shell.newCi')">
-          <span aria-hidden="true">+</span><span class="btn-label">{{ t("shell.newCi") }}</span>
+          <Icon name="plus" /><span class="btn-label">{{ t("shell.newCi") }}</span>
         </RouterLink>
         <UserMenu />
       </div>

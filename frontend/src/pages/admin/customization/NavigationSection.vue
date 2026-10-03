@@ -9,6 +9,7 @@ import LoadingState from "../../../components/LoadingState.vue";
 import { suggestKey } from "../../../lib/keys";
 import { moveItem } from "../../../lib/reorder";
 import { completeNavEntries, pageLabel } from "../../../lib/uiSettings";
+import Icon from "../../../components/Icon.vue";
 
 /**
  * Customization › Navigation: the main menu's order, names, sections and
@@ -138,8 +139,8 @@ function resetMenu() {
                 </label>
               </td>
               <td class="row-actions">
-                <button type="button" class="btn btn-sm" :disabled="i === 0" :aria-label="`Move ${defaultName(e)} up`" @click="move(i, i - 1)">↑</button>
-                <button type="button" class="btn btn-sm" :disabled="i === rows.length - 1" :aria-label="`Move ${defaultName(e)} down`" @click="move(i, i + 1)">↓</button>
+                <button type="button" class="btn btn-sm btn-icon" :disabled="i === 0" :aria-label="`Move ${defaultName(e)} up`" @click="move(i, i - 1)"><Icon name="arrow-up" /></button>
+                <button type="button" class="btn btn-sm btn-icon" :disabled="i === rows.length - 1" :aria-label="`Move ${defaultName(e)} down`" @click="move(i, i + 1)"><Icon name="arrow-down" /></button>
                 <select
                   v-if="e.type === 'class' && sections.length > 0"
                   class="inline-select"
@@ -166,8 +167,8 @@ function resetMenu() {
                 </label>
               </td>
               <td class="row-actions">
-                <button type="button" class="btn btn-sm" :disabled="j === 0" :aria-label="`Move ${className(it.classKey)} up`" @click="moveItemIn(i, j, j - 1)">↑</button>
-                <button type="button" class="btn btn-sm" :disabled="j === (e.items?.length ?? 0) - 1" :aria-label="`Move ${className(it.classKey)} down`" @click="moveItemIn(i, j, j + 1)">↓</button>
+                <button type="button" class="btn btn-sm btn-icon" :disabled="j === 0" :aria-label="`Move ${className(it.classKey)} up`" @click="moveItemIn(i, j, j - 1)"><Icon name="arrow-up" /></button>
+                <button type="button" class="btn btn-sm btn-icon" :disabled="j === (e.items?.length ?? 0) - 1" :aria-label="`Move ${className(it.classKey)} down`" @click="moveItemIn(i, j, j + 1)"><Icon name="arrow-down" /></button>
                 <button type="button" class="btn btn-sm" @click="moveOut(i, j)">Out of section</button>
               </td>
             </tr>

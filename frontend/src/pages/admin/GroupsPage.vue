@@ -12,6 +12,7 @@ import { useDebounced, useDocumentTitle } from "../../lib/composables";
 import { formatRelative } from "../../lib/format";
 import { useListQuery } from "../../lib/listQuery";
 import { useFlashStore } from "../../stores/flash";
+import SortIcon from "../../components/SortIcon.vue";
 
 /** Administration › Groups. Search, sort and page live in the URL; the API searches and pages. */
 useDocumentTitle(t("groups.title"));
@@ -67,7 +68,7 @@ function clearSearch() {
       <RouterLink class="btn btn-primary" to="/admin/groups/new">+ {{ t("groups.create") }}</RouterLink>
     </div>
   </div>
-  <div v-if="flashText" class="alert" role="status">{{ flashText }}</div>
+  <div v-if="flashText" class="alert alert-success" role="status">{{ flashText }}</div>
 
   <section class="panel" :aria-label="t('groups.title')">
     <form class="toolbar" role="search" @submit.prevent>
@@ -100,7 +101,7 @@ function clearSearch() {
             <tr>
               <th v-for="c in COLUMNS" :key="c.key" scope="col" :class="{ num: c.num }" :aria-sort="c.sort ? lq.ariaSort(c.sort) : undefined">
                 <button v-if="c.sort" type="button" class="sort" @click="lq.toggleSort(c.sort)">
-                  {{ c.label }} {{ lq.sortIndicator(c.sort) }}
+                  {{ c.label }} <SortIcon :dir="lq.ariaSort(c.sort)" />
                 </button>
                 <template v-else>{{ c.label }}</template>
               </th>

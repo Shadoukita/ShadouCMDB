@@ -209,10 +209,23 @@ pub(super) fn match_by_role(
             }
         }
     }
+    for (i, w) in file.workflows.iter().flatten().enumerate() {
+        if let Some(role) = w.class_system_role
+            && !class_of_role.contains_key(&role)
+        {
+            problem(
+                &mut errors,
+                format!("workflows.{i}.classSystemRole"),
+                "not_found",
+                format!("This install has no {}", class_role_name(role)),
+            );
+        }
+    }
     if !errors.is_empty() {
         return errors;
     }
 
+    super::workflows::match_classes(file, &class_of_role, &classes, &role_of_class);
     if let Some(dm) = file.data_model.as_mut() {
         for c in &mut dm.classes {
             rename(&mut c.key, &classes);

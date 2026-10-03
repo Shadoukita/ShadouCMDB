@@ -400,7 +400,7 @@ const notFound = computed(() => {
         </template>
       </div>
     </div>
-    <div v-if="flashText" class="alert" role="status">{{ flashText }}</div>
+    <div v-if="flashText" class="alert alert-success" role="status">{{ flashText }}</div>
 
     <div class="grid-2">
       <form class="stack" aria-label="Identity provider settings" novalidate @submit.prevent="submit">
@@ -408,7 +408,7 @@ const notFound = computed(() => {
           <div class="panel-header"><h2 id="idp-general-title">General</h2></div>
           <div class="panel-body stack">
             <FormErrorBanner v-if="error" :error="error" :unplaced="unplaced" />
-            <div v-if="saved" class="alert" role="status">{{ saved }}</div>
+            <div v-if="saved" class="alert alert-success" role="status">{{ saved }}</div>
             <fieldset v-if="isNew" class="group">
               <legend>Type</legend>
               <div class="radio-choice">

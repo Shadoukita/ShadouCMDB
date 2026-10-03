@@ -165,7 +165,7 @@ onBeforeUnmount(() => window.removeEventListener("beforeunload", onBeforeUnload)
       </button>
       <button type="button" class="btn" :disabled="!dirty || save.isPending.value" @click="discard">Discard</button>
     </div>
-    <div v-if="saved && !dirty" class="alert" role="status">{{ saved }}</div>
+    <div v-if="saved && !dirty" class="alert alert-success" role="status">{{ saved }}</div>
     <div v-if="conflict || (stale && dirty)" class="alert alert-warn" role="alert">
       <strong>Someone else saved the settings while you were editing.</strong>
       <div>
