@@ -454,6 +454,9 @@ async fn migrate_with(pool: &PgPool, cfg: &DatabaseConfig, adopt_drizzle: bool) 
     if let Some(notice) = crate::data::api_tokens::second_factor_refusal_notice(&mut *pool.acquire().await?).await? {
         println!("Warning: {notice}");
     }
+    if let Some(notice) = crate::data::api_tokens::email_required_refusal_notice(&mut *pool.acquire().await?).await? {
+        println!("Warning: {notice}");
+    }
     println!(
         "Database is at migration {after}/{expected}{}",
         if pending.is_empty() && !reconciled { " (nothing to do)" } else { "" }

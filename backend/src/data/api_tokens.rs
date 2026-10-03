@@ -242,6 +242,38 @@ pub async fn second_factor_refusal_notice(conn: &mut PgConnection) -> sqlx::Resu
     }))
 }
 
+/// What `shadoucmdb migrate` and `verify` print when working tokens belong to
+/// accounts without an e-mail: they are refused with 403 `EMAIL_REQUIRED`
+/// until the account has one (SHAA-1505, GH#544); None when there are none.
+pub async fn email_required_refusal_notice(conn: &mut PgConnection) -> sqlx::Result<Option<String>> {
+    const SHOWN: usize = 20;
+    let owners: Vec<(String, i64)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT u.username, count(*) FROM api_tokens t JOIN users u ON u.id = t.user_id
+         WHERE u.email IS NULL AND t.revoked_at IS NULL AND t.expires_at > now() AND u.is_active
+               AND {OWNER_PROVIDER_ENABLED}
+         GROUP BY u.username ORDER BY u.username"
+    )))
+    .fetch_all(conn)
+    .await?;
+    if owners.is_empty() {
+        return Ok(None);
+    }
+    let refused: i64 = owners.iter().map(|(_, n)| n).sum();
+    let accounts = owners.len();
+    let mut names = owners.iter().take(SHOWN).map(|(u, _)| u.as_str()).collect::<Vec<_>>().join(", ");
+    if accounts > SHOWN {
+        names.push_str(&format!(" and {} more", accounts - SHOWN));
+    }
+    Ok(Some(format!(
+        "{refused} API token{} of {accounts} account{} without an e-mail {} refused (403 EMAIL_REQUIRED) until the \
+         account has one: {names}. Give each account an e-mail in the web UI under Administration › Users (sign-in \
+         status \"e-mail required\") or with PATCH /api/v1/admin/users/{{id}}; its tokens then work again.",
+        if refused == 1 { "" } else { "s" },
+        if accounts == 1 { "" } else { "s" },
+        if refused == 1 { "is" } else { "are" },
+    )))
+}
+
 /// Working tokens [`REFUSED_WORKING`] refuses, and how many owners they have.
 pub async fn count_second_factor_refusals(conn: &mut PgConnection) -> sqlx::Result<(i64, i64)> {
     sqlx::query_as(sqlx::AssertSqlSafe(format!(

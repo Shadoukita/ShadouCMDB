@@ -560,6 +560,17 @@ mod tests {
         assert_eq!(last_outcome().await.as_deref(), Some("email_required"));
         let (status, _, _) = call(&app, "GET", "/api/v1/configuration-items", erin_token, None).await;
         assert_eq!(status, 200);
+        // `migrate` and `verify` name the accounts whose tokens are refused (GH#544).
+        let notice = async || {
+            crate::data::api_tokens::email_required_refusal_notice(&mut pool.acquire().await.unwrap()).await.unwrap()
+        };
+        let text = notice().await.unwrap();
+        assert!(
+            text.starts_with("1 API token of 1 account without an e-mail is refused (403 EMAIL_REQUIRED)"),
+            "{text}"
+        );
+        assert!(text.contains(": legacy."), "{text}");
+        assert!(text.contains("PATCH /api/v1/admin/users/{id}"), "{text}");
 
         let (status, me, creds) = login(&app, "legacy").await;
         assert_eq!((status, &me["emailRequired"]), (200, &json!(true)), "{me}");
@@ -583,6 +594,7 @@ mod tests {
         assert_eq!(status, 200, "the session goes on");
         let (status, _, _) = call(&app, "GET", "/api/v1/configuration-items", legacy_token, None).await;
         assert_eq!(status, 200, "and the token works");
+        assert_eq!(notice().await, None);
         let (status, v, _) =
             call(&app, "PUT", "/api/v1/auth/email", &creds, Some(json!({ "email": "other@example.test" }))).await;
         assert_eq!((status, code(&v)), (409, "CONFLICT"), "set once; an administrator changes it: {v}");
