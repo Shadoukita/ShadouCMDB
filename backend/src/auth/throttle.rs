@@ -88,7 +88,8 @@ pub const BUSY: Duration = Duration::from_secs(1);
 /// The network a sign-in comes from: the IPv4 /24 or IPv6 /64 of the client
 /// address, so one host cannot claim a fresh budget per address it holds.
 /// Unknown for requests without one (all of them share that budget). Kept in
-/// memory only, for throttling; never stored or logged.
+/// memory only, for throttling; never stored, and logged only as a network
+/// ([`Net::cidr`]) on a request it refuses or times out (GH#571).
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct Net(Option<IpAddr>);
 
@@ -109,6 +110,25 @@ impl Net {
             IpAddr::V4(v4) => IpAddr::V4((u32::from(v4) & 0xffff_0000).into()),
             IpAddr::V6(v6) => IpAddr::V6((u128::from(v6) & !0u128 << 80).into()),
         }))
+    }
+
+    /// The network, `203.0.113.0/24` or `2001:db8:1:2::/64` ("unknown" without
+    /// an address), for the log: never the client's address itself.
+    pub fn cidr(self) -> String {
+        self.prefixed(24, 64)
+    }
+
+    /// The wider network ([`Net::wide`]), `203.0.0.0/16` or `2001:db8:1::/48`.
+    pub fn wide_cidr(self) -> String {
+        self.wide().prefixed(16, 48)
+    }
+
+    fn prefixed(self, v4: u8, v6: u8) -> String {
+        match self.0 {
+            Some(IpAddr::V4(ip)) => format!("{ip}/{v4}"),
+            Some(IpAddr::V6(ip)) => format!("{ip}/{v6}"),
+            None => "unknown".into(),
+        }
     }
 }
 

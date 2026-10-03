@@ -140,6 +140,7 @@ struct ErrorBody {
     #[schema(inline)]
     code: ErrorCode,
     message: String,
+    /// At most 100 problems; when there are more, a last entry with code `truncated` counts the rest
     #[schema(inline, nullable = false)]
     details: Option<Vec<FieldErrorDoc>>,
     request_id: String,

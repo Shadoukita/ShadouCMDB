@@ -119,16 +119,15 @@ struct ResolvedTransition {
     conditions: Option<Value>,
 }
 
-/// Replaces the graph of draft `version_id` with `body` (already checked for
-/// shape, duplicate keys and dangling state keys). Field keys, lookup value
-/// keys and conditions are resolved here: what cannot be resolved is a 400.
-pub async fn store_draft(
-    conn: &mut PgConnection,
-    version_id: Uuid,
-    fields: &Fields,
-    state_attribute: Option<Uuid>,
-    body: &WorkflowDraftReplace,
-) -> Result<(), AppError> {
+/// A draft body with its field keys, lookup value keys and conditions resolved to ids.
+struct Resolved {
+    state_values: Vec<Option<Uuid>>,
+    transitions: Vec<ResolvedTransition>,
+}
+
+/// Resolves the keys of `body` (already checked for shape, duplicate keys and
+/// dangling state keys): what cannot be resolved is a 400.
+fn resolve(fields: &Fields, state_attribute: Option<Uuid>, body: &WorkflowDraftReplace) -> Result<Resolved, AppError> {
     let mut errors = Vec::new();
     let state_list = state_attribute.and_then(|id| fields.model.field(id)).and_then(|f| f.lookup_list_id);
     let mut state_values: Vec<Option<Uuid>> = Vec::with_capacity(body.states.len());
@@ -190,6 +189,59 @@ pub async fn store_draft(
     if !errors.is_empty() {
         return Err(AppError::validation(errors));
     }
+    Ok(Resolved { state_values, transitions: resolved })
+}
+
+/// The checksum `body` would have once stored as a draft, without storing it
+/// (a configuration import compares it with the current published version).
+pub fn draft_checksum(
+    fields: &Fields,
+    state_attribute: Option<Uuid>,
+    body: &WorkflowDraftReplace,
+) -> Result<String, AppError> {
+    let r = resolve(fields, state_attribute, body)?;
+    let key = |id: Uuid| fields.model.field(id).map(|f| f.key.clone()).unwrap_or_else(|| id.to_string());
+    let states: Vec<WorkflowState> = body
+        .states
+        .iter()
+        .zip(&r.state_values)
+        .map(|(s, v)| WorkflowState {
+            state_value: v.and_then(|id| fields.values.iter().find(|x| x.id == id)).map(|x| x.key.clone()),
+            ..s.clone()
+        })
+        .collect();
+    let transitions: Vec<WorkflowTransition> = body
+        .transitions
+        .iter()
+        .zip(&r.transitions)
+        .map(|(t, r)| WorkflowTransition {
+            fields: r
+                .fields
+                .iter()
+                .map(|(id, required)| WorkflowTransitionField { attribute: key(*id), required: *required })
+                .collect(),
+            conditions: r.conditions.as_ref().map(|c| {
+                condition::rename_fields(c, &|s| {
+                    s.parse::<Uuid>().ok().and_then(|id| fields.model.field(id)).map(|f| f.key.clone())
+                })
+            }),
+            ..t.clone()
+        })
+        .collect();
+    Ok(checksum(&body.initial_state, &states, &transitions))
+}
+
+/// Replaces the graph of draft `version_id` with `body` (already checked for
+/// shape, duplicate keys and dangling state keys). Field keys, lookup value
+/// keys and conditions are resolved here: what cannot be resolved is a 400.
+pub async fn store_draft(
+    conn: &mut PgConnection,
+    version_id: Uuid,
+    fields: &Fields,
+    state_attribute: Option<Uuid>,
+    body: &WorkflowDraftReplace,
+) -> Result<(), AppError> {
+    let Resolved { state_values, transitions: resolved } = resolve(fields, state_attribute, body)?;
 
     // The initial state goes first: the states it points at are about to go.
     sqlx::query("UPDATE cmdb.workflow_versions SET initial_state_id = NULL, layout = $2 WHERE id = $1")

@@ -903,6 +903,11 @@ impl RouteBuilder {
                     // Authorise before reading the body: an anonymous caller must not make
                     // the server buffer up to body_limit bytes only to be answered 401.
                     let ctx = authorise(&state, &headers, rule, client, used).await?;
+                    // On every line of the request from here, so a refusal for the
+                    // user's share or a body timeout names the account (GH#571).
+                    if let Some(p) = ctx.principal() {
+                        tracing::Span::current().record("user_id", tracing::field::display(p.user_id));
+                    }
                     // The permit is taken only once the caller is authorised, so rejected
                     // requests never hold capacity; only the health routes (`unlimited`)
                     // take none. Public routes draw from their own pool, and only once
@@ -916,9 +921,12 @@ impl RouteBuilder {
                             capacity.check_public()?;
                         }
                         let limit = capacity.public_body_timeout;
-                        let hold = capacity.hold_public_body(net);
+                        let hold = capacity.hold_public_body(net).logging_net(capture.ip);
                         let read = B::read(&headers, body, body_limit, body_media, Some(hold));
                         let body = tokio::time::timeout(limit, read).await.map_err(|_| {
+                            if capture.ip {
+                                crate::http::record_net(net);
+                            }
                             AppError::new(
                                 ErrorCode::RequestTimeout,
                                 format!("The request body was not received within {} s", limit.as_secs()),
@@ -1569,6 +1577,134 @@ mod tests {
         assert!(started.elapsed() < BODY_TIMEOUT * 4, "took {:?}", started.elapsed());
         assert_eq!(capacity.available(false), GLOBAL, "the permits were not given back");
         assert_eq!(send(&app, "GET", me, &session, Body::empty(), None).await.0, 200);
+
+        db.drop().await;
+    }
+
+    /// GH#571: SERVER_BUSY refusals and body timeouts were logged with the
+    /// method, path and request id only. They now name the caller: the user
+    /// (and the API token) once authorised; for a public body, the client's
+    /// network and wider network, never its address.
+    #[tokio::test]
+    async fn refusals_and_body_timeouts_name_the_caller_in_the_log() {
+        let Some(db) = scratch::database("refusals_and_body_timeouts_name_the_caller").await else { return };
+        let (log, _guard) = crate::auth::setup_token::capture::json();
+        const TIMEOUT: Duration = Duration::from_secs(1);
+        // One permit per user; room for one public body that waits.
+        const BUDGET: usize = crate::http::WAITING_BODY_COST + 64;
+        let capacity = Capacity::with_body_budget(4, 2, BUDGET, BUDGET, TIMEOUT).with_body_timeout(TIMEOUT);
+        let app = app_with_capacity(db.pool.clone(), capacity.clone());
+        let session = set_up_owner(&app).await;
+        let (_, me, _) = call(&app, "GET", "/api/v1/auth/me", &session, None).await;
+        let owner = me["user"]["id"].as_str().unwrap().to_owned();
+        let readers: uuid::Uuid =
+            sqlx::query_scalar("INSERT INTO permission_profiles (name) VALUES ('Readers') RETURNING id")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        sqlx::query(
+            "INSERT INTO permission_profile_global_permissions (profile_id, permission) VALUES ($1, 'audit.view')",
+        )
+        .bind(readers)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let expires = (chrono::Utc::now() + chrono::Duration::days(1)).to_rfc3339();
+        let create = json!({ "name": "monitoring", "profileId": readers, "expiresAt": expires });
+        let (status, created, _) = call(&app, "POST", "/api/v1/admin/api-tokens", &session, Some(create)).await;
+        assert_eq!(status, 201, "{created}");
+        let token = Creds { bearer: created["secret"].as_str().map(str::to_owned), ..Creds::default() };
+        let token_id = created["token"]["id"].as_str().unwrap().to_owned();
+
+        let stalled = || {
+            let first = stream::once(async { Ok::<_, std::convert::Infallible>(Bytes::from_static(b"{")) });
+            Body::from_stream(first.chain(stream::pending()))
+        };
+        // From a client address, as the server sees it without a proxy.
+        let from = |ip: &str, body: Body| {
+            let peer: std::net::SocketAddr = format!("{ip}:40000").parse().unwrap();
+            let mut req = Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/login")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::CONTENT_LENGTH, 100)
+                .body(body)
+                .unwrap();
+            req.extensions_mut().insert(axum::extract::ConnectInfo(peer));
+            let app = app.clone();
+            async move { app.oneshot(req).await.unwrap().status().as_u16() }
+        };
+
+        // The user's one permit is held by a body that never arrives.
+        let password = "/api/v1/auth/password";
+        let slow = {
+            let (app, session) = (app.clone(), session.clone());
+            tokio::spawn(async move { send(&app, "PUT", password, &session, stalled(), Some(1000)).await })
+        };
+        let started = Instant::now();
+        while capacity.held_by_user(owner.parse().unwrap()) == 0 {
+            assert!(started.elapsed() < Duration::from_secs(5), "the stalled request never took its permit");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        // Further requests by that user, with the session or a token, are refused.
+        assert_eq!(send(&app, "GET", "/api/v1/auth/me", &session, Body::empty(), None).await.0, 503);
+        assert_eq!(send(&app, "GET", "/api/v1/audit-log", &token, Body::empty(), None).await.0, 503);
+        assert_eq!(slow.await.unwrap(), (408, "REQUEST_TIMEOUT".into()));
+
+        // A public body from 203.0.113.7 spends the budget; another from its /24 is refused.
+        let waiting = tokio::spawn(from("203.0.113.7", stalled()));
+        while capacity.available_body_bytes() > BUDGET - crate::http::WAITING_BODY_COST {
+            assert!(started.elapsed() < Duration::from_secs(10), "the stalled sign-in was never counted");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(from("203.0.113.9", stalled()).await, 503);
+        assert_eq!(waiting.await.unwrap(), 408);
+        // A sign-in that is neither refused nor late logs no network.
+        let wrong = json!({ "username": "owner", "password": "wrong" }).to_string();
+        assert_eq!(from("198.51.100.4", Body::from(wrong)).await, 401);
+
+        let lines: Vec<serde_json::Value> = log.lines().iter().filter_map(|l| serde_json::from_str(l).ok()).collect();
+        let span = |message: &str, filter: &dyn Fn(&serde_json::Value) -> bool| -> Vec<serde_json::Value> {
+            lines
+                .iter()
+                .filter(|l| l["fields"]["message"].as_str().is_some_and(|m| m.starts_with(message)) && filter(l))
+                .map(|l| l["span"].clone())
+                .collect()
+        };
+        let path_is = |p: &'static str| move |l: &serde_json::Value| l["span"]["path"] == p;
+        let any = |_: &serde_json::Value| true;
+
+        let refused = span("request refused: one user's share", &any);
+        assert_eq!(refused.len(), 2, "{lines:#?}");
+        assert!(refused.iter().all(|s| s["user_id"] == owner.as_str()), "{refused:?}");
+        let by_token: Vec<_> = refused.iter().filter(|s| s["path"] == "/api/v1/audit-log").collect();
+        assert_eq!(by_token.len(), 1);
+        assert_eq!(by_token[0]["token_id"], token_id.as_str());
+        let by_session: Vec<_> = refused.iter().filter(|s| s["path"] == "/api/v1/auth/me").collect();
+        assert!(by_session[0].get("token_id").is_none(), "{:?}", by_session[0]);
+
+        let late = |l: &serde_json::Value| l["fields"]["status"] == 408;
+        let timed_out = span("request completed", &|l| late(l) && path_is(password)(l));
+        assert_eq!(timed_out.len(), 1);
+        assert_eq!(timed_out[0]["user_id"], owner.as_str());
+
+        let net = span("request refused: one client network's share", &any);
+        assert_eq!(net.len(), 1, "{lines:#?}");
+        assert_eq!((net[0]["net"].as_str(), net[0]["wide"].as_str()), (Some("203.0.113.0/24"), Some("203.0.0.0/16")));
+        let login = "/api/v1/auth/login";
+        let completed = span("request completed", &|l| path_is(login)(l));
+        assert_eq!(completed.len(), 3);
+        assert!(completed.iter().all(|s| s.get("user_id").is_none()), "{completed:?}");
+        let late_login = span("request completed", &|l| late(l) && path_is(login)(l));
+        assert_eq!(late_login[0]["net"], "203.0.113.0/24");
+        let refused_login = span("request completed", &|l| l["fields"]["status"] == 503 && path_is(login)(l));
+        assert_eq!(refused_login[0]["wide"], "203.0.0.0/16");
+        let unauthenticated = span("request completed", &|l| l["fields"]["status"] == 401 && path_is(login)(l));
+        assert!(unauthenticated[0].get("net").is_none(), "{:?}", unauthenticated[0]);
+        // Networks only: no address of a refused or late client reaches the log.
+        for address in ["203.0.113.7", "203.0.113.9"] {
+            assert!(log.lines().iter().all(|l| !l.contains(address)), "{address} logged");
+        }
 
         db.drop().await;
     }

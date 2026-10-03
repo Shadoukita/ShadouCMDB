@@ -30,6 +30,7 @@ use super::super::impact::ImpactDirection;
 use super::super::lookups::{LocationType, SystemRole};
 use super::super::ui_settings::assets::ImageType;
 use super::super::ui_settings::document::UiSettingsDocument;
+use super::super::workflows::schemas::{MAX_GRANT_PROFILES, WorkflowDraftReplace, WorkflowState, WorkflowTransition};
 use crate::api::schemas::{self, OwnerKind, description_schema, key_schema, name_schema, sort_order_schema, trimmed};
 use crate::auth::permissions::GlobalPermission;
 
@@ -40,8 +41,9 @@ pub const FORMAT: &str = "shadoucmdb.config";
 /// (the criticality list) and saved import mappings, version 5 the system role
 /// of classes and relationship types (business services) and of class grants,
 /// version 6 shared saved views, version 7 layout templates in the UI settings (`layoutTemplates`, and
-/// `layouts[].templateKey`); versions 1 to 6 are still read (their class layouts become templates).
-pub const FORMAT_VERSION: i32 = 7;
+/// `layouts[].templateKey`; versions 1 to 6 have class layouts, which become templates), version 8 workflows
+/// (the current published version of each); versions 1 to 7 are still read.
+pub const FORMAT_VERSION: i32 = 8;
 
 fn yes() -> bool {
     true
@@ -612,18 +614,129 @@ fn saved_views_schema() -> Schema {
     list::<SavedViewSpec>(crate::modules::saved_views::service::MAX_SHARED as usize)
 }
 
+// ---------------------------------------------------------------------------
+// Workflows
+// ---------------------------------------------------------------------------
+
+/// A workflow's graph, as the draft body of the definitions API (keys only)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowGraphSpec {
+    /// Key of the state an instance starts in
+    #[schema(schema_with = nullable_key_schema)]
+    #[serde(default)]
+    pub initial_state: Option<String>,
+    #[schema(max_items = 100)]
+    pub states: Vec<WorkflowState>,
+    #[schema(max_items = 300)]
+    #[serde(default)]
+    pub transitions: Vec<WorkflowTransition>,
+    /// Designer node positions; not part of the checksum, so a file that differs only here changes nothing
+    #[schema(schema_with = workflow_layout_schema)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<Value>,
+}
+
+impl WorkflowGraphSpec {
+    /// The same graph as a draft body.
+    pub fn to_draft(&self) -> WorkflowDraftReplace {
+        WorkflowDraftReplace {
+            initial_state: self.initial_state.clone(),
+            states: self.states.clone(),
+            transitions: self.transitions.clone(),
+            layout: self.layout.clone(),
+            expected_checksum: None,
+        }
+    }
+}
+
+fn workflow_layout_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::Object)
+        .description(Some("Designer node positions, free-form (at most 60 KiB)"))
+        .into()
+}
+
+fn grant_profiles_schema() -> Schema {
+    ArrayBuilder::new().items(utoipa::openapi::RefOr::T(name_schema())).max_items(Some(MAX_GRANT_PROFILES)).into()
+}
+
+/// The profiles (by name) that may run one transition
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowGrantSpec {
+    /// Transition key
+    #[schema(schema_with = key_schema)]
+    pub transition: String,
+    /// Permission profile names (case-insensitive), in the file or already here
+    #[schema(schema_with = grant_profiles_schema)]
+    pub profiles: Vec<String>,
+}
+
+fn workflow_grants_schema() -> Schema {
+    list::<WorkflowGrantSpec>(300)
+}
+
+/// A workflow, matched by key (case-insensitive), with its current published graph. Drafts, retired versions,
+/// running instances and their history are never part of a file.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowSpec {
+    #[schema(schema_with = key_schema)]
+    pub key: String,
+    #[schema(min_length = 1, max_length = 100, pattern = "\\S")]
+    #[serde(deserialize_with = "trimmed")]
+    pub name: String,
+    #[schema(schema_with = description_schema)]
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Key of the type it runs on (in the file or already here); it never changes for an existing workflow
+    #[schema(schema_with = key_schema)]
+    pub class: String,
+    /// Set when `class` is a built-in class: an import applies the workflow to this install's class of that role,
+    /// whatever `class` says
+    #[schema(inline)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub class_system_role: Option<ClassSystemRole>,
+    #[serde(default = "yes")]
+    pub include_subclasses: bool,
+    /// Key of the lookup field (of the type or an ancestor) the workflow keeps in step with its state. Fixed once
+    /// a version is published
+    #[schema(schema_with = nullable_key_schema)]
+    #[serde(default)]
+    pub state_attribute: Option<String>,
+    #[serde(default)]
+    pub auto_start: bool,
+    /// Default false, as on create
+    #[serde(default)]
+    pub is_active: bool,
+    #[schema(inline)]
+    pub graph: WorkflowGraphSpec,
+    /// Replace the workflow's grants
+    #[schema(schema_with = workflow_grants_schema)]
+    #[serde(default)]
+    pub grants: Vec<WorkflowGrantSpec>,
+}
+
+fn workflows_schema() -> Schema {
+    list::<WorkflowSpec>(MAX_WORKFLOWS)
+}
+
+/// Workflows per file.
+pub const MAX_WORKFLOWS: usize = 500;
+
 fn exported_at_schema() -> Schema {
     schemas::nullable_string_schema(64)
 }
 
-/// A whole configuration: data model, lookups, permission profiles, UI settings, saved import mappings and shared saved views (no users, passwords, CIs or personal views)
+/// A whole configuration: data model, lookups, permission profiles, UI settings, saved import mappings, shared saved views and workflows (no users, passwords, CIs, personal views or workflow instances)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConfigFile {
     #[schema(schema_with = format_schema)]
     pub format: String,
-    /// File format version; this server writes version 7 and reads 1 to 7
-    #[schema(minimum = 1, maximum = 7)]
+    /// File format version; this server writes version 8 and reads 1 to 8
+    #[schema(minimum = 1, maximum = 8)]
     pub format_version: i32,
     /// When and by which server version the file was written (informational)
     #[schema(schema_with = exported_at_schema)]
@@ -651,6 +764,11 @@ pub struct ConfigFile {
     #[schema(schema_with = saved_views_schema)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub saved_views: Option<Vec<SavedViewSpec>>,
+    /// Workflows (version 8) with their current published graph. Left out of an export when the caller does not
+    /// hold `workflows.manage`.
+    #[schema(schema_with = workflows_schema)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflows: Option<Vec<WorkflowSpec>>,
 }
 
 impl crate::api::route::Check for ConfigFile {
@@ -661,6 +779,12 @@ impl crate::api::route::Check for ConfigFile {
         };
         for (i, v) in self.saved_views.iter().flatten().enumerate() {
             e.extend(v.definition.problems(v.context, &format!("savedViews.{i}.definition")));
+        }
+        for (i, w) in self.workflows.iter().flatten().enumerate() {
+            e.extend(crate::api::route::Check::check(&w.graph.to_draft()).into_iter().map(|mut x| {
+                x.field = format!("workflows.{i}.graph.{}", x.field);
+                x
+            }));
         }
         e
     }

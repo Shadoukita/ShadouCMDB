@@ -244,6 +244,25 @@ pub(crate) mod capture {
             .with_ansi(false)
             .without_time()
             .finish();
+        (lines, install(subscriber))
+    }
+
+    /// INFO and above, as the JSON lines `logging::init` writes (with the
+    /// request span's fields), logged on this thread until the guard is dropped.
+    pub fn json() -> (Lines, tracing::subscriber::DefaultGuard) {
+        let lines = Lines::default();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_writer(lines.clone())
+            .with_max_level(tracing::Level::INFO)
+            .with_current_span(true)
+            .with_span_list(false)
+            .without_time()
+            .finish();
+        (lines, install(subscriber))
+    }
+
+    fn install(subscriber: impl tracing::Subscriber + Send + Sync + 'static) -> tracing::subscriber::DefaultGuard {
         // With one scoped subscriber registered, a call site first reached on
         // another thread takes that thread's interest (none) for good; a
         // second one, kept alive, makes tracing ask every live subscriber.
@@ -254,7 +273,7 @@ pub(crate) mod capture {
         // Interest is cached per call site for all threads; a test registering
         // its subscriber at the same time could leave this one's out.
         tracing::callsite::rebuild_interest_cache();
-        (lines, guard)
+        guard
     }
 }
 

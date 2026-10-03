@@ -758,6 +758,20 @@ async function main() {
   await get('/api/v1/audit-log?actorName=smoke&action=delete&limit=5');
   await get('/api/v1/audit-log?from=not-a-date', 400);
 
+  // Change histogram (SHAA-1687): the inventory list filters, bucketed over the CI audit history.
+  const hourly = (await get('/api/v1/configuration-items/change-histogram')).json;
+  const sum = (h: Json) => h.buckets.reduce((n: number, b: Json) => n + b.created + b.updated + b.statusChanged, 0);
+  check(
+    hourly.bucket === 'hour' && [24, 25].includes(hourly.buckets.length) && hourly.total === sum(hourly) && hourly.total > 0,
+    'change histogram: the last 24 hours in hour buckets by default, the total is their sum and includes this run',
+  );
+  const daily = (await get(`/api/v1/configuration-items/change-histogram?bucket=day&classId=${serverClass}`)).json;
+  check(daily.bucket === 'day' && [30, 31].includes(daily.buckets.length) && daily.total === sum(daily) && daily.total > 0, 'change histogram: the last 30 days in day buckets, filtered by class');
+  const tooLarge = await get('/api/v1/configuration-items/change-histogram?from=2026-01-01T00:00:00Z&to=2026-01-09T00:00:00Z', 400);
+  check(tooLarge.json.error?.details?.[0]?.code === 'range_too_large', 'change histogram: more than 7 days of hour buckets is refused');
+  const inverted = await get('/api/v1/configuration-items/change-histogram?from=2026-01-02T00:00:00Z&to=2026-01-01T00:00:00Z', 400);
+  check(inverted.json.error?.details?.[0]?.code === 'invalid_range', 'change histogram: an inverted range is refused');
+
   // --- Sign-out ------------------------------------------------------------------
   console.log('\n# Sign-out');
   await call('POST', '/api/v1/auth/logout', undefined, 403, { 'x-csrf-token': 'wrong' });
@@ -1826,7 +1840,7 @@ async function customization(x: Json) {
   const file = exported.json;
   const raw = JSON.stringify(file);
   check(/^attachment; filename="shadoucmdb-config-/.test(exported.headers.get('content-disposition') ?? ''), 'the export downloads as a file');
-  check(file.format === 'shadoucmdb.config' && file.formatVersion === 7 && Array.isArray(file.importMappings) && Array.isArray(file.savedViews) && file.dataModel.areas.some((a: Json) => a.key === 'infrastruktur') && !('users' in file) && !raw.includes('argon2') && !raw.includes('"username"') && !raw.includes('password'), 'the export has no users or password hashes');
+  check(file.format === 'shadoucmdb.config' && file.formatVersion === 8 && Array.isArray(file.workflows) && Array.isArray(file.importMappings) && Array.isArray(file.savedViews) && file.dataModel.areas.some((a: Json) => a.key === 'infrastruktur') && !('users' in file) && !raw.includes('argon2') && !raw.includes('"username"') && !raw.includes('password'), 'the export has no users or password hashes');
   check(file.permissionProfiles.every((p: Json) => p.name !== 'Administrator') && file.uiSettings.logo?.data === PNG_1X1, 'the export has editable profiles and the images');
   check(file.dataModel.attributes.every((a: Json) => typeof a.class === 'string' && !('classId' in a)), 'the export refers to classes by key');
   const noop = (await post('/api/v1/admin/config/import?mode=dry_run', file, 200)).json;
@@ -1875,7 +1889,7 @@ async function customization(x: Json) {
   attr.dataType = 'text';
   const immutable = await post('/api/v1/admin/config/import?mode=dry_run', retyped, 400);
   check(immutable.json.error?.details?.some((d: Json) => d.code === 'immutable'), 'the data type of an existing attribute cannot change');
-  await post('/api/v1/admin/config/import?mode=apply', { format: 'shadoucmdb.config', formatVersion: 8 }, 400);
+  await post('/api/v1/admin/config/import?mode=apply', { format: 'shadoucmdb.config', formatVersion: 9 }, 400);
   // Format 4: saved import mappings, merged by class key and name (SHAA-714 §6.2).
   const cfgMapping = { name: `Smoke config ${RUN}`, classKey: 'server', definition: { mode: 'create_only', columns: [{ header: 'Hostname', target: { kind: 'attribute', key: 'hostname' } }, { header: 'Notes', target: { kind: 'ignore' } }] } };
   const mappingFile = { format: 'shadoucmdb.config', formatVersion: 4, importMappings: [cfgMapping] };

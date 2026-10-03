@@ -369,6 +369,8 @@ pub async fn authenticate(
         Principal { user_id: t.user_id, username: t.username.clone(), credential: Credential::Token, permissions };
     let ctx = RequestContext::token(Arc::new(principal), request_id).with_client(client);
     let Some(r) = refusal else {
+        // With the request span's `user_id`, so its refusals and timeouts name the token (GH#571).
+        tracing::Span::current().record("token_id", tracing::field::display(t.id));
         let mut tx = pool.begin().await?;
         events::token_use(&mut tx, &ctx, &t, None, &used, 0).await?;
         data::record_use(&mut tx, t.id, ctx.client.ip).await?;

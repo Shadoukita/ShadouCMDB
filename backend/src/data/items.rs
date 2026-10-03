@@ -352,6 +352,47 @@ pub async fn summary(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<Option<S
         .await
 }
 
+/// Change counts of one histogram bucket.
+#[derive(Debug, sqlx::FromRow)]
+pub struct ChangeCounts {
+    pub start: DateTime<Utc>,
+    pub created: i64,
+    pub updated: i64,
+    pub status_changed: i64,
+}
+
+/// Audit entries on the CIs matching `f`, counted per `unit` ('hour' or 'day',
+/// UTC) in [from, to). Only buckets with a change are returned. `audit_scope`
+/// leaves out the entries the audit log would not show a class-limited caller.
+pub async fn change_counts(
+    conn: &mut PgConnection,
+    f: &ItemFilters,
+    audit_scope: Option<&[Uuid]>,
+    unit: &'static str,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> sqlx::Result<Vec<ChangeCounts>> {
+    const STATUS_CHANGED: &str = "action = 'update' AND old_value -> 'attributes' -> 'status' IS DISTINCT FROM new_value -> 'attributes' -> 'status'";
+    let mut qb = QueryBuilder::<Postgres>::new(format!(
+        "SELECT date_trunc('{unit}', occurred_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS start, \
+         count(*) FILTER (WHERE action = 'create') AS created, \
+         count(*) FILTER (WHERE action IN ('update', 'delete', 'restore') AND NOT ({STATUS_CHANGED})) AS updated, \
+         count(*) FILTER (WHERE {STATUS_CHANGED}) AS status_changed \
+         FROM audit_log WHERE entity_type = 'configuration_items' \
+         AND action IN ('create', 'update', 'delete', 'restore') AND occurred_at >= "
+    ));
+    qb.push_bind(from).push(" AND occurred_at < ").push_bind(to);
+    qb.push(format!(" AND entity_id IN (SELECT ci.id FROM {COUNT_FROM}"));
+    push_filters(&mut Where::new(&mut qb), f);
+    qb.push(")");
+    if let Some(visible) = audit_scope {
+        qb.push(" AND ");
+        crate::modules::audit::push_visible(&mut qb, visible);
+    }
+    qb.push(" GROUP BY 1 ORDER BY 1");
+    qb.build_query_as().fetch_all(conn).await
+}
+
 // ---------------------------------------------------------------------------
 // Writes
 // ---------------------------------------------------------------------------

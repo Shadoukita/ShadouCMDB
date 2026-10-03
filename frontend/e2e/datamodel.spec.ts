@@ -30,11 +30,11 @@ interface Attr {
   validation: Record<string, unknown> | null;
 }
 
-test("the sub-navigation groups Access, Data model and System", async ({ page }) => {
+test("the sub-navigation groups Access, Data model, Processes and System", async ({ page }) => {
   await page.goto("/admin/templates");
   const sub = page.getByRole("navigation", { name: "Administration" });
-  await expect(sub.getByRole("heading")).toHaveText(["Access", "Data model", "System"]);
-  await expect(sub.getByRole("link")).toHaveText(["Users", "Groups", "Permission profiles", "API tokens", "Identity providers", "Areas", "CI classes", "Relationship types", "Dropdowns", "Templates", "Customization", "Import", "Export / import", "Audit log"]);
+  await expect(sub.getByRole("heading")).toHaveText(["Access", "Data model", "Processes", "System"]);
+  await expect(sub.getByRole("link")).toHaveText(["Users", "Groups", "Permission profiles", "API tokens", "Identity providers", "Areas", "CI classes", "Relationship types", "Dropdowns", "Templates", "Workflows", "Customization", "Import", "Export / import", "Audit log"]);
   await expect(sub.getByRole("link", { name: "Templates" })).toHaveAttribute("aria-current", "page");
 });
 

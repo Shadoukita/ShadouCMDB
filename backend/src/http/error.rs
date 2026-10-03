@@ -7,6 +7,10 @@
 //! `code` is machine-readable and stable; `message` is for humans; `details`
 //! carries per-field problems (`in` says where the field lives). Same contract
 //! as the `ErrorEnvelope` schema in backend/openapi.json.
+//!
+//! A response carries at most [`MAX_DETAILS`] problems; the rest are counted
+//! in one last `truncated` entry, so a small invalid body cannot produce a
+//! response many times its size (GH#573).
 
 use axum::Json;
 use axum::http::StatusCode;
@@ -14,6 +18,9 @@ use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 
 use super::request_id;
+
+/// Most `details` entries a response carries before the `truncated` entry.
+pub const MAX_DETAILS: usize = 100;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -209,13 +216,31 @@ struct Body<'a> {
     request_id: String,
 }
 
+/// The first [`MAX_DETAILS`] problems, plus one `truncated` entry counting
+/// the rest when there are more.
+fn capped(details: &[FieldError]) -> std::borrow::Cow<'_, [FieldError]> {
+    if details.len() <= MAX_DETAILS {
+        return details.into();
+    }
+    let more = details.len() - MAX_DETAILS;
+    let mut kept = details[..MAX_DETAILS].to_vec();
+    kept.push(FieldError {
+        location: details[MAX_DETAILS].location,
+        field: String::new(),
+        message: format!("{more} more problem{} not shown", if more == 1 { "" } else { "s" }),
+        code: "truncated".into(),
+    });
+    kept.into()
+}
+
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
+        let details = self.details.as_deref().map(capped);
         let body = Envelope {
             error: Body {
                 code: self.code,
                 message: &self.message,
-                details: self.details.as_deref(),
+                details: details.as_deref(),
                 request_id: request_id::current(),
             },
         };
@@ -249,5 +274,29 @@ impl From<sqlx::Error> for AppError {
         }
         tracing::error!(error = %err, "unhandled database error");
         AppError::internal()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn problem(i: usize) -> FieldError {
+        FieldError { location: FieldLocation::Query, field: format!("f{i}"), message: "Bad".into(), code: "bad".into() }
+    }
+
+    #[test]
+    fn details_are_capped_with_a_count_of_the_rest() {
+        let at_cap: Vec<_> = (0..MAX_DETAILS).map(problem).collect();
+        assert!(matches!(capped(&at_cap), std::borrow::Cow::Borrowed(d) if d.len() == MAX_DETAILS));
+        let one_more: Vec<_> = (0..=MAX_DETAILS).map(problem).collect();
+        let kept = capped(&one_more);
+        assert_eq!(kept.len(), MAX_DETAILS + 1);
+        assert_eq!(kept[MAX_DETAILS - 1].field, format!("f{}", MAX_DETAILS - 1));
+        let last = &kept[MAX_DETAILS];
+        assert_eq!((last.location, last.field.as_str(), last.code.as_str()), (FieldLocation::Query, "", "truncated"));
+        assert_eq!(last.message, "1 more problem not shown");
+        let many: Vec<_> = (0..MAX_DETAILS + 250).map(problem).collect();
+        assert_eq!(capped(&many)[MAX_DETAILS].message, "250 more problems not shown");
     }
 }

@@ -598,3 +598,272 @@ async fn workflow_definitions_need_workflows_manage() {
     assert_eq!(status, 400, "{v}");
     db.drop().await;
 }
+
+/// A signed-in first administrator on an empty install.
+async fn admin_of(db: &scratch::Scratch) -> (Router, Creds) {
+    let app = app(db.pool.clone());
+    let password = format!("test passphrase {}", Uuid::new_v4());
+    let setup = json!({ "username": "admin", "email": "admin@example.test", "displayName": "Admin",
+        "password": password, "setupToken": crate::auth::setup_token::TEST_TOKEN });
+    let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
+    assert_eq!(status, 201, "{me}");
+    let admin = session_of(&me, &headers);
+    (app, admin)
+}
+
+async fn export_config(app: &Router, creds: &Creds) -> Value {
+    let (status, v, _) = call(app, "GET", "/api/v1/admin/config/export", creds, None).await;
+    assert_eq!(status, 200, "{v}");
+    v
+}
+
+async fn import_config(app: &Router, creds: &Creds, file: &Value) -> (u16, Value) {
+    let (status, v, _) = call(app, "POST", "/api/v1/admin/config/import?mode=apply", creds, Some(file.clone())).await;
+    (status, v)
+}
+
+async fn count(pool: &PgPool, sql: &str) -> i64 {
+    sqlx::query_scalar(sqlx::AssertSqlSafe(sql.to_owned())).fetch_one(pool).await.unwrap()
+}
+
+/// SHAA-1425 (design §7): config format 8 carries each workflow's current
+/// published version by key. Export → import into an empty install → export
+/// gives the same `workflows` section; an unchanged file is a no-op; a
+/// changed graph publishes a new version while running instances keep
+/// theirs; a broken graph fails the whole import; a version 6 file still
+/// imports.
+#[tokio::test]
+async fn workflows_round_trip_through_the_configuration_file() {
+    let Some(src) = scratch::database("workflows_config_src").await else { return };
+    let Some(dst) = scratch::database("workflows_config_dst").await else { return };
+    let w = world(&src).await;
+
+    // Source: an active workflow with v1 published, grants, and a later draft.
+    sqlx::query("INSERT INTO permission_profiles (name) VALUES ('Change managers')").execute(&w.pool).await.unwrap();
+    let body = json!({ "key": "server_lifecycle", "name": "Server lifecycle", "classId": w.server,
+        "stateAttributeId": w.lifecycle, "isActive": true, "description": "Servers from order to retirement" });
+    let def = id(&post(&w.app, &w.admin, BASE, body).await);
+    let draft = format!("{BASE}/{def}/draft");
+    let (status, v) = w.call("PUT", &draft, Some(lifecycle_graph())).await;
+    assert_eq!(status, 200, "{v}");
+    let v1_sum = v["checksum"].as_str().unwrap().to_owned();
+    let (status, v) =
+        w.call("POST", &format!("{draft}/publish"), Some(json!({ "expectedDraftChecksum": v1_sum }))).await;
+    assert_eq!(status, 201, "{v}");
+    let (status, g) = w.call("GET", &format!("{BASE}/{def}/grants"), None).await;
+    assert_eq!(status, 200);
+    let grants = json!({ "version": g["version"], "grants": [ { "transitionKey": "approve", "profiles": ["Change managers"] } ] });
+    let (status, v) = w.call("PUT", &format!("{BASE}/{def}/grants"), Some(grants)).await;
+    assert_eq!(status, 200, "{v}");
+    let mut unpublished = lifecycle_graph();
+    unpublished["states"][0]["name"] = json!("Draft only");
+    let (status, v) = w.call("PUT", &draft, Some(unpublished)).await;
+    assert_eq!(status, 200, "{v}");
+    // A workflow never published is not exported either.
+    post(&w.app, &w.admin, BASE, json!({ "key": "never_published", "name": "Never", "classId": w.server })).await;
+
+    let file = export_config(&w.app, &w.admin).await;
+    assert_eq!(file["formatVersion"], 8);
+    let flows = file["workflows"].as_array().unwrap();
+    assert_eq!(flows.len(), 1, "{flows:?}");
+    let flow = &flows[0];
+    let expected = lifecycle_graph();
+    assert_eq!(
+        (&flow["key"], &flow["class"], &flow["stateAttribute"], &flow["isActive"], &flow["autoStart"]),
+        (&json!("server_lifecycle"), &json!("server"), &json!("lifecycle"), &json!(true), &json!(false))
+    );
+    for k in ["initialState", "states", "transitions", "layout"] {
+        assert_eq!(flow["graph"][k], expected[k], "{k}");
+    }
+    assert_eq!(flow["grants"], json!([ { "transition": "approve", "profiles": ["Change managers"] } ]));
+    let text = flow.to_string();
+    assert!(!text.contains("Draft only") && !text.contains(&def.to_string()), "{text}");
+    // The source's draft is still in the way of a changed graph; it stays out of the no-op below.
+    let (status, _) = w.call("DELETE", &draft, None).await;
+    assert_eq!(status, 204);
+
+    // Into an empty install: the workflow is created and v1 published, by the importer.
+    let (app2, admin2) = admin_of(&dst).await;
+    let (status, res) = import_config(&app2, &admin2, &file).await;
+    assert_eq!(status, 200, "{res}");
+    let summary = res["summary"].as_array().unwrap().iter().find(|s| s["section"] == "workflows").unwrap().clone();
+    assert_eq!((summary["created"].as_i64(), summary["updated"].as_i64()), (Some(1), Some(0)), "{summary}");
+    let (note, by, sum): (Option<String>, Option<String>, Vec<u8>) = sqlx::query_as(
+        "SELECT v.change_note, v.published_by_name, v.checksum FROM workflow_versions v
+         JOIN workflow_definitions d ON d.id = v.definition_id
+         WHERE d.key = 'server_lifecycle' AND v.status = 'published'",
+    )
+    .fetch_one(&dst.pool)
+    .await
+    .unwrap();
+    assert_eq!((note.as_deref(), by.as_deref()), (Some("Imported from configuration file"), Some("admin")));
+    assert_eq!(hex::encode(sum), v1_sum, "the same graph has the same checksum on both installs");
+    let back = export_config(&app2, &admin2).await;
+    assert_eq!(back["workflows"], file["workflows"], "round trip");
+    let actions: Vec<String> =
+        sqlx::query_scalar("SELECT action FROM audit_log WHERE entity_type = 'workflow_definitions' ORDER BY id")
+            .fetch_all(&dst.pool)
+            .await
+            .unwrap();
+    assert_eq!(actions, ["create", "workflow.publish", "update"], "audited like a manual change");
+
+    // Re-importing the unchanged file changes nothing, on either install.
+    for (pool, app, creds) in [(&dst.pool, &app2, &admin2), (&w.pool, &w.app, &w.admin)] {
+        let audit = "SELECT count(*) FROM audit_log WHERE entity_type = 'workflow_definitions'";
+        let versions = "SELECT count(*) FROM workflow_versions";
+        let (a, n) = (count(pool, audit).await, count(pool, versions).await);
+        let (status, res) = import_config(app, creds, &file).await;
+        assert_eq!(status, 200, "{res}");
+        assert_eq!((count(pool, audit).await, count(pool, versions).await), (a, n));
+        let changes: Vec<&Value> =
+            res["changes"].as_array().unwrap().iter().filter(|c| c["section"] == "workflows").collect();
+        assert!(changes.is_empty(), "{changes:?}");
+    }
+
+    // A changed graph publishes v2; the instance running on v1 stays on v1.
+    let server2: Uuid =
+        sqlx::query_scalar("SELECT id FROM ci_classes WHERE key = 'server'").fetch_one(&dst.pool).await.unwrap();
+    let (status, ci, _) =
+        call(&app2, "POST", "/api/v1/configuration-items", &admin2, Some(json!({ "classId": server2 }))).await;
+    assert_eq!(status, 201, "{ci}");
+    let (def2, v1): (Uuid, Uuid) = sqlx::query_as(
+        "SELECT d.id, d.current_version_id FROM workflow_definitions d WHERE d.key = 'server_lifecycle'",
+    )
+    .fetch_one(&dst.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO workflow_instances (definition_id, version_id, ci_id, current_state_id, status, started_by_name)
+         SELECT $1, $2, $3, s.id, 'active', 'test' FROM workflow_states s WHERE s.version_id = $2 AND s.key = 'planned'",
+    )
+    .bind(def2)
+    .bind(v1)
+    .bind(id(&ci))
+    .execute(&dst.pool)
+    .await
+    .unwrap();
+    let mut changed = file.clone();
+    changed["workflows"][0]["graph"]["states"][1]["name"] = json!("Approved by CAB");
+    changed["workflows"][0]["grants"] = json!([]);
+    changed["workflows"][0]["autoStart"] = json!(true);
+    let (status, res) = import_config(&app2, &admin2, &changed).await;
+    assert_eq!(status, 200, "{res}");
+    let change = res["changes"].as_array().unwrap().iter().find(|c| c["section"] == "workflows").unwrap().clone();
+    let fields: Vec<&str> = change["fields"].as_array().unwrap().iter().map(|f| f["field"].as_str().unwrap()).collect();
+    assert_eq!((change["action"].as_str(), fields), (Some("update"), vec!["autoStart", "graph", "grants"]), "{change}");
+    assert_eq!(change["fields"][1]["to"]["versionNo"], 2);
+    let (status, d, _) = call(&app2, "GET", &format!("{BASE}/{def2}"), &admin2, None).await;
+    assert_eq!((status, d["currentVersionNo"].as_i64(), d["autoStart"].as_bool()), (200, Some(2), Some(true)), "{d}");
+    let (status, v, _) = call(&app2, "GET", &format!("{BASE}/{def2}/versions/1"), &admin2, None).await;
+    assert_eq!(
+        (status, v["status"].as_str(), v["states"][1]["name"].as_str()),
+        (200, Some("published"), Some("Approved"))
+    );
+    let running: Uuid = sqlx::query_scalar("SELECT version_id FROM workflow_instances WHERE definition_id = $1")
+        .bind(def2)
+        .fetch_one(&dst.pool)
+        .await
+        .unwrap();
+    assert_eq!(running, v1);
+    let (status, g, _) = call(&app2, "GET", &format!("{BASE}/{def2}/grants"), &admin2, None).await;
+    assert_eq!((status, &g["grants"]), (200, &json!([])), "grants are replaced");
+
+    // A graph the publish lint refuses fails the whole import, with paths into the file.
+    let mut broken = changed.clone();
+    broken["workflows"][0]["graph"]["states"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({ "key": "limbo", "name": "Limbo", "category": "active" }));
+    broken["workflows"][0]["name"] = json!("Renamed");
+    let versions = count(&dst.pool, "SELECT count(*) FROM workflow_versions").await;
+    let (status, v) = import_config(&app2, &admin2, &broken).await;
+    assert_eq!((status, code(&v)), (400, "VALIDATION_ERROR"), "{v}");
+    assert_eq!(
+        details(&v),
+        [("workflows.0.graph.states[3]", "unreachable_state"), ("workflows.0.graph.states[3]", "dead_end")]
+            .map(|(a, b)| (a.to_owned(), b.to_owned()))
+    );
+    assert_eq!(count(&dst.pool, "SELECT count(*) FROM workflow_versions").await, versions);
+    let name: String = sqlx::query_scalar("SELECT name FROM workflow_definitions WHERE id = $1")
+        .bind(def2)
+        .fetch_one(&dst.pool)
+        .await
+        .unwrap();
+    assert_eq!(name, "Server lifecycle");
+
+    // The section needs workflows.manage, on export and on import.
+    let modeller = w
+        .user("modeller", &["config.export_import", "datamodel.manage", "profiles.manage", "customization.manage"])
+        .await;
+    let partial = export_config(&w.app, &modeller).await;
+    assert!(partial.get("workflows").is_none(), "{partial}");
+    let (status, v, _) =
+        call(&w.app, "POST", "/api/v1/admin/config/import?mode=dry_run", &modeller, Some(file.clone())).await;
+    assert_eq!((status, code(&v)), (403, "FORBIDDEN"), "{v}");
+
+    // A version 6 file (no workflows, no layout templates) still imports.
+    let mut v6 = file.clone();
+    let o = v6.as_object_mut().unwrap();
+    o.insert("formatVersion".into(), json!(6));
+    o.remove("workflows");
+    o.remove("uiSettings");
+    let (status, res) = import_config(&app2, &admin2, &v6).await;
+    assert_eq!((status, res["applied"].as_bool()), (200, Some(true)), "{res}");
+
+    src.drop().await;
+    dst.drop().await;
+}
+
+/// GH#573: a small invalid body cannot answer with tens of thousands of
+/// details. Both bodies are the reproductions of the issue; each answers 100
+/// details plus one `truncated` entry counting the rest.
+#[tokio::test]
+async fn validation_details_are_capped() {
+    use crate::http::error::MAX_DETAILS;
+
+    let Some(db) = scratch::database("workflow_validation_details_capped").await else { return };
+    let w = world(&db).await;
+    let (status, d) = w.call("POST", BASE, Some(json!({ "key": "flow", "name": "Flow", "classId": w.server }))).await;
+    assert_eq!(status, 201, "{d}");
+    let by_id = format!("{BASE}/{}", id(&d));
+    let capped = |v: &Value| {
+        let found = details(v);
+        assert_eq!(found.len(), MAX_DETAILS + 1, "{found:?}");
+        assert_eq!(found[MAX_DETAILS], (String::new(), "truncated".to_owned()));
+        assert!(serde_json::to_vec(v).unwrap().len() < 32 * 1024, "{v}");
+        v["error"]["details"][MAX_DETAILS]["message"].as_str().unwrap().to_owned()
+    };
+
+    // 301 grants × 100 unknown profiles: 30,100 problems.
+    let grants: Vec<Value> =
+        (0..301).map(|i| json!({ "transitionKey": format!("t{i}"), "profiles": vec!["a"; 100] })).collect();
+    let (status, v) = w.call("PUT", &format!("{by_id}/grants"), Some(json!({ "version": 1, "grants": grants }))).await;
+    assert_eq!((status, code(&v)), (400, "VALIDATION_ERROR"), "{v}");
+    assert_eq!(details(&v)[0], ("grants[0].profiles[0]".to_owned(), "not_found".to_owned()));
+    assert_eq!(capped(&v), "30000 more problems not shown");
+
+    // 300 transitions with a condition of 200 leaves naming an unknown field each.
+    let states = json!([
+        { "key": "a", "name": "A", "category": "open", "terminal": false },
+        { "key": "b", "name": "B", "category": "done", "terminal": true }
+    ]);
+    let transitions: Vec<Value> = (0..300)
+        .map(|i| {
+            json!({ "key": format!("t{i}"), "name": "T", "from": "a", "to": "b", "requiresComment": false,
+                "fields": [], "conditions": { "any": vec![json!({ "field": "x" }); 200] } })
+        })
+        .collect();
+    let body = json!({ "initialState": "a", "states": states, "transitions": transitions });
+    let (status, v) = w.call("PUT", &format!("{by_id}/draft"), Some(body)).await;
+    assert_eq!((status, code(&v)), (400, "VALIDATION_ERROR"), "{v}");
+    assert!(capped(&v).ends_with(" more problems not shown"));
+
+    // At the cap nothing is truncated.
+    let grants = json!([{ "transitionKey": "t0", "profiles": vec!["a"; 100] }]);
+    let (status, v) = w.call("PUT", &format!("{by_id}/grants"), Some(json!({ "version": 1, "grants": grants }))).await;
+    assert_eq!(status, 400, "{v}");
+    let found = details(&v);
+    assert_eq!(found.len(), MAX_DETAILS);
+    assert!(found.iter().all(|(_, c)| c == "not_found"), "{found:?}");
+    db.drop().await;
+}
