@@ -1539,6 +1539,60 @@ async fn member_export_needs_the_csrf_token_from_a_session() {
     assert_eq!(exports().await, 2);
 }
 
+/// GH#514: an audited write that commits while the export runs (here a
+/// direct audit row, as a failed sign-in writes) does not fail the export.
+/// It read in a REPEATABLE READ snapshot and wrote its own audit row there,
+/// so the moved chain head was a serialization failure: 503 SERVER_BUSY.
+#[tokio::test]
+async fn member_export_survives_an_audited_write_committed_during_it() {
+    let Some(db) = scratch::database("business_services_export_concurrent_audit").await else { return };
+    let mut w = World::new(&db, BusinessServiceConfig::default()).await;
+    let admin = w.admin.clone();
+    let s = w.ci("business_service", "SHOP-1", "Shop").await;
+    w.ci("server", "web-01", "Web").await;
+    assert_eq!(w.add(&admin, "SHOP-1", &["web-01"]).await.0, 200);
+
+    // The other writer holds the chain head until the export is waiting on it.
+    let mut other = w.pool.begin().await.unwrap();
+    sqlx::query(
+        "INSERT INTO audit_log (actor_type, action, entity_type, entity_id, new_value)
+         VALUES ('system', 'login.failure', 'users', gen_random_uuid(), '{}')",
+    )
+    .execute(&mut *other)
+    .await
+    .unwrap();
+    let export = tokio::spawn({
+        let app = w.app.clone();
+        let path = format!("/api/v1/business-services/{s}/members/export");
+        async move { raw(&app, "GET", &path, &admin, None).await }
+    });
+    let mut waiting = false;
+    for _ in 0..200 {
+        let n: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'",
+        )
+        .fetch_one(&w.pool)
+        .await
+        .unwrap();
+        if n > 0 {
+            waiting = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(waiting, "the export waits for the other writer's lock on the chain head");
+    other.commit().await.unwrap();
+
+    let (status, _, body) = export.await.unwrap();
+    assert_eq!(status, 200, "{body}");
+    assert!(body.contains("web-01"), "{body}");
+    let exports: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM audit_log WHERE action = 'export'").fetch_one(&w.pool).await.unwrap();
+    assert_eq!(exports, 1);
+    let broken: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_log_verify()").fetch_one(&w.pool).await.unwrap();
+    assert_eq!(broken, 0, "the chain is intact");
+}
+
 // ---------------------------------------------------------------------------
 // Principals and settings
 // ---------------------------------------------------------------------------
