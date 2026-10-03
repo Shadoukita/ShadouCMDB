@@ -88,7 +88,8 @@ const layout = computed(() => props.editor.layout);
 const defFor = (f: string) => props.attrs.find((d) => d.key === attributeKey(f));
 const labelOf = (f: string) => fieldLabel(f, props.attrs);
 const known = (f: string) => !f.startsWith(ATTRIBUTE_PREFIX) || !!defFor(f);
-const shownFields = (s: LayoutSection) => (s.fields ?? []).filter((f) => known(f.field));
+// Separators (no field) are not edited here yet.
+const shownFields = (s: LayoutSection) => (s.fields ?? []).filter((f): f is typeof f & { field: string } => !!f.field && known(f.field));
 const isReadOnly = (f: string) => !!layout.value?.readOnlyFields?.includes(f);
 
 const tabs = computed<LayoutTab[]>(() => layout.value?.tabs ?? []);

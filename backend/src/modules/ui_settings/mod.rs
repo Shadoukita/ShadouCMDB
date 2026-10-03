@@ -301,13 +301,15 @@ impl PathInput for VersionPath {
 // Service
 // ---------------------------------------------------------------------------
 
-/// A stored document, normalised: layout tabs stored on the earlier grid come
-/// back free (see `UiLayoutTab::normalize`), so every reader, the export and the
+/// A stored document, in the current layout format and normalised: layout tabs
+/// stored on the earlier grid come back free (see `UiLayoutTab::normalize`),
+/// one stored before layout format 3 gets its record and relations panels
+/// placed (see `UiSettingsDocument::upgraded`), so every reader, the export and the
 /// version history see what a save would store. Stored documents were validated
 /// on save; one that no longer parses (a future format change without a
 /// migration) falls back to the defaults rather than breaking the UI.
 pub fn parse_stored(v: &Value) -> UiSettingsDocument {
-    serde_json::from_value::<UiSettingsDocument>(v.clone()).map(UiSettingsDocument::normalized).unwrap_or_else(|e| {
+    serde_json::from_value::<UiSettingsDocument>(v.clone()).map(|d| d.upgraded().normalized()).unwrap_or_else(|e| {
         tracing::warn!(error = %e, "stored UI settings do not match the current schema; using defaults");
         UiSettingsDocument::default()
     })
@@ -435,7 +437,8 @@ pub async fn save_in(
         return Err(version_conflict(current.version, current.updated_by_name.as_deref()));
     }
     let old_doc = parse_stored(&current.settings);
-    let mut doc = doc.clone().normalized();
+    // A document of an older layout format (an older export or version) gets its panels placed first.
+    let mut doc = doc.clone().upgraded().normalized();
     check_removed_templates(conn, ctx, &old_doc, &mut doc, in_use).await?;
     let model = data::model(conn).await?;
     let doc = document::contract(doc, &old_doc.layout_templates, &model.class_names).map_err(AppError::validation)?;
@@ -864,6 +867,103 @@ mod tests {
             (tabs[1]["sections"][1]["kind"].as_str(), tabs[1]["sections"][1]["collapsed"].as_bool()),
             (Some("audit"), Some(true))
         );
+
+        db.drop().await;
+    }
+
+    /// Record details and relationships are sections like the others (SHAA-1643): a document of an
+    /// older layout format, sent or restored, gets them where the page showed them; one in format 3
+    /// keeps a removed panel removed.
+    #[tokio::test]
+    async fn record_and_relations_panels_are_explicit_from_layout_format_3() {
+        let Some(db) = scratch::database("record_and_relations_panels_are_explicit_from_layout_format_3").await else {
+            return;
+        };
+        let app = app(db.pool.clone());
+        let body = json!({ "username": "owner", "email": "owner@example.test", "displayName": "Owner", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(body)).await;
+        assert_eq!(status, 201, "{me}");
+        let s = crate::modules::api_tokens::tests::session_of(&me, &headers);
+        let (status, v, _) =
+            call(&app, "POST", "/api/v1/ci-classes", &s, Some(json!({ "key": "server", "name": "Server" }))).await;
+        assert_eq!(status, 201, "{v}");
+        let (_, current, _) = call(&app, "GET", "/api/v1/ui-settings", &s, None).await;
+        assert_eq!(current["settings"]["layoutFormat"], 3, "{current}");
+        let version = current["version"].as_i64().unwrap();
+        let older = json!({ "layouts": [{ "classKey": "server", "tabs": [{ "key": "main", "label": "Main", "sections": [
+            { "key": "core", "label": "Core", "fields": [
+                { "field": "ident" }, { "separator": true, "label": "Lifecycle" }, { "field": "validFrom" }] }] }] }] });
+        let kinds = |settings: &serde_json::Value| -> Vec<String> {
+            settings["layouts"][0]["tabs"][0]["sections"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| s["kind"].as_str().unwrap_or("fields").to_owned())
+                .collect()
+        };
+
+        // An API client (or export) from before format 3: the panels it showed are placed.
+        let (status, saved, _) = call(
+            &app,
+            "PUT",
+            "/api/v1/ui-settings",
+            &s,
+            Some(json!({ "version": version, "settings": older.clone() })),
+        )
+        .await;
+        assert_eq!(status, 200, "{saved}");
+        assert_eq!(kinds(&saved["settings"]), ["fields", "record", "relations"], "{saved}");
+        let section = &saved["settings"]["layouts"][0]["tabs"][0]["sections"][0];
+        assert_eq!(section["fields"][1], json!({ "separator": true, "label": "Lifecycle", "width": 3 }), "{saved}");
+        assert_eq!(saved["settings"]["layoutFormat"], 3);
+
+        // Sent back without the record details (the returned document, format 3): they stay removed.
+        let mut edited = saved["settings"].clone();
+        edited["layouts"][0]["tabs"][0]["sections"].as_array_mut().unwrap().remove(1);
+        let (status, v, _) = call(
+            &app,
+            "PUT",
+            "/api/v1/ui-settings",
+            &s,
+            Some(json!({ "version": saved["version"], "settings": edited })),
+        )
+        .await;
+        assert_eq!(status, 200, "{v}");
+        assert_eq!(kinds(&v["settings"]), ["fields", "relations"], "{v}");
+
+        // A separator that names a field is refused.
+        let mut bad = v["settings"].clone();
+        bad["layouts"][0]["tabs"][0]["sections"][0]["fields"][1]["field"] = json!("label");
+        let (status, e, _) =
+            call(&app, "PUT", "/api/v1/ui-settings", &s, Some(json!({ "version": v["version"], "settings": bad })))
+                .await;
+        assert_eq!((status, code(&e)), (400, "VALIDATION_ERROR"), "{e}");
+        assert_eq!(e["error"]["details"][0]["field"], "settings.layouts.0.tabs.0.sections.0.fields.1.field", "{e}");
+
+        // Restoring a version saved before format 3 places them again, as that version showed them.
+        let (old_version,): (i32,) = sqlx::query_as(
+            "INSERT INTO ui_settings_versions (version, settings, actor_type) \
+             SELECT max(version) + 100, $1, 'user' FROM ui_settings_versions RETURNING version",
+        )
+        .bind(&older)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        // Read back in the current format, like every stored document.
+        let (status, got, _) =
+            call(&app, "GET", &format!("/api/v1/ui-settings/versions/{old_version}"), &s, None).await;
+        assert_eq!(status, 200, "{got}");
+        assert_eq!(kinds(&got["settings"]), ["fields", "record", "relations"], "{got}");
+        let (status, restored, _) = call(
+            &app,
+            "POST",
+            &format!("/api/v1/ui-settings/versions/{old_version}/restore"),
+            &s,
+            Some(json!({ "version": v["version"] })),
+        )
+        .await;
+        assert_eq!(status, 200, "{restored}");
+        assert_eq!(kinds(&restored["settings"]), ["fields", "record", "relations"], "{restored}");
 
         db.drop().await;
     }

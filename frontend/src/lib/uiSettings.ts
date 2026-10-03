@@ -32,6 +32,7 @@ export function emptyDocument(): UiSettingsDocument {
     listViews: [],
     layouts: [],
     layoutTemplates: [],
+    layoutFormat: 3,
   };
 }
 
@@ -55,6 +56,8 @@ export function normalizeDocument(doc: Partial<UiSettingsDocument> | undefined):
     // Kept as the API sent them (classes and CIs refer to them, and the API refuses to drop one in use), as a
     // copy: the editors change the draft, and the query cache's data is read-only.
     layoutTemplates: JSON.parse(JSON.stringify(d.layoutTemplates ?? [])) as UiSettingsDocument["layoutTemplates"],
+    // Sent back as returned (the API returns 3, the current format).
+    layoutFormat: d.layoutFormat ?? 3,
   };
 }
 
@@ -541,7 +544,7 @@ export function resolveLayout(
     return a === null ? core.includes(f) || record.includes(f) : attrKeys.has(a);
   };
   const placed = new Set<string>();
-  for (const t of layout.tabs ?? []) for (const s of t.sections ?? []) for (const f of s.fields ?? []) if (usable(f.field)) placed.add(f.field);
+  for (const t of layout.tabs ?? []) for (const s of t.sections ?? []) for (const f of s.fields ?? []) if (f.field && usable(f.field)) placed.add(f.field);
   const companion = (f: string) => {
     const c = COMPANIONS[f];
     return c && usable(c) && !placed.has(c) ? c : null;
@@ -559,7 +562,8 @@ export function resolveLayout(
       const columns = Math.min(Math.max(s.columns ?? GRID_COLUMNS, 1), MAX_COLUMNS);
       const fields: ResolvedField[] = [];
       for (const f of s.fields ?? []) {
-        if (!usable(f.field) || taken.has(f.field)) continue;
+        // Separators (no field) are not shown yet.
+        if (!f.field || !usable(f.field) || taken.has(f.field)) continue;
         taken.add(f.field);
         fields.push({ field: f.field, width: Math.min(Math.max(f.width ?? 1, 1), columns) });
         const c = companion(f.field);

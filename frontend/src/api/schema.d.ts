@@ -5901,16 +5901,24 @@ export interface components {
             /** @description Fields shown but not editable on the form. Presentation only: the API still accepts writes to them; restrict access with permission profiles */
             readOnlyFields?: string[];
         };
-        /** @description A field on a section's grid. Fields fill the grid row by row in the order given. */
+        /**
+         * @description An entry of a section's grid: a field, or a separator (`separator: true`) that divides the fields
+         *     into groups. Entries fill the grid row by row in the order given.
+         */
         UiLayoutField: {
             /** @description A built-in field or attributes.<key> */
-            field: string;
+            field?: string;
             /**
              * Format: int32
-             * @description Grid columns the field spans, at most the section's `columns`
+             * @description Grid columns the field spans, at most the section's `columns`. A separator always takes a row of
+             *     its own across the whole section: stored as the section's `columns`
              * @default 1
              */
             width: number;
+            /** @description A separator: a line across the section, with an optional `label`, instead of a field */
+            separator?: boolean;
+            /** @description separator: its heading (none: a plain line) */
+            label?: string;
         };
         /**
          * @description A panel of the layout format before tabs (v1). Accepted on input and converted to a section of one
@@ -5935,10 +5943,10 @@ export interface components {
             key: string;
             label: string;
             /**
-             * @description What the section shows (absent: fields): fields (a grid of `fields`), note (static `text`), or a built-in panel of the detail page (relations, history, audit). Each panel can be placed once per layout; one that is not placed keeps its usual position on the detail page.
+             * @description What the section shows (absent: fields): fields (a grid of `fields`), note (static `text`), or a built-in panel of the detail page: record (the CI's class, created and last changed, and the other bookkeeping fields no field section places), relations, history or audit. Each panel can be placed once per layout. A layout with tabs shows the record details, the relationships and the audit trail only where it places them, so removing one of these sections hides it; the history has a tab of its own when it is not placed. A layout without tabs shows the built-in arrangement: the fields by attribute group, then the record details and the relationships.
              * @enum {string}
              */
-            kind?: "fields" | "note" | "relations" | "history" | "audit";
+            kind?: "fields" | "note" | "record" | "relations" | "history" | "audit";
             /**
              * Format: int32
              * @description Columns of the section's field grid on a wide screen; narrow screens use fewer
@@ -6196,6 +6204,17 @@ export interface components {
              * @default []
              */
             layoutTemplates: components["schemas"]["UiLayoutTemplate"][];
+            /**
+             * Format: int32
+             * @description Layout format of the document; always 3 when returned. Send back what was returned. A document
+             *     without it (an older configuration export, an older settings version being restored, an API client
+             *     written before format 3) is from before layouts placed the record details and the relationships
+             *     explicitly: when it is saved, every layout that has tabs and does not place them gets a "Record" and
+             *     a "Relationships" section at the end of its first tab, as migration 0048 did with the stored
+             *     settings, so the detail page shows what it showed before.
+             * @default null
+             */
+            layoutFormat: number;
         };
         /**
          * @description The UI settings document with the logo and favicon. Importing it replaces

@@ -39806,10 +39806,7 @@
       },
       "UiLayoutField": {
         "type": "object",
-        "description": "A field on a section's grid. Fields fill the grid row by row in the order given.",
-        "required": [
-          "field"
-        ],
+        "description": "An entry of a section's grid: a field, or a separator (`separator: true`) that divides the fields\ninto groups. Entries fill the grid row by row in the order given.",
         "properties": {
           "field": {
             "type": "string",
@@ -39819,10 +39816,21 @@
           "width": {
             "type": "integer",
             "format": "int32",
-            "description": "Grid columns the field spans, at most the section's `columns`",
+            "description": "Grid columns the field spans, at most the section's `columns`. A separator always takes a row of\nits own across the whole section: stored as the section's `columns`",
             "default": 1,
             "maximum": 12,
             "minimum": 1
+          },
+          "separator": {
+            "type": "boolean",
+            "description": "A separator: a line across the section, with an optional `label`, instead of a field"
+          },
+          "label": {
+            "type": "string",
+            "description": "separator: its heading (none: a plain line)",
+            "maxLength": 100,
+            "minLength": 1,
+            "pattern": "\\S"
           }
         },
         "additionalProperties": false
@@ -39883,10 +39891,11 @@
           },
           "kind": {
             "type": "string",
-            "description": "What the section shows (absent: fields): fields (a grid of `fields`), note (static `text`), or a built-in panel of the detail page (relations, history, audit). Each panel can be placed once per layout; one that is not placed keeps its usual position on the detail page.",
+            "description": "What the section shows (absent: fields): fields (a grid of `fields`), note (static `text`), or a built-in panel of the detail page: record (the CI's class, created and last changed, and the other bookkeeping fields no field section places), relations, history or audit. Each panel can be placed once per layout. A layout with tabs shows the record details, the relationships and the audit trail only where it places them, so removing one of these sections hides it; the history has a tab of its own when it is not placed. A layout without tabs shows the built-in arrangement: the fields by attribute group, then the record details and the relationships.",
             "enum": [
               "fields",
               "note",
+              "record",
               "relations",
               "history",
               "audit"
@@ -40470,6 +40479,14 @@
             "description": "Named layouts that classes and CIs use. Stored settings always hold the Standard template\n(key \"standard\"); settings without templates (older exports and versions) are converted on save.",
             "default": [],
             "maxItems": 1000
+          },
+          "layoutFormat": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Layout format of the document; always 3 when returned. Send back what was returned. A document\nwithout it (an older configuration export, an older settings version being restored, an API client\nwritten before format 3) is from before layouts placed the record details and the relationships\nexplicitly: when it is saved, every layout that has tabs and does not place them gets a \"Record\" and\na \"Relationships\" section at the end of its first tab, as migration 0048 did with the stored\nsettings, so the detail page shows what it showed before.",
+            "default": null,
+            "maximum": 3,
+            "minimum": 2
           }
         },
         "additionalProperties": false
