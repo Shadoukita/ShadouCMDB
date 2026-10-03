@@ -19,3 +19,36 @@ Licence text: frontend/src/assets/fonts/inter/LICENSE.txt, shipped in the web UI
 Source:     https://github.com/rsms/inter/releases/tag/v4.1
             (release archive Inter-4.1.zip, files web/InterVariable.woff2,
             web/InterVariable-Italic.woff2 and LICENSE.txt)
+
+
+JetBrains Mono
+--------------
+
+Component:  JetBrains Mono typeface, version 2.304 (web fonts JetBrainsMono-Regular.woff2,
+            JetBrainsMono-Medium.woff2 and JetBrainsMono-SemiBold.woff2, unmodified)
+Used in:    Web UI (frontend/src/assets/fonts/jetbrains-mono/; built into dist/assets/)
+Copyright:  Copyright 2020 The JetBrains Mono Project Authors
+            (https://github.com/JetBrains/JetBrainsMono)
+Licence:    SIL Open Font License, Version 1.1 (OFL-1.1)
+Licence text: frontend/src/assets/fonts/jetbrains-mono/LICENSE.txt, shipped in the web UI as
+            /assets/JetBrainsMono-LICENSE.txt
+Source:     https://github.com/JetBrains/JetBrainsMono/releases/tag/v2.304
+            (release archive JetBrainsMono-2.304.zip, files fonts/webfonts/JetBrainsMono-Regular.woff2,
+            fonts/webfonts/JetBrainsMono-Medium.woff2, fonts/webfonts/JetBrainsMono-SemiBold.woff2
+            and OFL.txt)
+
+
+Lucide
+------
+
+Component:  Lucide icons, lucide-static version 1.51.0 (a subset of the icon element data in
+            icon-nodes.json, unmodified, converted to a TypeScript map by
+            frontend/scripts/vendor-lucide.mjs)
+Used in:    Web UI (frontend/src/icons/lucide.ts and lucide-css.css; built into the web UI bundle)
+Copyright:  Copyright (c) 2026 Lucide Icons and Contributors (https://lucide.dev);
+            icons derived from Feather: Copyright (c) 2013-present Cole Bemis
+Licence:    ISC License (ISC); the Feather-derived icons also under the MIT License (MIT)
+Licence text: frontend/src/icons/LICENSE.txt, shipped in the web UI as /assets/Lucide-LICENSE.txt
+Source:     https://www.npmjs.com/package/lucide-static/v/1.51.0
+            (https://registry.npmjs.org/lucide-static/-/lucide-static-1.51.0.tgz, SHA-256
+            6936026d1512256483161ae999982e3be3d5d74226996c4ec7447e901726a2d8)

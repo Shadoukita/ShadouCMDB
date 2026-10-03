@@ -12,6 +12,7 @@ import { t } from "./i18n";
 import { useMediaQuery } from "./lib/composables";
 import { applyBranding, useBrandingStore } from "./stores/branding";
 import { useSessionStore } from "./stores/session";
+import Icon from "./components/Icon.vue";
 
 const route = useRoute();
 const session = useSessionStore();
@@ -55,7 +56,7 @@ function retry() {
         :aria-label="navOpen ? t('shell.nav.close') : t('shell.nav.open')"
         @click="navOpen = !navOpen"
       >
-        <span aria-hidden="true">☰</span>
+        <Icon name="menu" :size="20" />
       </button>
       <RouterLink to="/" :aria-label="t('shell.home', { app: branding.effective.appName })"><BrandMark /></RouterLink>
     </div>
@@ -63,7 +64,7 @@ function retry() {
       <GlobalSearch />
       <div class="shell-actions">
         <RouterLink v-if="session.canOnAnyClass('create')" class="btn btn-primary new-ci" to="/cis/new" :title="t('shell.newCi')">
-          <span aria-hidden="true">+</span><span class="btn-label">{{ t("shell.newCi") }}</span>
+          <Icon name="plus" /><span class="btn-label">{{ t("shell.newCi") }}</span>
         </RouterLink>
         <UserMenu />
       </div>

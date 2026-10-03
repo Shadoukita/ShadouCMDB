@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from "vue";
-import { RouterLink, useRoute, useRouter } from "vue-router";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { onBeforeRouteLeave, onBeforeRouteUpdate, RouterLink, useRoute, useRouter, type RouteLocationNormalized } from "vue-router";
 import { ApiError } from "../api/client";
 import { useAreas } from "../api/datamodel";
 import { useCi, useCiClasses, useClassAttributes } from "../api/queries";
@@ -24,6 +24,8 @@ import { useTrail, type TrailStep } from "../lib/trail";
 import { attributeKey, builtInLayout, DETAIL_CORE, DETAIL_RECORD, layoutFor, normalizeLayout, placedPanels, resolveLayout, withoutKinds } from "../lib/uiSettings";
 import { useFlashStore } from "../stores/flash";
 import { useSessionStore } from "../stores/session";
+import { fieldIdFor, useCiDraft } from "./form/ciDraft";
+import FormErrorBanner from "./form/FormErrorBanner.vue";
 import AttributeValue from "./detail/AttributeValue.vue";
 import BlockContent from "./detail/BlockContent.vue";
 import CoreFieldValue from "./detail/CoreFieldValue.vue";
@@ -37,6 +39,11 @@ import RelationshipsPanel from "./detail/RelationshipsPanel.vue";
 import SignInAccountPanel from "./detail/SignInAccountPanel.vue";
 
 /**
+ * A CI's page. Its fields are its form: they open as inputs (SHAA-1644), and once something was changed a
+ * bar offers Save and Discard; leaving the CI with unsaved changes asks first. A user without the edit
+ * right on the class, a deleted CI, and read-only or managed fields show their values in the same place,
+ * read-only (ciDraft.ts, detail/LayoutPanels).
+ *
  * The class layout's tabs (`layout:<key>`; a single one is "overview"), then the relationship map, the
  * impact analysis and the history. The Impact tab has its own URL (/cis/:id/impact, with its options
  * in the query); the others are chosen on the page.
@@ -171,6 +178,71 @@ function onTabKey(e: KeyboardEvent) {
   void nextTick(() => document.getElementById(`tab-${tabId(next)}`)?.focus());
 }
 const tabId = (k: Tab) => k.replace(":", "-");
+// The CI's values being edited, on every layout tab (they stay while another tab is shown).
+const canEdit = computed(() => !!c.value && !c.value.deletedAt && session.canOnClass(c.value.classId, "edit"));
+const draft = useCiDraft({
+  mode: "edit",
+  classId: () => c.value?.classId,
+  ci: () => c.value,
+  attrs: () => attrs.data.value,
+  readOnlyFields: () => layout.value?.readOnlyFields,
+  locked: () => !canEdit.value,
+});
+/** The layout tab's key in TABS for the layout tab `i`. */
+const layoutTabKey = (i: number): Tab => (layoutTabs.value.length > 1 ? `layout:${layoutTabs.value[i].key}` : "overview");
+const layoutTabFields = (i: number) => layoutTabs.value[i]?.sections.flatMap((sec) => sec.fields.map((f) => f.field)) ?? [];
+const tabErrorCount = (key: Tab) => {
+  const i = layoutTabs.value.findIndex((_, j) => layoutTabKey(j) === key);
+  return i < 0 ? 0 : layoutTabFields(i).filter((f) => draft.fieldErrors[f]).length;
+};
+/** Shows the layout tab holding `field` and puts the cursor in it. */
+async function focusField(field: string) {
+  const i = layoutTabs.value.findIndex((_, j) => layoutTabFields(j).includes(field));
+  if (i >= 0) selectTab(layoutTabKey(i));
+  await nextTick();
+  document.getElementById(fieldIdFor(field))?.focus();
+}
+async function onSave() {
+  draft.error = null;
+  // Catch empty required fields before the round trip; everything else is validated by the API.
+  const missing = draft.checkRequired(new Set(layoutTabs.value.flatMap((_, i) => layoutTabFields(i))));
+  if (missing.length > 0) {
+    await focusField(missing[0]);
+    return;
+  }
+  try {
+    const saved = await draft.save();
+    if (!saved) return;
+    draft.reset(saved);
+    flash.show(saved.id, `Saved ${saved.label}.`);
+  } catch (err) {
+    draft.error = err;
+    // Show the first tab with a rejected field, so the message next to it is in view.
+    const withError = layoutTabs.value.findIndex((_, i) => tabErrorCount(layoutTabKey(i)) > 0);
+    if (withError >= 0) selectTab(layoutTabKey(withError));
+    window.scrollTo({ top: 0 });
+  }
+}
+/** After a version conflict: the CI as saved now, with the operator's changes dropped. */
+async function loadCurrent() {
+  const r = await ci.refetch();
+  if (r.data) draft.reset(r.data);
+}
+
+// Unsaved changes: confirm before leaving this CI in the app (its Impact tab is the same page), and let the
+// browser ask before a reload or closing the tab.
+const keepChanges = (to: RouteLocationNormalized) =>
+  !draft.dirty || String(to.params.id ?? "") === id.value || window.confirm(`Discard your unsaved changes to ${c.value?.label ?? "this configuration item"}?`);
+onBeforeRouteLeave(keepChanges);
+onBeforeRouteUpdate(keepChanges);
+function onBeforeUnload(e: BeforeUnloadEvent) {
+  if (!draft.dirty) return;
+  e.preventDefault();
+  e.returnValue = "";
+}
+onMounted(() => window.addEventListener("beforeunload", onBeforeUnload));
+onBeforeUnmount(() => window.removeEventListener("beforeunload", onBeforeUnload));
+
 const self = computed<TrailStep | undefined>(() => (c.value ? { id: c.value.id, name: c.value.label } : undefined));
 const crumbs = computed<Crumb[]>(() => {
   if (!c.value) return [];
@@ -216,11 +288,11 @@ const crumbs = computed<Crumb[]>(() => {
       <div v-if="!c.deletedAt" class="actions">
         <EditLayoutButton v-if="editor.allowed && !editor.active" :editor="editor" />
         <RouterLink v-if="!onImpactRoute" class="btn" :to="`/cis/${c.id}/impact`">Impact analysis</RouterLink>
-        <RouterLink v-if="session.canOnClass(c.classId, 'edit')" class="btn" :to="`/cis/${c.id}/edit`">Edit</RouterLink>
         <DeleteCiButton v-if="session.canOnClass(c.classId, 'delete')" :ci="c" />
       </div>
     </div>
-    <div v-if="flashText" class="alert" role="status">{{ flashText }}</div>
+    <div v-if="flashText && !draft.dirty" class="alert" role="status">{{ flashText }}</div>
+    <FormErrorBanner v-if="draft.error != null && draft.dirty && !editor.active" :error="draft.error" :unplaced="draft.unplaced" :on-reload="loadCurrent" />
     <div v-if="c.deletedAt" class="alert alert-warn">
       This CI was deleted on {{ formatDateTime(c.deletedAt) }}. It is kept read-only for history; its relationships were
       removed with it.
@@ -254,7 +326,7 @@ const crumbs = computed<Crumb[]>(() => {
         @click="selectTab(key)"
         @keydown="onTabKey"
       >
-        {{ label }}
+        {{ label }}<span v-if="tabErrorCount(key) > 0" class="badge danger tab-errors">{{ tabErrorCount(key) }} error{{ tabErrorCount(key) === 1 ? "" : "s" }}</span>
       </button>
     </div>
 
@@ -276,6 +348,7 @@ const crumbs = computed<Crumb[]>(() => {
           :self="self"
           :trail="trail"
           :orphans="layoutIndex === 0"
+          :draft="draft"
         />
         <SignInAccountPanel v-if="layoutIndex === 0" :ci="c" />
         <PartOfServicesPanel v-if="layoutIndex === 0" :ci="c" :self="self" :trail="trail" />
@@ -287,6 +360,11 @@ const crumbs = computed<Crumb[]>(() => {
       <RelationshipGraphPanel v-else-if="current === 'graph'" :ci="c" :self="self" :trail="trail" />
       <ImpactPanel v-else-if="current === 'impact'" :ci="c" :self="self" :trail="trail" />
       <HistoryPanel v-else :ci="c" />
+    </div>
+    <div v-if="!editor.active && (draft.dirty || draft.pending)" class="save-bar ci-save-bar" role="region" aria-label="Unsaved changes">
+      <span class="badge warn">Unsaved changes</span>
+      <button type="button" class="btn btn-primary" :disabled="draft.pending" @click="onSave">{{ draft.pending ? "Saving…" : "Save" }}</button>
+      <button type="button" class="btn" :disabled="draft.pending" @click="draft.reset(c)">Discard</button>
     </div>
   </template>
 </template>

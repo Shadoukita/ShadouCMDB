@@ -1,5 +1,5 @@
 import type { APIRequestContext, Page } from "@playwright/test";
-import { apiGet, ciIdByName, classIdByName, createCi, csrf, expect, resetUiSettings as resetSettings, saveLayout, snap, test } from "./support";
+import { apiGet, ciIdByName, classIdByName, createCi, csrf, expect, fieldLabels, resetUiSettings as resetSettings, saveCi, saveLayout, snap, test } from "./support";
 
 // Administration › Customization and Export / import, against the demo seed (the Server class
 // and its attributes). The settings apply to every user, so the walk starts from and ends with
@@ -346,20 +346,15 @@ test("layouts: Edit CI opens the layout editor on a Server, whose layout the det
   await expect(page.locator(".layout-container").getByText("Asset tag", { exact: true })).toHaveCount(0);
   await tabs.filter({ hasText: "Hardware" }).click();
   await expect(page.locator(".lg-free > details > summary h2")).toHaveText(["Hardware facts"]);
-  await expect(page.locator(".lg-free dt")).toHaveText(["CPU cores", "Manufacturer", "Model"]);
+  await expect(fieldLabels(page.locator(".lg-free"))).toHaveText([/^CPU cores/, /^Manufacturer/, /^Model/]);
 
-  // The form: the same tabs; a field on the second tab is edited and saved.
-  await page.getByRole("link", { name: "Edit" }).click();
-  const formTabs = page.getByRole("tablist", { name: "Form tabs" }).getByRole("tab");
-  await expect(formTabs).toHaveText(["General", "Hardware"]);
+  // The page is the form: a field on the second tab is edited and saved there, and the page stays as it is.
   await expect(page.getByLabel("Asset tag")).toHaveCount(0);
-  await expect(page.getByLabel("Model")).toBeHidden();
-  await formTabs.filter({ hasText: "Hardware" }).click();
   await page.getByLabel("Model").fill(`E2E ${stamp}`);
-  await page.getByRole("button", { name: "Save changes" }).click();
+  await saveCi(page);
+  await expect(page.getByRole("status").filter({ hasText: "Saved" })).toBeVisible();
   await expect(page).toHaveURL(new RegExp(`/cis/${ci.id}$`));
-  await tabs.filter({ hasText: "Hardware" }).click();
-  await expect(page.locator(".lg-free")).toContainText(`E2E ${stamp}`);
+  await expect(page.getByLabel("Model")).toHaveValue(`E2E ${stamp}`);
   expect(await ciIdByName(request, ci.label)).toBe(ci.id);
   await snap(page, "customization-layout");
 });

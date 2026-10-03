@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { moveItem } from "../lib/reorder";
+import Icon from "./Icon.vue";
 
 /**
  * The operator's column chooser for the inventory: the shown columns in order
@@ -105,7 +106,7 @@ function reset() {
       :aria-expanded="open"
       @click="open ? close(false) : show()"
     >
-      Columns<span v-if="customized" class="badge spaced">Custom</span> <span aria-hidden="true">▾</span>
+      Columns<span v-if="customized" class="badge spaced">Custom</span> <Icon name="chevron-down" />
     </button>
     <div v-if="open" id="columns-popover" ref="panel" class="popover columns-popover" role="dialog" aria-labelledby="columns-popover-title">
       <h2 id="columns-popover-title" class="popover-title">Columns</h2>
@@ -117,17 +118,15 @@ function reset() {
             <span v-if="c === 'label'" class="muted">(always shown)</span>
           </label>
           <span class="row-actions">
-            <button :id="`${id(c)}-up`" type="button" class="btn btn-sm" :disabled="i === 0" :aria-label="`Move ${labelOf(c)} up`" @click="move(i, i - 1, 'up')">↑</button>
+            <button :id="`${id(c)}-up`" type="button" class="btn btn-sm btn-icon" :disabled="i === 0" :aria-label="`Move ${labelOf(c)} up`" @click="move(i, i - 1, 'up')"><Icon name="arrow-up" /></button>
             <button
               :id="`${id(c)}-down`"
               type="button"
-              class="btn btn-sm"
+              class="btn btn-sm btn-icon"
               :disabled="i === columns.length - 1"
               :aria-label="`Move ${labelOf(c)} down`"
               @click="move(i, i + 1, 'down')"
-            >
-              ↓
-            </button>
+            ><Icon name="arrow-down" /></button>
           </span>
         </li>
       </ol>

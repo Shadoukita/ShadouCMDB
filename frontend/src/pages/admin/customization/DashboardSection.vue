@@ -8,6 +8,7 @@ import { attributeSortFields, sharedSortAttributes, SORT_FIELDS, unavailableSort
 import DashboardWidgets from "../../dashboard/DashboardWidgets.vue";
 import KeyChecklist from "./KeyChecklist.vue";
 import LookupFilterEditor from "./LookupFilterEditor.vue";
+import Icon from "../../../components/Icon.vue";
 
 /**
  * Customization › Dashboard: the built-in dashboard, or the administrator's
@@ -162,8 +163,8 @@ const staleSort = (w: UiWidget) => (classAttrs.value ? unavailableSortLabel(w.se
                 </template>
               </td>
               <td class="row-actions">
-                <button type="button" class="btn btn-sm" :disabled="i === 0" :aria-label="`Move ${w.id} up`" @click="move(i, i - 1)">↑</button>
-                <button type="button" class="btn btn-sm" :disabled="i === widgets.length - 1" :aria-label="`Move ${w.id} down`" @click="move(i, i + 1)">↓</button>
+                <button type="button" class="btn btn-sm btn-icon" :disabled="i === 0" :aria-label="`Move ${w.id} up`" @click="move(i, i - 1)"><Icon name="arrow-up" /></button>
+                <button type="button" class="btn btn-sm btn-icon" :disabled="i === widgets.length - 1" :aria-label="`Move ${w.id} down`" @click="move(i, i + 1)"><Icon name="arrow-down" /></button>
                 <button type="button" class="btn btn-sm" :aria-label="`Remove ${w.id}`" @click="remove(i)">Remove</button>
               </td>
             </tr>

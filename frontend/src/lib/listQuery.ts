@@ -34,11 +34,10 @@ export function useListQuery(defaults: { sort: string; limit?: number }) {
   }
 
   const toggleSort = (field: string) => update({ sort: sort.value === field ? `-${field}` : field });
-  const sortIndicator = (field: string) => (sort.value === field ? "▲" : sort.value === `-${field}` ? "▼" : "");
   const ariaSort = (field: string): "ascending" | "descending" | "none" =>
     sort.value === field ? "ascending" : sort.value === `-${field}` ? "descending" : "none";
 
-  return { get, limit, offset, sort, update, onPage, toggleSort, sortIndicator, ariaSort };
+  return { get, limit, offset, sort, update, onPage, toggleSort, ariaSort };
 }
 
 function clampInt(raw: string, fallback: number, min: number, max: number): number {

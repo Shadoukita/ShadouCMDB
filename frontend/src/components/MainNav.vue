@@ -15,6 +15,7 @@ import { buildNav, type NavLinkItem } from "../lib/uiSettings";
 import { visibleSections } from "../pages/admin/sections";
 import { useSessionStore } from "../stores/session";
 import ClassBadge from "./ClassBadge.vue";
+import Icon from "./Icon.vue";
 import NavLink from "./NavLink.vue";
 
 /**
@@ -103,20 +104,20 @@ function active(item: NavLinkItem): (r: RouteLocationNormalizedLoaded) => boolea
         :title="t(folded.has(g.area.key) ? 'nav.area.show' : 'nav.area.hide', { area: g.area.name })"
         @click="toggle(g.area.key)"
       >
-        <span class="nav-fold" aria-hidden="true">{{ folded.has(g.area.key) ? "▸" : "▾" }}</span>
-        <ClassBadge :icon="g.area.icon" :color="g.area.color" :name="g.heading ?? ''" />
+        <Icon class="nav-fold" :size="14" :name="folded.has(g.area.key) ? 'chevron-right' : 'chevron-down'" />
+        <ClassBadge :icon="g.area.icon" :color="g.area.color" plain :name="g.heading ?? ''" />
       </button>
     </h2>
     <h2 v-else-if="g.heading">{{ g.heading }}</h2>
     <div v-if="g.area" v-show="!folded.has(g.area.key)" :id="`nav-${g.id}`" class="nav-area-items">
       <NavLink v-for="item in g.items" :key="item.id" :to="item.to" :active="active(item)">
-        <ClassBadge v-if="item.cls" :icon="item.cls.icon" :color="item.cls.color" :name="item.label" />
+        <ClassBadge v-if="item.cls" :icon="item.cls.icon" :color="item.cls.color" plain :name="item.label" />
         <span v-if="item.cls" class="muted">{{ countFor(item) ?? "" }}</span>
       </NavLink>
     </div>
     <template v-for="item in g.area ? [] : g.items" :key="item.id">
       <NavLink :to="item.to" :active="active(item)">
-        <ClassBadge v-if="item.cls" :icon="item.cls.icon" :color="item.cls.color" :name="item.label" />
+        <ClassBadge v-if="item.cls" :icon="item.cls.icon" :color="item.cls.color" plain :name="item.label" />
         <template v-else>{{ item.label }}</template>
         <span v-if="item.cls" class="muted">{{ countFor(item) ?? "" }}</span>
       </NavLink>

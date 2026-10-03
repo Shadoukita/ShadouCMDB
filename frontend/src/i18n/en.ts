@@ -535,6 +535,8 @@ export const en = {
   "formError.notSavedSentence": "Your changes were not saved.",
   "formError.reapply": "{link} and re-apply your edits.",
   "formError.openCurrent": "Open the current version",
+  "formError.loadCurrent": "Load the current version",
+  "formError.loadCurrentDiscards": "(discards your changes)",
   "formError.fixFields": "Not saved — fix the highlighted fields.",
   "formError.notSaved": "Not saved",
   "time.justNow": "just now",

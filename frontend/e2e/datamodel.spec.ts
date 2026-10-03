@@ -176,10 +176,10 @@ test("the CI form and detail page follow the new definitions", async ({ page }) 
   await snap(page, "33-ci-form-from-admin-model");
   await page.getByRole("button", { name: `Create ${CLASS}` }).click();
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(CI);
-  const attrs = page.locator(".layout-panels");
-  await expect(attrs).toContainText("Gold");
-  await expect(attrs).toContainText("passive");
-  await expect(attrs.locator("dt", { hasText: "Rack units" }).locator("+ dd")).toHaveText("2");
+  // The CI page opens with the values in their inputs.
+  await expect(page.locator("#attr-tier option:checked")).toHaveText("Gold");
+  await expect(page.locator("#attr-mode")).toHaveValue("passive");
+  await expect(page.locator("#attr-rack_units")).toHaveValue("2");
 });
 
 test("an archived class keeps its CIs but takes no new ones", async ({ page }) => {

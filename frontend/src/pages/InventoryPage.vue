@@ -23,6 +23,7 @@ import { useSavedViews } from "../api/savedViews";
 import { useSavedViewSelection } from "../lib/useSavedViewSelection";
 import { useImportAccess } from "../lib/useImportAccess";
 import { useSessionStore } from "../stores/session";
+import SortIcon from "../components/SortIcon.vue";
 
 /**
  * CI inventory. Every filter, the sort, the columns and the page live in the URL
@@ -197,7 +198,7 @@ function clearFilters() {
             <tr>
               <th v-for="c in columns" :key="c" scope="col" :aria-sort="columnSort(c) ? state.ariaSort(columnSort(c)!) : undefined">
                 <button v-if="columnSort(c)" type="button" class="sort" @click="state.toggleSort(columnSort(c)!)">
-                  {{ columnLabel(c) }} {{ state.sortIndicator(columnSort(c)!) }}
+                  {{ columnLabel(c) }} <SortIcon :dir="state.ariaSort(columnSort(c)!)" />
                 </button>
                 <template v-else>{{ columnLabel(c) }}</template>
               </th>

@@ -13,6 +13,7 @@ import { useDebounced, useDocumentTitle } from "../../lib/composables";
 import { formatDate, formatDateTime, formatRelative } from "../../lib/format";
 import { useListQuery } from "../../lib/listQuery";
 import CreateApiTokenDialog from "./CreateApiTokenDialog.vue";
+import SortIcon from "../../components/SortIcon.vue";
 
 /**
  * Administration › API tokens. Search, filters, sort and page live in the URL;
@@ -178,7 +179,7 @@ function revokedTitle(t: ApiToken): string | undefined {
             <tr>
               <th v-for="c in COLUMNS" :key="c.key" scope="col" :aria-sort="c.sort ? lq.ariaSort(c.sort) : undefined">
                 <button v-if="c.sort" type="button" class="sort" @click="lq.toggleSort(c.sort)">
-                  {{ c.label }} {{ lq.sortIndicator(c.sort) }}
+                  {{ c.label }} <SortIcon :dir="lq.ariaSort(c.sort)" />
                 </button>
                 <template v-else-if="c.label">{{ c.label }}</template>
                 <span v-else class="sr-only">Actions</span>

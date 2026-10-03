@@ -8,6 +8,7 @@ import EmptyState from "../../../components/EmptyState.vue";
 import ErrorAlert from "../../../components/ErrorAlert.vue";
 import LoadingState from "../../../components/LoadingState.vue";
 import PaginationBar from "../../../components/PaginationBar.vue";
+import SortIcon from "../../../components/SortIcon.vue";
 import { useDebounced, useDocumentTitle } from "../../../lib/composables";
 import { formatRelative } from "../../../lib/format";
 import { useListQuery } from "../../../lib/listQuery";
@@ -132,7 +133,7 @@ function clearFilters() {
           <thead>
             <tr>
               <th v-for="c in COLUMNS" :key="c.key" scope="col" :class="{ num: c.num }" :aria-sort="c.sort ? lq.ariaSort(c.sort) : undefined">
-                <button v-if="c.sort" type="button" class="sort" @click="lq.toggleSort(c.sort)">{{ c.label }} {{ lq.sortIndicator(c.sort) }}</button>
+                <button v-if="c.sort" type="button" class="sort" @click="lq.toggleSort(c.sort)">{{ c.label }} <SortIcon :dir="lq.ariaSort(c.sort)" /></button>
                 <template v-else>{{ c.label }}</template>
               </th>
             </tr>

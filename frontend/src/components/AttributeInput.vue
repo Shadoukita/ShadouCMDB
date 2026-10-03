@@ -78,7 +78,9 @@ function onReference(ci: CiSummary | null) {
     :invalid="invalid"
     :described-by="describedBy"
     @select="onReference"
-  />
+  >
+    <template v-if="$slots.reference" #selected="{ selected }"><slot name="reference" :selected="selected" /></template>
+  </CiPicker>
   <LookupValueSelect
     v-else-if="def.dataType === 'lookup'"
     :id="id"

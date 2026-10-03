@@ -2,6 +2,7 @@ import type { components } from "../api/schema";
 import type { LayoutSection, LayoutTab } from "./layoutDesign";
 import { sectionPlaces } from "./layoutDesign";
 import { GRID_COLUMNS, SECTION_GRID, sectionKind } from "./uiSettings";
+import type { IconName } from "../icons/lucide";
 
 /**
  * Layout tabs are free (`placement: "free"`): every section is a window with a
@@ -163,8 +164,8 @@ export const LAYER_MOVES: { move: LayerMove; label: string; keys: string }[] = [
   { move: "back", label: "Send to back", keys: "Ctrl+Shift+PageDown" },
 ];
 
-/** Compact symbols of the layer moves, for toolbars (the buttons carry the labels as their names). */
-export const LAYER_ICONS: Record<LayerMove, string> = { front: "⤒", forward: "↑", backward: "↓", back: "⤓" };
+/** Icons of the layer moves, for toolbars (the buttons carry the labels as their names). */
+export const LAYER_ICONS: Record<LayerMove, IconName> = { front: "arrow-up-to-line", forward: "arrow-up", backward: "arrow-down", back: "arrow-down-to-line" };
 
 /** A window's place in the stack: 1 is the bottom, n the top. */
 export function layerOf(tab: LayoutTab, section: LayoutSection): { index: number; count: number } {
