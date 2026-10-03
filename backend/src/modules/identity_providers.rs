@@ -1334,7 +1334,12 @@ async fn test(
         });
     }
     let Ok(settings) = sso::ldap_settings(&row, &auth.keyring) else { return Ok(undecryptable_test()) };
-    Ok(match ldap::probe(&settings, b.username.as_deref()).await {
+    let probed = ldap::probe(&settings, b.username.as_deref()).await;
+    if probed.is_ok() {
+        // The password form stops skipping it at once (GH#570).
+        sso::directory_reachable(id);
+    }
+    Ok(match probed {
         Ok(None) => ConnectionTest {
             ok: true,
             message: "Connected over TLS and the service account bind succeeded".into(),

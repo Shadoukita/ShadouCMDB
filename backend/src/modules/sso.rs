@@ -11,6 +11,10 @@
 //! accounts are not affected by any of this and remain the way in when a
 //! provider is down (break-glass).
 
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
+
 use axum::http::{HeaderMap, Method, StatusCode};
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -376,6 +380,47 @@ fn directory_identity(user: ldap::DirectoryUser) -> ExternalIdentity {
     }
 }
 
+/// How long the password form skips a directory whose lookup timed out (GH#570).
+const TIMED_OUT_SKIP: Duration = Duration::from_secs(30);
+
+/// Directories (id and URL) whose last password-form lookup timed out, and
+/// until when the form skips them. While a directory drops packets, every
+/// unknown name would otherwise wait for the LDAP timeout (10 s) and a local
+/// account's wrong password only for `SIGN_IN_FAILURE_FLOOR_MS`, which tells
+/// the local account names apart; now only the first lookup per window waits.
+/// Per process: each replica learns of the outage on its own. A new URL starts
+/// afresh; a successful connection test clears the provider ([`directory_reachable`]).
+static TIMED_OUT: LazyLock<Mutex<HashMap<(Uuid, String), Instant>>> = LazyLock::new(Default::default);
+
+fn timed_out_directories() -> std::sync::MutexGuard<'static, HashMap<(Uuid, String), Instant>> {
+    TIMED_OUT.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Whether the password form skips the directory: it timed out within [`TIMED_OUT_SKIP`].
+fn skipped(provider: Uuid, url: &str) -> bool {
+    let now = Instant::now();
+    let mut map = timed_out_directories();
+    map.retain(|_, until| *until > now);
+    map.contains_key(&(provider, url.to_owned()))
+}
+
+/// Records how the directory's lookup ended: skipped for a while after a timeout.
+fn note_lookup(provider: Uuid, url: &str, timed_out: bool) {
+    let key = (provider, url.to_owned());
+    let mut map = timed_out_directories();
+    if timed_out {
+        map.insert(key, Instant::now() + TIMED_OUT_SKIP);
+    } else {
+        map.remove(&key);
+    }
+}
+
+/// The directory answered the administrator's connection test: the password
+/// form asks it again at once.
+pub fn directory_reachable(provider: Uuid) {
+    timed_out_directories().retain(|(id, _), _| *id != provider);
+}
+
 /// Signs in with a directory password. `linked`: the directory the account
 /// already belongs to; otherwise the enabled directories are asked in order
 /// and the first that knows the name decides (a wrong password there does not
@@ -406,8 +451,14 @@ pub async fn directory_sign_in(
             unavailable = true;
             continue;
         };
+        if skipped(provider.id, &settings.url) {
+            tracing::warn!(provider = %provider.name, "LDAP directory skipped: it timed out within the last {} s", TIMED_OUT_SKIP.as_secs());
+            unavailable = true;
+            continue;
+        }
         let outcome =
             ldap::authenticate(&settings, username, password, |user| admit(provider.id, &user.external_id)).await;
+        note_lookup(provider.id, &settings.url, matches!(&outcome, Err(e) if e.timed_out()));
         match outcome {
             Ok(ldap::Outcome::NotFound) => continue,
             Ok(ldap::Outcome::NotAdmitted) => return Ok(DirectoryAnswer::NotAdmitted),

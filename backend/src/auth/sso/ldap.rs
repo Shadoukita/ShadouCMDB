@@ -78,6 +78,9 @@ pub struct DirectoryError {
     /// No LDAP answer came back over verified TLS (connect, TLS, StartTLS or
     /// transport failure).
     unreachable: bool,
+    /// The connection or an operation ran into [`TIMEOUT`]: the directory
+    /// drops packets rather than refusing them (GH#570).
+    timed_out: bool,
 }
 
 /// What the connection test shows instead of the transport error: the error
@@ -87,7 +90,12 @@ pub const UNREACHABLE: &str = "Could not reach the directory over verified TLS (
 
 impl DirectoryError {
     fn new(detail: String) -> Self {
-        DirectoryError { detail, unreachable: false }
+        DirectoryError { detail, unreachable: false, timed_out: false }
+    }
+
+    /// No transport answer within [`TIMEOUT`].
+    pub fn timed_out(&self) -> bool {
+        self.timed_out
     }
 
     /// The text for the administrator: the directory's own result once it
@@ -107,7 +115,8 @@ impl std::fmt::Display for DirectoryError {
 /// anything else (I/O, timeout, a peer that does not speak LDAP) is not.
 fn fail(what: &str, e: LdapError) -> DirectoryError {
     let unreachable = !matches!(e, LdapError::LdapResult { .. });
-    DirectoryError { detail: format!("{what}: {e}"), unreachable }
+    let timed_out = matches!(e, LdapError::Timeout { .. });
+    DirectoryError { detail: format!("{what}: {e}"), unreachable, timed_out }
 }
 
 /// The configured filter with `{username}` replaced by the escaped name.
@@ -123,7 +132,7 @@ async fn connect(s: &Settings) -> Result<Ldap, DirectoryError> {
     // Whatever fails here, a StartTLS refusal included, came before verified TLS.
     let (conn, ldap) = LdapConnAsync::with_settings(settings, &s.url)
         .await
-        .map_err(|e| DirectoryError { detail: format!("connection: {e}"), unreachable: true })?;
+        .map_err(|e| DirectoryError { unreachable: true, ..fail("connection", e) })?;
     tokio::spawn(async move {
         if let Err(e) = conn.drive().await {
             tracing::debug!(error = %e, "LDAP connection ended");
@@ -374,6 +383,16 @@ mod tests {
         let e = fail("user search", LdapError::from(std::io::Error::from(std::io::ErrorKind::ConnectionReset)));
         assert_eq!(e.summary(), UNREACHABLE);
         assert!(e.to_string().starts_with("user search: "));
+        assert!(!e.timed_out(), "refused, not timed out");
+    }
+
+    /// GH#570: a timeout is told apart from a refusal.
+    #[tokio::test]
+    async fn a_timeout_is_reported_as_such() {
+        let elapsed = tokio::time::timeout(Duration::ZERO, std::future::pending::<()>()).await.unwrap_err();
+        let e = fail("user search", LdapError::from(elapsed));
+        assert!(e.timed_out(), "{e}");
+        assert_eq!(e.summary(), UNREACHABLE);
     }
 
     /// GH#125: a closed port and a port that does not speak TLS read the same.

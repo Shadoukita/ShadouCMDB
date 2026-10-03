@@ -2401,6 +2401,73 @@ pub(crate) mod tests {
         db.drop().await;
     }
 
+    /// GH#570: while a directory drops packets, only the first lookup waits
+    /// for the LDAP timeout; the directory is then skipped, and an unknown
+    /// name answers at the floor like a local account's wrong password.
+    #[tokio::test]
+    async fn a_directory_that_times_out_is_skipped() {
+        let Some(db) = scratch::database("a_directory_that_times_out_is_skipped").await else { return };
+        let floor = Duration::from_secs(1);
+        let base = auth_state();
+        let auth = AuthState::new(
+            AuthConfig { sign_in_failure_floor: floor, ..base.config.clone() },
+            crate::secrets::Keyring::for_tests(),
+        );
+        let (pool, headers) = (&db.pool, HeaderMap::new());
+        setup(pool, &auth, &headers, &from("192.0.2.1"), body("owner")).await.unwrap();
+        // Accepts the connection and never answers: the TLS handshake waits for the timeout.
+        let silent = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ldaps://127.0.0.1:{}", silent.local_addr().unwrap().port());
+        tokio::spawn(async move {
+            let mut held = vec![];
+            while let Ok((socket, _)) = silent.accept().await {
+                held.push(socket);
+            }
+        });
+        let ldap = crate::modules::mfa::tests::provider(pool, "ldap", true, &url).await;
+        let mut tx = pool.begin().await.unwrap();
+        let linked = crate::data::identity_providers::NewLinkedUser {
+            provider_id: ldap,
+            external_id: "erin",
+            username: "erin",
+            display_name: "erin",
+            email: None,
+        };
+        crate::data::identity_providers::insert_linked(&mut tx, &linked).await.unwrap();
+        tx.commit().await.unwrap();
+
+        let wrong = OWNER_PASSWORD.to_uppercase();
+        // The answer's time: the later of the handler returning and the hold.
+        let answer_time = |name: &'static str| {
+            let (auth, headers, wrong) = (&auth, &headers, &wrong);
+            async move {
+                let start = tokio::time::Instant::now();
+                let e = login(pool, auth, headers, &from("198.51.100.7"), login_body(name, wrong)).await.err().unwrap();
+                let done = tokio::time::Instant::now();
+                (e.code, e.hold_until.map_or(done, |until| until.max(done)) - start)
+            }
+        };
+        let (code, first) = answer_time("nobody-1").await;
+        assert_eq!(code, ErrorCode::Unauthenticated);
+        assert!(first >= Duration::from_secs(5), "the first lookup waits for the timeout: {first:?}");
+        let slack = floor / 20 + Duration::from_millis(500);
+        for name in ["owner", "nobody-2"] {
+            let (code, took) = answer_time(name).await;
+            assert_eq!(code, ErrorCode::Unauthenticated, "{name}");
+            assert!(took >= floor && took <= floor + slack, "{name}: answered at the floor, took {took:?}");
+        }
+        let failures = auth_rows(pool, "login.failure").await;
+        assert_eq!(failures[2].3["attemptedUsername"], "nobody-2");
+        assert_eq!(failures[2].3["reason"], "directory_unavailable", "audited as before");
+
+        // A directory account gets the 503 at once, without the timeout.
+        let start = tokio::time::Instant::now();
+        let e = login(pool, &auth, &headers, &from("198.51.100.7"), login_body("erin", &wrong)).await.err().unwrap();
+        assert_eq!((e.code, e.hold_until), (ErrorCode::IdentityProviderUnavailable, None), "a directory account");
+        assert!(start.elapsed() < floor, "skipped, not asked");
+        db.drop().await;
+    }
+
     /// GH#216 through the router: the wait holds neither a database connection
     /// nor a capacity permit, and a success is not held.
     #[tokio::test]
