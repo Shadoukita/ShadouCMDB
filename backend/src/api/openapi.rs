@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use axum::http::Method;
 use utoipa::openapi::path::{HttpMethod, OperationBuilder, Parameter, PathItem};
 use utoipa::openapi::request_body::RequestBodyBuilder;
-use utoipa::openapi::schema::Schema;
+use utoipa::openapi::schema::{ArrayItems, Schema};
 use utoipa::openapi::security::{
     ApiKey, ApiKeyValue, HttpAuthScheme, HttpBuilder, SecurityRequirement, SecurityScheme,
 };
@@ -461,8 +461,9 @@ pub fn document(routes: &[Route]) -> OpenApi {
             ),
         );
     let mut seen = std::collections::HashSet::new();
-    for (name, schema) in schemas {
+    for (name, mut schema) in schemas {
         if seen.insert(name.clone()) {
+            unwrap_described_inlines(&mut schema);
             components = components.schema(name, schema);
         }
     }
@@ -492,6 +493,42 @@ pub fn document(routes: &[Route]) -> OpenApi {
         SecurityRequirement::new(TOKEN_SCHEME, Vec::<String>::new()),
     ]);
     doc
+}
+
+/// utoipa turns a doc comment or a `default` on an `#[schema(inline)]` field
+/// into `allOf: [<the type>, {type: object, description, default}]`. The second
+/// member makes the property an object as well, which no enum or count value
+/// is, and code generators emit an impossible type (`"A" & Record<string,
+/// never>`). Fold the description and default into the inlined schema instead.
+fn unwrap_described_inlines(schema: &mut RefOr<Schema>) {
+    let RefOr::T(s) = schema else { return };
+    match s {
+        Schema::AllOf(all_of) => {
+            all_of.items.iter_mut().for_each(unwrap_described_inlines);
+            let [RefOr::T(Schema::Object(inner)), RefOr::T(Schema::Object(extra))] = all_of.items.as_slice() else {
+                return;
+            };
+            let mut bare = extra.clone();
+            bare.description = None;
+            bare.default = None;
+            if serde_json::to_value(&bare).ok() != Some(serde_json::json!({"type": "object"})) {
+                return;
+            }
+            let mut inner = inner.clone();
+            inner.description = extra.description.clone().or(inner.description);
+            inner.default = extra.default.clone().or(inner.default);
+            *s = Schema::Object(inner);
+        }
+        Schema::OneOf(o) => o.items.iter_mut().for_each(unwrap_described_inlines),
+        Schema::AnyOf(o) => o.items.iter_mut().for_each(unwrap_described_inlines),
+        Schema::Object(o) => o.properties.values_mut().for_each(unwrap_described_inlines),
+        Schema::Array(a) => {
+            if let ArrayItems::RefOrSchema(items) = &mut a.items {
+                unwrap_described_inlines(items);
+            }
+        }
+        _ => {}
+    }
 }
 
 #[cfg(test)]
@@ -563,6 +600,16 @@ mod tests {
                 assert!(op["responses"].get("413").is_some(), "{id} lacks 413");
             }
         }
+    }
+
+    #[test]
+    fn described_inline_fields_keep_their_type() {
+        let spec = spec();
+        let code = &spec["components"]["schemas"]["WorkflowWarning"]["properties"]["code"];
+        assert_eq!(code["type"], "string");
+        assert_eq!(code["enum"], serde_json::json!(["UNINSTANCED_CIS"]));
+        assert!(code["description"].as_str().unwrap().starts_with("`UNINSTANCED_CIS`"));
+        assert!(!crate::api::openapi_json().contains("\"allOf\": [\n"), "an allOf wrapper is left in the document");
     }
 
     #[test]

@@ -3275,12 +3275,22 @@ export interface components {
         BusinessServiceList: {
             data: components["schemas"]["BusinessServiceSummary"][];
             page: components["schemas"]["PageMeta"];
-            visibility: ("all_classes" | "restricted") & Record<string, never>;
+            /**
+             * @description restricted: the caller's profile limits the classes they may view, so member counts leave CIs out. Derived
+             *     from the permissions only, never from the data
+             * @enum {string}
+             */
+            visibility: "all_classes" | "restricted";
         };
         BusinessServiceMemberList: {
             data: components["schemas"]["Member"][];
             page: components["schemas"]["PageMeta"];
-            visibility: ("all_classes" | "restricted") & Record<string, never>;
+            /**
+             * @description restricted: members of classes the caller may not view are neither listed nor counted. Derived from the
+             *     permissions only, never from the data
+             * @enum {string}
+             */
+            visibility: "all_classes" | "restricted";
         };
         BusinessServiceMembersAdded: {
             /** @description The new members, by name */
@@ -5665,6 +5675,7 @@ export interface components {
             key: string;
             name: string;
             description: string;
+            /** @description What the template brings */
             contents: {
                 /** Format: int64 */
                 areas: number;
@@ -5680,7 +5691,8 @@ export interface components {
                 lookupLists: number;
                 /** Format: int64 */
                 lookupListValues: number;
-            } & Record<string, never>;
+            };
+            /** @description How many of those rows already exist (matched by key) */
             present: {
                 /** Format: int64 */
                 areas: number;
@@ -5696,7 +5708,7 @@ export interface components {
                 lookupLists: number;
                 /** Format: int64 */
                 lookupListValues: number;
-            } & Record<string, never>;
+            };
             /** @enum {string} */
             status: "not_installed" | "partial" | "installed";
             classes: {
@@ -5749,6 +5761,7 @@ export interface components {
         };
         TemplateInstallResult: {
             template: string;
+            /** @description Rows added by this install (each has an audit entry) */
             created: {
                 /** Format: int64 */
                 areas: number;
@@ -5764,7 +5777,8 @@ export interface components {
                 lookupLists: number;
                 /** Format: int64 */
                 lookupListValues: number;
-            } & Record<string, never>;
+            };
+            /** @description Rows that already existed and were left as they are */
             existing: {
                 /** Format: int64 */
                 areas: number;
@@ -5780,7 +5794,7 @@ export interface components {
                 lookupLists: number;
                 /** Format: int64 */
                 lookupListValues: number;
-            } & Record<string, never>;
+            };
             /** @description Rows not installed because they would clash with the current data model */
             skipped: string[];
             schemaChange: components["schemas"]["SchemaChange"] | null;
@@ -6063,7 +6077,13 @@ export interface components {
              * @default false
              */
             includeSubclasses: boolean;
-            filters?: {
+            /**
+             * @description Inventory filters, by key
+             * @default {
+             *       "q": null
+             *     }
+             */
+            filters: {
                 /**
                  * @description Search text
                  * @default null
@@ -6073,7 +6093,7 @@ export interface components {
                 lookups?: {
                     [key: string]: string[];
                 };
-            } & Record<string, never>;
+            };
             /** @default null */
             sort: {
                 field: string;
@@ -6584,7 +6604,13 @@ export interface components {
         };
         /** @description Something the caller should know about a change that was made anyway */
         WorkflowWarning: {
-            code: "UNINSTANCED_CIS" & Record<string, never>;
+            /**
+             * @description `UNINSTANCED_CIS`: the workflow drives a state field and is active, and this many live CIs it covers have
+             *     no running instance of it. Their state field cannot be edited (it is driven by the workflow) until an
+             *     instance is started on them.
+             * @enum {string}
+             */
+            code: "UNINSTANCED_CIS";
             /**
              * Format: int64
              * @description Null when withheld: the count spans CIs of types the caller may not view

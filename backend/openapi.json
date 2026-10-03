@@ -31515,18 +31515,11 @@
             "$ref": "#/components/schemas/PageMeta"
           },
           "visibility": {
-            "allOf": [
-              {
-                "type": "string",
-                "enum": [
-                  "all_classes",
-                  "restricted"
-                ]
-              },
-              {
-                "type": "object",
-                "description": "restricted: the caller's profile limits the classes they may view, so member counts leave CIs out. Derived\nfrom the permissions only, never from the data"
-              }
+            "type": "string",
+            "description": "restricted: the caller's profile limits the classes they may view, so member counts leave CIs out. Derived\nfrom the permissions only, never from the data",
+            "enum": [
+              "all_classes",
+              "restricted"
             ]
           }
         },
@@ -31550,18 +31543,11 @@
             "$ref": "#/components/schemas/PageMeta"
           },
           "visibility": {
-            "allOf": [
-              {
-                "type": "string",
-                "enum": [
-                  "all_classes",
-                  "restricted"
-                ]
-              },
-              {
-                "type": "object",
-                "description": "restricted: members of classes the caller may not view are neither listed nor counted. Derived from the\npermissions only, never from the data"
-              }
+            "type": "string",
+            "description": "restricted: members of classes the caller may not view are neither listed nor counted. Derived from the\npermissions only, never from the data",
+            "enum": [
+              "all_classes",
+              "restricted"
             ]
           }
         },
@@ -39161,108 +39147,92 @@
             "type": "string"
           },
           "contents": {
-            "allOf": [
-              {
-                "type": "object",
-                "description": "Rows per kind",
-                "required": [
-                  "areas",
-                  "classes",
-                  "attributeDefinitions",
-                  "relationshipTypes",
-                  "relationshipRules",
-                  "lookupLists",
-                  "lookupListValues"
-                ],
-                "properties": {
-                  "areas": {
-                    "type": "integer",
-                    "format": "int64"
-                  },
-                  "classes": {
-                    "type": "integer",
-                    "format": "int64"
-                  },
-                  "attributeDefinitions": {
-                    "type": "integer",
-                    "format": "int64"
-                  },
-                  "relationshipTypes": {
-                    "type": "integer",
-                    "format": "int64"
-                  },
-                  "relationshipRules": {
-                    "type": "integer",
-                    "format": "int64"
-                  },
-                  "lookupLists": {
-                    "type": "integer",
-                    "format": "int64"
-                  },
-                  "lookupListValues": {
-                    "type": "integer",
-                    "format": "int64"
-                  }
-                },
-                "additionalProperties": false
+            "type": "object",
+            "description": "What the template brings",
+            "required": [
+              "areas",
+              "classes",
+              "attributeDefinitions",
+              "relationshipTypes",
+              "relationshipRules",
+              "lookupLists",
+              "lookupListValues"
+            ],
+            "properties": {
+              "areas": {
+                "type": "integer",
+                "format": "int64"
               },
-              {
-                "type": "object",
-                "description": "What the template brings"
+              "classes": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "attributeDefinitions": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "relationshipTypes": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "relationshipRules": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "lookupLists": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "lookupListValues": {
+                "type": "integer",
+                "format": "int64"
               }
-            ]
+            },
+            "additionalProperties": false
           },
           "present": {
-            "allOf": [
-              {
-                "type": "object",
-                "description": "Rows per kind",
-                "required": [
-                  "areas",
-                  "classes",
-                  "attributeDefinitions",
-                  "relationshipTypes",
-                  "relationshipRules",
-                  "lookupLists",
-                  "lookupListValues"
-                ],
-                "properties": {
-                  "areas": {
-                    "type": "integer",
-                    "format": "int64"
-                  },
-                  "classes": {
-                    "type": "integer",
-                    "format": "int64"
-                  },
-                  "attributeDefinitions": {
-                    "type": "integer",
-                    "format": "int64"
-                  },
-                  "relationshipTypes": {
-                    "type": "integer",
-                    "format": "int64"
-                  },
-                  "relationshipRules": {
-                    "type": "integer",
-                    "format": "int64"
-                  },
-                  "lookupLists": {
-                    "type": "integer",
-                    "format": "int64"
-                  },
-                  "lookupListValues": {
-                    "type": "integer",
-                    "format": "int64"
-                  }
-                },
-                "additionalProperties": false
+            "type": "object",
+            "description": "How many of those rows already exist (matched by key)",
+            "required": [
+              "areas",
+              "classes",
+              "attributeDefinitions",
+              "relationshipTypes",
+              "relationshipRules",
+              "lookupLists",
+              "lookupListValues"
+            ],
+            "properties": {
+              "areas": {
+                "type": "integer",
+                "format": "int64"
               },
-              {
-                "type": "object",
-                "description": "How many of those rows already exist (matched by key)"
+              "classes": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "attributeDefinitions": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "relationshipTypes": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "relationshipRules": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "lookupLists": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "lookupListValues": {
+                "type": "integer",
+                "format": "int64"
               }
-            ]
+            },
+            "additionalProperties": false
           },
           "status": {
             "type": "string",
@@ -39451,108 +39421,92 @@
             "type": "string"
           },
           "created": {
-            "allOf": [
-              {
-                "type": "object",
-                "description": "Rows per kind",
-                "required": [
-                  "areas",
-                  "classes",
-                  "attributeDefinitions",
-                  "relationshipTypes",
-                  "relationshipRules",
-                  "lookupLists",
-                  "lookupListValues"
-                ],
-                "properties": {
-                  "areas": {
-                    "type": "integer",
-                    "format": "int64"
-                  },
-                  "classes": {
-                    "type": "integer",
-                    "format": "int64"
-                  },
-                  "attributeDefinitions": {
-                    "type": "integer",
-                    "format": "int64"
-                  },
-                  "relationshipTypes": {
-                    "type": "integer",
-                    "format": "int64"
-                  },
-                  "relationshipRules": {
-                    "type": "integer",
-                    "format": "int64"
-                  },
-                  "lookupLists": {
-                    "type": "integer",
-                    "format": "int64"
-                  },
-                  "lookupListValues": {
-                    "type": "integer",
-                    "format": "int64"
-                  }
-                },
-                "additionalProperties": false
+            "type": "object",
+            "description": "Rows added by this install (each has an audit entry)",
+            "required": [
+              "areas",
+              "classes",
+              "attributeDefinitions",
+              "relationshipTypes",
+              "relationshipRules",
+              "lookupLists",
+              "lookupListValues"
+            ],
+            "properties": {
+              "areas": {
+                "type": "integer",
+                "format": "int64"
               },
-              {
-                "type": "object",
-                "description": "Rows added by this install (each has an audit entry)"
+              "classes": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "attributeDefinitions": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "relationshipTypes": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "relationshipRules": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "lookupLists": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "lookupListValues": {
+                "type": "integer",
+                "format": "int64"
               }
-            ]
+            },
+            "additionalProperties": false
           },
           "existing": {
-            "allOf": [
-              {
-                "type": "object",
-                "description": "Rows per kind",
-                "required": [
-                  "areas",
-                  "classes",
-                  "attributeDefinitions",
-                  "relationshipTypes",
-                  "relationshipRules",
-                  "lookupLists",
-                  "lookupListValues"
-                ],
-                "properties": {
-                  "areas": {
-                    "type": "integer",
-                    "format": "int64"
-                  },
-                  "classes": {
-                    "type": "integer",
-                    "format": "int64"
-                  },
-                  "attributeDefinitions": {
-                    "type": "integer",
-                    "format": "int64"
-                  },
-                  "relationshipTypes": {
-                    "type": "integer",
-                    "format": "int64"
-                  },
-                  "relationshipRules": {
-                    "type": "integer",
-                    "format": "int64"
-                  },
-                  "lookupLists": {
-                    "type": "integer",
-                    "format": "int64"
-                  },
-                  "lookupListValues": {
-                    "type": "integer",
-                    "format": "int64"
-                  }
-                },
-                "additionalProperties": false
+            "type": "object",
+            "description": "Rows that already existed and were left as they are",
+            "required": [
+              "areas",
+              "classes",
+              "attributeDefinitions",
+              "relationshipTypes",
+              "relationshipRules",
+              "lookupLists",
+              "lookupListValues"
+            ],
+            "properties": {
+              "areas": {
+                "type": "integer",
+                "format": "int64"
               },
-              {
-                "type": "object",
-                "description": "Rows that already existed and were left as they are"
+              "classes": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "attributeDefinitions": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "relationshipTypes": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "relationshipRules": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "lookupLists": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "lookupListValues": {
+                "type": "integer",
+                "format": "int64"
               }
-            ]
+            },
+            "additionalProperties": false
           },
           "skipped": {
             "type": "array",
@@ -40295,49 +40249,42 @@
             "default": false
           },
           "filters": {
-            "allOf": [
-              {
-                "type": "object",
-                "description": "Inventory filters, by key",
-                "properties": {
-                  "q": {
-                    "type": [
-                      "string",
-                      "null"
-                    ],
-                    "description": "Search text",
-                    "default": null,
-                    "maxLength": 200
-                  },
-                  "lookups": {
-                    "type": "object",
-                    "description": "Lookup list key -> value keys: CIs holding one of the values in a lookup attribute of that list, for every list given (e.g. {\"status\": [\"in_service\"], \"environment\": [\"production\"]})",
-                    "additionalProperties": {
-                      "type": "array",
-                      "items": {
-                        "type": "string",
-                        "pattern": "^[a-z][a-z0-9_]{0,62}$"
-                      },
-                      "description": "Value keys of the list",
-                      "maxItems": 500,
-                      "uniqueItems": true
-                    },
-                    "propertyNames": {
-                      "type": "string",
-                      "pattern": "^[a-z][a-z0-9_]{0,62}$"
-                    },
-                    "maxProperties": 50
-                  }
-                },
-                "additionalProperties": false
+            "type": "object",
+            "description": "Inventory filters, by key",
+            "default": {
+              "q": null
+            },
+            "properties": {
+              "q": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Search text",
+                "default": null,
+                "maxLength": 200
               },
-              {
+              "lookups": {
                 "type": "object",
-                "default": {
-                  "q": null
-                }
+                "description": "Lookup list key -> value keys: CIs holding one of the values in a lookup attribute of that list, for every list given (e.g. {\"status\": [\"in_service\"], \"environment\": [\"production\"]})",
+                "additionalProperties": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                  },
+                  "description": "Value keys of the list",
+                  "maxItems": 500,
+                  "uniqueItems": true
+                },
+                "propertyNames": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                },
+                "maxProperties": 50
               }
-            ]
+            },
+            "additionalProperties": false
           },
           "sort": {
             "oneOf": [
@@ -41825,17 +41772,10 @@
         ],
         "properties": {
           "code": {
-            "allOf": [
-              {
-                "type": "string",
-                "enum": [
-                  "UNINSTANCED_CIS"
-                ]
-              },
-              {
-                "type": "object",
-                "description": "`UNINSTANCED_CIS`: the workflow drives a state field and is active, and this many live CIs it covers have\nno running instance of it. Their state field cannot be edited (it is driven by the workflow) until an\ninstance is started on them."
-              }
+            "type": "string",
+            "description": "`UNINSTANCED_CIS`: the workflow drives a state field and is active, and this many live CIs it covers have\nno running instance of it. Their state field cannot be edited (it is driven by the workflow) until an\ninstance is started on them.",
+            "enum": [
+              "UNINSTANCED_CIS"
             ]
           },
           "count": {
