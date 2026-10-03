@@ -22,12 +22,13 @@ use uuid::Uuid;
 
 use super::schemas::{ConfigurationItem, CreateItemBody, UpdateItemBody};
 use crate::api::context::RequestContext;
+use crate::api::schemas::normalize_email;
 use crate::api::{pg_error, validate};
 use crate::auth::permissions::ClassOp;
 use crate::data::classes::EffectiveAttributeRow;
 use crate::data::items::{self as data, StoredValue};
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
-use crate::modules::classes::AttributeDataType;
+use crate::modules::classes::{AttributeDataType, AttributeSystemRole};
 use crate::schema::model::{Field, Model};
 
 // ---------------------------------------------------------------------------
@@ -298,10 +299,14 @@ fn prepare_attributes<'d>(
             }
             continue;
         }
-        let Some(stored) = to_stored(def, value) else {
+        let Some(mut stored) = to_stored(def, value) else {
             errors.push(body_error(field, "Invalid input", "invalid_type"));
             continue;
         };
+        // The Person's Email is stored in the accounts' form (GH#531).
+        if let (Some(AttributeSystemRole::PersonEmail), StoredValue::Text(s)) = (def.system_role, &mut stored) {
+            *s = normalize_email(s);
+        }
         match stored {
             StoredValue::Reference(id) if current.and_then(|c| c.get(&def.id)) == Some(&id) => continue,
             StoredValue::Reference(id) if Some(id) == self_id => {
@@ -691,6 +696,18 @@ fn field_write_error(err: sqlx::Error, model: &Model) -> AppError {
     let pg = db.try_downcast_ref::<sqlx::postgres::PgDatabaseError>();
     let column = pg.and_then(|p| p.column()).map(str::to_owned);
     let constraint = db.constraint().map(str::to_owned);
+    // The Person's Email is unique ignoring case and Unicode form (uq_<field id hex>, SHAA-1505).
+    if let Some(f) = constraint.as_deref().and_then(|c| {
+        let hex = c.strip_prefix("uq_")?.get(..32)?;
+        model.fields.iter().find(|f| f.hex() == hex)
+    }) {
+        let message = "Another person already has this e-mail address".to_owned();
+        return AppError::new(ErrorCode::Conflict, message.clone()).with_details(vec![body_error(
+            format!("attributes.{}", f.key),
+            message,
+            "unique",
+        )]);
+    }
     // ck_<field id hex>_<hash>, fk_<field id hex>
     let by_constraint = constraint.as_deref().and_then(|c| {
         let hex = c.strip_prefix("ck_").or_else(|| c.strip_prefix("fk_"))?.get(..32)?;
@@ -738,6 +755,48 @@ async fn write_type_rows(
     Ok(())
 }
 
+/// A Person linked to a sign-in account keeps its type, and its Email follows
+/// the account's (SHAA-1505 decisions 5 and 7): a write may only set it to
+/// the account's current address, which is what the account's own change
+/// does after updating the account. Every CI write (API, bulk import, the
+/// account sync) passes here.
+async fn check_linked_person(
+    conn: &mut PgConnection,
+    model: &Model,
+    id: Uuid,
+    class_id: Uuid,
+    changes_class: bool,
+    plan: &Plan<'_>,
+) -> Result<(), AppError> {
+    let Some(email) = model.own_fields(class_id).find(|f| f.is_unique_email()) else { return Ok(()) };
+    let new_email = plan.set.iter().find(|(d, _)| d.id == email.id).map(|(_, v)| v.as_text());
+    if !changes_class && new_email.is_none() && !plan.clear.contains(&email.id) {
+        return Ok(());
+    }
+    let Some(account) = crate::data::people::linked_user(conn, id).await? else { return Ok(()) };
+    if changes_class {
+        return Err(AppError::field(
+            "classId",
+            format!("This person is linked to the sign-in account \"{}\" and cannot change its type", account.username),
+            "person_linked",
+        ));
+    }
+    // Resending the account's address is no change, in any of its Unicode forms.
+    if new_email.is_some() && new_email == account.email.as_deref().map(normalize_email) {
+        return Ok(());
+    }
+    let message = format!(
+        "The e-mail address of this person is managed by the sign-in account \"{}\"; change it on the account \
+         (Administration > Users)",
+        account.username
+    );
+    Err(AppError::new(ErrorCode::Conflict, message.clone()).with_details(vec![body_error(
+        format!("attributes.{}", email.key),
+        message,
+        "managed_by_user",
+    )]))
+}
+
 /// Writes a plan's registry and type rows, without refreshing the label (a
 /// caller applying many plans refreshes the labels once for all of them).
 /// Returns the CI's id.
@@ -758,6 +817,7 @@ pub async fn apply_rows(conn: &mut PgConnection, model: &Model, plan: &Plan<'_>)
             Ok(id)
         }
         Registry::Update { id, old_class_id, new_class_id, ident, valid_from, valid_until, criticality_value_id } => {
+            check_linked_person(conn, model, *id, *old_class_id, new_class_id.is_some(), plan).await?;
             let class_id = new_class_id.unwrap_or(*old_class_id);
             let old_lineage: Vec<Uuid> = model.lineage(*old_class_id).iter().map(|c| c.id).collect();
             let new_lineage: Vec<Uuid> = model.lineage(class_id).iter().map(|c| c.id).collect();

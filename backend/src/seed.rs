@@ -104,9 +104,16 @@ impl Val<'_> {
 }
 
 /// Small sample inventory (and the owners it uses) on top of the IT
-/// infrastructure template; only loaded into a database with no CIs.
+/// infrastructure template; only loaded into a database with no CIs. The
+/// Person CIs of the accounts do not count: an administrator created before
+/// `seed --demo` already has one (SHAA-1505).
 pub async fn seed_demo_data(pool: &PgPool) -> anyhow::Result<bool> {
-    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items").fetch_one(pool).await?;
+    let n: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM configuration_items ci JOIN ci_classes c ON c.id = ci.class_id
+         WHERE c.system_role IS DISTINCT FROM 'person'",
+    )
+    .fetch_one(pool)
+    .await?;
     if n > 0 {
         return Ok(false);
     }
@@ -451,7 +458,7 @@ mod tests {
 
         let fresh = data_model_report(&data_model_counts(&db.pool).await.unwrap());
         assert!(fresh.iter().any(|l| l.starts_with(HINT)), "{fresh:#?}");
-        assert!(fresh.contains(&"  ci_classes: 1 (built-in: 1)".to_owned()), "{fresh:#?}");
+        assert!(fresh.contains(&"  ci_classes: 2 (built-in: 2)".to_owned()), "{fresh:#?}");
 
         install_template(&db.pool, "it_infrastructure").await.unwrap();
         let seeded = data_model_report(&data_model_counts(&db.pool).await.unwrap());
@@ -472,7 +479,32 @@ mod tests {
         .unwrap();
         let report = data_model_report(&data_model_counts(&db.pool).await.unwrap());
         assert!(!report.iter().any(|l| l.starts_with(HINT)), "{report:#?}");
-        assert!(report.contains(&"  ci_classes: 2 (built-in: 1)".to_owned()), "{report:#?}");
+        assert!(report.contains(&"  ci_classes: 3 (built-in: 2)".to_owned()), "{report:#?}");
+        db.drop().await;
+    }
+
+    /// An administrator created before `seed --demo` has a Person CI: the
+    /// demo inventory still loads (SHAA-1505).
+    #[tokio::test]
+    async fn person_cis_do_not_stop_the_demo_inventory() {
+        use crate::api::context::RequestContext;
+        use crate::modules::users::{UserCreate, create_in};
+        let Some(db) = scratch::database("seed_demo_after_admin").await else { return };
+        install_template(&db.pool, "it_infrastructure").await.unwrap();
+        let mut tx = db.pool.begin().await.unwrap();
+        let admin = crate::data::auth::builtin_profile_id(&mut tx).await.unwrap();
+        let input = UserCreate {
+            username: "admin".into(),
+            display_name: "Admin".into(),
+            email: "admin@example.test".into(),
+            password: uuid::Uuid::new_v4().to_string().into(),
+            is_active: Some(true),
+            profile_ids: vec![admin],
+        };
+        create_in(&mut tx, &RequestContext::system("test", "test"), &input).await.unwrap();
+        tx.commit().await.unwrap();
+        assert!(super::seed_demo_data(&db.pool).await.unwrap(), "loaded next to the Person");
+        assert!(!super::seed_demo_data(&db.pool).await.unwrap(), "and only once");
         db.drop().await;
     }
 }

@@ -31,6 +31,7 @@ use crate::modules::ui_settings::document::UiSettingsDocument;
 fn class_role_name(role: ClassSystemRole) -> &'static str {
     match role {
         ClassSystemRole::BusinessService => "business service class",
+        ClassSystemRole::Person => "Person class",
     }
 }
 

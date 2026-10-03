@@ -56,15 +56,17 @@ test.describe("a bare install", () => {
   test.use({ baseURL: bareURL, storageState: BARE_STATE });
 
   test("starts without a data model, and the starter template fills it in one click", async ({ page, request }) => {
-    // What `seed` leaves: system rows only.
-    for (const path of ["/statuses", "/environments", "/locations", "/owners", "/configuration-items"]) {
+    // What `seed` leaves: system rows only, and the Person CI first-run setup created for the administrator.
+    for (const path of ["/statuses", "/environments", "/locations", "/owners"]) {
       expect((await apiGet<Page_<unknown>>(request, path)).page.total, path).toBe(0);
     }
+    expect((await apiGet<Page_<unknown>>(request, "/configuration-items")).page.total).toBe(1);
     // The one lookup list is the system list behind the core Criticality field.
     const lists = await apiGet<Page_<{ key: string; systemRole: string | null }>>(request, "/lookup-lists");
     expect(lists.data.map((l) => [l.key, l.systemRole])).toEqual([["criticality", "criticality"]]);
-    // The one class and the one relationship type are the built-in business service type and its member type (migration 0033).
-    expect((await apiGet<Page_<{ key: string }>>(request, "/ci-classes")).data.map((c) => c.key)).toEqual(["business_service"]);
+    // The classes are the built-in business service type (migration 0033) and Person type (0043); the one relationship
+    // type is the business service member type.
+    expect((await apiGet<Page_<{ key: string }>>(request, "/ci-classes")).data.map((c) => c.key).sort()).toEqual(["business_service", "person"]);
     expect((await apiGet<Page_<{ key: string }>>(request, "/relationship-types")).data.map((t) => t.key)).toEqual(["business_service_member"]);
     // The built-in class does not count as a data model: the dashboard guides to the starter template, not to a first CI.
     await page.goto("/");
@@ -96,7 +98,7 @@ test.describe("a bare install", () => {
     // Persisted, and a second install is a no-op.
     const templates = await apiGet<{ data: { key: string; status: string }[] }>(request, "/admin/templates");
     expect(templates.data.find((t) => t.key === "it_infrastructure")?.status).toBe("installed");
-    expect((await apiGet<Page_<unknown>>(request, "/ci-classes")).page.total).toBe(8);
+    expect((await apiGet<Page_<unknown>>(request, "/ci-classes")).page.total).toBe(9);
     const again = await apiSend<{ created: Record<string, number> }>(request, "POST", "/admin/templates/it_infrastructure/install", {});
     expect(Object.values(again.created).every((n) => n === 0), JSON.stringify(again.created)).toBeTruthy();
 
@@ -224,8 +226,8 @@ test.describe("imported into a fresh install", () => {
   test.use({ baseURL: targetURL, storageState: IMPORT_TARGET_STATE });
 
   test("the dry run, then apply, rebuild the same setup; exporting it again gives the same file", async ({ page, request }) => {
-    // Only the built-in business service type.
-    expect((await apiGet<Page_<unknown>>(request, "/ci-classes")).page.total).toBe(1);
+    // Only the built-in business service and Person types.
+    expect((await apiGet<Page_<unknown>>(request, "/ci-classes")).page.total).toBe(2);
     const file = { name: "fresh-install.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(exported)) };
 
     await page.goto("/admin");
@@ -233,12 +235,12 @@ test.describe("imported into a fresh install", () => {
     await page.locator("#config-file").setInputFiles(file);
     const summary = page.getByRole("table", { name: "Import summary" });
     await expect(summary).toBeVisible();
-    // 9 classes in the file; the business service type is already there, built in.
+    // 10 classes in the file; the business service and Person types are already there, built in.
     await expect(summary.getByRole("row", { name: /^CI classes/ }).getByRole("cell").nth(1)).toHaveText("8");
     await expect(summary.getByRole("row", { name: /^Permission profiles/ }).getByRole("cell").nth(1)).toHaveText("1");
     await expect(page.locator(".import-changes").filter({ hasText: "CI classes" })).toContainText(CLASS_KEY);
     // A dry run writes nothing.
-    expect((await apiGet<Page_<unknown>>(request, "/ci-classes")).page.total).toBe(1);
+    expect((await apiGet<Page_<unknown>>(request, "/ci-classes")).page.total).toBe(2);
     await snap(page, "53-import-into-fresh-dry-run");
 
     await page.getByRole("button", { name: "Apply import" }).click();
@@ -249,8 +251,8 @@ test.describe("imported into a fresh install", () => {
 
     // The round trip: the fresh install now exports the same configuration.
     expect(comparable(await exportConfig(request))).toEqual(comparable(exported));
-    // Only configuration moved: no CIs, and the source's users stayed behind.
-    expect((await apiGet<Page_<unknown>>(request, "/configuration-items")).page.total).toBe(0);
+    // Only configuration moved: no CIs but the administrator's own Person, and the source's users stayed behind.
+    expect((await apiGet<Page_<unknown>>(request, "/configuration-items")).page.total).toBe(1);
     const users = await apiGet<{ data: { username: string }[] }>(request, "/admin/users");
     expect(users.data.map((u) => u.username)).toEqual([FRESH_ADMIN.username]);
 

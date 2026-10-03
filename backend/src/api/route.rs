@@ -648,6 +648,11 @@ pub struct Route {
     pub session_only: bool,
     /// Answers a session that must set up MFA before anything else.
     pub before_mfa_enrolment: bool,
+    /// Answers a session whose account must enter an e-mail before anything else.
+    pub before_email_entry: bool,
+    /// Needs a session whose owner confirmed their credentials recently
+    /// ([`RouteBuilder::recent_reauthentication`]).
+    pub reauthentication: bool,
     /// A session request needs the X-CSRF-Token header: every method but GET
     /// and HEAD, and the reads marked [`RouteBuilder::csrf_on_read`].
     pub csrf: bool,
@@ -678,6 +683,8 @@ pub struct RouteBuilder {
     access: Access,
     session_only: bool,
     before_mfa_enrolment: bool,
+    before_email_entry: bool,
+    reauthentication: bool,
     csrf_on_read: bool,
     errors: Vec<ErrorCode>,
     also_returns: Vec<(StatusCode, String)>,
@@ -699,6 +706,8 @@ pub fn route(method: Method, path: impl Into<String>, operation_id: impl Into<St
         access: Access::Authenticated,
         session_only: false,
         before_mfa_enrolment: false,
+        before_email_entry: false,
+        reauthentication: false,
         csrf_on_read: false,
         errors: Vec::new(),
         also_returns: Vec::new(),
@@ -761,11 +770,32 @@ impl RouteBuilder {
         self.session_only = true;
         self
     }
+    /// Session only, and the session's owner must have confirmed their
+    /// credentials within [`auth::REAUTHENTICATION_WINDOW`]: at sign-in, or
+    /// through POST /api/v1/auth/reauthenticate (403 REAUTHENTICATION_REQUIRED
+    /// otherwise, audited as `session.reauthentication_required`). For the
+    /// writes that hand out or take over an account's rights (accounts,
+    /// passwords, MFA, profiles, API tokens, identity providers): a stolen
+    /// session cannot turn into a lasting credential without the owner's
+    /// password, not even through a second account it creates (GH#498).
+    pub fn recent_reauthentication(mut self) -> Self {
+        self.session_only = true;
+        self.reauthentication = true;
+        self
+    }
     /// Reachable by a session whose user holds a profile requiring MFA and has
     /// not set it up yet (sign-out, the current session, MFA set-up). Every
     /// other route answers such a session 403 MFA_ENROLMENT_REQUIRED.
     pub fn before_mfa_enrolment(mut self) -> Self {
         self.before_mfa_enrolment = true;
+        self
+    }
+    /// Reachable by a session whose account has no e-mail yet (created before
+    /// e-mails were required, SHAA-1505): sign-out, the current session and
+    /// entering the e-mail. Every other route answers such a session 403
+    /// EMAIL_REQUIRED.
+    pub fn before_email_entry(mut self) -> Self {
+        self.before_email_entry = true;
         self
     }
     /// A GET that a session must send with X-CSRF-Token like a write (403
@@ -791,6 +821,9 @@ impl RouteBuilder {
         self
     }
     /// Accept bodies up to this many bytes instead of [`BODY_LIMIT`] (config import).
+    /// The body then has `HTTP_REQUEST_TIMEOUT_SECS` to arrive instead of the
+    /// shorter `HTTP_BODY_TIMEOUT_SECS`, while it holds a request permit: keep
+    /// it to routes behind a global permission (GH#556).
     pub fn body_limit(mut self, bytes: usize) -> Self {
         self.body_limit = Some(bytes);
         self
@@ -827,11 +860,16 @@ impl RouteBuilder {
         assert!(!unlimited || access == Access::Public, "only public routes can be unlimited");
         let session_only = self.session_only;
         let before_mfa_enrolment = self.before_mfa_enrolment;
+        let before_email_entry = self.before_email_entry;
+        let reauthentication = self.reauthentication;
         let csrf = self.csrf_on_read || !(self.method == Method::GET || self.method == Method::HEAD);
         let body_limit = self.body_limit.unwrap_or(match access {
             Access::Public => PUBLIC_BODY_LIMIT,
             _ => BODY_LIMIT,
         });
+        // A raised body limit (configuration import, uploads) keeps HTTP_REQUEST_TIMEOUT_SECS
+        // or its own deadline for the body instead of HTTP_BODY_TIMEOUT_SECS.
+        let body_deadline = self.body_limit.is_none();
         let (method, operation_id) = (self.method.clone(), Arc::<str>::from(self.operation_id.as_str()));
         let body_media = self.body_media;
 
@@ -860,7 +898,8 @@ impl RouteBuilder {
                     };
                     let net = client.net;
                     let used = auth::token::Use { method: &method, path: uri.path(), operation_id: &operation_id };
-                    let rule = Rule { access, session_only, before_mfa_enrolment, csrf };
+                    let rule =
+                        Rule { access, session_only, before_mfa_enrolment, before_email_entry, reauthentication, csrf };
                     // Authorise before reading the body: an anonymous caller must not make
                     // the server buffer up to body_limit bytes only to be answered 401.
                     let ctx = authorise(&state, &headers, rule, client, used).await?;
@@ -887,8 +926,27 @@ impl RouteBuilder {
                         })??;
                         (if unlimited { None } else { Some(capacity.acquire(true)?) }, body)
                     } else {
-                        let permit = state.capacity.acquire(false)?;
-                        (Some(permit), B::read(&headers, body, body_limit, body_media, None).await?)
+                        // At most a quarter of the pool per user (GH#502): the body may be slow.
+                        let permit = match ctx.principal() {
+                            Some(p) => state.capacity.acquire_for_user(p.user_id)?,
+                            None => state.capacity.acquire(false)?,
+                        };
+                        // The permit is held while the body arrives, so the body gets
+                        // HTTP_BODY_TIMEOUT_SECS, not the whole request timeout: otherwise
+                        // four accounts sending slowly hold every permit for that long (GH#556).
+                        let read = B::read(&headers, body, body_limit, body_media, None);
+                        let body = if body_deadline {
+                            let limit = state.capacity.body_timeout;
+                            tokio::time::timeout(limit, read).await.map_err(|_| {
+                                AppError::new(
+                                    ErrorCode::RequestTimeout,
+                                    format!("The request body was not received within {} s", limit.as_secs()),
+                                )
+                            })??
+                        } else {
+                            read.await?
+                        };
+                        (Some(permit), body)
                     };
                     let input = In(P::parse(&raw_path)?, Q::parse(raw_query.as_deref())?, body);
                     let api = Api {
@@ -901,7 +959,8 @@ impl RouteBuilder {
                         imports: state.imports,
                         business_services: state.business_services,
                     };
-                    let res = match f(api, input).await {
+                    let csrf_free_read = (!csrf).then(|| operation_id.clone());
+                    let res = match crate::data::crud::run_handler(csrf_free_read, f(api, input)).await {
                         Ok(out) => out.respond(status),
                         // A refused sign-in answers no earlier than its floor (GH#216). The
                         // handler is done, so no database connection is held; the permit is
@@ -932,6 +991,8 @@ impl RouteBuilder {
             access,
             session_only,
             before_mfa_enrolment,
+            before_email_entry,
+            reauthentication,
             csrf,
             errors: self.errors,
             also_returns: self.also_returns,
@@ -952,6 +1013,8 @@ struct Rule {
     access: Access,
     session_only: bool,
     before_mfa_enrolment: bool,
+    before_email_entry: bool,
+    reauthentication: bool,
     /// A session request must carry the CSRF token.
     csrf: bool,
 }
@@ -961,7 +1024,10 @@ struct Rule {
 /// state-changing request (or a [`RouteBuilder::csrf_on_read`] GET) without
 /// the session's token, 403 FORBIDDEN without
 /// the required permission (or for a token on a session-only route), 403
-/// MFA_ENROLMENT_REQUIRED for a session that must set up MFA first.
+/// MFA_ENROLMENT_REQUIRED for a session that must set up MFA first, 403
+/// EMAIL_REQUIRED for a session whose account must enter an e-mail first, 403
+/// REAUTHENTICATION_REQUIRED for a session that has not recently confirmed
+/// its owner's credentials on a route that needs it.
 ///
 /// An `Authorization: Bearer` header selects token authentication and the
 /// cookies are then ignored: a bad token is 401, never a fall-back to the
@@ -994,6 +1060,12 @@ async fn authorise(
             "Missing or wrong X-CSRF-Token header (send the csrfToken from /api/v1/auth/me)",
         ));
     }
+    if principal.email_required() && !rule.before_email_entry {
+        return Err(AppError::new(
+            ErrorCode::EmailRequired,
+            "Your account has no e-mail address yet: enter it first (PUT /api/v1/auth/email)",
+        ));
+    }
     if principal.mfa_enrolment_required() && !rule.before_mfa_enrolment {
         return Err(AppError::new(
             ErrorCode::MfaEnrolmentRequired,
@@ -1006,7 +1078,43 @@ async fn authorise(
     {
         return Err(forbidden(format!("This requires the {} permission", p.as_str())));
     }
-    Ok(RequestContext::user(Arc::new(principal), request_id).with_client(client))
+    let ctx = RequestContext::user(Arc::new(principal), request_id).with_client(client);
+    if rule.reauthentication {
+        reauthentication_gate(&state.pool, &ctx, &used).await?;
+    }
+    Ok(ctx)
+}
+
+/// 403 REAUTHENTICATION_REQUIRED, audited, unless the session's owner
+/// confirmed their credentials recently (see
+/// [`RouteBuilder::recent_reauthentication`]).
+async fn reauthentication_gate(
+    pool: &PgPool,
+    ctx: &RequestContext,
+    used: &auth::token::Use<'_>,
+) -> Result<(), AppError> {
+    let Some(me) = ctx.principal() else { return Err(unauthenticated()) };
+    if me.recently_confirmed() {
+        return Ok(());
+    }
+    if let Some(session_id) = me.session_id() {
+        let mut tx = pool.begin().await?;
+        auth::events::reauthentication_required(&mut tx, ctx, session_id, me.user_id, &me.username, used).await?;
+        tx.commit().await?;
+    }
+    tracing::warn!(user = %me.username, operation = used.operation_id, "refused: credentials not confirmed recently");
+    Err(reauthentication_required())
+}
+
+pub fn reauthentication_required() -> AppError {
+    AppError::new(
+        ErrorCode::ReauthenticationRequired,
+        format!(
+            "Confirm your password first: this change needs a session that signed in or confirmed its password in \
+             the last {} minutes (POST /api/v1/auth/reauthenticate). Accounts of an OIDC provider sign in again.",
+            auth::REAUTHENTICATION_WINDOW.as_secs() / 60
+        ),
+    )
 }
 
 /// Largest request body a route accepts unless it sets [`RouteBuilder::body_limit`].
@@ -1190,7 +1298,7 @@ mod tests {
 
     /// Runs first-run setup and returns the owner's session.
     async fn set_up_owner(app: &axum::Router) -> Creds {
-        let setup = json!({ "username": "owner", "displayName": "Owner", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
+        let setup = json!({ "username": "owner", "email": "owner@example.test", "displayName": "Owner", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
         let (status, me, headers) = call(app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
         assert_eq!(status, 201, "{me}");
         let cookie = headers
@@ -1399,6 +1507,68 @@ mod tests {
             assert_eq!(task.await.unwrap(), (408, "REQUEST_TIMEOUT".into()));
         }
         assert_eq!(capacity.available_body_bytes(), BUDGET, "the body budget was not given back");
+
+        db.drop().await;
+    }
+
+    /// GH#502: a signed-in user who sent request bodies slowly held one global
+    /// permit per request, up to all of them, for HTTP_REQUEST_TIMEOUT_SECS.
+    /// One user now holds at most a quarter of the pool, and GH#556: only
+    /// until HTTP_BODY_TIMEOUT_SECS, so four users cannot hold it all for long.
+    #[tokio::test]
+    async fn one_signed_in_user_cannot_hold_every_request_permit() {
+        let Some(db) = scratch::database("one_user_cannot_hold_every_permit").await else { return };
+        const GLOBAL: usize = 8;
+        const BODY_TIMEOUT: Duration = Duration::from_secs(2);
+        let capacity = Capacity::with_sizes(GLOBAL, 2, Duration::from_secs(3)).with_body_timeout(BODY_TIMEOUT);
+        let app = app_with_capacity(db.pool.clone(), capacity.clone());
+        let session = set_up_owner(&app).await;
+        let stalled = || {
+            let first = stream::once(async { Ok::<_, std::convert::Infallible>(Bytes::from_static(b"{")) });
+            Body::from_stream(first.chain(stream::pending()))
+        };
+
+        let started = Instant::now();
+        let slow: Vec<_> = (0..GLOBAL)
+            .map(|_| {
+                let (app, session) = (app.clone(), session.clone());
+                tokio::spawn(async move {
+                    send(&app, "PUT", "/api/v1/auth/password", &session, stalled(), Some(1000)).await
+                })
+            })
+            .collect();
+        // A quarter of the pool waits for its bodies; the rest are refused as soon
+        // as they are authorised. Wait for those refusals, never for the stalled bodies.
+        let mut refused = 0;
+        while slow.iter().filter(|t| t.is_finished()).count() < GLOBAL - GLOBAL / 4 {
+            assert!(started.elapsed() < Duration::from_secs(10), "the extra requests were never refused");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let mut waiting = Vec::new();
+        for task in slow {
+            if task.is_finished() {
+                assert_eq!(task.await.unwrap(), (503, "SERVER_BUSY".into()));
+                refused += 1;
+            } else {
+                waiting.push(task);
+            }
+        }
+        assert_eq!((waiting.len(), refused), (GLOBAL / 4, GLOBAL - GLOBAL / 4));
+        assert_eq!(capacity.available(false), GLOBAL - GLOBAL / 4);
+        // The same user is refused while their share is held; the permits other users need are left.
+        let me = "/api/v1/auth/me";
+        assert_eq!(send(&app, "GET", me, &session, Body::empty(), None).await, (503, "SERVER_BUSY".into()));
+
+        // GH#556: the stalled bodies are cut off after HTTP_BODY_TIMEOUT_SECS (this
+        // app has no request timeout at all) and give their permits back.
+        for task in waiting {
+            let late = tokio::time::timeout(BODY_TIMEOUT * 3, task).await;
+            assert_eq!(late.expect("a stalled body kept its permit").unwrap(), (408, "REQUEST_TIMEOUT".into()));
+        }
+        assert!(started.elapsed() < BODY_TIMEOUT * 4, "took {:?}", started.elapsed());
+        assert_eq!(capacity.available(false), GLOBAL, "the permits were not given back");
+        assert_eq!(send(&app, "GET", me, &session, Body::empty(), None).await.0, 200);
 
         db.drop().await;
     }

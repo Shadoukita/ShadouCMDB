@@ -1,5 +1,5 @@
 import type { APIRequestContext, Page } from "@playwright/test";
-import { apiGet, ciIdByName, classIdByName, createCi, csrf, expect, resetUiSettings as resetSettings, snap, test } from "./support";
+import { apiGet, ciIdByName, classIdByName, createCi, csrf, expect, resetUiSettings as resetSettings, saveLayout, snap, test } from "./support";
 
 // Administration › Customization and Export / import, against the demo seed (the Server class
 // and its attributes). The settings apply to every user, so the walk starts from and ends with
@@ -288,17 +288,17 @@ test("layouts: Edit CI opens the layout editor on a Server, whose layout the det
   const serverId = await classIdByName(request, "Server");
   const ci = (await apiGet<{ data: { id: string; label: string }[] }>(request, `/configuration-items?classId=${serverId}&sort=-updatedAt&limit=1`)).data[0];
   await page.goto("/admin/customization/layouts?class=server");
-  await expect(page.getByTestId("layout-status")).toContainText("Server uses the built-in layout");
-  // The editor opens in its own window on the most recently updated Server.
+  await expect(page.getByTestId("layout-status")).toContainText("Server uses the template “Standard” by default.");
+  // The editor opens in its own window on the most recently updated Server, on the class's default template.
   const [editor] = await Promise.all([page.waitForEvent("popup"), page.getByRole("button", { name: `Edit CI: ${ci.label}` }).click()]);
-  await expect(editor).toHaveURL(new RegExp(`/cis/${ci.id}/layout-editor$`));
+  await expect(editor).toHaveURL(new RegExp(`/cis/${ci.id}/layout-editor\\?template=standard$`));
   // Tall enough that a dragged field and the tab it is dropped on are both in view.
   await editor.setViewportSize({ width: 1440, height: 2000 });
   const bar = editor.getByRole("region", { name: "Layout editing" });
   const tabBar = editor.getByRole("group", { name: "Tabs of the layout" });
   const section = (label: string) => editor.getByRole("region", { name: `Section ${label}`, exact: true });
   const field = (label: string) => editor.locator(".le-field").filter({ has: editor.getByRole("button", { name: new RegExp(`^${label}, `) }) });
-  await expect(bar).toContainText("Editing the Server layout");
+  await expect(bar).toContainText("Layout editor · Server");
 
   // A second tab, its section renamed and given a two-column grid.
   await tabBar.getByRole("button", { name: "+ Tab" }).click();
@@ -332,13 +332,11 @@ test("layouts: Edit CI opens the layout editor on a Server, whose layout the det
   await expect(editor.locator(".le-canvas [aria-live=assertive]")).toHaveText("Ident belongs to every CI: it can be moved, not hidden.");
   await expect(field("Ident")).toHaveCount(1);
 
-  await bar.getByLabel("Note for this version").fill(`e2e layout ${stamp}`);
-  await bar.getByRole("button", { name: "Save layout" }).click();
-  await expect(bar.getByRole("status")).toContainText(/Saved as version \d+/);
+  await saveLayout(editor, `e2e layout ${stamp}`);
   await snap(editor, "customization-layout-editor");
   await editor.close();
   await page.reload();
-  await expect(page.getByTestId("layout-status")).toContainText("Server has its own layout");
+  await expect(page.getByTestId("layout-status")).toContainText("Server uses the template “Standard” by default.");
 
   // The detail page: the layout's tabs, then the relationship map.
   await page.goto(`/cis/${ci.id}`);
@@ -377,7 +375,7 @@ test("history: an earlier version can be restored", async ({ page }) => {
   await expect(rows.first()).toContainText("Restored version");
   await expect(rows.first()).toContainText("current");
   await page.goto("/admin/customization/layouts?class=server");
-  await expect(page.getByTestId("layout-status")).toContainText("Server uses the built-in layout");
+  await expect(page.getByTestId("layout-status")).toContainText("Server uses the template “Standard” by default.");
 });
 
 test("layouts: the API validates the layout document and converts the older panels format", async ({ request }) => {

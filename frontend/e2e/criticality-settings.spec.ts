@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { apiGet, classIdByName, expect, resetUiSettings, test } from "./support";
+import { apiGet, classIdByName, expect, resetUiSettings, saveLayout as saveTemplate, test } from "./support";
 
 // Criticality as a stored list view column and sort, and as a layout field that can be
 // placed, made read-only and hidden (SHAA-945). Against the demo seed's Server class; the
@@ -44,10 +44,7 @@ test("layouts: Criticality is placed like the other fields, can be read-only and
   const editor = `/cis/new/layout-editor?classId=${serverId}`;
   const bar = page.getByRole("region", { name: "Layout editing" });
   const field = (label: string) => page.locator(".le-field").filter({ has: page.getByRole("button", { name: new RegExp(`^${label}, `) }) });
-  const saveLayout = async () => {
-    await bar.getByRole("button", { name: "Save layout" }).click();
-    await expect(bar.getByRole("status")).toContainText(/Saved as version \d+/);
-  };
+  const saveLayout = () => saveTemplate(page);
   await page.goto(editor);
   // The built-in General section holds it after the other core fields.
   await expect(page.locator('[data-window="general"] .le-field').nth(3)).toContainText("Criticality");
@@ -63,8 +60,9 @@ test("layouts: Criticality is placed like the other fields, can be read-only and
   await page.keyboard.press("Delete");
   await expect(page.getByTestId("le-hidden").getByRole("listitem")).toHaveText([/Criticality/]);
   await saveLayout();
-  const stored = await apiGet<{ settings: { layouts: { classKey: string; hiddenFields?: string[] }[] } }>(request, "/ui-settings");
-  expect(stored.settings.layouts.find((l) => l.classKey === "server")?.hiddenFields).toContain("criticality");
+  // Saved to the template Server uses (Standard: the class has no default of its own).
+  const stored = await apiGet<{ settings: { layoutTemplates: { key: string; layout: { hiddenFields?: string[] } }[] } }>(request, "/ui-settings");
+  expect(stored.settings.layoutTemplates.find((t) => t.key === "standard")?.layout.hiddenFields).toContain("criticality");
 
   await page.goto(`/cis/new?classId=${serverId}`);
   await expect(page.getByLabel("Ident")).toBeVisible();

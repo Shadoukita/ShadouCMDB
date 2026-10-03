@@ -102,6 +102,9 @@ export function definitionFromUrl(
   effective: { sort: string; limit: number },
 ): DefinitionResult {
   const ids = (k: string) => param(query, k).split(",").filter(Boolean);
+  if (param(query, "ownLayout") || param(query, "layoutTemplate")) {
+    return { ok: false, message: "A saved view cannot hold the layout filter. Remove that filter, then save again." };
+  }
   const classKeys: string[] = [];
   for (const id of ids("classId")) {
     const c = cat.classes.find((x) => x.id === id);

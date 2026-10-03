@@ -1708,7 +1708,7 @@ mod tests {
         let Some(db) = scratch::database("legacy_lookup_writes_are_gone").await else { return };
         let pool = &db.pool;
         let app = app(pool.clone());
-        let setup = json!({ "username": "owner", "displayName": "Owner", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
+        let setup = json!({ "username": "owner", "email": "owner@example.test", "displayName": "Owner", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
         let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
         assert_eq!(status, 201, "{me}");
         let cookie = headers

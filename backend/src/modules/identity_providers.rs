@@ -1429,7 +1429,7 @@ pub fn routes() -> Vec<Route> {
             ))
             .status(StatusCode::CREATED)
             .requires(manage)
-            .session_only()
+            .recent_reauthentication()
             .errors(&[ErrorCode::Conflict])
             .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<IdentityProviderCreate>>| async move {
                 Ok(Json(create(&api.pool, &api.auth, &api.ctx, &b).await?))
@@ -1441,7 +1441,7 @@ pub fn routes() -> Vec<Route> {
                 "{ADMIN_ONLY} The kind cannot change. Secrets: a string replaces, null removes, left out keeps; but a patch that changes `oidc.issuerUrl`, the scheme, host or port of `ldap.url`, or `ldap.bindDn` must send the secret again, or it is refused with 422 SECRET_REQUIRED (detail code `secret_required` on `oidc.clientSecret` or `ldap.bindPassword`) and nothing changes. `isEnabled: false` stops sign-ins through the provider, ends the sessions of its accounts and refuses their API tokens (401) until it is enabled again. `oidc.mfaAssurance: trustProvider` without `oidc.requiredAcr` also empties `requiredAcr` (400 when both are sent with values). Switching to `verify` ends, on their next request, the sessions whose sign-in did not prove MFA for users whose profiles require it."
             ))
             .requires(manage)
-            .session_only()
+            .recent_reauthentication()
             .errors(&[ErrorCode::NotFound, ErrorCode::Conflict, ErrorCode::SecretRequired])
             .handle(|api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<IdentityProviderUpdate>>| async move {
                 Ok(Json(update(&api.pool, &api.auth, &api.ctx, id, &b).await?))
@@ -1543,7 +1543,7 @@ mod tests {
         let Some(db) = scratch::database("the_admin_api_stores_provider_secrets_encrypted").await else { return };
         let (pool, app) = (&db.pool, app(db.pool.clone()));
         let ring = Keyring::for_tests();
-        let setup = json!({ "username": "admin", "displayName": "Admin", "password": "correct horse battery",
+        let setup = json!({ "username": "admin", "email": "admin@example.test", "displayName": "Admin", "password": "correct horse battery",
             "setupToken": crate::auth::setup_token::TEST_TOKEN });
         let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
         assert_eq!(status, 201, "{me}");
@@ -1714,7 +1714,7 @@ mod tests {
 
         let Some(db) = scratch::database("a_moved_provider_needs_its_secret_again").await else { return };
         let (pool, app) = (&db.pool, app(db.pool.clone()));
-        let setup = json!({ "username": "admin", "displayName": "Admin", "password": "correct horse battery",
+        let setup = json!({ "username": "admin", "email": "admin@example.test", "displayName": "Admin", "password": "correct horse battery",
             "setupToken": crate::auth::setup_token::TEST_TOKEN });
         let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
         assert_eq!(status, 201, "{me}");

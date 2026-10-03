@@ -718,6 +718,9 @@ pub async fn run(cfg: &DatabaseConfig, encryption: &crate::config::EncryptionCon
     if let Some(notice) = crate::data::api_tokens::second_factor_refusal_notice(&mut conn).await? {
         println!("Warning: {notice}\n");
     }
+    if let Some(notice) = crate::data::api_tokens::email_required_refusal_notice(&mut conn).await? {
+        println!("Warning: {notice}\n");
+    }
     let mut failed = 0;
     conn.execute("BEGIN").await?;
     // The checks build on the IT infrastructure data model. A bare install gets

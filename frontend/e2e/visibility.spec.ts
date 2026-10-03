@@ -84,7 +84,7 @@ test.beforeAll(async ({ request, playwright, baseURL }) => {
       })
     ).id;
   const user = async (username: string, profileId: string) =>
-    apiSend(request, "POST", "/admin/users", { username, displayName: username, password: PASSWORD, profileIds: [profileId] });
+    apiSend(request, "POST", "/admin/users", { username, email: `${username}@example.test`, displayName: username, password: PASSWORD, profileIds: [profileId] });
   // The writer may use both classes; every CI and relationship below is theirs, so the audit log can be filtered to them.
   await user(WRITER, await profile("E2E vis writers", [], [publicId, secretsId], true));
   await user(OPERATOR, await profile("E2E vis operators", ["datamodel.manage"], [publicId], true));

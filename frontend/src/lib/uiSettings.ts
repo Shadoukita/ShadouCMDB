@@ -52,8 +52,9 @@ export function normalizeDocument(doc: Partial<UiSettingsDocument> | undefined):
     },
     listViews: (d.listViews ?? []).map((v) => ({ columns: [], defaultSort: null, pageSize: null, ...v, defaultFilters: { ...EMPTY_FILTERS, lookups: {}, ...v.defaultFilters } })),
     layouts: (d.layouts ?? []).map(normalizeLayout),
-    // Kept as the API sent them: classes and CIs refer to them, and the API refuses to drop one in use.
-    layoutTemplates: d.layoutTemplates ?? [],
+    // Kept as the API sent them (classes and CIs refer to them, and the API refuses to drop one in use), as a
+    // copy: the editors change the draft, and the query cache's data is read-only.
+    layoutTemplates: JSON.parse(JSON.stringify(d.layoutTemplates ?? [])) as UiSettingsDocument["layoutTemplates"],
   };
 }
 
@@ -391,8 +392,20 @@ export function widgetLabel(type: UiWidgetType): string {
 
 // ---------- Detail and form layouts ----------
 
+/**
+ * A class's layout: its default template's. The settings the API returns carry it on the class's entry; a
+ * class without an entry uses the Standard template (SHAA-1472), which can have a layout of its own too.
+ * Undefined when there is nothing to show but the built-in arrangement.
+ */
 export function layoutFor(doc: UiSettingsDocument | undefined, classKey: string | undefined): UiClassLayout | undefined {
-  return classKey ? doc?.layouts.find((l) => l.classKey === classKey) : undefined;
+  if (!classKey || !doc) return undefined;
+  const filled = (l: { tabs?: unknown[]; hiddenFields?: unknown[]; readOnlyFields?: unknown[] } | undefined) =>
+    !!l && ((l.tabs?.length ?? 0) > 0 || (l.hiddenFields?.length ?? 0) > 0 || (l.readOnlyFields?.length ?? 0) > 0);
+  const entry = doc.layouts.find((l) => l.classKey === classKey);
+  if (filled(entry)) return entry;
+  const template = doc.layoutTemplates.find((x) => x.key === (entry?.templateKey ?? "standard"));
+  if (!template?.layout || !filled(template.layout)) return entry;
+  return normalizeLayout({ classKey, ...(entry?.templateKey ? { templateKey: entry.templateKey } : {}), ...template.layout });
 }
 
 /** Grid columns of a section that does not say (the API's default). */

@@ -27,7 +27,7 @@ struct Env {
 
 async fn env(pool: &PgPool, cfg: ImportConfig) -> Env {
     let app = app_with_imports(pool.clone(), cfg);
-    let setup = json!({ "username": "admin", "displayName": "Admin", "password": "correct horse battery",
+    let setup = json!({ "username": "admin", "email": "admin@example.test", "displayName": "Admin", "password": "correct horse battery",
         "setupToken": crate::auth::setup_token::TEST_TOKEN });
     let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
     assert_eq!(status, 201, "{me}");
@@ -72,7 +72,7 @@ async fn user_in(e: &Env, name: &str, global: &[&str], classes: Option<&[&str]>)
         .await
         .unwrap();
     }
-    let body = json!({ "username": name, "displayName": name, "password": "a long enough password",
+    let body = json!({ "username": name, "email": format!("{name}@example.test"), "displayName": name, "password": "a long enough password",
         "profileIds": [profile] });
     let (status, v, _) = call(&e.app, "POST", "/api/v1/admin/users", &e.admin, Some(body)).await;
     assert_eq!(status, 201, "{v}");
@@ -886,7 +886,7 @@ async fn a_dry_run_plans_every_row_and_writes_nothing() {
     assert_eq!(status, 202, "{v}");
     assert_eq!((v["status"].as_str(), v["phase"].as_str()), (Some("queued"), Some("validate")));
     let cis_before: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM configuration_items").fetch_one(&e.pool).await.unwrap();
+        sqlx::query_scalar("SELECT count(*) FROM configuration_items WHERE class_id <> (SELECT id FROM ci_classes WHERE system_role = 'person')").fetch_one(&e.pool).await.unwrap();
     drain(&e.pool).await;
 
     let j = job(&e, &e.admin, &id).await;
@@ -906,7 +906,7 @@ async fn a_dry_run_plans_every_row_and_writes_nothing() {
 
     // Read-only: nothing was written.
     let cis_after: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM configuration_items").fetch_one(&e.pool).await.unwrap();
+        sqlx::query_scalar("SELECT count(*) FROM configuration_items WHERE class_id <> (SELECT id FROM ci_classes WHERE system_role = 'person')").fetch_one(&e.pool).await.unwrap();
     assert_eq!(cis_after, cis_before);
     let (_, ci, _) = call(&e.app, "GET", &format!("/api/v1/configuration-items/{web01}"), &e.admin, None).await;
     assert_eq!(ci["attributes"]["cores"], 8);
@@ -1164,7 +1164,7 @@ async fn an_administrator_only_reads_cancels_or_deletes_another_users_import_and
     }
     drain(&e.pool).await;
     assert_eq!(job(&e, &alice, &id).await["status"], "validated", "nothing changed");
-    let cis: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items").fetch_one(&e.pool).await.unwrap();
+    let cis: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items WHERE class_id <> (SELECT id FROM ci_classes WHERE system_role = 'person')").fetch_one(&e.pool).await.unwrap();
     assert_eq!(cis, 0);
 
     // The owner's reads are not audited; the administrator's are, once per view while polling.
@@ -1301,7 +1301,7 @@ async fn a_row_failing_only_at_commit_is_failed_and_the_other_499_are_written() 
     let j = job(&e, &e.admin, &id).await;
     assert_eq!(j["status"], "completed_with_errors", "{j}");
     assert_eq!(committed(&j), (499, 0, 0, 0, 1), "{j}");
-    let written: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items").fetch_one(&e.pool).await.unwrap();
+    let written: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items WHERE class_id <> (SELECT id FROM ci_classes WHERE system_role = 'person')").fetch_one(&e.pool).await.unwrap();
     assert_eq!(written, 499);
     let (_, v, _) = call(&e.app, "GET", &format!("/api/v1/imports/{id}/issues?severity=error"), &e.admin, None).await;
     let rows: Vec<u64> = v["data"].as_array().unwrap().iter().map(|i| i["row"].as_u64().unwrap()).collect();
@@ -1340,7 +1340,7 @@ async fn a_deadlock_runs_the_chunk_again_and_it_commits_once() {
     drain(&e.pool).await;
     let j = job(&e, &e.admin, &id).await;
     assert_eq!((j["status"].as_str(), committed(&j)), (Some("completed"), (20, 0, 0, 0, 0)), "{j}");
-    let written: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items").fetch_one(&e.pool).await.unwrap();
+    let written: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items WHERE class_id <> (SELECT id FROM ci_classes WHERE system_role = 'person')").fetch_one(&e.pool).await.unwrap();
     assert_eq!(written, 20);
 }
 
@@ -1372,7 +1372,7 @@ async fn a_killed_commit_resumes_after_its_cursor_and_a_stalled_worker_is_fenced
     drain(&e.pool).await;
     let j = job(&e, &e.admin, &id).await;
     assert_eq!((j["status"].as_str(), committed(&j)), (Some("completed"), (1_200, 0, 0, 0, 0)), "{j}");
-    let (all, distinct): (i64, i64) = sqlx::query_as("SELECT count(*), count(DISTINCT label) FROM configuration_items")
+    let (all, distinct): (i64, i64) = sqlx::query_as("SELECT count(*), count(DISTINCT label) FROM configuration_items WHERE class_id <> (SELECT id FROM ci_classes WHERE system_role = 'person')")
         .fetch_one(&e.pool)
         .await
         .unwrap();
@@ -1398,13 +1398,13 @@ async fn a_killed_commit_resumes_after_its_cursor_and_a_stalled_worker_is_fenced
     let cfg = ImportConfig::default();
     let lost = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     super::commit::run(&e.pool, &cfg, &a, &lost).await;
-    let written: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items").fetch_one(&e.pool).await.unwrap();
+    let written: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items WHERE class_id <> (SELECT id FROM ci_classes WHERE system_role = 'person')").fetch_one(&e.pool).await.unwrap();
     assert_eq!(written, 1_200, "A wrote nothing");
     let (_stop, mut rx) = watch::channel(false);
     worker::work(&e.pool, &std::sync::Arc::new(cfg), b, &mut rx).await;
     let j = job(&e, &e.admin, &id).await;
     assert_eq!((j["status"].as_str(), committed(&j)), (Some("completed"), (600, 0, 0, 0, 0)), "{j}");
-    let written: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items").fetch_one(&e.pool).await.unwrap();
+    let written: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items WHERE class_id <> (SELECT id FROM ci_classes WHERE system_role = 'person')").fetch_one(&e.pool).await.unwrap();
     assert_eq!(written, 1_800);
 }
 
@@ -1436,7 +1436,7 @@ async fn a_commit_stops_when_the_owner_loses_the_import_right_and_keeps_earlier_
         (Some("failed"), Some("permission_revoked"), (500, 0, 0, 0, 0)),
         "{j}"
     );
-    let written: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items").fetch_one(&e.pool).await.unwrap();
+    let written: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items WHERE class_id <> (SELECT id FROM ci_classes WHERE system_role = 'person')").fetch_one(&e.pool).await.unwrap();
     assert_eq!(written, 500);
     let event: Value = sqlx::query_scalar(
         "SELECT new_value FROM audit_log WHERE action = 'import.commit' AND entity_id = $1 AND actor_type = 'import'
@@ -1489,7 +1489,7 @@ async fn a_commit_cancelled_during_a_chunk_ends_cancelled_with_its_final_counts(
         (&last["summary"], &last["progress"], &last["finishedAt"]),
         (&first["summary"], &first["progress"], &first["finishedAt"])
     );
-    let written: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items").fetch_one(&e.pool).await.unwrap();
+    let written: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items WHERE class_id <> (SELECT id FROM ci_classes WHERE system_role = 'person')").fetch_one(&e.pool).await.unwrap();
     assert_eq!(written, 1_000, "the chunk in flight is written, the third is not");
     let events: Vec<Value> =
         sqlx::query_scalar("SELECT new_value FROM audit_log WHERE action = 'import.commit' AND entity_id = $1")
@@ -1521,7 +1521,7 @@ async fn a_commit_cancelled_during_a_chunk_ends_cancelled_with_its_final_counts(
     drain(&e.pool).await;
     let j = job(&e, &e.admin, &id).await;
     assert_eq!((j["status"].as_str(), committed(&j)), (Some("cancelled"), (500, 0, 0, 0, 0)), "{j}");
-    let written: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items").fetch_one(&e.pool).await.unwrap();
+    let written: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items WHERE class_id <> (SELECT id FROM ci_classes WHERE system_role = 'person')").fetch_one(&e.pool).await.unwrap();
     assert_eq!(written, 1_500);
 }
 
@@ -1538,7 +1538,7 @@ async fn a_commit_cancelled_while_queued_writes_nothing_and_is_audited_once() {
     drain(&e.pool).await;
 
     assert_eq!(job(&e, &e.admin, &id).await["status"], "cancelled");
-    let written: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items").fetch_one(&e.pool).await.unwrap();
+    let written: i64 = sqlx::query_scalar("SELECT count(*) FROM configuration_items WHERE class_id <> (SELECT id FROM ci_classes WHERE system_role = 'person')").fetch_one(&e.pool).await.unwrap();
     assert_eq!(written, 0);
     // No worker ever held it, so the cancel itself writes the one import.commit (§4.3).
     let events: Vec<Value> = sqlx::query_scalar(
@@ -1838,11 +1838,22 @@ async fn a_commit_stops_linking_to_a_class_whose_view_right_is_revoked() {
 // Error report (SHAA-799 part 4, §3.4, §5.1)
 // ---------------------------------------------------------------------------
 
-/// A GET whose body is not JSON: status, headers and body text.
+/// A GET whose body is not JSON: status, headers and body text. Sends the
+/// session's CSRF token, as the UI does on the audited reads (GH#503).
 async fn download(e: &Env, creds: &Creds, uri: &str) -> (u16, HeaderMap, String) {
+    download_with(e, creds, uri, &[]).await
+}
+
+async fn download_with(e: &Env, creds: &Creds, uri: &str, extra: &[(&str, &str)]) -> (u16, HeaderMap, String) {
     let mut req = Request::builder().uri(uri);
     if let Some(c) = &creds.cookie {
         req = req.header(header::COOKIE, c);
+    }
+    if let Some(c) = &creds.csrf {
+        req = req.header("x-csrf-token", c);
+    }
+    for (name, value) in extra {
+        req = req.header(*name, *value);
     }
     let res = e.app.clone().oneshot(req.body(HttpBody::empty()).unwrap()).await.unwrap();
     let status = res.status().as_u16();
@@ -1914,6 +1925,52 @@ async fn the_error_report_lists_each_problem_with_its_row_and_audits_other_reade
     let clean = validated(&e, &alice, "Hostname;Cores\nweb09;1\n").await;
     let (status, _, _) = download(&e, &alice, &format!("/api/v1/imports/{clean}/error-report")).await;
     assert_eq!(status, 404);
+    db.drop().await;
+}
+
+/// GH#503: an administrator's read of another user's job, its problems or its
+/// report is audited, so a session must send the CSRF token. A cross-site
+/// top-level navigation carries the SameSite=Lax cookie but no custom header:
+/// refused before any work, and nothing is recorded. The UI's fetch with the
+/// token still reads, and is audited.
+#[tokio::test(flavor = "multi_thread")]
+async fn audited_import_reads_need_the_csrf_token_from_a_session() {
+    let Some(db) = scratch::database("import_reads_csrf").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    server_class(&e).await;
+    let alice = user(&e, "alice", &["cis.import"]).await;
+    let id = validated(&e, &alice, "Hostname;Cores\nweb01;many\n").await;
+    let paths = [
+        format!("/api/v1/imports/{id}"),
+        format!("/api/v1/imports/{id}/issues"),
+        format!("/api/v1/imports/{id}/error-report"),
+    ];
+    let reads = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM audit_log WHERE action = 'import.report_read'")
+            .fetch_one(&e.pool)
+            .await
+            .unwrap()
+    };
+
+    let navigation = [("sec-fetch-site", "cross-site"), ("sec-fetch-mode", "navigate"), ("sec-fetch-dest", "document")];
+    let no_csrf = Creds { csrf: None, ..e.admin.clone() };
+    let wrong = Creds { csrf: Some("not-the-token".into()), ..e.admin.clone() };
+    for path in &paths {
+        for (creds, extra) in [(&no_csrf, &navigation[..]), (&no_csrf, &[]), (&wrong, &[])] {
+            let (status, _, body) = download_with(&e, creds, path, extra).await;
+            assert_eq!(status, 403, "{path}: {body}");
+            assert_eq!(code(&serde_json::from_str(&body).unwrap()), "CSRF_TOKEN_INVALID", "{path}");
+        }
+    }
+    assert_eq!(reads().await, 0, "a refused read is not recorded");
+
+    // The UI: same-origin fetch with the token.
+    let same_origin = [("sec-fetch-site", "same-origin"), ("sec-fetch-mode", "cors")];
+    for path in &paths {
+        let (status, _, body) = download_with(&e, &e.admin, path, &same_origin).await;
+        assert_eq!(status, 200, "{path}: {body}");
+    }
+    assert_eq!(reads().await, 3);
     db.drop().await;
 }
 

@@ -30,7 +30,7 @@ const SECTIONS = [
   { key: "navigation", label: "Navigation" },
   { key: "dashboard", label: "Dashboard" },
   { key: "list-views", label: "List views" },
-  { key: "layouts", label: "Detail and form layout" },
+  { key: "layouts", label: "Layouts" },
   { key: "history", label: "History" },
 ] as const;
 

@@ -16,6 +16,7 @@ pub mod imports;
 pub mod items;
 pub mod lookups;
 pub mod mfa;
+pub mod people;
 pub mod profiles;
 pub mod relationships;
 pub mod saved_views;

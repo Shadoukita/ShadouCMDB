@@ -14,6 +14,10 @@ export type UiClassLayout = Schemas["UiClassLayout"];
 export type UiLayoutTab = Schemas["UiLayoutTab"];
 export type UiLayoutSection = Schemas["UiLayoutSection"];
 export type UiLayoutField = Schemas["UiLayoutField"];
+export type UiLayout = Schemas["UiLayout"];
+export type UiLayoutTemplate = Schemas["UiLayoutTemplate"];
+export type CiLayout = Schemas["CiLayout"];
+export type LayoutTemplateUsages = Schemas["LayoutTemplateUsages"];
 export type UiListSort = NonNullable<UiListView["defaultSort"]>;
 export type UiListFilters = NonNullable<UiListView["defaultFilters"]>;
 export type UiPage = NonNullable<UiNavEntry["page"]>;
@@ -42,6 +46,9 @@ export const uiKeys = {
   branding: ["ui-settings", "branding"] as const,
   versions: (limit: number, offset: number) => ["ui-settings", "versions", limit, offset] as const,
   version: (n: number) => ["ui-settings", "version", n] as const,
+  // Under "ui-settings": every settings save can change them (a template's layout, a class's default).
+  templateUsage: ["ui-settings", "layout-template-usage"] as const,
+  ciLayout: (id: string) => ["ui-settings", "ci-layout", id] as const,
 };
 
 const fetchSettings = ({ signal }: { signal: AbortSignal }) => unwrap(api.GET("/api/v1/ui-settings", { signal }));
@@ -120,6 +127,45 @@ export const useUploadAsset = () =>
 
 export const useDeleteAsset = () =>
   useUiMutation((kind: AssetKind) => unwrap(api.DELETE("/api/v1/ui-settings/assets/{kind}", { params: { path: { kind } } })));
+
+// ---------- Layout templates ----------
+
+/** Which template each class uses, and who uses each template (customization.manage). */
+export function useLayoutTemplateUsage(enabled: MaybeRefOrGetter<boolean> = true) {
+  return useQuery(() => ({
+    queryKey: uiKeys.templateUsage,
+    enabled: toValue(enabled),
+    queryFn: ({ signal }: { signal: AbortSignal }) => unwrap(api.GET("/api/v1/ui-settings/layout-templates/usage", { signal })),
+  }));
+}
+
+const ciLayoutQuery = (id: string) => ({
+  queryKey: uiKeys.ciLayout(id),
+  queryFn: ({ signal }: { signal: AbortSignal }) =>
+    unwrap(api.GET("/api/v1/configuration-items/{id}/layout", { params: { path: { id } }, signal })),
+  staleTime: 60_000,
+});
+
+/** The layout a CI's detail page and form show, and where it comes from (its own, another template, the class's default). */
+export function useCiLayout(id: MaybeRefOrGetter<string | undefined>) {
+  return useQuery(() => {
+    const ci = toValue(id) ?? "";
+    return { ...ciLayoutQuery(ci), enabled: !!ci };
+  });
+}
+
+/** The CI's layout fresh from the API: what the layout editor starts from. */
+export const fetchCiLayout = (qc: QueryClient, id: string) => qc.fetchQuery({ ...ciLayoutQuery(id), staleTime: 0 });
+
+export type CiLayoutUpdate = { templateKey: string; layout?: never; version?: number } | { layout: UiLayout; templateKey?: never; version?: number };
+
+export const layoutApi = {
+  /** Another template (`templateKey`) or a layout of its own (`layout`) for the CI; `version` is the one loaded, if it had its own. */
+  setCiLayout: (id: string, body: CiLayoutUpdate) =>
+    unwrap(api.PUT("/api/v1/configuration-items/{id}/layout", { params: { path: { id } }, body: body as JsonBody<"/api/v1/configuration-items/{id}/layout", "put"> })),
+  /** Back to the class's default template. */
+  resetCiLayout: (id: string) => unwrap(api.DELETE("/api/v1/configuration-items/{id}/layout", { params: { path: { id } } })),
+};
 
 // ---------- Configuration export/import ----------
 

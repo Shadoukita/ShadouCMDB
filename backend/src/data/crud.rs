@@ -2,12 +2,14 @@
 //! talks SQL lives under data/; services call these and never build HTTP
 //! responses, routes call services and never touch the database.
 
+use std::cell::RefCell;
+
 use serde_json::Value;
 use sqlx::postgres::PgRow;
 use sqlx::{AssertSqlSafe, FromRow, PgConnection, Postgres, QueryBuilder};
 use uuid::Uuid;
 
-use crate::api::context::RequestContext;
+use crate::api::context::{Actor, RequestContext};
 
 // ---------------------------------------------------------------------------
 // WHERE clauses shared by a page query and its count
@@ -316,6 +318,40 @@ pub enum AuditAction {
     #[serde(rename = "import.report_read")]
     #[sqlx(rename = "import.report_read")]
     ImportReportRead,
+    /// The session's owner confirmed their credentials again (entity type
+    /// `sessions`), so it may make the writes that need it (GH#498).
+    #[serde(rename = "session.reauthenticate")]
+    #[sqlx(rename = "session.reauthenticate")]
+    SessionReauthenticate,
+    /// Such a write was refused: the session's owner had not confirmed their
+    /// credentials recently (entity type `sessions`; the operation in new_value).
+    #[serde(rename = "session.reauthentication_required")]
+    #[sqlx(rename = "session.reauthentication_required")]
+    SessionReauthenticationRequired,
+    /// A workflow version was published (entity type `workflow_definitions`; the version and graph in new_value).
+    #[serde(rename = "workflow.publish")]
+    #[sqlx(rename = "workflow.publish")]
+    WorkflowPublish,
+    /// A workflow instance was started on a CI (entity type `configuration_items`, the CI's id).
+    #[serde(rename = "workflow.start")]
+    #[sqlx(rename = "workflow.start")]
+    WorkflowStart,
+    /// A workflow instance was cancelled (entity type `configuration_items`, the CI's id).
+    #[serde(rename = "workflow.cancel")]
+    #[sqlx(rename = "workflow.cancel")]
+    WorkflowCancel,
+    /// A CI's workflow instance moved along a transition (entity type `configuration_items`; before and after).
+    #[serde(rename = "workflow.transition")]
+    #[sqlx(rename = "workflow.transition")]
+    WorkflowTransition,
+    /// A workflow instance was moved to another version of its workflow (before and after).
+    #[serde(rename = "workflow.migrate")]
+    #[sqlx(rename = "workflow.migrate")]
+    WorkflowMigrate,
+    /// An administrator forced a workflow instance into a state (before and after, with the reason).
+    #[serde(rename = "workflow.force")]
+    #[sqlx(rename = "workflow.force")]
+    WorkflowForce,
 }
 
 impl AuditAction {
@@ -341,6 +377,14 @@ impl AuditAction {
             AuditAction::Export => "export",
             AuditAction::ImportCommit => "import.commit",
             AuditAction::ImportReportRead => "import.report_read",
+            AuditAction::SessionReauthenticate => "session.reauthenticate",
+            AuditAction::SessionReauthenticationRequired => "session.reauthentication_required",
+            AuditAction::WorkflowPublish => "workflow.publish",
+            AuditAction::WorkflowStart => "workflow.start",
+            AuditAction::WorkflowCancel => "workflow.cancel",
+            AuditAction::WorkflowTransition => "workflow.transition",
+            AuditAction::WorkflowMigrate => "workflow.migrate",
+            AuditAction::WorkflowForce => "workflow.force",
         }
     }
 }
@@ -358,8 +402,113 @@ pub struct AuditEntry {
 /// Audit rows per INSERT; a type purge can audit tens of thousands of CIs.
 pub const AUDIT_BATCH: usize = 1000;
 
-/// Append audit rows in the caller's transaction so a change and its audit commit together.
+#[cfg(debug_assertions)]
+tokio::task_local! {
+    /// The operation id of the GET running without the CSRF check, if any.
+    static CSRF_FREE_READ: std::sync::Arc<str>;
+}
+
+/// Runs a route handler; `csrf_free_read` is its operation id when it is a GET
+/// without [`csrf_on_read`](crate::api::route::RouteBuilder::csrf_on_read).
+/// In debug builds (every test run) [`write_audit`] then refuses to record
+/// anything for a session: the SameSite=Lax cookie travels with a cross-site
+/// navigation, so a link on another site could write the row in the user's
+/// name (GH#414, GH#503). Release builds just run the handler.
+pub async fn run_handler<F: std::future::Future>(csrf_free_read: Option<std::sync::Arc<str>>, f: F) -> F::Output {
+    #[cfg(debug_assertions)]
+    if let Some(op) = csrf_free_read {
+        return CSRF_FREE_READ.scope(op, f).await;
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = csrf_free_read;
+    f.await
+}
+
+/// Audit rows held back by `hold_audit`, in order, grouped by actor and request.
+type Held = Vec<(Actor, String, Vec<AuditEntry>)>;
+
+tokio::task_local! {
+    /// Inside `hold_audit` (`Some`) or `discard_audit` (`None`).
+    static HELD: RefCell<Option<Held>>;
+}
+
+/// Audit rows written while `hold_audit` ran; `write` inserts them.
+#[must_use = "held audit rows are lost unless written"]
+pub struct HeldAudit(Held);
+
+impl HeldAudit {
+    /// Inserts the held rows in the order they were written, in the caller's transaction.
+    pub async fn write(self, conn: &mut PgConnection) -> sqlx::Result<()> {
+        for (actor, request_id, entries) in self.0 {
+            insert_audit(conn, &actor, &request_id, entries).await?;
+        }
+        Ok(())
+    }
+}
+
+/// Runs `f` with every `write_audit` call held in memory instead of inserted,
+/// and returns the held rows for the caller to `write` just before commit.
+///
+/// Every audit insert locks the single audit chain head row until the
+/// transaction ends (migration 0040), so every other audited write, sign-ins
+/// included, waits behind it. A long transaction that audits as it goes (a
+/// configuration import) would hold that lock for its whole run; holding the
+/// rows back confines the lock to the final insert and the commit (GH#500).
+/// Not for work that rolls back to a savepoint and carries on: the rows
+/// written before the rollback would still be held.
+pub async fn hold_audit<T>(f: impl Future<Output = T>) -> (T, HeldAudit) {
+    HELD.scope(RefCell::new(Some(Vec::new())), async move {
+        let out = f.await;
+        let held = HELD.with(|h| h.take()).unwrap_or_default();
+        (out, HeldAudit(held))
+    })
+    .await
+}
+
+/// Runs `f` with every `write_audit` call dropped: for work whose transaction
+/// is always rolled back (a dry run), so it never takes the audit chain lock.
+pub async fn discard_audit<T>(f: impl Future<Output = T>) -> T {
+    HELD.scope(RefCell::new(None), f).await
+}
+
+/// Append audit rows in the caller's transaction so a change and its audit
+/// commit together (unless `hold_audit` or `discard_audit` is running).
 pub async fn write_audit(conn: &mut PgConnection, ctx: &RequestContext, entries: Vec<AuditEntry>) -> sqlx::Result<()> {
+    #[cfg(debug_assertions)]
+    if let (Ok(op), Some(p)) = (CSRF_FREE_READ.try_with(Clone::clone), ctx.principal())
+        && matches!(p.credential, crate::auth::Credential::Session { .. })
+    {
+        panic!("{op} is a GET without csrf_on_read() but writes an audit row for a session (GH#503)");
+    }
+    let mut entries = Some(entries);
+    let deferred = HELD.try_with(|held| {
+        let entries = entries.take().unwrap_or_default();
+        if let Some(held) = held.borrow_mut().as_mut() {
+            match held.last_mut() {
+                Some((actor, request_id, last))
+                    if actor.actor_type == ctx.actor.actor_type
+                        && actor.id == ctx.actor.id
+                        && actor.name == ctx.actor.name
+                        && *request_id == ctx.request_id =>
+                {
+                    last.extend(entries)
+                }
+                _ => held.push((ctx.actor.clone(), ctx.request_id.clone(), entries)),
+            }
+        }
+    });
+    if deferred.is_ok() {
+        return Ok(());
+    }
+    insert_audit(conn, &ctx.actor, &ctx.request_id, entries.unwrap_or_default()).await
+}
+
+async fn insert_audit(
+    conn: &mut PgConnection,
+    actor: &Actor,
+    request_id: &str,
+    entries: Vec<AuditEntry>,
+) -> sqlx::Result<()> {
     let mut rest = entries;
     while !rest.is_empty() {
         let batch: Vec<AuditEntry> = rest.drain(..rest.len().min(AUDIT_BATCH)).collect();
@@ -381,10 +530,10 @@ pub async fn write_audit(conn: &mut PgConnection, ctx: &RequestContext, entries:
              FROM UNNEST($5::text[], $6::text[], $7::uuid[], $8::jsonb[], $9::jsonb[])
                   WITH ORDINALITY AS u(action, entity_type, entity_id, old_value, new_value, n)
              ORDER BY u.n",
-            ctx.actor.actor_type.as_str(),
-            ctx.actor.id,
-            ctx.actor.name,
-            ctx.request_id,
+            actor.actor_type.as_str(),
+            actor.id,
+            actor.name,
+            request_id,
             &actions as &[&str],
             &entity_types as &[&str],
             &entity_ids,

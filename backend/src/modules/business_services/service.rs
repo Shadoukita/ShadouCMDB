@@ -30,6 +30,7 @@ use crate::data::business_services::{
     self as data, MemberFilters, MemberRow, MemberSort, OwnerRole, OwnerState, Roles, ServiceFilters, ServiceRow,
     ServiceSort,
 };
+use crate::data::classes as class_data;
 use crate::data::crud::{self, AuditAction, AuditEntry};
 use crate::data::impact as impact_data;
 use crate::data::items::{self as items_data, ActiveFilter, ItemFilters, SummaryRow};
@@ -207,8 +208,9 @@ pub async fn list(
         "updatedAt" => ServiceSort::UpdatedAt,
         _ => ServiceSort::Criticality,
     };
+    let members_in = class_data::asset_scope(&mut conn, visible.as_deref()).await?;
     let (rows, total) =
-        data::list_services(&mut conn, roles, visible.as_deref(), &filters, sort, q.sort.desc, q.limit, q.offset)
+        data::list_services(&mut conn, roles, members_in.as_deref(), &filters, sort, q.sort.desc, q.limit, q.offset)
             .await?;
     Ok(BusinessServiceList {
         data: summaries(&mut conn, rows).await?,
@@ -227,7 +229,8 @@ pub async fn get(
     let roles = roles(&mut conn).await?;
     require(ctx, roles, ClassOp::View)?;
     let visible = ctx.class_scope(ClassOp::View);
-    let row = load(&mut conn, roles, visible.as_deref(), id).await?;
+    let members_in = class_data::asset_scope(&mut conn, visible.as_deref()).await?;
+    let row = load(&mut conn, roles, members_in.as_deref(), id).await?;
     let summary = summaries(&mut conn, vec![row]).await?.pop().ok_or_else(AppError::internal)?;
     Ok(BusinessService::new(summary, roles.service_class, visibility(&visible), limits(cfg)))
 }
@@ -299,10 +302,11 @@ pub async fn members(
     let roles = roles(&mut conn).await?;
     require(ctx, roles, ClassOp::View)?;
     let visible = ctx.class_scope(ClassOp::View);
-    load(&mut conn, roles, visible.as_deref(), id).await?;
+    let members_in = class_data::asset_scope(&mut conn, visible.as_deref()).await?;
+    load(&mut conn, roles, members_in.as_deref(), id).await?;
     let (filters, sort) = member_filters(&mut conn, ctx, q).await?;
     let (rows, total) =
-        data::list_members(&mut conn, roles, id, visible.as_deref(), &filters, sort, q.sort.desc, q.limit, q.offset)
+        data::list_members(&mut conn, roles, id, members_in.as_deref(), &filters, sort, q.sort.desc, q.limit, q.offset)
             .await?;
     Ok(BusinessServiceMemberList {
         data: rows.into_iter().map(|r| member(roles, r)).collect(),
@@ -367,6 +371,8 @@ pub async fn add_members(
     let class_of: HashMap<Uuid, Uuid> = data::live_items(&mut tx, ids).await?.into_iter().collect();
     let shown = |ci: &Uuid| class_of.get(ci).is_some_and(|c| ctx.require_class(*c, ClassOp::View).is_ok());
     let already: HashSet<Uuid> = data::current_members(&mut tx, roles, id, ids).await?.into_iter().collect();
+    let process = class_data::process_class_ids(&mut tx).await?;
+    let is_process = |ci: &Uuid| class_of.get(ci).is_some_and(|c| process.contains(c));
 
     let mut errors = Vec::new();
     let mut new = Vec::new();
@@ -374,6 +380,13 @@ pub async fn add_members(
     for (i, ci) in ids.iter().enumerate() {
         if !shown(ci) {
             errors.push(entry_error("memberIds", i, NOT_FOUND, "not_found"));
+        } else if is_process(ci) {
+            errors.push(entry_error(
+                "memberIds",
+                i,
+                "A process record (for example a change request) cannot be a member of a business service",
+                "membership_process",
+            ));
         } else if *ci == id {
             errors.push(entry_error(
                 "memberIds",
@@ -422,7 +435,8 @@ pub async fn add_members(
 
     // The limit counts the members the caller may view (D6), so it says
     // nothing about the members they may not.
-    let count = data::visible_member_count(&mut tx, roles, id, visible.as_deref()).await?;
+    let members_in = class_data::asset_scope(&mut tx, visible.as_deref()).await?;
+    let count = data::visible_member_count(&mut tx, roles, id, members_in.as_deref()).await?;
     if count + new.len() as i64 > cfg.max_members {
         errors.push(FieldError {
             location: FieldLocation::Body,
@@ -550,15 +564,20 @@ pub async fn export(
     q: MemberQuery,
 ) -> Result<(String, String), AppError> {
     let mut tx = pool.begin().await?;
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ").execute(&mut *tx).await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY").execute(&mut *tx).await?;
     let roles = roles(&mut tx).await?;
     require(ctx, roles, ClassOp::View)?;
     let visible = ctx.class_scope(ClassOp::View);
-    let service = load(&mut tx, roles, visible.as_deref(), id).await?;
+    let members_in = class_data::asset_scope(&mut tx, visible.as_deref()).await?;
+    let service = load(&mut tx, roles, members_in.as_deref(), id).await?;
     let (filters, sort) = member_filters(&mut tx, ctx, &q).await?;
     let (rows, total) =
-        data::list_members(&mut tx, roles, id, visible.as_deref(), &filters, sort, q.sort.desc, cfg.max_members, 0)
+        data::list_members(&mut tx, roles, id, members_in.as_deref(), &filters, sort, q.sort.desc, cfg.max_members, 0)
             .await?;
+    // GH#514: the snapshot is read-only; the audit row goes in its own
+    // transaction below, so an audited write committed meanwhile cannot make
+    // the chain-head update a serialization failure.
+    tx.commit().await?;
 
     let one_line = |s: &str| s.replace(['\r', '\n'], " ");
     let mut described = Vec::new();
@@ -614,6 +633,7 @@ pub async fn export(
             "visibility": visibility(&visible),
         })),
     };
+    let mut tx = pool.begin().await?;
     crud::write_audit(&mut tx, ctx, vec![entry]).await?;
     tx.commit().await?;
     let name =
@@ -796,7 +816,9 @@ pub async fn part_of(
     nodes.truncate(MAX_PART_OF);
     let ids: Vec<Uuid> = nodes.iter().map(|n| n.id).collect();
     bound(&mut tx, assembly).await?;
-    let rows = data::services(&mut tx, roles, visible.as_deref(), &ids).await.map_err(part_of_db_error)?;
+    let members_in = class_data::asset_scope(&mut tx, visible.as_deref()).await.map_err(part_of_db_error)?;
+    bound(&mut tx, assembly).await?;
+    let rows = data::services(&mut tx, roles, members_in.as_deref(), &ids).await.map_err(part_of_db_error)?;
     bound(&mut tx, assembly).await?;
     let mut by_id: HashMap<Uuid, BusinessServiceSummary> =
         summaries(&mut tx, rows).await.map_err(part_of_db_error)?.into_iter().map(|s| (s.id, s)).collect();

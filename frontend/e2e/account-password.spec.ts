@@ -24,7 +24,7 @@ async function signIn(browser: Browser, password: string): Promise<Page> {
 }
 
 test.beforeAll(async ({ request }) => {
-  await apiSend(request, "POST", "/admin/users", { username: USERNAME, displayName: `Password operator ${stamp}`, password: OLD_PASSWORD, profileIds: [] });
+  await apiSend(request, "POST", "/admin/users", { username: USERNAME, email: `${USERNAME}@example.test`, displayName: `Password operator ${stamp}`, password: OLD_PASSWORD, profileIds: [] });
 });
 
 test("an operator changes their own password: checks next to the fields, other sessions end, the old password stops working", async ({ browser }) => {

@@ -132,7 +132,9 @@ One settings document (`GET /ui-settings`) applies to every user. The screens re
   class list without filters (menu, links); a reload or Back keeps the URL as it is, so a cleared filter stays
   cleared. Attribute columns read the values the list API returns with each CI.
 - **Detail and form layout** (`detail/LayoutPanels.vue`, `form/CiForm.vue`, `lib/uiSettings.ts`
-  `resolveLayout`): per class, tabs of sections, each section a window with its own position and size
+  `resolveLayout`): a layout template (`lib/layoutTemplates.ts`): each class's default, or the CI's own layout
+  or another template chosen for it (`GET /configuration-items/{id}/layout`, which the detail page and the edit
+  form read; the create form uses the class's default). A layout is tabs of sections, each section a window with its own position and size
   (`lib/freeLayout.ts`; windows may overlap) and a grid of 1–12 columns whose fields span some of them
   (collapsed sections start closed on the detail page), hidden fields, and fields read-only on the form. Fields
   no section places follow below the windows of the first tab, in a General section and their attribute groups.
@@ -148,14 +150,21 @@ references to classes that do not exist right now, and saves the whole document 
 (`409 VERSION_CONFLICT` if someone saved in between). Its History section lists every saved version and restores
 one by saving it again as the newest. Branding and navigation preview live in the real header and
 menu while the editor is open; the dashboard and list view sections preview inline. The layout section
-(`admin/customization/LayoutsSection.vue`) picks a class and opens the layout editor on one of its CIs
-(**Edit CI: <name>**: the most recently updated, or another found by name; a class without CIs links to the
-create form's editor). The layout editor is the CI page itself (`components/layoutEdit/`, `lib/layoutEditor.ts`,
+(`admin/customization/LayoutsSection.vue`) lists every class with its default template (an inline select in the
+draft; search, template filter and sort in the URL, paged in the browser: classes are metadata, not inventory)
+and every template with who uses it (`GET /ui-settings/layout-templates/usage` for the CIs), with New, Rename,
+Duplicate and Delete in the draft, and Edit, which opens the layout editor with `?template=<key>` on a CI that
+shows it. **Edit CI…** opens a class's panel (`ClassCiEditor.vue`) with **Edit CI: <name>** on the class's default
+template (the most recently updated CI, or another found by name; a class without CIs links to the create form's
+editor). The layout editor edits a target (`lib/layoutEditor.ts`): a template, or the CI's own layout, and saves
+to the template (a new settings version, confirmed with who it reaches), as a new template or for this CI only
+(`PUT /configuration-items/{id}/layout`); **Use template…** and **Reset to class default** change the CI's
+layout at once. The layout editor is the CI page itself (`components/layoutEdit/`, `lib/layoutEditor.ts`,
 edits in `lib/layoutDesign.ts`), in a window of its own: fields are dragged between sections and tabs (or onto a
 tab) and resized by dragging their right edge; each section is a window (`FreeWindow.vue`) moved and resized
 anywhere, snapping to the other windows and an 8 px grid, and stacked in layers. Everything has a keyboard path,
 announced to screen readers. Core fields (ident, valid from, valid until) can be moved but not hidden. The editor
-saves a new settings version itself. Leaving Customization or reloading with unsaved changes asks first. The issues the API
+saves itself. Leaving Customization or reloading with unsaved changes asks first. The issues the API
 reports (unknown classes, a required attribute hidden by a layout) are listed above the sections.
 
 ### Errors, states and navigation

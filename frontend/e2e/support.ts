@@ -2,6 +2,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { test as base, expect, type APIRequestContext, type Locator, type Page, type TestInfo } from "@playwright/test";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { E2E_USER, FRESH_ADMIN } from "./global-setup";
 
 export { expect };
 
@@ -9,7 +10,7 @@ export { expect };
  * Every test fails on uncaught page errors, console errors and Vue warnings.
  * "Failed to load resource" is excluded: the tests provoke 4xx responses on purpose.
  */
-export const test = base.extend<{ failOnPageErrors: void }>({
+export const test = base.extend<{ failOnPageErrors: void; recentPassword: void }>({
   failOnPageErrors: [
     async ({ page }, use) => {
       const problems: string[] = [];
@@ -21,6 +22,25 @@ export const test = base.extend<{ failOnPageErrors: void }>({
       });
       await use();
       expect(problems, "page errors / Vue warnings").toEqual([]);
+    },
+    { auto: true },
+  ],
+  /**
+   * The suite signs in once and runs far longer than 10 minutes, but changes to users, profiles, API tokens
+   * and identity providers need the password confirmed in the last 10 minutes (GH#498): confirm it before
+   * each test for the signed-in e2e accounts. A test without a session, or signed in as another account, is left alone.
+   */
+  recentPassword: [
+    async ({ request }, use) => {
+      const me = await request.get("/api/v1/auth/me");
+      const username = me.ok() ? ((await me.json()) as { user?: { username?: string } }).user?.username : undefined;
+      const password = [E2E_USER, FRESH_ADMIN].find((u) => u.username === username)?.password;
+      if (password) {
+        const csrf = (await request.storageState()).cookies.find((c) => c.name === "shadoucmdb_csrf")?.value ?? "";
+        const res = await request.post("/api/v1/auth/reauthenticate", { data: { currentPassword: password }, headers: { "X-CSRF-Token": csrf } });
+        expect(res.status(), `confirming the password of ${username}: ${await res.text()}`).toBe(204);
+      }
+      await use();
     },
     { auto: true },
   ],
@@ -147,12 +167,27 @@ const BUILT_IN_SETTINGS = {
   layouts: [],
 };
 
+/**
+ * Saves the layout editor's draft to the template it edits: Save to template opens a confirmation that
+ * says who the change reaches, with an optional note for the settings version.
+ */
+export async function saveLayout(page: Page, note?: string) {
+  const bar = page.getByRole("region", { name: "Layout editing" });
+  await bar.getByTestId("le-save").click();
+  const dialog = page.getByRole("dialog", { name: /^Save to the template/ });
+  if (note) await dialog.getByLabel("Note for this version").fill(note);
+  await dialog.getByRole("button", { name: "Save to template", exact: true }).click();
+  await expect(bar.getByRole("status")).toContainText(/settings version \d+/);
+}
+
 /** Back to the built-in UI settings (Customization) and no images, so other specs see the stock UI. */
 export async function resetUiSettings(request: APIRequestContext) {
   const s = await apiGet<{ version: number; settings: unknown; assets: { logo: unknown; favicon: unknown } }>(request, "/ui-settings");
   const headers = { "X-CSRF-Token": await csrf(request) };
   if (JSON.stringify(s.settings) !== JSON.stringify(BUILT_IN_SETTINGS)) {
-    const res = await request.put("/api/v1/ui-settings", { data: { version: s.version, settings: {}, comment: "e2e reset" }, headers });
+    // Standard sent empty: left out, it keeps the layout it has (GH#521).
+    const settings = { layoutTemplates: [{ key: "standard", name: "Standard", layout: {} }] };
+    const res = await request.put("/api/v1/ui-settings", { data: { version: s.version, settings, comment: "e2e reset" }, headers });
     expect(res.ok(), `reset → ${res.status()} ${await res.text()}`).toBeTruthy();
   }
   for (const kind of ["logo", "favicon"] as const) {

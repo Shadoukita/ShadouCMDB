@@ -34,6 +34,7 @@ async function submit() {
   if (!f.setupToken.trim()) errs.setupToken = t("common.required");
   if (!f.username.trim()) errs.username = t("common.required");
   if (!f.displayName.trim()) errs.displayName = t("common.required");
+  if (!f.email.trim()) errs.email = t("common.required");
   if ([...f.password].length < 12) errs.password = t("auth.password.tooShort");
   if (f.password !== f.confirm) errs.confirm = t("auth.password.mismatch");
   local.value = errs;
@@ -46,7 +47,7 @@ async function submit() {
     await session.setup({
       username: f.username.trim(),
       displayName: f.displayName.trim(),
-      email: f.email.trim() || null,
+      email: f.email.trim(),
       password: f.password,
       setupToken: f.setupToken.trim(),
     });
@@ -96,7 +97,7 @@ async function submit() {
             <input :id="id" v-model="form.displayName" type="text" autocomplete="name" :aria-invalid="invalid" :aria-describedby="describedBy" />
           </template>
         </FormField>
-        <FormField id="setup-email" :label="t('auth.setup.email')" :error="fieldErrors.email">
+        <FormField id="setup-email" :label="t('auth.setup.email')" required :error="fieldErrors.email" :hint="t('people.setup.emailHint')">
           <template #default="{ id, invalid, describedBy }">
             <input :id="id" v-model="form.email" type="email" autocomplete="email" :aria-invalid="invalid" :aria-describedby="describedBy" />
           </template>

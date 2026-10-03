@@ -8,7 +8,7 @@ use sqlx::PgConnection;
 use sqlx::types::Json;
 use uuid::Uuid;
 
-use crate::modules::classes::AttributeDataType;
+use crate::modules::classes::{AttributeDataType, AttributeSystemRole};
 
 /// An attribute definition of a class or one of its ancestors.
 #[derive(Debug, Clone)]
@@ -30,6 +30,8 @@ pub struct EffectiveAttributeRow {
     pub default_value: Option<Json<Value>>,
     pub sort_order: i32,
     pub is_active: bool,
+    /// The Person's Name or Email (migration 0044).
+    pub system_role: Option<AttributeSystemRole>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     /// 0 = defined on the class itself.
@@ -54,7 +56,7 @@ pub async fn effective_attributes(conn: &mut PgConnection, class_id: Uuid) -> sq
                   d.enum_values AS "enum_values: Json<Vec<String>>", d.reference_class_id, d.lookup_list_id,
                   d.parent_attribute_id, d.validation AS "validation: Json<Map<String, Value>>", d.group_name, d.help_text,
                   d.default_value AS "default_value: Json<Value>", d.sort_order,
-                  d.is_active, d.created_at, d.updated_at,
+                  d.is_active, d.system_role AS "system_role: AttributeSystemRole", d.created_at, d.updated_at,
                   l.depth AS "depth!", c.key AS defined_on_key, c.name AS defined_on_name
            FROM ci_class_lineage($1) l
            JOIN ci_attribute_definitions d ON d.class_id = l.class_id
@@ -103,6 +105,27 @@ pub async fn class_has_items(conn: &mut PgConnection, class_id: Uuid) -> sqlx::R
     .fetch_optional(conn)
     .await?
     .is_some())
+}
+
+/// Ids of the process types (`ci_classes.kind = 'process'`); none on an install without workflows.
+pub async fn process_class_ids(conn: &mut PgConnection) -> sqlx::Result<Vec<Uuid>> {
+    sqlx::query_scalar("SELECT id FROM cmdb.ci_classes WHERE kind = 'process' ORDER BY id").fetch_all(conn).await
+}
+
+/// The caller's view scope (`None`: every class) narrowed to asset types, for
+/// the reads that never show process records: the relationship graph, impact
+/// analysis and business service membership. While no process type exists it
+/// is the view scope itself, so those queries are exactly what they were.
+pub async fn asset_scope(conn: &mut PgConnection, visible: Option<&[Uuid]>) -> sqlx::Result<Option<Vec<Uuid>>> {
+    let process = process_class_ids(&mut *conn).await?;
+    if process.is_empty() {
+        return Ok(visible.map(<[Uuid]>::to_vec));
+    }
+    let classes: Vec<Uuid> = match visible {
+        Some(v) => v.to_vec(),
+        None => sqlx::query_scalar("SELECT id FROM cmdb.ci_classes ORDER BY id").fetch_all(conn).await?,
+    };
+    Ok(Some(classes.into_iter().filter(|c| !process.contains(c)).collect()))
 }
 
 /// Class ids plus every descendant class, so filtering by "hardware" finds servers too.

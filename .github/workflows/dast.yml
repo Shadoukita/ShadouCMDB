@@ -15,7 +15,9 @@ name: DAST
 #   profiles, API tokens, identity providers, configuration import) answer the
 #   token scan 403 before reading the body, so they are scanned again, actively,
 #   with an administrator's session cookie and X-CSRF-Token (SHAA-715), capped
-#   at 10 minutes. tools/dast/session-openapi.mjs picks them from openapi.json.
+#   at 9 minutes: most of those changes need a session that signed in within
+#   the last 10 (GH#498), and the session is opened just before the scan.
+#   tools/dast/session-openapi.mjs picks them from openapi.json.
 # Pass/fail per rule is in .zap/rules.tsv. The reports are kept for 90 days as
 # release evidence.
 
@@ -98,7 +100,7 @@ jobs:
           B=backend/target/release/shadoucmdb
           $B migrate
           $B seed --demo
-          printf '%s\n' "$DAST_PASSWORD" | $B create-admin --username "$DAST_USERNAME" --display-name "DAST admin" --password-stdin
+          printf '%s\n' "$DAST_PASSWORD" | $B create-admin --username "$DAST_USERNAME" --display-name "DAST admin" --email dast-admin@example.test --password-stdin
           $B serve > serve.log 2>&1 &
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:3000/readyz && break; sleep 1; done
           curl -sf http://127.0.0.1:3000/readyz | grep -q '"upToDate":true'
@@ -176,7 +178,7 @@ jobs:
             -e ZAP_AUTH_HEADER=Cookie -e ZAP_AUTH_HEADER_VALUE="$DAST_COOKIE" -e ZAP_AUTH_HEADER_SITE=127.0.0.1 \
             "$ZAP_IMAGE" \
             zap-api-scan.py -t openapi-session.json -f openapi -O http://127.0.0.1:3000 -c rules.tsv -I \
-              -z "-config scanner.maxScanDurationInMins=10 -config scanner.maxRuleDurationInMins=2 \
+              -z "-config scanner.maxScanDurationInMins=9 -config scanner.maxRuleDurationInMins=2 \
                   -config replacer.full_list(0).description=csrf -config replacer.full_list(0).enabled=true \
                   -config replacer.full_list(0).matchtype=REQ_HEADER -config replacer.full_list(0).matchstr=X-CSRF-Token \
                   -config replacer.full_list(0).regex=false -config replacer.full_list(0).replacement=$DAST_CSRF \

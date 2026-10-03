@@ -157,6 +157,12 @@ pub struct ItemFilters {
     pub deleted: Option<Deleted>,
     /// Classes the caller may view; `None` means every class.
     pub visible_class_ids: Option<Vec<Uuid>>,
+    /// Only CIs with (true) or without (false) a layout of their own (`ci_layout_overrides`)
+    pub own_layout: Option<bool>,
+    /// Only CIs whose own layout is this template
+    pub layout_template: Option<String>,
+    /// CIs of these classes are left out (process types, unless asked for).
+    pub excluded_class_ids: Option<Vec<Uuid>>,
     /// Type tables searched by `q` (see [`search_tables`]).
     pub search_tables: Vec<SearchTable>,
 }
@@ -252,10 +258,24 @@ pub(crate) fn push_filters(w: &mut Where<'_>, f: &ItemFilters) {
             w.and().push(column).push(" = ANY(").push_bind(ids.clone()).push(")");
         }
     }
+    if let Some(ids) = f.excluded_class_ids.as_ref().filter(|ids| !ids.is_empty()) {
+        w.and().push("NOT ci.class_id = ANY(").push_bind(ids.clone()).push(")");
+    }
     for (values, columns) in &f.lookups {
         push_in_columns(w, columns, |qb, c| {
             qb.push(format!("{c} = ANY(")).push_bind(values.clone()).push(")");
         });
+    }
+    match f.own_layout {
+        Some(true) => w.and_sql("EXISTS (SELECT 1 FROM ci_layout_overrides o WHERE o.ci_id = ci.id)"),
+        Some(false) => w.and_sql("NOT EXISTS (SELECT 1 FROM ci_layout_overrides o WHERE o.ci_id = ci.id)"),
+        None => {}
+    }
+    if let Some(key) = &f.layout_template {
+        w.and()
+            .push("EXISTS (SELECT 1 FROM ci_layout_overrides o WHERE o.ci_id = ci.id AND o.template_key = ")
+            .push_bind(key.clone())
+            .push(")");
     }
     if let Some(cidr) = &f.ip_within {
         let columns: Vec<(TableName, Ident)> =
@@ -501,6 +521,15 @@ pub async fn lookup_value_lists(conn: &mut PgConnection, ids: &[Uuid]) -> sqlx::
 
 pub async fn soft_delete(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<()> {
     sqlx::query!("UPDATE configuration_items SET deleted_at = now(), version = version + 1 WHERE id = $1", id)
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
+/// Undoes a soft delete (a Person adopted by a new account, SHAA-1505).
+pub async fn restore(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<()> {
+    sqlx::query("UPDATE cmdb.configuration_items SET deleted_at = NULL, version = version + 1 WHERE id = $1")
+        .bind(id)
         .execute(conn)
         .await?;
     Ok(())

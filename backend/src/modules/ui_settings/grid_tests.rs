@@ -19,7 +19,7 @@ async fn sections_side_by_side_are_validated_and_stored() {
     let Some(db) = scratch::database("sections_side_by_side_are_validated_and_stored").await else { return };
     let app = app(db.pool.clone());
 
-    let setup = json!({ "username": "owner", "displayName": "Owner", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
+    let setup = json!({ "username": "owner", "email": "owner@example.test", "displayName": "Owner", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
     let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
     assert_eq!(status, 201, "{me}");
     let cookie = headers
@@ -110,7 +110,7 @@ async fn free_tabs_are_validated_normalised_audited_and_exported() {
     let Some(db) = scratch::database("free_tabs_are_validated_normalised_audited_and_exported").await else { return };
     let app = app(db.pool.clone());
 
-    let setup = json!({ "username": "owner", "displayName": "Owner", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
+    let setup = json!({ "username": "owner", "email": "owner@example.test", "displayName": "Owner", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
     let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
     assert_eq!(status, 201, "{me}");
     let cookie = headers

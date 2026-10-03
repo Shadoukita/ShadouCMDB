@@ -38,6 +38,9 @@ pub struct Field {
     pub is_active: bool,
     pub sort_order: i32,
     pub lookup_list_id: Option<Uuid>,
+    /// `person_name` or `person_email` for the key fields of the built-in
+    /// Person type (migration 0044); the Person's email is unique ignoring case and Unicode form.
+    pub system_role: Option<String>,
 }
 
 /// PostgreSQL column type of a field's data type.
@@ -68,6 +71,11 @@ impl Field {
 
     pub fn column(&self) -> Ident {
         Ident::trusted(&self.key)
+    }
+
+    /// The Person's Email: unique across Person CIs, ignoring case.
+    pub fn is_unique_email(&self) -> bool {
+        self.system_role.as_deref() == Some("person_email")
     }
 
     /// Hex of the id: the stable part of the field's constraint and index names.
@@ -129,8 +137,9 @@ impl Model {
 
     pub async fn load_fields(conn: &mut PgConnection) -> sqlx::Result<Vec<Field>> {
         sqlx::query_as::<_, Field>(
-            "SELECT id, class_id, key, label, data_type, enum_values, is_required, is_active, sort_order, lookup_list_id
-             FROM cmdb.ci_attribute_definitions ORDER BY sort_order, key",
+            "SELECT id, class_id, key, label, data_type, enum_values, is_required, is_active, sort_order, lookup_list_id,
+                    to_jsonb(d) ->> 'system_role' AS system_role
+             FROM cmdb.ci_attribute_definitions d ORDER BY sort_order, key",
         )
         .fetch_all(&mut *conn)
         .await

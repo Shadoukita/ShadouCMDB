@@ -84,7 +84,7 @@ impl World {
         let pool = db.pool.clone();
         reconcile(&pool).await;
         let app = app_with_business_services(pool.clone(), limits);
-        let setup = json!({ "username": "admin", "displayName": "Admin", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
+        let setup = json!({ "username": "admin", "email": "admin@example.test", "displayName": "Admin", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
         let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
         assert_eq!(status, 201, "{me}");
         let admin = session_of(&me, &headers);
@@ -230,7 +230,7 @@ impl World {
                 .await
                 .unwrap();
         }
-        let body = json!({ "username": name, "displayName": format!("User {name}"), "password": "a long enough password", "profileIds": [profile] });
+        let body = json!({ "username": name, "email": format!("{name}@example.test"), "displayName": format!("User {name}"), "password": "a long enough password", "profileIds": [profile] });
         let (status, v, _) = call(&self.app, "POST", "/api/v1/admin/users", &self.admin, Some(body)).await;
         assert_eq!(status, 201, "{v}");
         let login = json!({ "username": name, "password": "a long enough password" });
@@ -1539,6 +1539,60 @@ async fn member_export_needs_the_csrf_token_from_a_session() {
     assert_eq!(exports().await, 2);
 }
 
+/// GH#514: an audited write that commits while the export runs (here a
+/// direct audit row, as a failed sign-in writes) does not fail the export.
+/// It read in a REPEATABLE READ snapshot and wrote its own audit row there,
+/// so the moved chain head was a serialization failure: 503 SERVER_BUSY.
+#[tokio::test]
+async fn member_export_survives_an_audited_write_committed_during_it() {
+    let Some(db) = scratch::database("business_services_export_concurrent_audit").await else { return };
+    let mut w = World::new(&db, BusinessServiceConfig::default()).await;
+    let admin = w.admin.clone();
+    let s = w.ci("business_service", "SHOP-1", "Shop").await;
+    w.ci("server", "web-01", "Web").await;
+    assert_eq!(w.add(&admin, "SHOP-1", &["web-01"]).await.0, 200);
+
+    // The other writer holds the chain head until the export is waiting on it.
+    let mut other = w.pool.begin().await.unwrap();
+    sqlx::query(
+        "INSERT INTO audit_log (actor_type, action, entity_type, entity_id, new_value)
+         VALUES ('system', 'login.failure', 'users', gen_random_uuid(), '{}')",
+    )
+    .execute(&mut *other)
+    .await
+    .unwrap();
+    let export = tokio::spawn({
+        let app = w.app.clone();
+        let path = format!("/api/v1/business-services/{s}/members/export");
+        async move { raw(&app, "GET", &path, &admin, None).await }
+    });
+    let mut waiting = false;
+    for _ in 0..200 {
+        let n: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'",
+        )
+        .fetch_one(&w.pool)
+        .await
+        .unwrap();
+        if n > 0 {
+            waiting = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(waiting, "the export waits for the other writer's lock on the chain head");
+    other.commit().await.unwrap();
+
+    let (status, _, body) = export.await.unwrap();
+    assert_eq!(status, 200, "{body}");
+    assert!(body.contains("web-01"), "{body}");
+    let exports: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM audit_log WHERE action = 'export'").fetch_one(&w.pool).await.unwrap();
+    assert_eq!(exports, 1);
+    let broken: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_log_verify()").fetch_one(&w.pool).await.unwrap();
+    assert_eq!(broken, 0, "the chain is intact");
+}
+
 // ---------------------------------------------------------------------------
 // Principals and settings
 // ---------------------------------------------------------------------------
@@ -1598,4 +1652,142 @@ async fn the_owner_picker_is_a_bounded_lookup() {
             "limits": { "maxMembers": 5000, "maxBatch": 500, "maxNesting": 5, "maxOwnersPerRole": 10 },
         })
     );
+}
+
+/// SHAA-1422 (amendment 3 to the workflow design): a record of a process type
+/// (`ci_classes.kind = 'process'`, such as a change request) never shows in
+/// the asset inventory list, global search, the relationship graph, impact
+/// analysis, business service membership or the dashboard counters, and is
+/// not walked through either. It is listed when asked for by kind or by
+/// naming its type.
+#[tokio::test]
+async fn process_records_stay_out_of_the_asset_inventory() {
+    let Some(db) = scratch::database("process_records_stay_out").await else { return };
+    let mut w = World::new(&db, BusinessServiceConfig::default()).await;
+    let admin = w.admin.clone();
+    let change = w.class("change", None).await;
+    let path = format!("/api/v1/ci-classes/{change}");
+    let (status, v, _) = call(&w.app, "PATCH", &path, &admin, Some(json!({ "kind": "process" }))).await;
+    assert_eq!((status, v["kind"].as_str()), (200, Some("process")), "{v}");
+    sqlx::query(
+        "INSERT INTO relationship_type_rules (relationship_type_id, source_class_id, target_class_id)
+         VALUES ($1, $2, $3), ($1, $3, $2)",
+    )
+    .bind(w.runs_on)
+    .bind(change)
+    .bind(w.classes["server"])
+    .execute(&w.pool)
+    .await
+    .unwrap();
+    // CIs the fixture already holds (the admin's Person CI since 0044).
+    let (_, before) = w.get(&admin, "/api/v1/configuration-items?limit=1").await;
+    let base = before["page"]["total"].as_u64().unwrap();
+
+    w.ci("business_service", "S", "Shop").await;
+    let db01 = w.ci("server", "db-01", "db-01").await;
+    w.ci("server", "web-01", "web-01").await;
+    w.ci("server", "app-01", "app-01").await;
+    let chg = w.ci("change", "CHG-1", "Patch db-01").await;
+    // web-01 runs on db-01; the change runs on db-01, and app-01 is reached only through the change.
+    w.runs_on("web-01", "db-01").await;
+    w.runs_on("CHG-1", "db-01").await;
+    w.runs_on("app-01", "CHG-1").await;
+    let ours = w.cis.clone();
+    let idents = |v: &Value, at: &str| -> Vec<String> {
+        let mut out: Vec<String> = v[at]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["ident"].as_str().unwrap().to_owned())
+            .filter(|i| ours.contains_key(i))
+            .collect();
+        out.sort();
+        out
+    };
+
+    // 1. The inventory list and its count (the dashboard counters are list counts).
+    let (status, list) = w.get(&admin, "/api/v1/configuration-items?limit=200").await;
+    assert_eq!(status, 200, "{list}");
+    assert_eq!(idents(&list, "data"), ["S", "app-01", "db-01", "web-01"]);
+    assert_eq!(list["page"]["total"], base + 4);
+    let (_, counted) = w.get(&admin, "/api/v1/configuration-items?limit=1").await;
+    assert_eq!(counted["page"]["total"], base + 4, "the dashboard's total");
+    let (_, by_kind) = w.get(&admin, "/api/v1/configuration-items?kind=process").await;
+    assert_eq!(idents(&by_kind, "data"), ["CHG-1"]);
+    let (_, named) = w.get(&admin, &format!("/api/v1/configuration-items?classId={change}")).await;
+    assert_eq!(idents(&named, "data"), ["CHG-1"], "naming the type lists its records");
+    let (_, any) = w.get(&admin, "/api/v1/configuration-items?kind=any").await;
+    assert_eq!(any["page"]["total"], base + 5);
+    let (_, assets) = w.get(&admin, &format!("/api/v1/configuration-items?kind=asset&classId={change}")).await;
+    assert_eq!(assets["page"]["total"], 0);
+
+    // 2. Global search.
+    let (status, found) = w.get(&admin, "/api/v1/search?q=patch").await;
+    assert_eq!((status, &found["page"]["total"]), (200, &json!(0)), "{found}");
+    let (_, found) = w.get(&admin, "/api/v1/search?q=01").await;
+    let hits: Vec<&str> =
+        found["data"].as_array().unwrap().iter().map(|h| h["item"]["ident"].as_str().unwrap()).collect();
+    assert!(!hits.contains(&"CHG-1"), "{hits:?}");
+    let (_, found) = w.get(&admin, "/api/v1/search?q=patch&kind=process").await;
+    assert_eq!(found["page"]["total"], 1);
+
+    // 3. The relationship graph: neither the change nor what hangs off it.
+    let (status, graph) =
+        w.get(&admin, &format!("/api/v1/configuration-items/{db01}/graph?depth=3&direction=both")).await;
+    assert_eq!(status, 200, "{graph}");
+    let nodes: Vec<String> = {
+        let mut n: Vec<String> =
+            graph["nodes"].as_array().unwrap().iter().map(|n| n["ident"].as_str().unwrap().to_owned()).collect();
+        n.sort();
+        n
+    };
+    assert_eq!(nodes, ["db-01", "web-01"]);
+
+    // 4. Impact analysis: web-01 is affected; the change is not, and app-01 is not reached through it.
+    let (status, impact) = w.get(&admin, &format!("/api/v1/configuration-items/{db01}/impact?depth=3")).await;
+    assert_eq!(status, 200, "{impact}");
+    assert_eq!(idents(&impact, "items"), ["web-01"]);
+
+    // 5. Business service membership: refused through the API, and an edge made
+    // another way is neither listed nor counted.
+    let (status, v) = w.add(&admin, "S", &["CHG-1", "db-01"]).await;
+    assert_eq!((status, code(&v)), (400, "VALIDATION_ERROR"), "{v}");
+    assert_eq!(details(&v), [("memberIds[0]".to_owned(), "membership_process".to_owned())]);
+    let (status, v) = w.add(&admin, "S", &["db-01"]).await;
+    assert_eq!(status, 200, "{v}");
+    sqlx::query("INSERT INTO ci_relationships (relationship_type_id, source_ci_id, target_ci_id) VALUES ($1, $2, $3)")
+        .bind(w.member_type)
+        .bind(w.id("S"))
+        .bind(chg)
+        .execute(&w.pool)
+        .await
+        .unwrap();
+    let (_, members) = w.get(&admin, &format!("/api/v1/business-services/{}/members", w.id("S"))).await;
+    assert_eq!(self::idents(&members), ["db-01"]);
+    assert_eq!(members["page"]["total"], 1);
+    let (_, service) = w.get(&admin, &format!("/api/v1/business-services/{}", w.id("S"))).await;
+    assert_eq!(service["memberCount"], 1, "{service}");
+    let (_, services) = w.get(&admin, "/api/v1/business-services").await;
+    assert_eq!(services["data"][0]["memberCount"], 1, "{services}");
+
+    // The record itself is still a CI: readable on its own.
+    let (status, v) = w.get(&admin, &format!("/api/v1/configuration-items/{chg}")).await;
+    assert_eq!((status, v["class"]["key"].as_str()), (200, Some("change")), "{v}");
+
+    // A type's kind: fixed once it holds records, inherited by subtypes, and never process for the service type.
+    let (status, v, _) = call(&w.app, "PATCH", &path, &admin, Some(json!({ "kind": "asset" }))).await;
+    assert_eq!((status, details(&v)), (400, vec![("kind".to_owned(), "class_has_items".to_owned())]), "{v}");
+    let sub = json!({ "key": "emergency_change", "name": "Emergency change", "parentId": change });
+    let (status, v, _) = call(&w.app, "POST", "/api/v1/ci-classes", &admin, Some(sub)).await;
+    assert_eq!((status, v["kind"].as_str()), (201, Some("process")), "{v}");
+    let sub = json!({ "key": "odd_change", "name": "Odd change", "parentId": change, "kind": "asset" });
+    let (status, v, _) = call(&w.app, "POST", "/api/v1/ci-classes", &admin, Some(sub)).await;
+    assert_eq!((status, details(&v)), (400, vec![("kind".to_owned(), "kind_mismatch".to_owned())]), "{v}");
+    let (_, process_types) = w.get(&admin, "/api/v1/ci-classes?kind=process&sort=key").await;
+    let keys: Vec<&str> =
+        process_types["data"].as_array().unwrap().iter().map(|c| c["key"].as_str().unwrap()).collect();
+    assert_eq!(keys, ["change", "emergency_change"]);
+    let service_class = format!("/api/v1/ci-classes/{}", w.service_class);
+    let (status, v, _) = call(&w.app, "PATCH", &service_class, &admin, Some(json!({ "kind": "process" }))).await;
+    assert_eq!((status, code(&v)), (409, "IN_USE"), "{v}");
 }

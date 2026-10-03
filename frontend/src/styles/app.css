@@ -675,8 +675,13 @@ table.data tr.deleted td {
   color: var(--c-text-muted);
   text-decoration: line-through;
 }
+/* Stale rows while the next page loads: a wash and muted text, never opacity, so the text keeps AA contrast. */
 table.data.loading tbody {
-  opacity: 0.55;
+  cursor: progress;
+}
+table.data.loading tbody td {
+  background: var(--c-surface-alt);
+  color: var(--c-text-muted);
 }
 
 /* ---------- Toolbar / filters / pagination ---------- */
@@ -2249,8 +2254,10 @@ fieldset.impact-direction legend {
 .impact-views {
   padding: 0 var(--sp-4);
 }
+/* Stale results while the next analysis loads: muted text, never opacity, so the text keeps AA contrast. */
 #impact-view-panel.loading {
-  opacity: 0.55;
+  cursor: progress;
+  color: var(--c-text-muted);
 }
 .impact-ident {
   margin-left: var(--sp-2);
@@ -2623,8 +2630,15 @@ dialog.member-picker td .badge {
   font-size: var(--fs-sm);
   color: var(--c-danger-text);
 }
-.part-of-services {
+.part-of-services,
+.sign-in-account {
   margin-top: var(--sp-4);
+}
+.sign-in-account p {
+  margin: 0;
+}
+.sign-in-account p.hint {
+  margin-top: var(--sp-2);
 }
 .part-of-services > .hint {
   margin: 0;

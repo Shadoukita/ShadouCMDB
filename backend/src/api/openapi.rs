@@ -112,7 +112,7 @@ const DESCRIPTION: &str = "REST API for ShadouCMDB. This API is the only databas
 - Permissions come from the permission profiles a user holds. A missing global permission (named in each operation's description) or class permission (view/create/edit/delete) answers 403 `FORBIDDEN`. Lists only contain CIs of classes the user may view.
 - Writes are recorded in the audit log (`/api/v1/audit-log`) with the signed-in user as the actor.
 - Send `X-Request-Id` to correlate a request; it is echoed back and stored with audit rows.
-- Request bodies are limited to 1 MiB (64 KiB on public operations; configuration import allows more): 413 `PAYLOAD_TOO_LARGE`. A request not answered within `HTTP_REQUEST_TIMEOUT_SECS` answers 408 `REQUEST_TIMEOUT`.";
+- Request bodies are limited to 1 MiB (64 KiB on public operations; configuration import allows more): 413 `PAYLOAD_TOO_LARGE`. A request not answered within `HTTP_REQUEST_TIMEOUT_SECS` answers 408 `REQUEST_TIMEOUT`, and so does a request body that does not arrive within `HTTP_BODY_TIMEOUT_SECS` (`HTTP_HEADER_READ_TIMEOUT_SECS` on public operations; configuration import and file uploads excepted).";
 
 /// [`DESCRIPTION`] with the public operations listed.
 fn description(routes: &[Route]) -> String {
@@ -171,16 +171,26 @@ fn error_status(code: ErrorCode) -> (u16, &'static str) {
             "Wrong credentials (code UNAUTHENTICATED), or the password was right and the second factor is due (code \
              MFA_REQUIRED)",
         ),
-        ErrorCode::Forbidden | ErrorCode::CsrfTokenInvalid | ErrorCode::MfaEnrolmentRequired => (
+        ErrorCode::Forbidden
+        | ErrorCode::CsrfTokenInvalid
+        | ErrorCode::MfaEnrolmentRequired
+        | ErrorCode::EmailRequired => (
             403,
-            "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), or MFA must be set up \
-             first (code MFA_ENROLMENT_REQUIRED)",
+            "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up \
+             first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
         ),
         ErrorCode::MfaRequiredForToken => (
             403,
             "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first \
-             (code MFA_ENROLMENT_REQUIRED), or the token's owner must use two-factor authentication and this session \
-             did not sign in with a second factor (code MFA_REQUIRED_FOR_TOKEN)",
+             (code MFA_ENROLMENT_REQUIRED), the account must enter its e-mail first (code EMAIL_REQUIRED), or the \
+             token's owner must use two-factor authentication and this session did not sign in with a second factor \
+             (code MFA_REQUIRED_FOR_TOKEN)",
+        ),
+        ErrorCode::ReauthenticationRequired => (
+            403,
+            "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first \
+             (code MFA_ENROLMENT_REQUIRED), or the session's owner has not confirmed their credentials in the last 10 \
+             minutes (code REAUTHENTICATION_REQUIRED; POST /api/v1/auth/reauthenticate, then send the request again)",
         ),
         ErrorCode::NotFound => (404, "Not found (code NOT_FOUND)"),
         ErrorCode::Gone => (410, "The operation was removed (code GONE); the message names its replacement"),
@@ -332,6 +342,10 @@ pub fn document(routes: &[Route]) -> OpenApi {
         }
 
         let mut codes = Vec::new();
+        // First, so its description (which names every 403 code) is the one kept.
+        if r.reauthentication {
+            codes.push(ErrorCode::ReauthenticationRequired);
+        }
         if !r.path_params.is_empty() || !r.query_params.is_empty() || r.body.is_some() {
             codes.push(ErrorCode::ValidationError);
         }
@@ -346,6 +360,9 @@ pub fn document(routes: &[Route]) -> OpenApi {
         }
         if r.access != Access::Public && !r.before_mfa_enrolment {
             codes.push(ErrorCode::MfaEnrolmentRequired);
+        }
+        if r.access != Access::Public && !r.before_email_entry {
+            codes.push(ErrorCode::EmailRequired);
         }
         codes.extend(r.errors.iter().copied());
         codes.push(ErrorCode::InternalError);
@@ -377,6 +394,12 @@ pub fn document(routes: &[Route]) -> OpenApi {
         };
         if r.session_only {
             let note = "Needs a signed-in session: API tokens get 403 FORBIDDEN.";
+            description = Some(description.map_or_else(|| note.to_owned(), |d| format!("{d} {note}")));
+        }
+        if r.reauthentication {
+            let note = "The session's owner must have signed in or confirmed their credentials \
+                        (`reauthenticate`, POST /api/v1/auth/reauthenticate) in the last 10 minutes: 403 \
+                        REAUTHENTICATION_REQUIRED otherwise, audited as `session.reauthentication_required`.";
             description = Some(description.map_or_else(|| note.to_owned(), |d| format!("{d} {note}")));
         }
         let mut op = OperationBuilder::new()

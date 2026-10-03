@@ -24,6 +24,7 @@ const attrs = useClassAttributes(() => c.value?.classId);
 const editor = useLayoutEditor({
   classKey: () => classes.data.value?.find((k) => k.id === c.value?.classId)?.key,
   attrs: () => attrs.data.value?.filter((d) => d.isActive),
+  ciId: () => String(route.params.id),
 });
 const forbidden = computed(() => ci.error.value instanceof ApiError && ci.error.value.code === "FORBIDDEN");
 </script>

@@ -20,6 +20,11 @@ export const GLOBAL_PERMISSIONS: { key: GlobalPermission; label: string; hint: s
     hint: "Import configuration items from CSV and Excel files (still limited by the class rights)",
   },
   { key: "views.share", label: "Share views", hint: "Create, edit and delete views shared with all users" },
+  {
+    key: "workflows.manage",
+    label: "Manage workflows",
+    hint: "Design, publish and retire workflows, decide who may run their transitions, and migrate or force instances",
+  },
 ];
 
 export const CLASS_RIGHTS: ClassRight[] = ["view", "create", "edit", "delete"];

@@ -139,6 +139,10 @@ pub struct LayoutTemplateUsage {
     /// may not view
     #[schema(value_type = Option<i64>, required = true)]
     pub override_count: Count,
+    /// A live CI you may view that shows it as its own layout (the first by label), to open the layout
+    /// editor on when no class uses the template; null when there is none
+    #[schema(required = true)]
+    pub sample_ci_id: Option<Uuid>,
 }
 
 /// The default template of a class
@@ -150,6 +154,11 @@ pub struct ClassTemplate {
     pub template_key: String,
     /// Whether the class has a layout entry (false: it uses Standard because it has none)
     pub explicit: bool,
+    /// Live CIs of the class itself (not its subclasses) with a layout of their own, another template or a
+    /// custom one; null when you may not view the class. The list of them:
+    /// GET /api/v1/configuration-items?classId=<id>&includeSubclasses=false&ownLayout=true
+    #[schema(value_type = Option<i64>, required = true)]
+    pub own_layout_count: Count,
 }
 
 /// Which template each class uses, and who uses each template
@@ -175,6 +184,8 @@ pub async fn usage(pool: &PgPool, ctx: &RequestContext) -> Result<LayoutTemplate
     let doc = stored(&mut conn).await?;
     let model = data::model(&mut conn).await?;
     let cis = data::template_use(&mut conn).await?;
+    let own = data::own_layout_counts(&mut conn).await?;
+    let mut samples = data::template_samples(&mut conn, ctx.class_scope(ClassOp::View).as_deref()).await?;
     let mut by_template: BTreeMap<&str, Vec<String>> = BTreeMap::new();
     let mut classes: Vec<ClassTemplate> = model
         .class_names
@@ -186,6 +197,10 @@ pub async fn usage(pool: &PgPool, ctx: &RequestContext) -> Result<LayoutTemplate
                 class_name: name.clone(),
                 template_key: doc.class_template(key).to_owned(),
                 explicit,
+                own_layout_count: match own.get(key) {
+                    Some((id, n)) => Count::scoped(ctx, &[*id], *n),
+                    None => Count::Exact(0),
+                },
             }
         })
         .collect();
@@ -206,6 +221,7 @@ pub async fn usage(pool: &PgPool, ctx: &RequestContext) -> Result<LayoutTemplate
                 Some((n, class_ids)) => Count::scoped(ctx, class_ids, *n),
                 None => Count::Exact(0),
             },
+            sample_ci_id: samples.remove(&t.key),
         })
         .collect();
     Ok(LayoutTemplateUsages { templates, classes })
@@ -416,9 +432,11 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("Which layout template each class uses, and who uses each template")
             .description(
-                "Per template: the classes that use it as their default and the number of live CIs that show it \
-                 instead of their class's default (null when some of those CIs are in classes you may not view). \
-                 Per class: its default template. Templates are edited in the settings document (`layoutTemplates`, \
+                "Per template: the classes that use it as their default, the number of live CIs that show it \
+                 instead of their class's default (null when some of those CIs are in classes you may not view) \
+                 and one of those CIs you may view (`sampleCiId`). Per class: its default template and the number \
+                 of its live CIs with a layout of their own (`ownLayoutCount`, null when you may not view the \
+                 class). The CIs themselves: GET /api/v1/configuration-items with `ownLayout` or `layoutTemplate`. Templates are edited in the settings document (`layoutTemplates`, \
                  PUT /api/v1/ui-settings); one that a class or a live CI uses cannot be removed (409 CONFLICT).",
             )
             .requires(GlobalPermission::CustomizationManage)
@@ -461,7 +479,8 @@ pub fn routes() -> Vec<Route> {
                 "Send `templateKey` (a template of the UI settings) or `layout` (for this CI only), not both. \
                  Needs `customization.manage` and edit on the CI's class (403 otherwise; 404 for a CI that is \
                  missing, deleted or in a class you may not view). Audited (entity type ci_layout_overrides, the \
-                 CI's id). Saving what the CI already has changes nothing.",
+                 CI's id). Saving what the CI already has changes nothing. A `layout` larger than 256 KiB as \
+                 JSON is refused (400 VALIDATION_ERROR, field `layout`, code `too_large`).",
             )
             .requires(GlobalPermission::CustomizationManage)
             .errors(&[ErrorCode::NotFound, ErrorCode::VersionConflict])

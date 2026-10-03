@@ -9,7 +9,7 @@ use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
 use crate::auth::permissions::{ClassRights, GlobalPermission, Permissions};
-use crate::data::auth::MFA_REQUIRED;
+use crate::data::auth::{MFA_REQUIRED, PERSON_LINKED};
 
 /// Lets [`MFA_REQUIRED`] read the token's `mfa_verified` as the session's.
 const TOKEN_AS_SESSION: &str = "CROSS JOIN LATERAL (SELECT t.mfa_verified) AS s(mfa_verified)";
@@ -45,6 +45,11 @@ pub struct PresentedToken {
     /// The owner must use two-factor authentication and the token was not
     /// created from a session that proved it.
     pub mfa_required: bool,
+    /// The owner has an e-mail but no linked Person: they cannot sign in
+    /// either (see [`PERSON_LINKED`], SHAA-1505).
+    pub account_incomplete: bool,
+    /// The owner has no e-mail yet and must enter one in a session first.
+    pub email_missing: bool,
 }
 
 pub async fn find_by_hash(pool: &PgPool, token_hash: &[u8]) -> sqlx::Result<Option<PresentedToken>> {
@@ -53,7 +58,7 @@ pub async fn find_by_hash(pool: &PgPool, token_hash: &[u8]) -> sqlx::Result<Opti
                 coalesce(ip.is_enabled, true) AS provider_enabled, t.profile_id,
                 t.created_by_user_id, coalesce(c.is_active, false) AS creator_active,
                 t.revoked_at IS NOT NULL AS revoked, t.expires_at <= now() AS expired,
-                {} AS mfa_required
+                {} AS mfa_required, NOT {PERSON_LINKED} AS account_incomplete, u.email IS NULL AS email_missing
          FROM api_tokens t JOIN users u ON u.id = t.user_id LEFT JOIN users c ON c.id = t.created_by_user_id
               LEFT JOIN identity_providers ip ON ip.id = u.identity_provider_id
               {TOKEN_AS_SESSION}
@@ -235,6 +240,38 @@ pub async fn second_factor_refusal_notice(conn: &mut PgConnection) -> sqlx::Resu
             if refused == 1 { "is" } else { "are" },
         )
     }))
+}
+
+/// What `shadoucmdb migrate` and `verify` print when working tokens belong to
+/// accounts without an e-mail: they are refused with 403 `EMAIL_REQUIRED`
+/// until the account has one (SHAA-1505, GH#544); None when there are none.
+pub async fn email_required_refusal_notice(conn: &mut PgConnection) -> sqlx::Result<Option<String>> {
+    const SHOWN: usize = 20;
+    let owners: Vec<(String, i64)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT u.username, count(*) FROM api_tokens t JOIN users u ON u.id = t.user_id
+         WHERE u.email IS NULL AND t.revoked_at IS NULL AND t.expires_at > now() AND u.is_active
+               AND {OWNER_PROVIDER_ENABLED}
+         GROUP BY u.username ORDER BY u.username"
+    )))
+    .fetch_all(conn)
+    .await?;
+    if owners.is_empty() {
+        return Ok(None);
+    }
+    let refused: i64 = owners.iter().map(|(_, n)| n).sum();
+    let accounts = owners.len();
+    let mut names = owners.iter().take(SHOWN).map(|(u, _)| u.as_str()).collect::<Vec<_>>().join(", ");
+    if accounts > SHOWN {
+        names.push_str(&format!(" and {} more", accounts - SHOWN));
+    }
+    Ok(Some(format!(
+        "{refused} API token{} of {accounts} account{} without an e-mail {} refused (403 EMAIL_REQUIRED) until the \
+         account has one: {names}. Give each account an e-mail in the web UI under Administration › Users (sign-in \
+         status \"e-mail required\") or with PATCH /api/v1/admin/users/{{id}}; its tokens then work again.",
+        if refused == 1 { "" } else { "s" },
+        if accounts == 1 { "" } else { "s" },
+        if refused == 1 { "is" } else { "are" },
+    )))
 }
 
 /// Working tokens [`REFUSED_WORKING`] refuses, and how many owners they have.

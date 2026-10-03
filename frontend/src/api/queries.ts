@@ -1,7 +1,7 @@
 // TanStack Query composables over the typed client. Query keys live here so that
 // mutations invalidate exactly what they change. Arguments are refs or getters,
 // so a query refetches when the URL or form state it depends on changes.
-import { keepPreviousData, useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/vue-query";
+import { keepPreviousData, useMutation, useQueries, useQuery, useQueryClient, type QueryClient } from "@tanstack/vue-query";
 import { computed, toValue, type MaybeRefOrGetter } from "vue";
 import { ApiError, api, unwrap, type Schemas } from "./client";
 import type { paths } from "./schema";
@@ -65,6 +65,15 @@ export function useCiList(query: MaybeRefOrGetter<CiListQuery>, enabled: MaybeRe
   });
 }
 
+/** A page of the CI list, fetched once (cached like useCiList): for actions that need a CI, e.g. a sample to open. */
+export function fetchCiList(qc: QueryClient, query: CiListQuery) {
+  return qc.fetchQuery({
+    queryKey: keys.ciList(query),
+    queryFn: ({ signal }: { signal: AbortSignal }) => unwrap(api.GET("/api/v1/configuration-items", { params: { query }, signal })),
+    staleTime: 10_000,
+  });
+}
+
 /** Server-side count only (limit=1, read page.total). */
 export function ciCountQuery(query: CiListQuery) {
   return {
@@ -76,16 +85,20 @@ export function ciCountQuery(query: CiListQuery) {
   };
 }
 
+const ciQuery = (ciId: string) => ({
+  queryKey: keys.ci(ciId),
+  queryFn: ({ signal }: { signal: AbortSignal }) => unwrap(api.GET("/api/v1/configuration-items/{id}", { params: { path: { id: ciId } }, signal })),
+});
+
 export function useCi(id: MaybeRefOrGetter<string | undefined>) {
   return useQuery(() => {
     const ciId = toValue(id) ?? "";
-    return {
-      queryKey: keys.ci(ciId),
-      enabled: !!ciId,
-      queryFn: ({ signal }: { signal: AbortSignal }) => unwrap(api.GET("/api/v1/configuration-items/{id}", { params: { path: { id: ciId } }, signal })),
-    };
+    return { ...ciQuery(ciId), enabled: !!ciId };
   });
 }
+
+/** One CI, outside a component (from the cache when fresh). */
+export const fetchCi = (qc: QueryClient, id: string) => qc.fetchQuery({ ...ciQuery(id), staleTime: 10_000 });
 
 export function useCreateCi() {
   const qc = useQueryClient();

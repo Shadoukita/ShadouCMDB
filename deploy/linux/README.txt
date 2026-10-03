@@ -116,7 +116,7 @@ Install as a systemd service
   sudo -u shadoucmdb shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env seed --template it_infrastructure
   # First administrator (or skip this and use first-run setup in the web UI, with the setup token from
   # `sudo cat /var/lib/shadoucmdb/setup-token`; it is in the journal only if that file cannot be written):
-  sudo -u shadoucmdb shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env create-admin --username admin
+  sudo -u shadoucmdb shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env create-admin --username admin --email admin@example.com
   sudo install -m 0644 shadoucmdb.service /etc/systemd/system/
   sudo systemctl daemon-reload && sudo systemctl enable --now shadoucmdb
   curl -s http://127.0.0.1:3000/readyz
@@ -160,6 +160,13 @@ env file line, a copy in your password vault). At its first start the server
 encrypts the existing authenticator secrets; nobody has to set up two-factor
 sign-in again. Going back to the previous release afterwards needs a restore of
 a backup taken before the upgrade.
+
+Upgrading from a release where e-mail addresses were optional: from then on
+API tokens of an account without an e-mail are refused (403 EMAIL_REQUIRED)
+until it has one. Before the upgrade, give every service account that scripts
+use (backup, monitoring, import) a unique e-mail under Administration > Users,
+or right after migrate the same way. migrate prints the accounts without an
+e-mail that own working tokens; their tokens work again once they have one.
 
   sudo install -m 0755 shadoucmdb /usr/local/bin/shadoucmdb
   read -rsp 'shadoucmdb_owner password: ' PW; echo

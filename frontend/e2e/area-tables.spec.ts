@@ -308,7 +308,7 @@ test.describe("the source install", () => {
       globalPermissions: [],
       classPermissions: [networkClassId, vmClassId].map((classId) => ({ classId, view: true, create: true, edit: true, delete: true })),
     });
-    await apiSend(request, "POST", "/admin/users", { ...RESTRICTED, displayName: "Bestand viewer", profileIds: [profile.id] });
+    await apiSend(request, "POST", "/admin/users", { ...RESTRICTED, email: `${RESTRICTED.username}@example.test`, displayName: "Bestand viewer", profileIds: [profile.id] });
     const before = { net: columns(sourceDb!, "bestand", "netzwerk"), vm: columns(sourceDb!, "bestand", "virtuelle_maschinen") };
     const schemas = () => sql(sourceDb!, "SELECT schema_name FROM information_schema.schemata ORDER BY 1");
     const schemasBefore = schemas();

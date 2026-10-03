@@ -56,9 +56,9 @@ test.beforeAll(async ({ request }) => {
     globalPermissions: [],
     classPermissions: [{ classId: null, view: true, create: true, edit: true, delete: false }],
   });
-  await apiSend(request, "POST", "/admin/users", { username: IMPORTER, displayName: `E2E Importer ${stamp}`, password: PASSWORD, profileIds: [importers.id] });
-  await apiSend(request, "POST", "/admin/users", { username: PLAIN, displayName: `E2E Plain ${stamp}`, password: PASSWORD, profileIds: [plain.id] });
-  await apiSend(request, "POST", "/admin/users", { username: OTHER_IMPORTER, displayName: `E2E Other importer ${stamp}`, password: PASSWORD, profileIds: [importers.id] });
+  await apiSend(request, "POST", "/admin/users", { username: IMPORTER, email: `${IMPORTER}@example.test`, displayName: `E2E Importer ${stamp}`, password: PASSWORD, profileIds: [importers.id] });
+  await apiSend(request, "POST", "/admin/users", { username: PLAIN, email: `${PLAIN}@example.test`, displayName: `E2E Plain ${stamp}`, password: PASSWORD, profileIds: [plain.id] });
+  await apiSend(request, "POST", "/admin/users", { username: OTHER_IMPORTER, email: `${OTHER_IMPORTER}@example.test`, displayName: `E2E Other importer ${stamp}`, password: PASSWORD, profileIds: [importers.id] });
   await setImport(request, false);
 });
 
@@ -501,8 +501,10 @@ test("import off: another importer cannot open the job, and the owner's earlier 
     await expect(other.getByText("This import does not exist or belongs to another user.")).toBeVisible();
     await expect(other.getByRole("table", { name: "Row problems" })).toHaveCount(0);
     await expect(other.getByRole("button", { name: "Download error report" })).toHaveCount(0);
+    // These reads need the CSRF token (GH#503); without it they answer 403 before the ownership check.
+    const headers = { "X-CSRF-Token": await csrf(other.request) };
     for (const path of [`/imports/${id}`, `/imports/${id}/issues`, `/imports/${id}/error-report`]) {
-      expect((await other.request.get(`/api/v1${path}`)).status(), path).toBe(404);
+      expect((await other.request.get(`/api/v1${path}`, { headers })).status(), path).toBe(404);
     }
     await other.context().close();
 
@@ -566,7 +568,7 @@ test("a user with rights on one class can only pick that class", async ({ browse
     classPermissions: [{ classId: serverClass, view: true, create: true, edit: true, delete: false }],
   });
   const user = `e2e-srv-importer-${stamp}`;
-  await apiSend(request, "POST", "/admin/users", { username: user, displayName: `E2E Server importer ${stamp}`, password: PASSWORD, profileIds: [profile.id] });
+  await apiSend(request, "POST", "/admin/users", { username: user, email: `${user}@example.test`, displayName: `E2E Server importer ${stamp}`, password: PASSWORD, profileIds: [profile.id] });
   const page = await signInUi(browser, user);
   await newImport(page, { name: `one-class-${stamp}.csv`, mimeType: "text/csv", buffer: appsCsv([appRow(1)]) });
   const classes = await page.getByLabel("Target class").locator("option").allTextContents();

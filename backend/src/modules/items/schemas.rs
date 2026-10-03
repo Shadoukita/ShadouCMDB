@@ -480,6 +480,28 @@ fn include_subclasses_schema() -> Schema {
         .into()
 }
 
+fn own_layout_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .enum_values(Some(["true", "false"]))
+        .description(Some(
+            "true: only CIs with a layout of their own (another template or a custom layout, see \
+             /configuration-items/{id}/layout); false: only CIs that show their class's default template",
+        ))
+        .into()
+}
+
+fn layout_template_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .pattern(Some(schemas::KEY_PATTERN))
+        .description(Some(
+            "Only CIs that show this layout template (`layoutTemplates[].key`) as their own layout, not as their \
+             class's default",
+        ))
+        .into()
+}
+
 fn ip_within_schema() -> Schema {
     let mut s = schemas::cidr_schema();
     if let Schema::AnyOf(a) = &mut s {
@@ -526,6 +548,26 @@ fn deleted_items_schema() -> Schema {
     schemas::deleted_schema("Soft-deleted CIs: exclude (default), include, or only")
 }
 
+/// Which CIs by the kind of their type (see `CiClass.kind`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum KindQuery {
+    Asset,
+    Process,
+    Any,
+}
+
+fn kind_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .enum_values(Some(["asset", "process", "any"]))
+        .description(Some(
+            "CIs by the kind of their type: asset, process (records such as change requests) or any. Without it, \
+             process records are left out unless their type is named in classId.",
+        ))
+        .into()
+}
+
 /// Filters shared by the inventory list and global search.
 pub trait ItemFilterQuery {
     fn class_id(&self) -> Option<&UuidList>;
@@ -535,6 +577,7 @@ pub trait ItemFilterQuery {
     fn ip_within(&self) -> Option<&str>;
     fn criticality_value_id(&self) -> Option<&UuidList>;
     fn deleted(&self) -> Deleted;
+    fn kind(&self) -> Option<KindQuery>;
 }
 
 macro_rules! item_filters {
@@ -560,6 +603,9 @@ macro_rules! item_filters {
             }
             fn deleted(&self) -> Deleted {
                 self.deleted
+            }
+            fn kind(&self) -> Option<KindQuery> {
+                self.kind
             }
         }
     };
@@ -594,6 +640,12 @@ pub struct ListItemsQuery {
     pub criticality_value_id: Option<UuidList>,
     #[param(required = false, schema_with = deleted_items_schema)]
     pub deleted: Deleted,
+    #[param(schema_with = own_layout_schema)]
+    pub own_layout: Option<QueryBool>,
+    #[param(schema_with = layout_template_schema)]
+    pub layout_template: Option<String>,
+    #[param(schema_with = kind_schema)]
+    pub kind: Option<KindQuery>,
 }
 paged!(ListItemsQuery);
 item_filters!(ListItemsQuery);
@@ -626,6 +678,8 @@ pub struct SearchQuery {
     pub criticality_value_id: Option<UuidList>,
     #[param(required = false, schema_with = deleted_items_schema)]
     pub deleted: Deleted,
+    #[param(schema_with = kind_schema)]
+    pub kind: Option<KindQuery>,
 }
 paged!(SearchQuery);
 item_filters!(SearchQuery);

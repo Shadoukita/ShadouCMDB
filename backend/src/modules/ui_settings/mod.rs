@@ -791,7 +791,7 @@ mod tests {
     async fn layouts_place_notes_and_built_in_panels() {
         let Some(db) = scratch::database("layouts_place_notes_and_built_in_panels").await else { return };
         let app = app(db.pool.clone());
-        let body = json!({ "username": "owner", "displayName": "Owner", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
+        let body = json!({ "username": "owner", "email": "owner@example.test", "displayName": "Owner", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
         let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(body)).await;
         assert_eq!(status, 201, "{me}");
         let cookie = headers

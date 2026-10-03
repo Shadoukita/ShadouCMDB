@@ -127,6 +127,8 @@ pub struct HttpConfig {
     pub header_read_timeout: Duration,
     /// Time allowed for a whole request, body upload included, until the response starts.
     pub request_timeout: Duration,
+    /// Time an authenticated request's body may take to arrive (GH#556).
+    pub body_timeout: Duration,
     /// Requests handled at once; more are answered 503 SERVER_BUSY (bounds buffered bodies).
     pub max_concurrent_requests: usize,
 }
@@ -651,6 +653,7 @@ impl Config {
         };
         let header_read_timeout_secs = r.int::<u64>("HTTP_HEADER_READ_TIMEOUT_SECS", 1, 3600).unwrap_or(10);
         let request_timeout_secs = r.int::<u64>("HTTP_REQUEST_TIMEOUT_SECS", 1, 86_400).unwrap_or(120);
+        let body_timeout_secs = r.int::<u64>("HTTP_BODY_TIMEOUT_SECS", 1, 3600).unwrap_or(30);
         let max_concurrent_requests = r.int::<usize>("HTTP_MAX_CONCURRENT_REQUESTS", 1, 1_000_000).unwrap_or(512);
 
         let url = r.raw("DATABASE_URL");
@@ -852,6 +855,7 @@ impl Config {
             http: HttpConfig {
                 header_read_timeout: Duration::from_secs(header_read_timeout_secs),
                 request_timeout: Duration::from_secs(request_timeout_secs),
+                body_timeout: Duration::from_secs(body_timeout_secs),
                 max_concurrent_requests,
             },
             database: DatabaseConfig {
@@ -999,6 +1003,7 @@ mod tests {
         assert_eq!(cfg.api_docs, ApiDocs::Off);
         assert_eq!(cfg.http.header_read_timeout, Duration::from_secs(10));
         assert_eq!(cfg.http.request_timeout, Duration::from_secs(120));
+        assert_eq!(cfg.http.body_timeout, crate::http::DEFAULT_BODY_TIMEOUT);
         assert_eq!(cfg.http.max_concurrent_requests, 512);
         assert!(cfg.audit.capture_client_ip && cfg.audit.capture_user_agent);
         assert!(cfg.audit.export.is_none());

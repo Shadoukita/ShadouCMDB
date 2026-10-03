@@ -37,6 +37,12 @@ pub struct LiveSession {
     /// requires MFA and neither the provider is trusted nor the sign-in proved
     /// it. It cannot set up MFA here (no password), so it must be ended.
     pub mfa_not_enforced: bool,
+    /// The account has no e-mail yet (created before 0044): until it enters
+    /// one, only the routes marked `before_email_entry` answer.
+    pub email_required: bool,
+    /// The owner confirmed their credentials within
+    /// [`crate::auth::REAUTHENTICATION_WINDOW`] (GH#498).
+    pub recently_confirmed: bool,
 }
 
 /// Whether a profile the user `u` holds requires MFA of this session `s`
@@ -62,6 +68,11 @@ const OIDC_ACCOUNT: &str =
 /// a session left over from a disabled provider is refused (GH#250).
 const PROVIDER_ENABLED: &str = "(u.identity_provider_id IS NULL OR EXISTS (SELECT 1 FROM identity_providers ip
      WHERE ip.id = u.identity_provider_id AND ip.is_enabled))";
+
+/// The account is linked to its Person, or has no e-mail yet and is asked
+/// for one (SHAA-1505 decisions 8 and 9): an account with an e-mail but no
+/// Person ("account incomplete") has no live session.
+pub const PERSON_LINKED: &str = "(u.person_ci_id IS NOT NULL OR u.email IS NULL)";
 
 /// `mfa_verified`: the sign-in proved a second factor (an authenticator or
 /// recovery code, or an OIDC ID token under `verify`).
@@ -92,28 +103,35 @@ pub async fn create_session(
 }
 
 pub async fn resolve_session(pool: &PgPool, token_hash: &[u8], idle: Duration) -> sqlx::Result<Option<LiveSession>> {
-    type Row = (Uuid, Uuid, String, String, bool, bool, bool, bool);
+    type Row = (Uuid, Uuid, String, String, bool, bool, bool, bool, bool, bool);
     let row: Option<Row> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT s.id, u.id, u.username, s.csrf_token, s.last_seen_at < now() - interval '1 minute',
                 {MFA_REQUIRED}, {OIDC_ACCOUNT},
                 EXISTS (SELECT 1 FROM user_totp t WHERE t.user_id = u.id AND t.confirmed_at IS NOT NULL)
-                  AND s.mfa_verified
+                  AND s.mfa_verified,
+                u.email IS NULL,
+                s.credentials_confirmed_at > now() - $3::interval
          FROM sessions s JOIN users u ON u.id = s.user_id
          WHERE s.token_hash = $1 AND s.expires_at > now() AND s.last_seen_at > now() - $2::interval AND u.is_active
-           AND {PROVIDER_ENABLED}"
+           AND {PROVIDER_ENABLED} AND {PERSON_LINKED}"
     )))
     .bind(token_hash)
     .bind(interval(idle))
+    .bind(interval(crate::auth::REAUTHENTICATION_WINDOW))
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|(session_id, user_id, username, csrf_token, needs_touch, required, oidc, proven)| LiveSession {
-        session_id,
-        user_id,
-        username,
-        csrf_token,
-        needs_touch,
-        mfa_enrolment_required: required && !oidc && !proven,
-        mfa_not_enforced: required && oidc,
+    Ok(row.map(|(session_id, user_id, username, csrf_token, needs_touch, required, oidc, proven, no_email, recent)| {
+        LiveSession {
+            session_id,
+            user_id,
+            username,
+            csrf_token,
+            needs_touch,
+            mfa_enrolment_required: required && !oidc && !proven,
+            mfa_not_enforced: required && oidc,
+            email_required: no_email,
+            recently_confirmed: recent,
+        }
     }))
 }
 
@@ -126,6 +144,12 @@ pub async fn holds_mfa_profile(conn: &mut PgConnection, user_id: Uuid) -> sqlx::
     .bind(user_id)
     .fetch_one(conn)
     .await
+}
+
+/// The session's owner confirmed their credentials again (GH#498).
+pub async fn mark_session_reauthenticated(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<()> {
+    sqlx::query("UPDATE sessions SET credentials_confirmed_at = now() WHERE id = $1").bind(id).execute(conn).await?;
+    Ok(())
 }
 
 /// The session proved a second factor after sign-in (TOTP enrolment confirmed in it).
@@ -312,10 +336,12 @@ pub struct UserRow {
     pub updated_at: DateTime<Utc>,
     /// Set for an account that signs in through an identity provider.
     pub identity_provider_id: Option<Uuid>,
+    /// The Person CI the account is linked to (migration 0044).
+    pub person_ci_id: Option<Uuid>,
 }
 
 pub const USER_COLUMNS: &str = "id, username, display_name, email, is_active, password_changed_at, last_login_at, \
-     created_at, updated_at, identity_provider_id";
+     created_at, updated_at, identity_provider_id, person_ci_id";
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct UserProfileRow {
@@ -415,25 +441,31 @@ pub struct LoginRow {
     pub is_active: bool,
     /// The provider the account belongs to, and its kind (`oidc`, `ldap`).
     pub provider: Option<(Uuid, String)>,
+    /// Linked to its Person, or without an e-mail yet (see [`PERSON_LINKED`]).
+    pub person_linked: bool,
 }
 
 pub async fn find_for_login(pool: &PgPool, username: &str) -> sqlx::Result<Option<LoginRow>> {
-    type Row = (Uuid, String, Option<String>, DateTime<Utc>, bool, Option<Uuid>, Option<String>);
-    let row: Option<Row> = sqlx::query_as(
-        "SELECT u.id, u.username, u.password_hash, u.password_changed_at, u.is_active, u.identity_provider_id, p.kind
+    type Row = (Uuid, String, Option<String>, DateTime<Utc>, bool, Option<Uuid>, Option<String>, bool);
+    let row: Option<Row> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT u.id, u.username, u.password_hash, u.password_changed_at, u.is_active, u.identity_provider_id, p.kind,
+                {PERSON_LINKED}
          FROM users u LEFT JOIN identity_providers p ON p.id = u.identity_provider_id
-         WHERE lower(u.username) = lower($1)",
-    )
+         WHERE lower(u.username) = lower($1)"
+    )))
     .bind(username)
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|(id, username, password_hash, password_changed_at, is_active, provider_id, kind)| LoginRow {
-        id,
-        username,
-        password_hash,
-        password_changed_at,
-        is_active,
-        provider: provider_id.zip(kind),
+    Ok(row.map(|(id, username, password_hash, password_changed_at, is_active, provider_id, kind, person_linked)| {
+        LoginRow {
+            id,
+            username,
+            password_hash,
+            password_changed_at,
+            is_active,
+            provider: provider_id.zip(kind),
+            person_linked,
+        }
     }))
 }
 
@@ -491,6 +523,21 @@ pub async fn insert_user(conn: &mut PgConnection, u: &NewUser<'_>) -> sqlx::Resu
     .await
 }
 
+/// Whether the account may sign in as far as its Person goes (see [`PERSON_LINKED`]).
+pub async fn person_linked(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<bool> {
+    let linked: Option<bool> =
+        sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT {PERSON_LINKED} FROM users u WHERE u.id = $1")))
+            .bind(id)
+            .fetch_optional(conn)
+            .await?;
+    Ok(linked.unwrap_or(false))
+}
+
+pub async fn set_email(conn: &mut PgConnection, id: Uuid, email: &str) -> sqlx::Result<()> {
+    sqlx::query("UPDATE users SET email = $2 WHERE id = $1").bind(id).bind(email).execute(conn).await?;
+    Ok(())
+}
+
 pub async fn set_password(conn: &mut PgConnection, id: Uuid, hash: &str) -> sqlx::Result<()> {
     sqlx::query("UPDATE users SET password_hash = $2, password_changed_at = now() WHERE id = $1")
         .bind(id)
@@ -531,6 +578,11 @@ pub async fn set_user_profiles(conn: &mut PgConnection, user_id: Uuid, profile_i
     .execute(conn)
     .await?;
     Ok(())
+}
+
+/// Accounts that must enter an e-mail at their next sign-in (created before 0044).
+pub async fn count_without_email(conn: &mut PgConnection) -> sqlx::Result<i64> {
+    sqlx::query_scalar("SELECT count(*) FROM users WHERE email IS NULL").fetch_one(conn).await
 }
 
 pub async fn count_users(conn: &mut PgConnection) -> sqlx::Result<i64> {

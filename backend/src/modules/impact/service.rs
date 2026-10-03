@@ -284,6 +284,9 @@ async fn run(
         AnalysisDirection::Upstream => &[Way::Upstream],
         AnalysisDirection::Both => &[Way::Downstream, Way::Upstream],
     };
+    // Process records are neither reached nor walked through.
+    bound(&mut tx, assembly).await?;
+    let reach = crate::data::classes::asset_scope(&mut tx, visible.as_deref()).await.map_err(db_error)?;
     let opts = Options {
         ways,
         depth: p.depth,
@@ -291,7 +294,7 @@ async fn run(
         include_inactive: p.include_inactive,
         max_nodes: p.max_nodes as usize,
         deadline,
-        visible: visible.as_deref(),
+        visible: reach.as_deref(),
         result_classes: None,
     };
     let traversal = engine::traverse(&mut tx, &[root_id], &opts).await?;

@@ -56,6 +56,15 @@ const TAG: &str = "Configuration export/import";
 
 /// Largest accepted import file (the images alone can be ~850 KiB base64).
 const IMPORT_BODY_LIMIT: usize = 16 * 1024 * 1024;
+/// Entries per file: lookup values (the rows of the former tables included),
+/// data-model entries, permission profiles, saved import mappings and shared
+/// saved views. An applied import writes an audit row per changed entry just
+/// before commit, and those rows hold the audit chain head, so every sign-in
+/// waits for them; the per-list limits alone still let a file within the body
+/// limit carry half a million lookup values (GH#546) or ~77,000 data-model
+/// entries (GH#551). Checked before anything touches the database, dry runs
+/// included.
+const MAX_ENTRIES: usize = 25_000;
 
 // ---------------------------------------------------------------------------
 // Import result
@@ -2033,6 +2042,39 @@ fn check_format(file: &ConfigFile) -> Result<(), AppError> {
             "unsupported",
         ));
     }
+    let lookups = file.lookups.as_ref().map_or(0, |l| {
+        l.statuses.len()
+            + l.environments.len()
+            + l.locations.len()
+            + l.owners.len()
+            + l.lists.iter().map(|list| list.values.len()).sum::<usize>()
+    });
+    let data_model = file.data_model.as_ref().map_or(0, |d| {
+        d.areas.len() + d.classes.len() + d.attributes.len() + d.relationship_types.len() + d.relationship_rules.len()
+    });
+    let sections = [
+        ("dataModel", data_model),
+        ("lookups", lookups),
+        ("permissionProfiles", file.permission_profiles.as_ref().map_or(0, Vec::len)),
+        ("importMappings", file.import_mappings.as_ref().map_or(0, Vec::len)),
+        ("savedViews", file.saved_views.as_ref().map_or(0, Vec::len)),
+    ];
+    let total: usize = sections.iter().map(|s| s.1).sum();
+    if total > MAX_ENTRIES {
+        // Reported at the largest section, the one to split.
+        let (field, _) = sections.iter().max_by_key(|s| s.1).expect("five sections");
+        let held: Vec<String> =
+            sections.iter().filter(|s| s.1 > 0).map(|(section, n)| format!("{section}: {n}")).collect();
+        return Err(AppError::field(
+            *field,
+            format!(
+                "The file holds {total} entries ({}); one file may hold at most {MAX_ENTRIES}. Split it into \
+                 several files and import them one after the other",
+                held.join(", ")
+            ),
+            "too_big",
+        ));
+    }
     Ok(())
 }
 
@@ -2085,12 +2127,24 @@ pub async fn import(
     check_format(file)?;
     check_sections(ctx, file)?;
     let mut tx = pool.begin().await?;
-    let (result, schema_changes) = engine::collect_previews(run(&mut tx, ctx, file, mode)).await;
+    // Audit rows lock the audit chain head until commit, which would stall
+    // every sign-in for the whole import (GH#500): a dry run writes none, and
+    // an apply writes them all at the end. Boxed: the import future is too
+    // large to sit on a test thread's stack inside the audit scope.
+    let run = Box::pin(engine::collect_previews(run(&mut tx, ctx, file, mode)));
+    let ((result, schema_changes), audit) = match mode {
+        ImportMode::DryRun => (crud::discard_audit(run).await, None),
+        ImportMode::Apply => {
+            let (out, audit) = crud::hold_audit(run).await;
+            (out, Some(audit))
+        }
+    };
     let mut result = result?;
     result.schema_changes = schema_changes;
-    match mode {
-        ImportMode::DryRun => tx.rollback().await?,
-        ImportMode::Apply => {
+    match audit {
+        None => tx.rollback().await?,
+        Some(audit) => {
+            audit.write(&mut tx).await?;
             tx.commit().await?;
             result.applied = true;
         }
@@ -2150,7 +2204,10 @@ pub fn routes() -> Vec<Route> {
                  and the logo and favicon. All sections are optional. Problems in the file are reported together as \
                  400 VALIDATION_ERROR with paths into the file; a change the data model does not allow (e.g. making \
                  an attribute required while CIs lack a value) fails with the same error the admin API gives, with \
-                 the file path prefixed. A non-empty `dataModel` or `lookups` section also requires \
+                 the file path prefixed. A file holds at most 25,000 entries in all: data-model entries, lookup values \
+                 (former tables included), permission profiles, saved import mappings and saved views (400 \
+                 VALIDATION_ERROR with code too_big at the largest section otherwise, dry run included): split a \
+                 larger configuration across several files. A non-empty `dataModel` or `lookups` section also requires \
                  `datamodel.manage`, a `uiSettings` section `customization.manage`, and a non-empty \
                  `permissionProfiles` section `profiles.manage`, and a non-empty `importMappings` section \
                  `cis.import` (403 otherwise, dry run included). Saved import mappings are matched by class key and \
@@ -2167,7 +2224,7 @@ pub fn routes() -> Vec<Route> {
                  either way a warning names the section.",
             )
             .requires(GlobalPermission::ConfigExportImport)
-            .session_only()
+            .recent_reauthentication()
             .body_limit(IMPORT_BODY_LIMIT)
             .errors(&[ErrorCode::Conflict, ErrorCode::InUse, ErrorCode::PayloadTooLarge])
             .handle(
@@ -2186,6 +2243,15 @@ mod tests {
     use crate::db::scratch;
 
     async fn user_ctx(pool: &PgPool, username: &str, global: &[GlobalPermission]) -> RequestContext {
+        user_ctx_with(pool, username, global, Default::default()).await
+    }
+
+    async fn user_ctx_with(
+        pool: &PgPool,
+        username: &str,
+        global: &[GlobalPermission],
+        all_classes: crate::auth::permissions::ClassRights,
+    ) -> RequestContext {
         let user_id: Uuid = sqlx::query_scalar(
             "INSERT INTO users (username, display_name, password_hash) VALUES ($1, $1, '$argon2id$v=19$test')
              RETURNING id",
@@ -2194,7 +2260,7 @@ mod tests {
         .fetch_one(pool)
         .await
         .unwrap();
-        let permissions = Permissions { global: global.iter().copied().collect(), ..Default::default() };
+        let permissions = Permissions { global: global.iter().copied().collect(), all_classes, ..Default::default() };
         let principal = Principal {
             user_id,
             username: username.into(),
@@ -2202,6 +2268,8 @@ mod tests {
                 id: Uuid::new_v4(),
                 csrf_token: String::new(),
                 mfa_enrolment_required: false,
+                email_required: false,
+                recently_confirmed: true,
             },
             permissions,
         };
@@ -2269,7 +2337,9 @@ mod tests {
         assert!(import(&dst.pool, &profile_admin, &profiles_only, ImportMode::Apply).await.unwrap().applied);
         assert_eq!(profile_count().await, 1);
 
-        let full = user_ctx(
+        // Making a field of an existing type required is checked against its
+        // stored values: the built-in types' tables exist after migrate.
+        let full = user_ctx_with(
             &dst.pool,
             "configurator",
             &[
@@ -2277,6 +2347,7 @@ mod tests {
                 GlobalPermission::DatamodelManage,
                 GlobalPermission::CustomizationManage,
             ],
+            crate::auth::permissions::ClassRights { view: true, ..Default::default() },
         )
         .await;
         let res = import(&dst.pool, &full, &file, ImportMode::Apply).await.unwrap();
@@ -2712,6 +2783,63 @@ mod tests {
         assert!(p.class_permissions[1].view, "edit implies view");
     }
 
+    /// GH#546, GH#551: the audit rows of an applied import hold sign-ins
+    /// while they are written, so a file carries a bounded number of entries,
+    /// counted across its sections.
+    #[test]
+    fn a_file_with_too_many_entries_is_refused() {
+        let lookups = |owners: usize| -> Value {
+            let values: Vec<Value> =
+                (0..5000).map(|i| serde_json::json!({ "key": format!("v{i}"), "name": "V" })).collect();
+            let lists: Vec<Value> =
+                (0..4).map(|n| serde_json::json!({ "key": format!("l{n}"), "name": "L", "values": values })).collect();
+            let owners: Vec<Value> =
+                (0..owners).map(|i| serde_json::json!({ "kind": "team", "name": format!("o{i}") })).collect();
+            serde_json::json!({ "lists": lists, "owners": owners })
+        };
+        let file = |body: Value| -> ConfigFile {
+            let mut file = serde_json::json!({ "format": FORMAT, "formatVersion": 1 });
+            file.as_object_mut().unwrap().extend(body.as_object().unwrap().clone());
+            serde_json::from_value(file).unwrap()
+        };
+        let refused = |f: ConfigFile| {
+            let e = check_format(&f).unwrap_err();
+            assert_eq!(e.code, ErrorCode::ValidationError);
+            let d = e.details.unwrap().remove(0);
+            assert_eq!(d.code, "too_big");
+            (d.field, d.message)
+        };
+
+        assert!(check_format(&file(serde_json::json!({ "lookups": lookups(MAX_ENTRIES - 20_000) }))).is_ok());
+        let (field, message) = refused(file(serde_json::json!({ "lookups": lookups(MAX_ENTRIES - 20_000 + 1) })));
+        assert_eq!(field, "lookups");
+        assert!(message.starts_with("The file holds 25001 entries (lookups: 25001)"), "{message}");
+
+        // The data model counts against the same budget: one class, 20,000
+        // attributes and 4,999 rules fit; another rule, or a lookup value
+        // next to them, does not.
+        let data_model = |rules: usize| -> Value {
+            let attributes: Vec<Value> = (0..20_000)
+                .map(|i| serde_json::json!({ "class": "c", "key": format!("a{i}"), "label": "A", "dataType": "text" }))
+                .collect();
+            let rules: Vec<Value> = (0..rules)
+                .map(|i| serde_json::json!({ "relationshipType": format!("t{i}"), "sourceClass": "c", "targetClass": "c" }))
+                .collect();
+            serde_json::json!({
+                "classes": [{ "key": "c", "name": "C" }], "attributes": attributes, "relationshipRules": rules
+            })
+        };
+        assert!(check_format(&file(serde_json::json!({ "dataModel": data_model(4_999) }))).is_ok());
+        let (field, message) = refused(file(serde_json::json!({ "dataModel": data_model(5_000) })));
+        assert_eq!(field, "dataModel");
+        assert!(message.starts_with("The file holds 25001 entries (dataModel: 25001)"), "{message}");
+        let (field, message) = refused(file(serde_json::json!({
+            "dataModel": data_model(4_999), "lookups": { "owners": [{ "kind": "team", "name": "o" }] }
+        })));
+        assert_eq!(field, "dataModel", "reported at the largest section");
+        assert!(message.contains("(dataModel: 25000, lookups: 1)"), "{message}");
+    }
+
     #[test]
     fn errors_get_the_file_path() {
         let e = at("dataModel.attributes.3", AppError::field("isRequired", "CIs without a value: 2", "values_missing"));
@@ -3032,16 +3160,16 @@ mod tests {
     }
 
     /// GH#344: 20,000 owners with the same key, and lists to look through for
-    /// the statuses, import within the request timeout. (The fold of the
-    /// largest file is timed in `legacy`; writing its 200,000 values here
-    /// would time the audit trail instead.)
+    /// the statuses, import within the request timeout. Four lists keep the
+    /// file within `MAX_ENTRIES`; the fold of 200 lists, more than a
+    /// file may carry, is timed in `legacy`.
     #[tokio::test]
     async fn the_largest_legacy_sections_import_quickly() {
         let Some(db) = scratch::database("the_largest_legacy_sections_import_quickly").await else { return };
         let ctx = RequestContext::system("test", "test");
         crate::seed::seed_system_rows(&db.pool).await.unwrap();
         let file: ConfigFile = serde_json::from_value(serde_json::json!({
-            "format": "shadoucmdb.config", "formatVersion": 1, "lookups": legacy::worst_case(5)
+            "format": "shadoucmdb.config", "formatVersion": 1, "lookups": legacy::worst_case(4)
         }))
         .unwrap();
         let started = std::time::Instant::now();
@@ -3050,7 +3178,7 @@ mod tests {
         assert!(took < std::time::Duration::from_secs(120), "{took:?}");
         let created: Vec<&str> =
             dry.changes.iter().filter(|c| c.section == "lookupLists").map(|c| c.key.as_str()).collect();
-        assert!(created.contains(&"owner") && created.contains(&"status_6"), "{created:?}");
+        assert!(created.contains(&"owner") && created.contains(&"status_5"), "{created:?}");
         db.drop().await;
     }
 
@@ -3094,7 +3222,10 @@ mod tests {
         let dm = exported.data_model.as_ref().unwrap();
         let roles: Vec<(&str, ClassSystemRole)> =
             dm.classes.iter().filter_map(|c| Some((c.key.as_str(), c.system_role?))).collect();
-        assert_eq!(roles, vec![("business_service", ClassSystemRole::BusinessService)]);
+        assert_eq!(
+            roles,
+            vec![("business_service", ClassSystemRole::BusinessService), ("person", ClassSystemRole::Person)]
+        );
         let roles: Vec<(&str, RelationshipTypeSystemRole)> =
             dm.relationship_types.iter().filter_map(|t| Some((t.key.as_str(), t.system_role?))).collect();
         assert_eq!(roles, vec![("business_service_member", RelationshipTypeSystemRole::BusinessServiceMember)]);
@@ -3397,9 +3528,119 @@ mod tests {
             .fetch_one(&dst.pool)
             .await
             .unwrap();
-        assert_eq!(roles, 1);
+        assert_eq!(roles, 2, "the business service and Person types");
 
         src.drop().await;
         dst.drop().await;
+    }
+
+    /// GH#500: an import used to write its audit rows as it went, and every
+    /// audit row locks the chain head until commit, so a sign-in waited for
+    /// the whole import, dry run included. The import is stopped part-way (a
+    /// row lock on the second list) after it changed the first list; a
+    /// sign-in's audit row must still be written meanwhile.
+    #[tokio::test]
+    async fn an_import_does_not_hold_up_sign_ins() {
+        let Some(db) = scratch::database("an_import_does_not_hold_up_sign_ins").await else { return };
+        let pool = &db.pool;
+        let ctx = RequestContext::system("test", "test");
+        crate::seed::seed_system_rows(pool).await.unwrap();
+        let file = |second: &str| -> ConfigFile {
+            serde_json::from_value(serde_json::json!({
+                "format": FORMAT,
+                "formatVersion": FORMAT_VERSION,
+                "lookups": { "lists": [
+                    { "key": "first", "name": format!("First {second}"), "values": [{ "key": "a", "name": "A" }] },
+                    { "key": "second", "name": second }
+                ] }
+            }))
+            .unwrap()
+        };
+        import(pool, &ctx, &file("v1"), ImportMode::Apply).await.unwrap();
+
+        for (mode, name) in [(ImportMode::DryRun, "v2"), (ImportMode::Apply, "v3")] {
+            let mut blocker = pool.begin().await.unwrap();
+            let blocker_pid: i32 =
+                sqlx::query_scalar("SELECT pg_backend_pid()").fetch_one(&mut *blocker).await.unwrap();
+            sqlx::query("SELECT 1 FROM lookup_lists WHERE key = 'second' FOR UPDATE")
+                .execute(&mut *blocker)
+                .await
+                .unwrap();
+            let running = tokio::spawn({
+                let (pool, ctx, file) = (pool.clone(), ctx.clone(), file(name));
+                async move { import(&pool, &ctx, &file, mode).await }
+            });
+            // Wait until the import is stuck on the second list.
+            let mut waits = 0;
+            while !sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1 = ANY (pg_blocking_pids(pid)))",
+            )
+            .bind(blocker_pid)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+            {
+                waits += 1;
+                assert!(waits < 200, "{mode:?}: the import never reached the second list");
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+
+            let mut login = pool.begin().await.unwrap();
+            sqlx::query("SET LOCAL lock_timeout = '2s'").execute(&mut *login).await.unwrap();
+            crate::auth::events::login_failure(&mut login, &ctx, "someone", None)
+                .await
+                .unwrap_or_else(|e| panic!("{mode:?}: a sign-in waited for the import: {e}"));
+            login.commit().await.unwrap();
+
+            blocker.commit().await.unwrap();
+            let result = running.await.unwrap().unwrap();
+            assert_eq!(result.applied, mode == ImportMode::Apply);
+        }
+
+        // The apply's rows were written at the end, after the sign-in's, and
+        // the dry run's not at all.
+        let names: Vec<String> = sqlx::query_scalar(
+            "SELECT coalesce(new_value->>'name', action) FROM audit_log
+             WHERE entity_type = 'lookup_lists' OR action = 'login.failure' ORDER BY chain_seq",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        assert_eq!(names, ["First v1", "v1", "login.failure", "login.failure", "First v3", "v3"]);
+        let broken: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_log_verify()").fetch_one(pool).await.unwrap();
+        assert_eq!(broken, 0);
+        db.drop().await;
+    }
+
+    /// GH#551: a data model past the entry budget is refused before the
+    /// import touches the database: nothing is created and nothing audited.
+    #[tokio::test]
+    async fn a_data_model_past_the_entry_budget_writes_nothing() {
+        let Some(db) = scratch::database("a_data_model_past_the_entry_budget_writes_nothing").await else { return };
+        let pool = &db.pool;
+        crate::seed::seed_system_rows(pool).await.unwrap();
+        let ctx = RequestContext::system("test", "test");
+        let attributes: Vec<Value> = (0..MAX_ENTRIES)
+            .map(|i| serde_json::json!({ "class": "budget", "key": format!("a{i}"), "label": "A", "dataType": "text" }))
+            .collect();
+        let file: ConfigFile = serde_json::from_value(serde_json::json!({
+            "format": FORMAT, "formatVersion": FORMAT_VERSION,
+            "dataModel": { "classes": [{ "key": "budget", "name": "Budget" }], "attributes": attributes }
+        }))
+        .unwrap();
+        let audit_rows =
+            || async { sqlx::query_scalar::<_, i64>("SELECT count(*) FROM audit_log").fetch_one(pool).await.unwrap() };
+        let before = audit_rows().await;
+        for mode in [ImportMode::DryRun, ImportMode::Apply] {
+            let err = import(pool, &ctx, &file, mode).await.unwrap_err();
+            assert_eq!(err.code, ErrorCode::ValidationError);
+            let d = &err.details.unwrap()[0];
+            assert_eq!((d.field.as_str(), d.code.as_str()), ("dataModel", "too_big"), "{}", d.message);
+        }
+        let classes: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM ci_classes WHERE key = 'budget'").fetch_one(pool).await.unwrap();
+        assert_eq!(classes, 0);
+        assert_eq!(audit_rows().await, before);
+        db.drop().await;
     }
 }

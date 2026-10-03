@@ -12,12 +12,12 @@ use ipnetwork::IpNetwork;
 use super::plan::{self, DbResolver, Needs, is_visible};
 use super::schemas::{
     ActiveQuery, AttributeReference, ConfigurationItem, ConfigurationItemSummary, CreateItemBody, CriticalityRef,
-    Graph, GraphDirection, GraphEdge, GraphEdgeType, GraphNode, GraphQuery, ItemFilterQuery, ListItemsQuery, SearchHit,
-    SearchMatch, SearchQuery, SearchResults, UpdateItemBody,
+    Graph, GraphDirection, GraphEdge, GraphEdgeType, GraphNode, GraphQuery, ItemFilterQuery, KindQuery, ListItemsQuery,
+    SearchHit, SearchMatch, SearchQuery, SearchResults, UpdateItemBody,
 };
-use crate::api::context::RequestContext;
+use crate::api::context::{Caller, RequestContext};
 use crate::api::route::InvalidBody;
-use crate::api::schemas::{LookupRef, Page, Paged};
+use crate::api::schemas::{KEY_PATTERN, LookupRef, Page, Paged};
 use crate::api::validate;
 use crate::auth::permissions::ClassOp;
 use crate::data::classes as class_data;
@@ -161,10 +161,27 @@ async fn check_changed_attributes(
 // ---------------------------------------------------------------------------
 
 async fn filters(conn: &mut PgConnection, model: &Model, q: &impl ItemFilterQuery) -> Result<ItemFilters, AppError> {
-    let class_ids = match q.class_id() {
+    let mut class_ids = match q.class_id() {
         Some(ids) if q.include_subclasses() => Some(class_data::with_descendant_classes(conn, &ids.0).await?),
         Some(ids) => Some(ids.0.clone()),
         None => None,
+    };
+    // Process records stay out of the inventory unless asked for by kind or by naming their type.
+    let process = class_data::process_class_ids(conn).await?;
+    let excluded_class_ids = match q.kind() {
+        Some(KindQuery::Any) => None,
+        Some(KindQuery::Asset) => Some(process),
+        Some(KindQuery::Process) => {
+            class_ids = Some(match class_ids {
+                Some(ids) => ids.into_iter().filter(|c| process.contains(c)).collect(),
+                None => process,
+            });
+            None
+        }
+        None => {
+            let named: &[Uuid] = q.class_id().map(|l| l.0.as_slice()).unwrap_or_default();
+            Some(process.into_iter().filter(|c| !named.contains(c)).collect())
+        }
     };
     // Values grouped by list: any value of a list, and every list.
     let mut lookups: Vec<(Vec<Uuid>, data::LookupColumns)> = Vec::new();
@@ -196,6 +213,9 @@ async fn filters(conn: &mut PgConnection, model: &Model, q: &impl ItemFilterQuer
         criticality_value_ids: q.criticality_value_id().map(|l| l.0.clone()),
         deleted: Some(q.deleted()),
         visible_class_ids: None,
+        own_layout: None,
+        layout_template: None,
+        excluded_class_ids,
         // Also where ipWithin looks.
         search_tables: data::search_tables(model),
     })
@@ -258,9 +278,21 @@ pub async fn list(
     let mut conn = pool.acquire().await?;
     let model = Model::load(&mut conn).await?;
     let sort = list_sort(&model, q)?;
+    if let Some(key) = &q.layout_template
+        && !validate::cached_regex(KEY_PATTERN).is_some_and(|r| r.is_match(key))
+    {
+        return Err(AppError::validation(vec![FieldError {
+            location: FieldLocation::Query,
+            field: "layoutTemplate".into(),
+            message: "Not a layout template key (lower_snake_case)".into(),
+            code: "invalid_string".into(),
+        }]));
+    }
     let f = ItemFilters {
         q: q.q.clone(),
         visible_class_ids: ctx.class_scope(ClassOp::View),
+        own_layout: q.own_layout.map(bool::from),
+        layout_template: q.layout_template.clone(),
         ..filters(&mut conn, &model, q).await?
     };
     let (rows, total) = data::list(&mut conn, &f, sort, q.sort.desc, q.limit, q.offset).await?;
@@ -492,6 +524,24 @@ pub async fn remove(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<(),
         }
         _ => return Err(AppError::missing("Configuration item", id)),
     }
+    // A Person linked to a sign-in account stays (SHAA-1505 decision 7); the
+    // trigger configuration_items_keep_person is the backstop.
+    if let Some(account) = crate::data::people::linked_user(&mut tx, id).await? {
+        return Err(AppError::new(
+            ErrorCode::Conflict,
+            format!(
+                "This person is linked to the sign-in account \"{}\" and cannot be deleted. Disable or delete the \
+                 account first (Administration > Users).",
+                account.username
+            ),
+        )
+        .with_details(vec![FieldError {
+            location: FieldLocation::Params,
+            field: "id".into(),
+            message: format!("Linked to the sign-in account \"{}\"", account.username),
+            code: "person_linked".into(),
+        }]));
+    }
     let model = Model::load(&mut tx).await?;
     let before = must_detail(&mut tx, &model, id, None).await?;
     let edges = data::soft_delete_edges_of(&mut tx, id).await?;
@@ -516,6 +566,115 @@ pub async fn remove(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<(),
     });
     crud::write_audit(&mut tx, ctx, entries).await?;
     tx.commit().await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Writes on behalf of another operation
+// ---------------------------------------------------------------------------
+
+/// `ctx` with the system caller's rights: for CI writes another operation
+/// makes as part of its own (a user's Person, SHAA-1505), which needs the
+/// rights of that operation, not class rights. The audit rows still name `ctx`.
+fn on_behalf(ctx: &RequestContext) -> RequestContext {
+    RequestContext { caller: Caller::System, ..ctx.clone() }
+}
+
+/// Creates a CI of `class_id` with these attribute values, validated as any
+/// create is, in the caller's transaction; writes its audit row. Returns its id.
+pub(crate) async fn create_on_behalf(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    class_id: Uuid,
+    attributes: Map<String, Value>,
+) -> Result<Uuid, AppError> {
+    let system = on_behalf(ctx);
+    let model = Model::load(conn).await?;
+    let defs = class_data::effective_attributes(conn, class_id).await?;
+    let input = CreateItemBody {
+        class_id,
+        ident: None,
+        valid_from: None,
+        valid_until: None,
+        attributes: Some(attributes),
+        criticality_value_id: None,
+    };
+    let needs = Needs::for_create(&defs, input.attributes.as_ref());
+    let resolver = DbResolver::load(conn, None, &needs).await?;
+    let plan = plan::plan_create(&system, &model, &defs, &input, &resolver)?;
+    let id = plan::apply(conn, &model, &plan).await?;
+    let dto = must_detail(conn, &model, id, None).await?;
+    let entry = AuditEntry {
+        action: AuditAction::Create,
+        entity_type: "configuration_items",
+        entity_id: id,
+        old_value: None,
+        new_value: Some(crud::json(&dto)),
+    };
+    crud::write_audit(conn, ctx, vec![entry]).await?;
+    Ok(id)
+}
+
+/// Sets these attribute values on a live CI, validated as any update is, in
+/// the caller's transaction; writes its audit row unless nothing changed.
+pub(crate) async fn update_on_behalf(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    id: Uuid,
+    attributes: Map<String, Value>,
+) -> Result<(), AppError> {
+    let system = on_behalf(ctx);
+    let locked = data::lock(conn, id).await?.ok_or_else(|| AppError::missing("Configuration item", id))?;
+    let model = Model::load(conn).await?;
+    let before = must_detail(conn, &model, id, None).await?;
+    let defs = class_data::effective_attributes(conn, locked.class_id).await?;
+    let input = UpdateItemBody {
+        class_id: None,
+        ident: None,
+        valid_from: None,
+        valid_until: None,
+        attributes: Some(attributes),
+        criticality_value_id: None,
+        version: None,
+    };
+    let needs = Needs::for_update(&defs, input.attributes.as_ref(), &before.attributes);
+    let resolver = DbResolver::load(conn, None, &needs).await?;
+    let plan = plan::plan_update(&system, &model, &defs, before, &input, &resolver, None)?;
+    plan::apply(conn, &model, &plan).await?;
+    let dto = must_detail(conn, &model, id, None).await?;
+    let old = plan.before.as_ref().map(crud::json);
+    let new = crud::json(&dto);
+    if old.as_ref() != Some(&new) {
+        let entry = AuditEntry {
+            action: AuditAction::Update,
+            entity_type: "configuration_items",
+            entity_id: id,
+            old_value: old,
+            new_value: Some(new),
+        };
+        crud::write_audit(conn, ctx, vec![entry]).await?;
+    }
+    Ok(())
+}
+
+/// Brings a soft-deleted CI back (its relationships stay deleted), in the
+/// caller's transaction, with a `restore` audit row.
+pub(crate) async fn restore_on_behalf(conn: &mut PgConnection, ctx: &RequestContext, id: Uuid) -> Result<(), AppError> {
+    let model = Model::load(conn).await?;
+    let before = must_detail(conn, &model, id, None).await?;
+    if before.summary.deleted_at.is_none() {
+        return Ok(());
+    }
+    data::restore(conn, id).await?;
+    let after = must_detail(conn, &model, id, None).await?;
+    let entry = AuditEntry {
+        action: AuditAction::Restore,
+        entity_type: "configuration_items",
+        entity_id: id,
+        old_value: Some(crud::json(&before)),
+        new_value: Some(crud::json(&after)),
+    };
+    crud::write_audit(conn, ctx, vec![entry]).await?;
     Ok(())
 }
 
@@ -546,7 +705,8 @@ pub async fn graph(pool: &PgPool, ctx: &RequestContext, root_id: Uuid, q: &Graph
         return Err(AppError::missing("Configuration item", root_id));
     };
     ctx.require_class_visible(root.class_id, "Configuration item", root_id)?;
-    let visible = ctx.class_scope(ClassOp::View);
+    // Process records are not part of the graph.
+    let visible = class_data::asset_scope(&mut conn, ctx.class_scope(ClassOp::View).as_deref()).await?;
     let visible = visible.as_deref();
     let direction = match q.direction {
         GraphDirection::Both => Direction::Both,

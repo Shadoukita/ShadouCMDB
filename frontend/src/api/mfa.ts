@@ -78,5 +78,15 @@ export function useResetUserMfa() {
   });
 }
 
+/**
+ * Confirms the password (and a code once MFA is set up) again: for 10 minutes the session may change accounts,
+ * profiles, API tokens and identity providers (GH#498).
+ */
+export function useReauthenticate() {
+  return useMutation({
+    mutationFn: (body: { currentPassword: string; code?: string }) => unwrap(api.POST("/api/v1/auth/reauthenticate", { body })),
+  });
+}
+
 /** Authenticator codes are 6 digits; recovery codes ignore case, dashes and spaces. Strip what users paste around them. */
 export const normaliseCode = (code: string) => code.trim().replace(/\s+/g, "");

@@ -2,10 +2,10 @@
 // permission profiles, audit log). Same rules as queries.ts: every request goes
 // through the typed client, and mutations invalidate exactly what they change.
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/vue-query";
-import { toValue, type MaybeRefOrGetter } from "vue";
+import { computed, toValue, type MaybeRefOrGetter } from "vue";
 import { api, unwrap, type JsonBody as Body, type Schemas } from "./client";
 import { groupKeys } from "./groups";
-import { MAX_PAGE } from "./queries";
+import { keys, MAX_PAGE, useCiClasses } from "./queries";
 import type { paths } from "./schema";
 
 export type Session = Schemas["Session"];
@@ -16,6 +16,8 @@ export type EffectivePermissions = Schemas["EffectivePermissions"];
 export type GlobalPermission = EffectivePermissions["global"][number];
 export type ApiToken = Schemas["ApiToken"];
 export type CreatedApiToken = Schemas["CreatedApiToken"];
+export type SignInStatus = User["signInStatus"];
+export type SignInAccount = Schemas["SignInAccount"];
 
 export type SetupBody = Body<"/api/v1/setup", "post">;
 export type LoginBody = Body<"/api/v1/auth/login", "post">;
@@ -36,6 +38,7 @@ export const adminKeys = {
   profiles: ["admin", "profiles"] as const,
   profileList: (q: ProfileListQuery) => ["admin", "profiles", "list", q] as const,
   profile: (id: string) => ["admin", "profiles", "detail", id] as const,
+  signInAccount: (ciId: string) => ["admin", "users", "sign-in-account", ciId] as const,
   apiTokens: ["admin", "api-tokens"] as const,
   apiTokenList: (q: ApiTokenListQuery) => ["admin", "api-tokens", "list", q] as const,
   auditList: (q: AuditListQuery) => ["audit", "list", q] as const,
@@ -50,6 +53,8 @@ export const authApi = {
   loginMfa: (code: string) => unwrap(api.POST("/api/v1/auth/login/mfa", { body: { code } })),
   logout: () => unwrap(api.POST("/api/v1/auth/logout")),
   me: () => unwrap(api.GET("/api/v1/auth/me")),
+  /** For an account created before e-mails were required: answers the session, now linked to its Person CI. */
+  enterEmail: (email: string) => unwrap(api.PUT("/api/v1/auth/email", { body: { email } })),
 };
 
 /** Changes the signed-in user's own password; the API ends their other sessions and keeps this one. */
@@ -92,6 +97,7 @@ export function useCreateUser() {
     onSuccess: (user) => {
       qc.invalidateQueries({ queryKey: adminKeys.users });
       qc.invalidateQueries({ queryKey: adminKeys.profiles }); // userCount
+      qc.invalidateQueries({ queryKey: keys.cis }); // the Person CI it was linked to, created when there was none
       qc.setQueryData(adminKeys.user(user.id), user);
     },
   });
@@ -106,6 +112,7 @@ export function useUpdateUser() {
       qc.invalidateQueries({ queryKey: adminKeys.users });
       qc.invalidateQueries({ queryKey: adminKeys.profiles });
       qc.invalidateQueries({ queryKey: groupKeys.all }); // members show the user's name and status
+      qc.invalidateQueries({ queryKey: keys.cis }); // the linked Person's Email follows the account's
       qc.setQueryData(adminKeys.user(user.id), user);
     },
   });
@@ -128,7 +135,33 @@ export function useDeleteUser() {
       qc.invalidateQueries({ queryKey: adminKeys.users });
       qc.invalidateQueries({ queryKey: adminKeys.profiles });
       qc.invalidateQueries({ queryKey: groupKeys.all }); // memberCount
+      qc.invalidateQueries({ queryKey: keys.cis }); // its Person stays, unlinked
     },
+  });
+}
+
+/** Whether CIs of this class are Persons (the built-in class with `systemRole` person), which sign-in accounts link to. */
+export function useIsPersonClass(classId: MaybeRefOrGetter<string | undefined>) {
+  const classes = useCiClasses();
+  return computed(() => {
+    const id = toValue(classId);
+    return !!id && classes.data.value?.find((c) => c.id === id)?.systemRole === "person";
+  });
+}
+
+/**
+ * The sign-in account linked to a Person CI (null when none is, or for a CI of another class). Kept under the
+ * users key, so a change to an account (its e-mail, its status, a delete) refreshes the panel.
+ */
+export function useSignInAccount(ciId: MaybeRefOrGetter<string | undefined>, enabled: MaybeRefOrGetter<boolean> = true) {
+  return useQuery(() => {
+    const id = toValue(ciId) ?? "";
+    return {
+      queryKey: adminKeys.signInAccount(id),
+      enabled: !!id && toValue(enabled),
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        unwrap(api.GET("/api/v1/configuration-items/{id}/sign-in-account", { params: { path: { id } }, signal })),
+    };
   });
 }
 

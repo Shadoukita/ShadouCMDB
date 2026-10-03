@@ -99,7 +99,7 @@ test("account writes refuse the token, even an Administrator's, while reading ac
 
   const minted = `e2e-token-minted-${stamp}`;
   const writes = [
-    ctx.post("/api/v1/admin/users", { data: { username: minted, displayName: "Minted by a token", password: "minted-by-a-token-1", profileIds: [] } }),
+    ctx.post("/api/v1/admin/users", { data: { username: minted, email: `${minted}@example.test`, displayName: "Minted by a token", password: "minted-by-a-token-1", profileIds: [] } }),
     ctx.patch(`/api/v1/admin/users/${me!.id}`, { data: { displayName: "Renamed by a token" } }),
     ctx.put(`/api/v1/admin/users/${me!.id}/password`, { data: { password: "set-by-a-token-123" } }),
     ctx.delete(`/api/v1/admin/users/${me!.id}`),
@@ -171,7 +171,7 @@ test("a token for an owner with more rights than yours is refused, and the dialo
   });
   const me = await apiGet<{ user: { id: string } }>(request, "/auth/me");
   const ownerId = me.user.id;
-  await apiSend(request, "POST", "/admin/users", { username, displayName: `E2E Token Manager ${stamp}`, password, profileIds: [profile.id] });
+  await apiSend(request, "POST", "/admin/users", { username, email: `${username}@example.test`, displayName: `E2E Token Manager ${stamp}`, password, profileIds: [profile.id] });
 
   const context = await browser.newContext({ storageState: { cookies: [], origins: [] } });
   const page = await context.newPage();
@@ -200,6 +200,7 @@ test("a token refused because its owner must use two-factor authentication is ba
   const mfa = await apiSend<{ id: string }>(request, "POST", "/admin/profiles", { name: `E2E token MFA ${stamp}`, globalPermissions: [], classPermissions: [], requireMfa: true });
   const svc = await apiSend<{ id: string; username: string }>(request, "POST", "/admin/users", {
     username: `e2e-token-svc-${stamp}`,
+    email: `e2e-token-svc-${stamp}@example.test`,
     displayName: `E2E token service ${stamp}`,
     password: "token-service-password-1",
     profileIds: [readers.id],

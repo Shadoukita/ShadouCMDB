@@ -21,8 +21,10 @@ pub struct CreateAdminArgs {
     /// Name shown in the UI (defaults to the username).
     #[arg(long)]
     pub display_name: Option<String>,
+    /// E-mail address (required, unique regardless of case); the account is
+    /// linked to the Person with this e-mail, which is created when there is none.
     #[arg(long)]
-    pub email: Option<String>,
+    pub email: String,
     /// Read the password from the first line of stdin instead of prompting
     /// (for scripts: `printf '%s\n' "$PW" | shadoucmdb create-admin --username admin --password-stdin`).
     #[arg(long)]
@@ -75,9 +77,6 @@ pub async fn create_admin(cfg: &DatabaseConfig, args: CreateAdminArgs) -> anyhow
             profile_ids: vec![admin],
         };
         let user = users::create_in(&mut tx, &ctx, &input).await.map_err(|e| {
-            if e.code == crate::http::error::ErrorCode::Conflict {
-                return anyhow::anyhow!("a user named \"{}\" already exists", args.username);
-            }
             let details: Vec<String> =
                 e.details.iter().flatten().map(|d| format!("{}: {}", d.field, d.message)).collect();
             if details.is_empty() {

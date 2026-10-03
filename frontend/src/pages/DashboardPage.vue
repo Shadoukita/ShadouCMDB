@@ -37,7 +37,10 @@ const classes = useCiClasses();
 /** A fresh install: no classes but the built-in ones yet, so the first step is the data model, not a CI. */
 const noClasses = computed(() => !!classes.data.value && dataModelEmpty(classes.data.value));
 // Only classes the user may view: the API leaves the others out of every count, which would read as 0.
-const concrete = computed(() => (classes.data.value ?? []).filter((c) => !c.isAbstract && session.canOnClass(c.id, "view")));
+// Process types (change requests and the like) are not part of the inventory.
+const concrete = computed(() =>
+  (classes.data.value ?? []).filter((c) => !c.isAbstract && c.kind === "asset" && session.canOnClass(c.id, "view")),
+);
 const classCounts = useQueries({ queries: computed(() => concrete.value.map((c) => ciCountQuery({ classId: c.id }))) });
 const classRows = computed<CountRow[]>(() =>
   concrete.value.map((c, i) => ({
@@ -76,7 +79,7 @@ const statusRows = computed<CountRow[]>(() =>
     </div>
 
     <LoadingState v-if="total.isLoading.value" />
-    <section v-if="total.data.value === 0 && noClasses" class="panel callout">
+    <section v-if="noClasses" class="panel callout">
       <DataModelEmpty />
     </section>
     <section v-else-if="total.data.value === 0 && classes.data.value" class="panel">
@@ -87,7 +90,7 @@ const statusRows = computed<CountRow[]>(() =>
         </template>
       </EmptyState>
     </section>
-    <template v-if="total.data.value !== undefined && total.data.value > 0 && widgets">
+    <template v-if="!noClasses && total.data.value !== undefined && total.data.value > 0 && widgets">
       <DashboardWidgets v-if="widgets.length > 0" :widgets="widgets" />
       <EmptyState v-else :title="t('dashboard.noWidgets.title')">
         {{ t("dashboard.noWidgets.body") }}
@@ -97,7 +100,7 @@ const statusRows = computed<CountRow[]>(() =>
       </EmptyState>
     </template>
     <LoadingState v-else-if="settings.query.isLoading.value" />
-    <template v-else-if="total.data.value !== undefined && total.data.value > 0">
+    <template v-else-if="!noClasses && total.data.value !== undefined && total.data.value > 0">
       <div class="kpis">
         <div class="kpi">
           <div class="value">{{ formatNumber(total.data.value) }}</div>

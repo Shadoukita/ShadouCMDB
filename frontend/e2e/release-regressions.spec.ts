@@ -31,6 +31,7 @@ async function signIn(playwright: Ctx, baseURL: string, username: string): Promi
 async function createUser(request: APIRequestContext, name: string, profileIds: string[]): Promise<{ id: string; username: string }> {
   const user = await apiSend<{ id: string; username: string }>(request, "POST", "/admin/users", {
     username: `e2e-relreg-${name}-${stamp}`,
+    email: `e2e-relreg-${name}-${stamp}@example.test`,
     displayName: `E2E release regressions ${name} ${stamp}`,
     password: PASSWORD,
     profileIds,

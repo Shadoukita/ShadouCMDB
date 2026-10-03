@@ -108,7 +108,7 @@ Run in an elevated PowerShell, from the folder you extracted this archive to:
   & "$bin\shadoucmdb.exe" --env-file "$data\shadoucmdb.env" seed --template it_infrastructure
   # First administrator (or skip this and use first-run setup in the web UI, with the setup token from
   # "$data\state\setup-token"; it is in the log file only if that file cannot be written):
-  & "$bin\shadoucmdb.exe" --env-file "$data\shadoucmdb.env" create-admin --username admin
+  & "$bin\shadoucmdb.exe" --env-file "$data\shadoucmdb.env" create-admin --username admin --email admin@example.com
   # Register the service. It runs as its own virtual account, NT SERVICE\ShadouCMDB,
   # which Windows creates with the service; no other service shares it.
   & "$bin\shadoucmdb.exe" --env-file "$data\shadoucmdb.env" --log-file "$data\logs\shadoucmdb.log" service install
@@ -172,6 +172,13 @@ in your password vault). At its first start the service encrypts the existing
 authenticator secrets; nobody has to set up two-factor sign-in again. Going
 back to the previous release afterwards needs a restore of a backup taken
 before the upgrade.
+
+Upgrading from a release where e-mail addresses were optional: from then on
+API tokens of an account without an e-mail are refused (403 EMAIL_REQUIRED)
+until it has one. Before the upgrade, give every service account that scripts
+use (backup, monitoring, import) a unique e-mail under Administration > Users,
+or right after migrate the same way. migrate prints the accounts without an
+e-mail that own working tokens; their tokens work again once they have one.
 
 Upgrading an install whose service runs as NT AUTHORITY\LocalService (installed
 before the service had its own account): LocalService is shared by many Windows

@@ -3,11 +3,12 @@ import { createPinia } from "pinia";
 import { createApp } from "vue";
 import { watch } from "vue";
 import { START_LOCATION } from "vue-router";
-import { onMfaEnrolmentRequired, onSessionEnded } from "./api/client";
+import { onEmailRequired, onMfaEnrolmentRequired, onReauthenticationRequired, onSessionEnded } from "./api/client";
 import { queryClient } from "./api/queryClient";
 import App from "./App.vue";
 import { listenForLayoutUpdates } from "./lib/layoutEditor";
-import { loginQuery, router, TWO_FACTOR_SETUP } from "./router";
+import { reauthentication } from "./lib/reauthentication";
+import { EMAIL_ENTRY, loginQuery, router, TWO_FACTOR_SETUP } from "./router";
 import { useBrandingStore } from "./stores/branding";
 import { useSessionStore } from "./stores/session";
 import "./styles/app.css";
@@ -43,6 +44,27 @@ watch(
     router.replace({ path: TWO_FACTOR_SETUP, query: here.fullPath === "/" ? {} : { redirect: here.fullPath } });
   },
 );
+
+// The account has no e-mail yet (created before e-mails were required, and the session was read
+// before that showed): re-read the session, then ask for it. The router guard keeps the user there.
+onEmailRequired(() => {
+  const session = useSessionStore();
+  if (session.status === "signedIn" && !session.emailRequired) void session.refresh().catch(() => undefined);
+});
+watch(
+  () => useSessionStore().emailRequired,
+  (required) => {
+    const here = router.currentRoute.value;
+    if (!required || here === START_LOCATION || here.path === EMAIL_ENTRY || here.meta.public) return;
+    router.replace({ path: EMAIL_ENTRY, query: here.fullPath === "/" ? {} : { redirect: here.fullPath } });
+  },
+);
+
+// A change to accounts, profiles, API tokens or identity providers needs the password confirmed
+// in the last 10 minutes (GH#498): ask for it, then the user sends the change again.
+onReauthenticationRequired(() => {
+  if (useSessionStore().status === "signedIn") reauthentication.open = true;
+});
 
 // Branding is public (the sign-in page is branded too); App applies it as it arrives.
 void useBrandingStore().load();

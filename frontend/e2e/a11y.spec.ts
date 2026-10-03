@@ -108,7 +108,7 @@ test.describe("an operator's own account", () => {
   let page: Page;
 
   test.beforeAll(async ({ request, browser }) => {
-    await apiSend(request, "POST", "/admin/users", { username: USERNAME, displayName: `A11y operator ${stamp}`, password: PASSWORD, profileIds: [] });
+    await apiSend(request, "POST", "/admin/users", { username: USERNAME, email: `${USERNAME}@example.test`, displayName: `A11y operator ${stamp}`, password: PASSWORD, profileIds: [] });
     page = await signedOutPage(browser);
     await page.goto("/login");
     await page.getByLabel("Username").fill(USERNAME);

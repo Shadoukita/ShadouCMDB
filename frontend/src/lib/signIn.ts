@@ -13,6 +13,7 @@ export const SSO_ERRORS: Record<string, MessageKey> = {
   invalid_username: "auth.sso.invalid_username",
   last_administrator: "auth.sso.last_administrator",
   mfa_not_enforced: "auth.sso.mfa_not_enforced",
+  account_incomplete: "auth.sso.account_incomplete",
 };
 
 /** The shape of a server error code. Anything else in ?ssoError= came from a crafted link, not from us. */
