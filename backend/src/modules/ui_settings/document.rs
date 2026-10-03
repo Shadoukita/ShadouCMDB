@@ -1265,7 +1265,8 @@ fn standard_template(taken: &HashSet<String>, layout: UiLayout) -> UiLayoutTempl
 /// * tabs or fields sent with a `templateKey` replace that template's layout, unless they are the layout it
 ///   has (now or in `previous`), as when the settings the API returned are sent back;
 /// * class layouts keep only `classKey` and `templateKey`;
-/// * the Standard template is added when missing.
+/// * the Standard template is added when missing, as it is in `previous` (an administrator who sends only
+///   the templates they edit keeps Standard's layout; GH#521), else empty.
 ///
 /// A class layout naming a template that does not exist, and two different layouts sent for one
 /// template, are refused.
@@ -1283,7 +1284,10 @@ pub fn contract(
     }
     let sent: HashMap<String, UiLayout> =
         doc.layout_templates.iter().map(|t| (t.key.clone(), t.layout.clone())).collect();
+    // Standard when `doc` leaves it out: as in the version it replaces.
+    let kept_standard = previous.iter().find(|t| t.key == STANDARD_TEMPLATE);
     let empty = UiLayout::default();
+    let standard_layout = kept_standard.map_or(&empty, |t| &t.layout);
     let mut edited: HashMap<String, UiLayout> = HashMap::new();
     let mut created = Vec::new();
     for (i, l) in doc.layouts.iter_mut().enumerate() {
@@ -1303,7 +1307,7 @@ pub fn contract(
             l.template_key = Some(key);
             continue;
         };
-        let Some(current) = sent.get(&key).or((key == STANDARD_TEMPLATE).then_some(&empty)) else {
+        let Some(current) = sent.get(&key).or((key == STANDARD_TEMPLATE).then_some(standard_layout)) else {
             errors.push(custom(
                 format!("settings.layouts.{i}.templateKey"),
                 format!("No layout template has the key \"{key}\""),
@@ -1341,8 +1345,15 @@ pub fn contract(
         }
     }
     if !doc.layout_templates.iter().any(|t| t.key == STANDARD_TEMPLATE) {
-        let layout = edited.remove(STANDARD_TEMPLATE).unwrap_or_default();
-        doc.layout_templates.insert(0, standard_template(&names, layout));
+        let layout = edited.remove(STANDARD_TEMPLATE).unwrap_or_else(|| standard_layout.clone());
+        let mut standard = standard_template(&names, layout);
+        if let Some(kept) = kept_standard {
+            standard.description = kept.description.clone();
+            if !names.contains(&kept.name.trim().to_lowercase()) {
+                standard.name = kept.name.clone();
+            }
+        }
+        doc.layout_templates.insert(0, standard);
     }
     doc.layout_templates.extend(created);
     Ok(doc)

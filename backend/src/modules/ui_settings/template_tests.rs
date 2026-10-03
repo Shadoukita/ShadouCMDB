@@ -593,3 +593,43 @@ async fn usage_counts_own_layouts_names_a_sample_ci_and_the_list_filters_by_them
 
     db.drop().await;
 }
+
+/// A PUT that leaves the Standard template out keeps it as it was, with its layout, name and description,
+/// instead of resetting it to an empty layout for every class and CI using it (GH#521).
+#[tokio::test]
+async fn a_put_without_the_standard_template_keeps_its_layout() {
+    let Some(db) = scratch::database("a_put_without_the_standard_template_keeps_its_layout").await else {
+        return;
+    };
+    let w = world(&db).await;
+    let mut settings = w.stored().await;
+    let i = keys(&settings["layoutTemplates"]).iter().position(|k| *k == "standard").unwrap();
+    settings["layoutTemplates"][i]["layout"]["hiddenFields"] = json!(["attributes.cpu_cores"]);
+    settings["layoutTemplates"][i]["description"] = json!("Every class without its own template");
+    let (status, v) = w.put(settings).await;
+    assert_eq!(status, 200, "{v}");
+    let before = template(&w.raw().await, "standard").clone();
+    assert_eq!(before["layout"]["hiddenFields"], json!(["attributes.cpu_cores"]), "{before}");
+
+    // Only another template sent: Standard is carried over.
+    let compact = json!({ "key": "compact", "name": "Compact", "layout": { "tabs": [tab("Compact", &["ident"])] } });
+    let (status, v) = w.put(json!({ "layoutTemplates": [compact] })).await;
+    assert_eq!(status, 200, "{v}");
+    let raw = w.raw().await;
+    assert_eq!(keys(&raw["layoutTemplates"]), ["standard", "compact"]);
+    assert_eq!(template(&raw, "standard"), &before, "{raw}");
+    assert_eq!(
+        w.settings().await["settings"]["layoutTemplates"][0]["layout"]["hiddenFields"],
+        json!(["attributes.cpu_cores"])
+    );
+
+    // A class edits Standard through its layout while the template itself is left out: the edit counts.
+    let sent = json!({ "classKey": "server", "templateKey": "standard", "readOnlyFields": ["label"] });
+    let (status, v) = w.put(json!({ "layouts": [sent], "layoutTemplates": [template(&raw, "compact")] })).await;
+    assert_eq!(status, 200, "{v}");
+    let standard = template(&w.raw().await, "standard").clone();
+    assert_eq!(standard["layout"]["readOnlyFields"], json!(["label"]), "{standard}");
+    assert_eq!(standard["name"], "Standard");
+
+    db.drop().await;
+}
