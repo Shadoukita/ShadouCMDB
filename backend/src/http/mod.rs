@@ -302,7 +302,8 @@ impl Capacity {
     }
 
     /// A permit from the global pool for `user`, or 503 SERVER_BUSY when the
-    /// pool, or the user's share of it, is spent.
+    /// pool, or the user's share of it, is spent. The refusal is logged with the
+    /// request span's `user_id` (and `token_id`), recorded by `api::route` (GH#571).
     pub fn acquire_for_user(&self, user: uuid::Uuid) -> Result<Slot, AppError> {
         let mut held = self.by_user.lock();
         if !Shares::room(&held, user, 1, self.by_user.max) {
@@ -327,7 +328,7 @@ impl Capacity {
 
     /// What a public request body from `net` holds of the budget: nothing until [`BodyHold::add`].
     pub fn hold_public_body(&self, net: crate::auth::throttle::Net) -> BodyHold {
-        BodyHold { capacity: self.clone(), net, permit: None, bytes: 0 }
+        BodyHold { capacity: self.clone(), net, logs_net: false, permit: None, bytes: 0 }
     }
 
     #[cfg(test)]
@@ -355,32 +356,46 @@ impl Capacity {
 pub struct BodyHold {
     capacity: Capacity,
     net: crate::auth::throttle::Net,
+    /// A refusal records `net` on the request span (AUDIT_CAPTURE_IP).
+    logs_net: bool,
     permit: Option<tokio::sync::OwnedSemaphorePermit>,
     bytes: usize,
 }
 
 impl BodyHold {
+    /// A refusal logs the client network (GH#571).
+    pub fn logging_net(mut self, yes: bool) -> Self {
+        self.logs_net = yes;
+        self
+    }
+
     /// Holds `bytes` more, or 503 SERVER_BUSY when the budget, or this client
     /// network's or its wider network's share of it, is spent.
     pub fn add(&mut self, bytes: usize) -> Result<(), AppError> {
         let n = u32::try_from(bytes).map_err(|_| server_busy())?;
         let capacity = &self.capacity;
         let wide = self.net.wide();
+        let refuse = |why: &str| {
+            if self.logs_net {
+                record_net(self.net);
+            }
+            tracing::warn!("request refused: {why}");
+            server_busy()
+        };
         // Always in this order (net, then wide), so two holds cannot deadlock.
         let mut by_net = capacity.public_body_by_net.lock();
         let mut by_wide = capacity.public_body_by_wide.lock();
         if !Shares::room(&by_net, self.net, bytes, capacity.public_body_by_net.max) {
-            tracing::warn!("request refused: one client network's share of the public request body budget reached");
-            return Err(server_busy());
+            return Err(refuse("one client network's share of the public request body budget reached"));
         }
         if !Shares::room(&by_wide, wide, bytes, capacity.public_body_by_wide.max) {
-            tracing::warn!("request refused: one wider network's share of the public request body budget reached");
-            return Err(server_busy());
+            return Err(refuse("one wider network's share of the public request body budget reached"));
         }
-        let more = capacity.public_body_bytes.clone().try_acquire_many_owned(n).map_err(|_| {
-            tracing::warn!("request refused: public request body budget reached");
-            server_busy()
-        })?;
+        let more = capacity
+            .public_body_bytes
+            .clone()
+            .try_acquire_many_owned(n)
+            .map_err(|_| refuse("public request body budget reached"))?;
         *by_net.entry(self.net).or_default() += bytes;
         *by_wide.entry(wide).or_default() += bytes;
         drop((by_net, by_wide));
@@ -401,6 +416,14 @@ impl Drop for BodyHold {
         self.capacity.public_body_by_net.give_back(self.net, self.bytes);
         self.capacity.public_body_by_wide.give_back(self.net.wide(), self.bytes);
     }
+}
+
+/// Records the client's network and wider network, never its address, on the
+/// request span, so the refusal or timeout of a public body can be attributed (GH#571).
+pub fn record_net(net: crate::auth::throttle::Net) {
+    let span = tracing::Span::current();
+    span.record("net", net.cidr());
+    span.record("wide", net.wide_cidr());
 }
 
 fn server_busy() -> AppError {

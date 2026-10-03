@@ -35,7 +35,19 @@ pub async fn middleware(req: Request, next: Next) -> Response {
         .map(str::to_owned)
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-    let span = tracing::info_span!("request", request_id = %id, method = %req.method(), path = %req.uri().path());
+    // The caller, once known, so a refusal or a timeout before the handler can be
+    // attributed (GH#571): `user_id` and `token_id` once the request is authorised,
+    // `net` and `wide` (networks, never the address) when a public body is refused or times out.
+    let span = tracing::info_span!(
+        "request",
+        request_id = %id,
+        method = %req.method(),
+        path = %req.uri().path(),
+        user_id = tracing::field::Empty,
+        token_id = tracing::field::Empty,
+        net = tracing::field::Empty,
+        wide = tracing::field::Empty,
+    );
     let started = Instant::now();
     let mut res = REQUEST_ID.scope(id.clone(), next.run(req)).instrument(span.clone()).await;
 
