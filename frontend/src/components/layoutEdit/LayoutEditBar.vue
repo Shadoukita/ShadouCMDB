@@ -296,7 +296,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
   border: 2px solid var(--c-primary);
   border-radius: var(--radius);
   background: var(--c-surface-alt);
-  box-shadow: 0 2px 8px rgb(0 0 0 / 10%);
+  box-shadow: var(--shadow-md);
 }
 .le-bar-row {
   display: flex;

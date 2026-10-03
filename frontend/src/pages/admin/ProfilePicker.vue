@@ -40,6 +40,6 @@ function toggle(id: string, on: boolean) {
       </li>
     </ul>
     <p v-if="truncated" class="muted">Only the first {{ rows.length }} profiles are listed.</p>
-    <span v-if="error" class="field error" role="alert" style="color: var(--c-danger)">{{ error }}</span>
+    <span v-if="error" class="field error" role="alert" style="color: var(--c-danger-text)">{{ error }}</span>
   </fieldset>
 </template>

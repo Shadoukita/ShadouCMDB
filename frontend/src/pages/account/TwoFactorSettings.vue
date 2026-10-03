@@ -336,7 +336,7 @@ function codesSaved() {
   font-size: var(--fs-md);
 }
 .error-text {
-  color: var(--c-danger);
+  color: var(--c-danger-text);
   font-weight: 600;
 }
 </style>

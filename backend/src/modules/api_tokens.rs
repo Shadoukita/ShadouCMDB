@@ -669,6 +669,7 @@ pub(crate) mod tests {
             http: HttpConfig {
                 header_read_timeout: StdDuration::from_secs(10),
                 request_timeout: StdDuration::from_secs(120),
+                body_timeout: StdDuration::from_secs(30),
                 max_concurrent_requests: 512,
             },
             database: DatabaseConfig {

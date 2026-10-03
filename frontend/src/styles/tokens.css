@@ -1,99 +1,232 @@
-/* Design tokens. A later visual pass should mostly edit this file. */
+/*
+ * Design tokens (SHAA-1670 design document, §2). Components use the semantic tokens only;
+ * the raw scales below exist to define them. No colour, font size, radius, shadow or z-index
+ * literal belongs anywhere else in the stylesheets.
+ *
+ * Contrast notes give the WCAG ratio against the surface the token is drawn on: text needs
+ * 4.5:1, a control's boundary 3:1 (1.4.11).
+ *
+ * Branding (stores/branding.ts) overrides --c-primary, --c-primary-hover, --c-primary-text,
+ * --c-link, --c-focus and --c-accent on <html> at runtime. Its SURFACE and SIDEBAR constants
+ * mirror --c-surface and --c-sidebar here; unit/branding.test.ts keeps them in step.
+ */
 :root {
+  /* ---------- Raw scales ---------- */
+  --gray-0: #ffffff;
+  --gray-25: #fafbfc;
+  --gray-50: #f5f6f8;
+  --gray-100: #eceef2;
+  --gray-150: #e2e5ea;
+  --gray-200: #d5d9e0;
+  --gray-300: #b9bfc9;
+  --gray-400: #8a919d;
+  --gray-500: #636b78;
+  --gray-600: #4e5562;
+  --gray-700: #3a404b;
+  --gray-800: #262b33;
+  --gray-900: #181c22;
+  --gray-950: #12161c;
+
+  --blue-50: #edf2fc;
+  --blue-100: #dbe7fe;
+  --blue-500: #3b6fe0;
+  --blue-600: #2457d6;
+  --blue-700: #1d46b0;
+
+  /* ---------- Typography ---------- */
   --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
-  --fs-xs: 11px;
-  --fs-sm: 12px;
-  --fs-md: 13px;
-  --fs-lg: 15px;
-  --fs-xl: 18px;
 
-  --sp-1: 2px;
-  --sp-2: 4px;
-  --sp-3: 8px;
-  --sp-4: 12px;
-  --sp-5: 16px;
-  --sp-6: 24px;
+  --fs-xs: 11px; /* badges, overline labels, kbd hints */
+  --fs-sm: 12px; /* labels, help text, table headers, breadcrumbs */
+  --fs-md: 13px; /* body, table cells, controls */
+  --fs-h3: 14px; /* section inside a card, form group */
+  --fs-h2: 16px; /* card and dialog titles */
+  --fs-h1: 20px; /* page title */
+  --fs-display: 24px; /* sign-in and dashboard greeting */
+  --fs-kpi: 28px; /* dashboard figures */
+  /* Older names, kept until every rule uses the names above (rollout PR 11). */
+  --fs-lg: var(--fs-h2);
+  --fs-xl: var(--fs-h1);
 
-  --radius: 3px;
+  --lh-tight: 1.25;
+  --lh-body: 1.45;
+
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+
+  /* ---------- Spacing (4px base) ---------- */
+  --space-px: 1px;
+  --space-0_5: 2px;
+  --space-1: 4px;
+  --space-1_5: 6px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  /* Older steps, same values. */
+  --sp-1: var(--space-0_5);
+  --sp-2: var(--space-1);
+  --sp-3: var(--space-2);
+  --sp-4: var(--space-3);
+  --sp-5: var(--space-4);
+  --sp-6: var(--space-6);
+
+  /* ---------- Radius and elevation ---------- */
+  --radius-sm: 4px; /* badges, checkboxes, chips */
+  --radius-md: 6px; /* buttons, inputs, menus */
+  --radius-lg: 8px; /* cards, popovers, dialogs */
+  --radius-full: 999px;
+  --radius: var(--radius-sm);
+
+  --shadow-xs: 0 1px 2px rgb(16 24 40 / 6%);
+  --shadow-md: 0 4px 12px rgb(16 24 40 / 12%);
+  --shadow-lg: 0 16px 40px rgb(16 24 40 / 20%);
+  --shadow-pop: var(--shadow-md);
+  --c-scrim: rgb(15 18 22 / 50%);
+
+  --z-raised: 1;
+  --z-sticky: 10;
+  --z-dropdown: 30;
+  --z-drawer: 40;
+  --z-dialog: 50;
+  --z-toast: 60;
+
+  /* ---------- Sizes (compact density: today's values) ---------- */
   --row-h: 28px;
   --control-h: 28px;
+  --control-h-sm: 24px;
   --sidebar-w: 200px;
   --header-h: 44px;
 
-  --c-bg: #f3f4f6;
-  --c-surface: #ffffff;
-  --c-surface-alt: #f9fafb;
-  --c-border: #d6d9de;
-  --c-border-strong: #b5bac2;
-  --c-text: #1d232b;
-  --c-text-muted: #56606d;
-  --c-link: #1557b0;
-  --c-primary: #1f5fbf;
-  --c-primary-hover: #184d9c;
+  /* ---------- Colour: surfaces, borders, text ---------- */
+  --c-bg: var(--gray-50);
+  --c-surface: var(--gray-0);
+  --c-surface-alt: var(--gray-50);
+  --c-surface-sunken: var(--gray-100);
+  --c-border: var(--gray-200); /* cards, table rules: decorative */
+  --c-border-strong: var(--gray-300);
+  --c-border-control: var(--gray-400); /* inputs, secondary buttons: 3.2:1 on the surface */
+  --c-border-control-hover: var(--gray-500);
+  --c-divider: var(--gray-100);
+  --c-text: var(--gray-900); /* 17.1:1 */
+  --c-text-secondary: var(--gray-600); /* 7.5:1 on the surface, 6.9:1 on --c-bg */
+  --c-text-tertiary: var(--gray-500); /* 5.4:1 on the surface, 5.0:1 on --c-bg */
+  --c-text-muted: var(--c-text-secondary);
+  --c-row-hover: #f3f6fd;
+  --c-row-selected: var(--blue-50);
+
+  /* ---------- Colour: primary (brandable) ---------- */
+  --c-primary: var(--blue-600); /* white text 6.2:1 */
+  --c-primary-hover: var(--blue-700); /* white text 8.2:1 */
   --c-primary-text: #ffffff;
-  --c-danger: #b42318;
-  --c-danger-hover: #8f1c13;
-  --c-danger-bg: #fdecea;
-  /* Error text on surfaces and hovered rows (at least 4.5:1 on both). */
-  --c-danger-text: #b42318;
-  /* Solid danger buttons (white text). */
-  --c-danger-solid: #b42318;
-  --c-danger-solid-hover: #8f1c13;
-  --c-warn-bg: #fff6e0;
-  --c-warn-border: #e8c46b;
-  --c-ok: #1a7f37;
-  --c-focus: #2f6fdd;
-  /* Sidebar highlights (active item marker, brand strip). Administration › Customization › Branding can override it. */
+  --c-on-solid: #ffffff; /* text on solid success, warning and danger fills */
+  --c-primary-subtle: var(--blue-50); /* primary text on it 5.5:1 */
+  --c-primary-muted: var(--blue-100);
+  --c-link: var(--blue-600);
+  --c-focus: var(--blue-600);
+  /* The sidebar's highlight (active item bar, brand strip). Drawn on the dark rail only:
+   * highlights on light surfaces use the primary tokens. Customization › Branding can override it. */
   --c-accent: #4c8dff;
-  --c-divider: #edf0f3;
+
+  /* ---------- Colour: semantic states ---------- */
+  --c-success: #16794a;
+  --c-success-subtle: #e3f5ea;
+  --c-success-text: #155e3a; /* 6.9:1 on the subtle background */
+  --c-warning: #b25e09;
+  --c-warning-subtle: #fff4e0;
+  --c-warning-text: #7a3e00; /* 7.7:1 */
+  --c-danger-solid: #c4271d; /* white text 5.8:1 */
+  --c-danger-solid-hover: #9b1c14;
+  --c-danger-subtle: #fdeceb;
+  --c-danger-text: #b42318; /* 6.6:1 on the surface, 5.8:1 on the subtle background */
   --c-danger-border: #efb4ad;
-  --c-row-hover: #eef3fb;
-  --c-sidebar: #1e2733;
-  --c-sidebar-text: #c9d1dc;
-  --c-sidebar-active: #2d3b4d;
+  --c-info-subtle: #e8effd;
+  --c-info-text: var(--blue-700); /* 7.1:1 */
+  /* Older names. */
+  --c-danger: var(--c-danger-solid);
+  --c-danger-hover: var(--c-danger-solid-hover);
+  --c-danger-bg: var(--c-danger-subtle);
+  --c-warn-bg: var(--c-warning-subtle);
+  --c-warn-border: #e8c46b;
+  --c-ok: var(--c-success);
 
-  --badge-neutral-bg: #e8eaee;
-  --badge-neutral-fg: #37404c;
-  --badge-ok-bg: #dcf2e3;
-  --badge-ok-fg: #14532d;
-  --badge-warn-bg: #fdf0d2;
-  --badge-warn-fg: #6b4a05;
-  --badge-off-bg: #eceff3;
-  --badge-off-fg: #5b6573;
-  --badge-danger-bg: #fbe0dd;
-  --badge-danger-fg: #7a1a12;
+  /* ---------- Colour: sidebar (dark rail in both themes) ---------- */
+  --c-sidebar: var(--gray-950);
+  --c-sidebar-hover: #1b2129;
+  --c-sidebar-active: #232a34;
+  --c-sidebar-text: #c4cad3; /* 11.0:1, 8.8:1 on the active row */
+  --c-sidebar-text-muted: #8f96a3; /* 6.1:1, 4.9:1 on the active row: section labels, counts */
+  --c-sidebar-text-strong: #ffffff;
+  --c-sidebar-link: #9ec1ff;
+  /* Class icons are drawn in colours meant for light backgrounds: on the rail they sit on this chip. */
+  --c-sidebar-chip: #eef1f5;
 
-  --shadow-pop: 0 6px 20px rgba(15, 23, 42, 0.18);
+  /* ---------- Badges ---------- */
+  --badge-neutral-bg: var(--gray-100);
+  --badge-neutral-fg: var(--gray-700);
+  --badge-ok-bg: var(--c-success-subtle);
+  --badge-ok-fg: var(--c-success-text);
+  --badge-warn-bg: var(--c-warning-subtle);
+  --badge-warn-fg: var(--c-warning-text);
+  --badge-off-bg: var(--gray-100);
+  --badge-off-fg: var(--gray-600);
+  --badge-danger-bg: var(--c-danger-subtle);
+  --badge-danger-fg: #9b1c14;
+  --badge-info-bg: var(--c-info-subtle);
+  --badge-info-fg: var(--c-info-text);
+
   color-scheme: light;
 }
 
 /* Dark theme: set on <html data-theme="dark"> from the user's choice or the administrator's default. */
 :root[data-theme="dark"] {
-  --c-bg: #11151b;
-  --c-surface: #1a2029;
-  --c-surface-alt: #202733;
-  --c-border: #333d4b;
-  --c-border-strong: #4a5667;
-  --c-text: #e3e8ef;
-  --c-text-muted: #9aa5b4;
-  --c-link: #7fb0ff;
-  --c-primary: #326fd4; /* white text on it: 4.8:1 */
+  --c-bg: #0f1216;
+  --c-surface: #1b2027;
+  --c-surface-alt: #20262e;
+  --c-surface-sunken: #14181e;
+  --c-border: #2b323c;
+  --c-border-strong: #3a424e;
+  --c-border-control: #69727f; /* 3.4:1 on the surface */
+  --c-border-control-hover: #8f96a3;
+  --c-divider: #262c35;
+  --c-text: #e6e9ee; /* 13.5:1 */
+  --c-text-secondary: #9aa3b0; /* 6.4:1 */
+  --c-text-tertiary: #8f96a3; /* 5.5:1 */
+  --c-row-hover: #232b37;
+  --c-row-selected: #1d2a40;
+
+  --c-primary: #326fd4; /* white text 4.8:1 */
   --c-primary-hover: #2a62bf; /* darker, not lighter: white text keeps 5.8:1 on hover */
+  --c-primary-subtle: #1d2a40;
+  --c-primary-muted: #23375a;
+  --c-link: #7fb0ff;
+  --c-focus: #7fb0ff;
+
+  --c-success: #4cc26b;
+  --c-success-subtle: #173824;
+  --c-success-text: #9be3b1;
+  --c-warning: #e0a23a;
+  --c-warning-subtle: #3b2f10;
+  --c-warning-text: #f1d18a;
+  --c-danger-solid: #c0342d; /* white text 5.6:1 */
+  --c-danger-solid-hover: #a52b25;
+  --c-danger-subtle: #3a1d1c;
+  --c-danger-text: #ff7b72; /* 6.5:1 on the surface, 5.7:1 on a hovered row */
+  --c-danger-border: #7a2e29;
+  --c-info-subtle: #1d2a40;
+  --c-info-text: #a9c8ff;
   --c-danger: #e5534b;
   --c-danger-hover: #f06e66;
-  --c-danger-bg: #3a1d1c;
-  --c-danger-text: #ff7b72; /* 6.5:1 on the surface, 5.3:1 on a hovered row */
-  --c-danger-solid: #c0342d; /* white text: 5.6:1 */
-  --c-danger-solid-hover: #a52b25;
-  --c-danger-border: #7a2e29;
-  --c-warn-bg: #352b12;
   --c-warn-border: #8a6d1f;
-  --c-ok: #4cc26b;
-  --c-focus: #7fb0ff;
-  --c-row-hover: #243042;
-  --c-divider: #29313d;
-  --c-sidebar: #0c1016;
+
+  --c-sidebar: #0b0e12;
+  --c-sidebar-hover: #151a21;
   --c-sidebar-active: #1d2735;
 
   --badge-neutral-bg: #2b3340;
@@ -106,7 +239,12 @@
   --badge-off-fg: #a3adba;
   --badge-danger-bg: #401d1b;
   --badge-danger-fg: #ffb4ad;
+  --badge-info-bg: #1d2a40;
+  --badge-info-fg: #a9c8ff;
 
-  --shadow-pop: 0 6px 20px rgba(0, 0, 0, 0.5);
+  --shadow-xs: 0 1px 2px rgb(0 0 0 / 30%);
+  --shadow-md: 0 4px 12px rgb(0 0 0 / 45%);
+  --shadow-lg: 0 16px 40px rgb(0 0 0 / 55%);
+  --c-scrim: rgb(0 0 0 / 60%);
   color-scheme: dark;
 }

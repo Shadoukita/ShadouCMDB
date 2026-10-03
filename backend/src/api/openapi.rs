@@ -112,7 +112,7 @@ const DESCRIPTION: &str = "REST API for ShadouCMDB. This API is the only databas
 - Permissions come from the permission profiles a user holds. A missing global permission (named in each operation's description) or class permission (view/create/edit/delete) answers 403 `FORBIDDEN`. Lists only contain CIs of classes the user may view.
 - Writes are recorded in the audit log (`/api/v1/audit-log`) with the signed-in user as the actor.
 - Send `X-Request-Id` to correlate a request; it is echoed back and stored with audit rows.
-- Request bodies are limited to 1 MiB (64 KiB on public operations; configuration import allows more): 413 `PAYLOAD_TOO_LARGE`. A request not answered within `HTTP_REQUEST_TIMEOUT_SECS` answers 408 `REQUEST_TIMEOUT`.";
+- Request bodies are limited to 1 MiB (64 KiB on public operations; configuration import allows more): 413 `PAYLOAD_TOO_LARGE`. A request not answered within `HTTP_REQUEST_TIMEOUT_SECS` answers 408 `REQUEST_TIMEOUT`, and so does a request body that does not arrive within `HTTP_BODY_TIMEOUT_SECS` (`HTTP_HEADER_READ_TIMEOUT_SECS` on public operations; configuration import and file uploads excepted).";
 
 /// [`DESCRIPTION`] with the public operations listed.
 fn description(routes: &[Route]) -> String {

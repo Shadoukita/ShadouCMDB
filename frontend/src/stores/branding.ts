@@ -2,7 +2,7 @@ import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import { fetchPublicBranding, type PublicBranding, type UiBranding, type UiTheme } from "../api/uiSettings";
 import { config } from "../config";
-import { HEX_COLOR, mix, readableOn, textOn } from "../lib/color";
+import { BRAND_VARS, brandVariables } from "../lib/brandColors";
 
 export const DEFAULT_APP_NAME = "ShadouCMDB";
 const THEME_KEY = "shadoucmdb.theme";
@@ -83,10 +83,6 @@ function readUserTheme(): UiTheme | null {
   }
 }
 
-const SURFACE = { light: "#ffffff", dark: "#1a2029" };
-const SIDEBAR = { light: "#1e2733", dark: "#0c1016" };
-const BRAND_VARS = ["--c-primary", "--c-primary-hover", "--c-primary-text", "--c-link", "--c-focus", "--c-accent"];
-
 /**
  * Applies branding to the document: theme attribute, colour variables, title
  * suffix and favicon. Colours are set only as values of known variables, and
@@ -96,18 +92,7 @@ export function applyBranding(b: EffectiveBranding, theme: "light" | "dark") {
   const root = document.documentElement;
   root.dataset.theme = theme;
   for (const v of BRAND_VARS) root.style.removeProperty(v);
-  const surface = SURFACE[theme];
-  if (b.primaryColor && HEX_COLOR.test(b.primaryColor)) {
-    const primary = b.primaryColor;
-    root.style.setProperty("--c-primary", primary);
-    root.style.setProperty("--c-primary-hover", mix(primary, theme === "dark" ? "#ffffff" : "#000000", 0.15));
-    root.style.setProperty("--c-primary-text", textOn(primary));
-    root.style.setProperty("--c-link", readableOn(primary, surface));
-    root.style.setProperty("--c-focus", readableOn(primary, surface, 3));
-  }
-  if (b.accentColor && HEX_COLOR.test(b.accentColor)) {
-    root.style.setProperty("--c-accent", readableOn(b.accentColor, SIDEBAR[theme], 3));
-  }
+  for (const [name, value] of Object.entries(brandVariables(b.primaryColor, b.accentColor, theme))) root.style.setProperty(name, value);
   let link = document.querySelector<HTMLLinkElement>("link[rel~='icon']");
   if (!link) {
     link = document.createElement("link");
