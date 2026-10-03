@@ -56,6 +56,12 @@ const TAG: &str = "Configuration export/import";
 
 /// Largest accepted import file (the images alone can be ~850 KiB base64).
 const IMPORT_BODY_LIMIT: usize = 16 * 1024 * 1024;
+/// Lookup values per file, the rows of the former tables included. An applied
+/// import writes an audit row per value just before commit, and those rows
+/// hold the audit chain head, so every sign-in waits for them; the per-list
+/// limit alone still let a file within the body limit carry half a million
+/// (GH#546). Checked before anything touches the database, dry runs included.
+const MAX_LOOKUP_VALUES: usize = 25_000;
 
 // ---------------------------------------------------------------------------
 // Import result
@@ -2033,6 +2039,23 @@ fn check_format(file: &ConfigFile) -> Result<(), AppError> {
             "unsupported",
         ));
     }
+    let lookups = file.lookups.as_ref().map_or(0, |l| {
+        l.statuses.len()
+            + l.environments.len()
+            + l.locations.len()
+            + l.owners.len()
+            + l.lists.iter().map(|list| list.values.len()).sum::<usize>()
+    });
+    if lookups > MAX_LOOKUP_VALUES {
+        return Err(AppError::field(
+            "lookups",
+            format!(
+                "The file holds {lookups} lookup values; one file may hold at most {MAX_LOOKUP_VALUES}. Split the \
+                 lists across several files and import them one after the other"
+            ),
+            "too_big",
+        ));
+    }
     Ok(())
 }
 
@@ -2162,7 +2185,9 @@ pub fn routes() -> Vec<Route> {
                  and the logo and favicon. All sections are optional. Problems in the file are reported together as \
                  400 VALIDATION_ERROR with paths into the file; a change the data model does not allow (e.g. making \
                  an attribute required while CIs lack a value) fails with the same error the admin API gives, with \
-                 the file path prefixed. A non-empty `dataModel` or `lookups` section also requires \
+                 the file path prefixed. A file holds at most 25,000 lookup values in all (former tables included; \
+                 400 VALIDATION_ERROR with code too_big at `lookups` otherwise, dry run included): split larger \
+                 lookups across several files. A non-empty `dataModel` or `lookups` section also requires \
                  `datamodel.manage`, a `uiSettings` section `customization.manage`, and a non-empty \
                  `permissionProfiles` section `profiles.manage`, and a non-empty `importMappings` section \
                  `cis.import` (403 otherwise, dry run included). Saved import mappings are matched by class key and \
@@ -2738,6 +2763,30 @@ mod tests {
         assert!(p.class_permissions[1].view, "edit implies view");
     }
 
+    /// GH#546: the audit rows of an applied import hold sign-ins while they
+    /// are written, so a file carries a bounded number of lookup values.
+    #[test]
+    fn a_file_with_too_many_lookup_values_is_refused() {
+        let file = |owners: usize| -> ConfigFile {
+            let values: Vec<Value> =
+                (0..5000).map(|i| serde_json::json!({ "key": format!("v{i}"), "name": "V" })).collect();
+            let lists: Vec<Value> =
+                (0..4).map(|n| serde_json::json!({ "key": format!("l{n}"), "name": "L", "values": values })).collect();
+            let owners: Vec<Value> =
+                (0..owners).map(|i| serde_json::json!({ "kind": "team", "name": format!("o{i}") })).collect();
+            serde_json::from_value(serde_json::json!({
+                "format": FORMAT, "formatVersion": 1, "lookups": { "lists": lists, "owners": owners }
+            }))
+            .unwrap()
+        };
+        assert!(check_format(&file(MAX_LOOKUP_VALUES - 20_000)).is_ok());
+        let e = check_format(&file(MAX_LOOKUP_VALUES - 20_000 + 1)).unwrap_err();
+        assert_eq!(e.code, ErrorCode::ValidationError);
+        let d = &e.details.unwrap()[0];
+        assert_eq!((d.field.as_str(), d.code.as_str()), ("lookups", "too_big"));
+        assert!(d.message.starts_with("The file holds 25001 lookup values"), "{}", d.message);
+    }
+
     #[test]
     fn errors_get_the_file_path() {
         let e = at("dataModel.attributes.3", AppError::field("isRequired", "CIs without a value: 2", "values_missing"));
@@ -3058,16 +3107,16 @@ mod tests {
     }
 
     /// GH#344: 20,000 owners with the same key, and lists to look through for
-    /// the statuses, import within the request timeout. (The fold of the
-    /// largest file is timed in `legacy`; writing its 200,000 values here
-    /// would time the audit trail instead.)
+    /// the statuses, import within the request timeout. Four lists keep the
+    /// file within `MAX_LOOKUP_VALUES`; the fold of 200 lists, more than a
+    /// file may carry, is timed in `legacy`.
     #[tokio::test]
     async fn the_largest_legacy_sections_import_quickly() {
         let Some(db) = scratch::database("the_largest_legacy_sections_import_quickly").await else { return };
         let ctx = RequestContext::system("test", "test");
         crate::seed::seed_system_rows(&db.pool).await.unwrap();
         let file: ConfigFile = serde_json::from_value(serde_json::json!({
-            "format": "shadoucmdb.config", "formatVersion": 1, "lookups": legacy::worst_case(5)
+            "format": "shadoucmdb.config", "formatVersion": 1, "lookups": legacy::worst_case(4)
         }))
         .unwrap();
         let started = std::time::Instant::now();
@@ -3076,7 +3125,7 @@ mod tests {
         assert!(took < std::time::Duration::from_secs(120), "{took:?}");
         let created: Vec<&str> =
             dry.changes.iter().filter(|c| c.section == "lookupLists").map(|c| c.key.as_str()).collect();
-        assert!(created.contains(&"owner") && created.contains(&"status_6"), "{created:?}");
+        assert!(created.contains(&"owner") && created.contains(&"status_5"), "{created:?}");
         db.drop().await;
     }
 
