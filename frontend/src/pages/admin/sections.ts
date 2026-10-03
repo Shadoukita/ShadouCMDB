@@ -40,6 +40,7 @@ export const ADMIN_SECTIONS: AdminSection[] = [
   { key: "relationships", label: "Relationship types", group: "Data model", to: "/admin/relationships", permissions: ["datamodel.manage"] },
   { key: "dropdowns", label: "Dropdowns", group: "Data model", to: "/admin/dropdowns", permissions: ["datamodel.manage"] },
   { key: "templates", label: "Templates", group: "Data model", to: "/admin/templates", permissions: ["datamodel.manage"] },
+  { key: "workflows", label: "Workflows", group: "Processes", to: "/admin/workflows", permissions: ["workflows.manage"] },
   { key: "customization", label: "Customization", group: "System", to: "/admin/customization", permissions: ["customization.manage"] },
   // Switches bulk import on for the instance: the API allows only the Administrator profile.
   { key: "import", label: "Import", group: "System", to: "/admin/import", permissions: [], administratorOnly: true },
