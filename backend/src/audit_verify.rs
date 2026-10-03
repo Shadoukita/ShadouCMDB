@@ -66,7 +66,6 @@ async fn check(pool: &sqlx::PgPool, allow_gaps: bool) -> anyhow::Result<()> {
 mod tests {
     use crate::db::scratch;
     use sqlx::{Connection, Executor};
-    use std::time::{Duration, Instant};
 
     /// One audit row per statement, as the API writes them.
     const INSERT_ONE: &str = "INSERT INTO audit_log (actor_type, action, entity_type, entity_id, new_value)
@@ -92,37 +91,58 @@ mod tests {
         assert!(head_ok, "the head is the newest row");
     }
 
-    async fn insert_in_one_transaction(pool: &sqlx::PgPool, n: usize) -> Duration {
+    async fn insert_in_one_transaction(pool: &sqlx::PgPool, n: usize) {
         let mut tx = pool.begin().await.unwrap();
-        let start = Instant::now();
         for _ in 0..n {
             tx.execute(INSERT_ONE).await.unwrap();
         }
         tx.commit().await.unwrap();
-        start.elapsed()
     }
 
-    /// N single-row audit inserts in one transaction, looped on the server so
-    /// that the trigger, not the round trips, dominates the time.
-    async fn insert_looped(pool: &sqlx::PgPool, n: usize) -> Duration {
-        let start = Instant::now();
-        pool.execute(sqlx::AssertSqlSafe(format!("DO $$ BEGIN FOR i IN 1..{n} LOOP {INSERT_ONE}; END LOOP; END $$")))
+    /// Updates this backend has counted on the chain head and not yet flushed
+    /// to the cumulative statistics. Since PostgreSQL 15 that includes earlier
+    /// transactions on the same connection, but nothing is flushed while a
+    /// transaction is open, so a difference taken inside one is exact.
+    async fn head_updates(conn: &mut sqlx::PgConnection) -> i64 {
+        sqlx::query_scalar(
+            "SELECT n_tup_upd FROM pg_stat_xact_user_tables WHERE relid = 'audit_log_chain_head'::regclass",
+        )
+        .fetch_one(conn)
+        .await
+        .unwrap()
+    }
+
+    /// N single-row audit inserts in one transaction, looped on the server.
+    /// Returns the head updates after the inserts and after the deferred
+    /// commit trigger has fired (SET CONSTRAINTS ... IMMEDIATE runs it now,
+    /// as COMMIT would).
+    async fn head_updates_for(pool: &sqlx::PgPool, n: usize) -> (i64, i64) {
+        let mut tx = pool.begin().await.unwrap();
+        let before = head_updates(&mut tx).await;
+        tx.execute(sqlx::AssertSqlSafe(format!("DO $$ BEGIN FOR i IN 1..{n} LOOP {INSERT_ONE}; END LOOP; END $$")))
             .await
             .unwrap();
-        start.elapsed()
+        let after_inserts = head_updates(&mut tx).await - before;
+        tx.execute("SET CONSTRAINTS ALL IMMEDIATE").await.unwrap();
+        let at_commit = head_updates(&mut tx).await - before;
+        tx.commit().await.unwrap();
+        (after_inserts, at_commit)
     }
 
     /// GH#487: each row used to update the head, leaving a row version per
     /// audit row that every later insert in the transaction walked (O(N^2)).
+    /// The head must move once per transaction, however many rows it writes.
+    /// GH#526: counted, not timed, so parallel load cannot fail it.
     #[tokio::test]
-    async fn audit_rows_in_one_transaction_cost_linear_time() {
-        let Some(db) = scratch::database("audit_rows_in_one_transaction_cost_linear_time").await else { return };
-        insert_looped(&db.pool, 1_000).await; // warm-up
-        let small = insert_looped(&db.pool, 5_000).await;
-        let large = insert_looped(&db.pool, 40_000).await;
-        let ratio = large.as_secs_f64() / small.as_secs_f64();
-        eprintln!("5,000 rows: {small:?}, 40,000 rows: {large:?}, ratio {ratio:.1} (linear 8, quadratic 64)");
-        assert!(ratio < 16.0, "8x the rows took {ratio:.1}x the time: {small:?} vs {large:?}");
+    async fn audit_rows_in_one_transaction_update_the_head_once() {
+        let Some(db) = scratch::database("audit_rows_in_one_transaction_update_the_head_once").await else { return };
+        for n in [1, 2, 5_000] {
+            assert_eq!(
+                head_updates_for(&db.pool, n).await,
+                (0, 1),
+                "head updates (after inserts, at commit) for {n} rows"
+            );
+        }
         insert_in_one_transaction(&db.pool, 100).await;
 
         // Many rows in one statement see each other too.
