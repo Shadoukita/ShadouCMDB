@@ -189,7 +189,8 @@ test("an account without an e-mail enters one before anything else, then goes wh
   });
 
   await page.goto("/cis?q=router");
-  await expect(page).toHaveURL(at("/enter-email", `?redirect=${encodeURIComponent("/cis?q=router")}`));
+  // The router leaves "/" and "?" unencoded in the query, so compare the decoded return path.
+  await expect(page).toHaveURL((url) => url.pathname === "/enter-email" && url.searchParams.get("redirect") === "/cis?q=router");
   const form = page.getByTestId("email-entry");
   await expect(form.getByRole("heading", { name: "Enter your e-mail address" })).toBeVisible();
   // It stands alone: no navigation, no search.
@@ -199,16 +200,16 @@ test("an account without an e-mail enters one before anything else, then goes wh
 
   await form.getByRole("button", { name: "Save and continue" }).click();
   await expect(page.locator("#email-entry-err")).toHaveText("Enter your e-mail address.");
-  await page.getByLabel("E-mail address").fill("not-an-address");
+  await form.getByRole("textbox", { name: "E-mail address" }).fill("not-an-address");
   await form.getByRole("button", { name: "Save and continue" }).click();
   await expect(page.locator("#email-entry-err")).toHaveText("Enter a valid e-mail address, such as name@example.com.");
   expect(sent).toEqual([]);
 
-  await page.getByLabel("E-mail address").fill("taken@example.test");
+  await form.getByRole("textbox", { name: "E-mail address" }).fill("taken@example.test");
   await form.getByRole("button", { name: "Save and continue" }).click();
   await expect(page.locator("#email-entry-err")).toHaveText("Another account already uses this e-mail address.");
 
-  await page.getByLabel("E-mail address").fill(" legacy@example.test ");
+  await form.getByRole("textbox", { name: "E-mail address" }).fill(" legacy@example.test ");
   await form.getByRole("button", { name: "Save and continue" }).click();
   await expect(page).toHaveURL(at("/cis", "?q=router"));
   expect(sent).toEqual(["taken@example.test", "legacy@example.test"]);
