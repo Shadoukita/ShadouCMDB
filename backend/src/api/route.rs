@@ -821,6 +821,9 @@ impl RouteBuilder {
         self
     }
     /// Accept bodies up to this many bytes instead of [`BODY_LIMIT`] (config import).
+    /// The body then has `HTTP_REQUEST_TIMEOUT_SECS` to arrive instead of the
+    /// shorter `HTTP_BODY_TIMEOUT_SECS`, while it holds a request permit: keep
+    /// it to routes behind a global permission (GH#556).
     pub fn body_limit(mut self, bytes: usize) -> Self {
         self.body_limit = Some(bytes);
         self
@@ -864,6 +867,9 @@ impl RouteBuilder {
             Access::Public => PUBLIC_BODY_LIMIT,
             _ => BODY_LIMIT,
         });
+        // A raised body limit (configuration import, uploads) keeps HTTP_REQUEST_TIMEOUT_SECS
+        // or its own deadline for the body instead of HTTP_BODY_TIMEOUT_SECS.
+        let body_deadline = self.body_limit.is_none();
         let (method, operation_id) = (self.method.clone(), Arc::<str>::from(self.operation_id.as_str()));
         let body_media = self.body_media;
 
@@ -925,7 +931,22 @@ impl RouteBuilder {
                             Some(p) => state.capacity.acquire_for_user(p.user_id)?,
                             None => state.capacity.acquire(false)?,
                         };
-                        (Some(permit), B::read(&headers, body, body_limit, body_media, None).await?)
+                        // The permit is held while the body arrives, so the body gets
+                        // HTTP_BODY_TIMEOUT_SECS, not the whole request timeout: otherwise
+                        // four accounts sending slowly hold every permit for that long (GH#556).
+                        let read = B::read(&headers, body, body_limit, body_media, None);
+                        let body = if body_deadline {
+                            let limit = state.capacity.body_timeout;
+                            tokio::time::timeout(limit, read).await.map_err(|_| {
+                                AppError::new(
+                                    ErrorCode::RequestTimeout,
+                                    format!("The request body was not received within {} s", limit.as_secs()),
+                                )
+                            })??
+                        } else {
+                            read.await?
+                        };
+                        (Some(permit), body)
                     };
                     let input = In(P::parse(&raw_path)?, Q::parse(raw_query.as_deref())?, body);
                     let api = Api {
@@ -1492,12 +1513,14 @@ mod tests {
 
     /// GH#502: a signed-in user who sent request bodies slowly held one global
     /// permit per request, up to all of them, for HTTP_REQUEST_TIMEOUT_SECS.
-    /// One user now holds at most a quarter of the pool.
+    /// One user now holds at most a quarter of the pool, and GH#556: only
+    /// until HTTP_BODY_TIMEOUT_SECS, so four users cannot hold it all for long.
     #[tokio::test]
     async fn one_signed_in_user_cannot_hold_every_request_permit() {
         let Some(db) = scratch::database("one_user_cannot_hold_every_permit").await else { return };
         const GLOBAL: usize = 8;
-        let capacity = Capacity::with_sizes(GLOBAL, 2, Duration::from_secs(3));
+        const BODY_TIMEOUT: Duration = Duration::from_secs(2);
+        let capacity = Capacity::with_sizes(GLOBAL, 2, Duration::from_secs(3)).with_body_timeout(BODY_TIMEOUT);
         let app = app_with_capacity(db.pool.clone(), capacity.clone());
         let session = set_up_owner(&app).await;
         let stalled = || {
@@ -1537,12 +1560,13 @@ mod tests {
         let me = "/api/v1/auth/me";
         assert_eq!(send(&app, "GET", me, &session, Body::empty(), None).await, (503, "SERVER_BUSY".into()));
 
-        for task in &waiting {
-            task.abort();
-        }
+        // GH#556: the stalled bodies are cut off after HTTP_BODY_TIMEOUT_SECS (this
+        // app has no request timeout at all) and give their permits back.
         for task in waiting {
-            let _ = task.await;
+            let late = tokio::time::timeout(BODY_TIMEOUT * 3, task).await;
+            assert_eq!(late.expect("a stalled body kept its permit").unwrap(), (408, "REQUEST_TIMEOUT".into()));
         }
+        assert!(started.elapsed() < BODY_TIMEOUT * 4, "took {:?}", started.elapsed());
         assert_eq!(capacity.available(false), GLOBAL, "the permits were not given back");
         assert_eq!(send(&app, "GET", me, &session, Body::empty(), None).await.0, 200);
 

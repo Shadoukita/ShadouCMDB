@@ -115,7 +115,8 @@ impl AppState {
     }
 
     pub fn limited(mut self, http: &HttpConfig) -> Self {
-        self.capacity = Capacity::new(http.max_concurrent_requests, http.header_read_timeout);
+        self.capacity =
+            Capacity::new(http.max_concurrent_requests, http.header_read_timeout).with_body_timeout(http.body_timeout);
         self
     }
 
@@ -137,8 +138,9 @@ impl AppState {
 /// Authenticated routes take a permit from the global pool in `api::route`
 /// after they authorise the caller and before they read the body. One user
 /// (with all their sessions and API tokens) holds at most a quarter of that
-/// pool (GH#502), so a user who sends bodies slowly cannot hold every permit
-/// and refuse everyone else for `HTTP_REQUEST_TIMEOUT_SECS`. Public
+/// pool (GH#502), and the body must arrive within `HTTP_BODY_TIMEOUT_SECS`
+/// (GH#556), so users who send bodies slowly cannot hold every permit and
+/// refuse everyone else for `HTTP_REQUEST_TIMEOUT_SECS`. Public
 /// routes (setup, sign-in, OIDC, branding) draw from their own, smaller pool,
 /// and only once their body is in (GH#283): anyone can send one slowly, so a
 /// body in transit holds no permit. It must arrive within
@@ -172,6 +174,9 @@ pub struct Capacity {
     public_body_by_wide: Arc<Shares<crate::auth::throttle::Net>>,
     /// Time a public route may take to receive its body.
     pub public_body_timeout: Duration,
+    /// Time an authenticated route may take to receive its body
+    /// (`HTTP_BODY_TIMEOUT_SECS`), while it holds a global permit (GH#556).
+    pub body_timeout: Duration,
 }
 
 /// What each key holds of a shared resource, and the most one key may hold.
@@ -236,6 +241,8 @@ const PUBLIC_BODY_SHARES: usize = 16;
 const PUBLIC_BODY_WIDE_SHARES: usize = 4;
 /// The part of the global pool one user may hold.
 const USER_SHARES: usize = 4;
+/// `HTTP_BODY_TIMEOUT_SECS` when not set.
+pub const DEFAULT_BODY_TIMEOUT: Duration = Duration::from_secs(30);
 /// What a public body that waits for more costs beyond its bytes: the
 /// connection, its task, timer and buffers. Charged even when nothing has
 /// arrived yet, so the budget also bounds how many bodies are in transit
@@ -275,7 +282,13 @@ impl Capacity {
             public_body_by_net: Arc::new(Shares::new(per_net)),
             public_body_by_wide: Arc::new(Shares::new((body_bytes / PUBLIC_BODY_WIDE_SHARES).max(per_net))),
             public_body_timeout,
+            body_timeout: DEFAULT_BODY_TIMEOUT,
         }
+    }
+
+    pub fn with_body_timeout(mut self, body_timeout: Duration) -> Self {
+        self.body_timeout = body_timeout;
+        self
     }
 
     /// A permit from the public or the global pool, or 503 SERVER_BUSY.
@@ -978,6 +991,7 @@ mod tests {
             http: crate::config::HttpConfig {
                 header_read_timeout: Duration::from_secs(10),
                 request_timeout: Duration::from_secs(120),
+                body_timeout: Duration::from_secs(30),
                 max_concurrent_requests: 512,
             },
             database: crate::config::DatabaseConfig {
@@ -1311,6 +1325,7 @@ mod tests {
         let http = crate::config::HttpConfig {
             header_read_timeout: Duration::from_millis(200),
             request_timeout: Duration::from_secs(5),
+            body_timeout: Duration::from_secs(5),
             max_concurrent_requests: 512,
         };
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
