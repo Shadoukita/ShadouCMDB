@@ -1410,6 +1410,7 @@ mod tests {
         let http = crate::config::HttpConfig {
             header_read_timeout: Duration::from_secs(30),
             request_timeout: Duration::from_secs(5),
+            body_timeout: Duration::from_secs(5),
             max_concurrent_requests: 512,
         };
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
