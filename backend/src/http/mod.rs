@@ -135,7 +135,10 @@ impl AppState {
 /// never holds capacity.
 ///
 /// Authenticated routes take a permit from the global pool in `api::route`
-/// after they authorise the caller and before they read the body. Public
+/// after they authorise the caller and before they read the body. One user
+/// (with all their sessions and API tokens) holds at most a quarter of that
+/// pool (GH#502), so a user who sends bodies slowly cannot hold every permit
+/// and refuse everyone else for `HTTP_REQUEST_TIMEOUT_SECS`. Public
 /// routes (setup, sign-in, OIDC, branding) draw from their own, smaller pool,
 /// and only once their body is in (GH#283): anyone can send one slowly, so a
 /// body in transit holds no permit. It must arrive within
@@ -146,7 +149,9 @@ impl AppState {
 /// permits of real sign-ins, and both the memory and the number of bodies in
 /// transit stay bounded, even for bodies that send nothing (GH#343). One client
 /// network (`auth::throttle::Net`) holds at most a sixteenth of the budget
-/// (GH#342), so one host cannot spend it for everyone else. A body that arrives
+/// (GH#342), and one wider network (`Net::wide`, an IPv4 /16 or IPv6 /48) at
+/// most a quarter (GH#504), so one host cannot spend it for everyone else, even
+/// with many /64s. A body that arrives
 /// without a wait is never held and never counts, so a spent budget cannot
 /// refuse it. Anonymous
 /// callers can then only saturate the public routes, never the capacity
@@ -157,13 +162,66 @@ impl AppState {
 pub struct Capacity {
     global: Arc<tokio::sync::Semaphore>,
     public: Arc<tokio::sync::Semaphore>,
+    /// Global permits each user holds.
+    by_user: Arc<Shares<uuid::Uuid>>,
     /// Bytes held by public request bodies waiting for the rest, one permit per byte.
     public_body_bytes: Arc<tokio::sync::Semaphore>,
-    /// The share of those bytes each client network holds, and the most one may hold.
-    public_body_by_net: Arc<std::sync::Mutex<std::collections::HashMap<crate::auth::throttle::Net, usize>>>,
-    public_body_per_net: usize,
+    /// The share of those bytes each client network holds.
+    public_body_by_net: Arc<Shares<crate::auth::throttle::Net>>,
+    /// The share of those bytes each wider network (`Net::wide`) holds.
+    public_body_by_wide: Arc<Shares<crate::auth::throttle::Net>>,
     /// Time a public route may take to receive its body.
     pub public_body_timeout: Duration,
+}
+
+/// What each key holds of a shared resource, and the most one key may hold.
+/// Keys holding nothing are forgotten.
+struct Shares<K> {
+    held: std::sync::Mutex<std::collections::HashMap<K, usize>>,
+    max: usize,
+}
+
+impl<K: std::hash::Hash + Eq + Copy> Shares<K> {
+    fn new(max: usize) -> Self {
+        Shares { held: std::sync::Mutex::default(), max }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, std::collections::HashMap<K, usize>> {
+        self.held.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn room(held: &std::collections::HashMap<K, usize>, key: K, n: usize, max: usize) -> bool {
+        held.get(&key).copied().unwrap_or(0).saturating_add(n) <= max
+    }
+
+    fn give_back(&self, key: K, n: usize) {
+        let mut held = self.lock();
+        if let Some(h) = held.get_mut(&key) {
+            *h -= n.min(*h);
+            if *h == 0 {
+                held.remove(&key);
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn of(&self, key: K) -> usize {
+        self.lock().get(&key).copied().unwrap_or(0)
+    }
+}
+
+/// A permit from one of the request pools, given back when dropped.
+pub struct Slot {
+    _permit: tokio::sync::OwnedSemaphorePermit,
+    user: Option<(Arc<Shares<uuid::Uuid>>, uuid::Uuid)>,
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        if let Some((by_user, user)) = &self.user {
+            by_user.give_back(*user, 1);
+        }
+    }
 }
 
 /// Floor of the public body budget, so a small HTTP_MAX_CONCURRENT_REQUESTS
@@ -174,10 +232,16 @@ const MIN_PUBLIC_BODY_BUDGET: usize = 16 * 1024 * 1024;
 const MAX_PUBLIC_BODY_BUDGET: usize = 256 * 1024 * 1024;
 /// The part of the public body budget one client network may hold.
 const PUBLIC_BODY_SHARES: usize = 16;
+/// The part of the public body budget one wider network (`Net::wide`) may hold.
+const PUBLIC_BODY_WIDE_SHARES: usize = 4;
+/// The part of the global pool one user may hold.
+const USER_SHARES: usize = 4;
 /// What a public body that waits for more costs beyond its bytes: the
 /// connection, its task, timer and buffers. Charged even when nothing has
-/// arrived yet, so the budget also bounds how many bodies are in transit (GH#343).
-pub const WAITING_BODY_COST: usize = 4 * 1024;
+/// arrived yet, so the budget also bounds how many bodies are in transit
+/// (GH#343). Measured on a release build at about 66 kB of resident memory per
+/// waiting body; 4 KiB let the budget admit 16 times as many (GH#501).
+pub const WAITING_BODY_COST: usize = 64 * 1024;
 
 impl Capacity {
     /// `max` requests for authenticated routes, and `max / 8` (at least 16) for public ones.
@@ -193,6 +257,7 @@ impl Capacity {
         Capacity::with_body_budget(global, public, budget, per_net, public_body_timeout)
     }
 
+    /// A wider network may hold a quarter of `body_bytes`, and never less than `per_net`.
     pub fn with_body_budget(
         global: usize,
         public: usize,
@@ -203,22 +268,38 @@ impl Capacity {
         Capacity {
             global: Arc::new(tokio::sync::Semaphore::new(global)),
             public: Arc::new(tokio::sync::Semaphore::new(public)),
+            by_user: Arc::new(Shares::new((global / USER_SHARES).max(1))),
             public_body_bytes: Arc::new(tokio::sync::Semaphore::new(
                 body_bytes.min(tokio::sync::Semaphore::MAX_PERMITS),
             )),
-            public_body_by_net: Arc::default(),
-            public_body_per_net: per_net,
+            public_body_by_net: Arc::new(Shares::new(per_net)),
+            public_body_by_wide: Arc::new(Shares::new((body_bytes / PUBLIC_BODY_WIDE_SHARES).max(per_net))),
             public_body_timeout,
         }
     }
 
     /// A permit from the public or the global pool, or 503 SERVER_BUSY.
-    pub fn acquire(&self, public: bool) -> Result<tokio::sync::OwnedSemaphorePermit, AppError> {
+    pub fn acquire(&self, public: bool) -> Result<Slot, AppError> {
         let pool = if public { &self.public } else { &self.global };
-        pool.clone().try_acquire_owned().map_err(|_| {
+        let permit = pool.clone().try_acquire_owned().map_err(|_| {
             tracing::warn!(public, "request refused: HTTP_MAX_CONCURRENT_REQUESTS reached");
             server_busy()
-        })
+        })?;
+        Ok(Slot { _permit: permit, user: None })
+    }
+
+    /// A permit from the global pool for `user`, or 503 SERVER_BUSY when the
+    /// pool, or the user's share of it, is spent.
+    pub fn acquire_for_user(&self, user: uuid::Uuid) -> Result<Slot, AppError> {
+        let mut held = self.by_user.lock();
+        if !Shares::room(&held, user, 1, self.by_user.max) {
+            tracing::warn!("request refused: one user's share of HTTP_MAX_CONCURRENT_REQUESTS reached");
+            return Err(server_busy());
+        }
+        let mut slot = self.acquire(false)?;
+        *held.entry(user).or_default() += 1;
+        slot.user = Some((self.by_user.clone(), user));
+        Ok(slot)
     }
 
     /// 503 SERVER_BUSY when the public pool has no permit left: a public route
@@ -248,7 +329,12 @@ impl Capacity {
 
     #[cfg(test)]
     pub fn held_body_bytes(&self, net: crate::auth::throttle::Net) -> usize {
-        self.public_body_by_net.lock().expect("not poisoned").get(&net).copied().unwrap_or(0)
+        self.public_body_by_net.of(net)
+    }
+
+    #[cfg(test)]
+    pub fn held_by_user(&self, user: uuid::Uuid) -> usize {
+        self.by_user.of(user)
     }
 }
 
@@ -261,22 +347,30 @@ pub struct BodyHold {
 }
 
 impl BodyHold {
-    /// Holds `bytes` more, or 503 SERVER_BUSY when the budget or this client network's share is spent.
+    /// Holds `bytes` more, or 503 SERVER_BUSY when the budget, or this client
+    /// network's or its wider network's share of it, is spent.
     pub fn add(&mut self, bytes: usize) -> Result<(), AppError> {
         let n = u32::try_from(bytes).map_err(|_| server_busy())?;
         let capacity = &self.capacity;
-        let mut by_net = capacity.public_body_by_net.lock().unwrap_or_else(|e| e.into_inner());
-        let held = by_net.get(&self.net).copied().unwrap_or(0);
-        if held.saturating_add(bytes) > capacity.public_body_per_net {
+        let wide = self.net.wide();
+        // Always in this order (net, then wide), so two holds cannot deadlock.
+        let mut by_net = capacity.public_body_by_net.lock();
+        let mut by_wide = capacity.public_body_by_wide.lock();
+        if !Shares::room(&by_net, self.net, bytes, capacity.public_body_by_net.max) {
             tracing::warn!("request refused: one client network's share of the public request body budget reached");
+            return Err(server_busy());
+        }
+        if !Shares::room(&by_wide, wide, bytes, capacity.public_body_by_wide.max) {
+            tracing::warn!("request refused: one wider network's share of the public request body budget reached");
             return Err(server_busy());
         }
         let more = capacity.public_body_bytes.clone().try_acquire_many_owned(n).map_err(|_| {
             tracing::warn!("request refused: public request body budget reached");
             server_busy()
         })?;
-        by_net.insert(self.net, held + bytes);
-        drop(by_net);
+        *by_net.entry(self.net).or_default() += bytes;
+        *by_wide.entry(wide).or_default() += bytes;
+        drop((by_net, by_wide));
         match &mut self.permit {
             Some(p) => p.merge(more),
             None => self.permit = Some(more),
@@ -291,13 +385,8 @@ impl Drop for BodyHold {
         if self.bytes == 0 {
             return;
         }
-        let mut by_net = self.capacity.public_body_by_net.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(held) = by_net.get_mut(&self.net) {
-            *held -= self.bytes.min(*held);
-            if *held == 0 {
-                by_net.remove(&self.net);
-            }
-        }
+        self.capacity.public_body_by_net.give_back(self.net, self.bytes);
+        self.capacity.public_body_by_wide.give_back(self.net.wide(), self.bytes);
     }
 }
 
@@ -1285,19 +1374,95 @@ mod tests {
         assert_eq!(capacity.available_body_bytes(), budget);
         assert_eq!(capacity.held_body_bytes(net("203.0.113.1")), 0);
         assert!(
-            capacity.public_body_by_net.lock().unwrap().is_empty(),
+            capacity.public_body_by_net.lock().is_empty() && capacity.public_body_by_wide.lock().is_empty(),
             "networks are forgotten once they hold nothing"
         );
 
         // The budget itself still bounds every network together.
         let mut held = Vec::new();
         for n in 0..PUBLIC_BODY_SHARES {
-            let mut hold = capacity.hold_public_body(net(&format!("10.0.{n}.1")));
+            let mut hold = capacity.hold_public_body(net(&format!("10.{n}.0.1")));
             hold.add(share).unwrap();
             held.push(hold);
         }
-        let mut late = capacity.hold_public_body(net("10.1.0.1"));
+        let mut late = capacity.hold_public_body(net("10.200.0.1"));
         assert_eq!(late.add(1).unwrap_err().code, ErrorCode::ServerBusy);
-        assert_eq!(capacity.held_body_bytes(net("10.1.0.1")), 0, "a refusal for the budget holds no share");
+        assert_eq!(capacity.held_body_bytes(net("10.200.0.1")), 0, "a refusal for the budget holds no share");
+    }
+
+    /// GH#504: one client with an IPv6 /56 holds 256 /64s, and so could fill
+    /// all sixteen shares of the public body budget. A wider network (IPv6 /48,
+    /// IPv4 /16) now holds at most a quarter of it.
+    #[test]
+    fn one_wider_network_holds_at_most_a_quarter_of_the_public_body_budget() {
+        use crate::auth::throttle::Net;
+        let net = |ip: &str| Net::of(Some(ip.parse().unwrap()));
+        let capacity = Capacity::new(512, Duration::from_secs(10));
+        let (budget, share) = (32 * 1024 * 1024, 2 * 1024 * 1024);
+
+        for (prefix, other) in [("2001:db8:0:{n}00::1", "2001:db8:1::1"), ("198.51.{n}.1", "198.52.0.1")] {
+            let mut held = Vec::new();
+            for n in 0..PUBLIC_BODY_SHARES {
+                let mut hold = capacity.hold_public_body(net(&prefix.replace("{n}", &n.to_string())));
+                if hold.add(share).is_err() {
+                    break;
+                }
+                held.push(hold);
+            }
+            assert_eq!(held.len() * share, budget / 4, "{prefix}");
+            // Another network still gets its whole share.
+            let mut hold = capacity.hold_public_body(net(other));
+            hold.add(share).unwrap();
+            drop((held, hold));
+            assert_eq!(capacity.available_body_bytes(), budget);
+        }
+    }
+
+    /// GH#501: each waiting public body was charged 4 KiB but costs about
+    /// 66 kB of memory, so the budget admitted 16 times as many as it meant to.
+    #[test]
+    fn a_waiting_public_body_is_charged_what_it_costs() {
+        use crate::auth::throttle::Net;
+        assert_eq!(WAITING_BODY_COST, 64 * 1024);
+        // The largest budget, from as many networks as it takes.
+        let capacity = Capacity::new(1_000_000, Duration::from_secs(10));
+        let mut held = Vec::new();
+        'fill: for wide in 0..=u16::MAX {
+            for n in 0..=u16::MAX {
+                let ip = std::net::Ipv6Addr::new(0x2001, 0xdb8, wide, n, 0, 0, 0, 1);
+                let mut hold = capacity.hold_public_body(Net::of(Some(ip.into())));
+                match hold.add(WAITING_BODY_COST) {
+                    Ok(()) => held.push(hold),
+                    Err(_) if n == 0 => break 'fill,
+                    Err(_) => break,
+                }
+            }
+        }
+        assert_eq!(held.len(), MAX_PUBLIC_BODY_BUDGET / (64 * 1024), "at most 4,096 bodies wait at once");
+    }
+
+    /// GH#502: one user's requests could hold every global permit while
+    /// sending their bodies slowly, so everyone else got 503 SERVER_BUSY.
+    #[test]
+    fn one_user_holds_at_most_a_quarter_of_the_request_pool() {
+        let capacity = Capacity::new(512, Duration::from_secs(10));
+        let (alice, bob) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+        let held: Vec<_> = (0..128).map(|_| capacity.acquire_for_user(alice).unwrap()).collect();
+        assert_eq!(capacity.acquire_for_user(alice).err().unwrap().code, ErrorCode::ServerBusy);
+        assert_eq!(capacity.held_by_user(alice), 128, "a refusal holds nothing");
+        assert_eq!(capacity.available(false), 512 - 128);
+        let _bob = capacity.acquire_for_user(bob).unwrap();
+        drop(held);
+        assert_eq!(capacity.held_by_user(alice), 0);
+        assert!(capacity.acquire_for_user(alice).is_ok(), "the permits were given back");
+
+        // The pool still bounds every user together, and a tiny pool still admits one each.
+        let small = Capacity::new(2, Duration::from_secs(10));
+        let _a = small.acquire_for_user(alice).unwrap();
+        assert!(small.acquire_for_user(alice).is_err());
+        let _b = small.acquire_for_user(bob).unwrap();
+        let carol = uuid::Uuid::new_v4();
+        assert!(small.acquire_for_user(carol).is_err());
+        assert_eq!(small.held_by_user(carol), 0, "a refusal for the pool holds no share");
     }
 }

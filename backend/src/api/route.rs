@@ -920,7 +920,11 @@ impl RouteBuilder {
                         })??;
                         (if unlimited { None } else { Some(capacity.acquire(true)?) }, body)
                     } else {
-                        let permit = state.capacity.acquire(false)?;
+                        // At most a quarter of the pool per user (GH#502): the body may be slow.
+                        let permit = match ctx.principal() {
+                            Some(p) => state.capacity.acquire_for_user(p.user_id)?,
+                            None => state.capacity.acquire(false)?,
+                        };
                         (Some(permit), B::read(&headers, body, body_limit, body_media, None).await?)
                     };
                     let input = In(P::parse(&raw_path)?, Q::parse(raw_query.as_deref())?, body);
@@ -1482,6 +1486,65 @@ mod tests {
             assert_eq!(task.await.unwrap(), (408, "REQUEST_TIMEOUT".into()));
         }
         assert_eq!(capacity.available_body_bytes(), BUDGET, "the body budget was not given back");
+
+        db.drop().await;
+    }
+
+    /// GH#502: a signed-in user who sent request bodies slowly held one global
+    /// permit per request, up to all of them, for HTTP_REQUEST_TIMEOUT_SECS.
+    /// One user now holds at most a quarter of the pool.
+    #[tokio::test]
+    async fn one_signed_in_user_cannot_hold_every_request_permit() {
+        let Some(db) = scratch::database("one_user_cannot_hold_every_permit").await else { return };
+        const GLOBAL: usize = 8;
+        let capacity = Capacity::with_sizes(GLOBAL, 2, Duration::from_secs(3));
+        let app = app_with_capacity(db.pool.clone(), capacity.clone());
+        let session = set_up_owner(&app).await;
+        let stalled = || {
+            let first = stream::once(async { Ok::<_, std::convert::Infallible>(Bytes::from_static(b"{")) });
+            Body::from_stream(first.chain(stream::pending()))
+        };
+
+        let started = Instant::now();
+        let slow: Vec<_> = (0..GLOBAL)
+            .map(|_| {
+                let (app, session) = (app.clone(), session.clone());
+                tokio::spawn(async move {
+                    send(&app, "PUT", "/api/v1/auth/password", &session, stalled(), Some(1000)).await
+                })
+            })
+            .collect();
+        // A quarter of the pool waits for its bodies; the rest are refused as soon
+        // as they are authorised. Wait for those refusals, never for the stalled bodies.
+        let mut refused = 0;
+        while slow.iter().filter(|t| t.is_finished()).count() < GLOBAL - GLOBAL / 4 {
+            assert!(started.elapsed() < Duration::from_secs(10), "the extra requests were never refused");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let mut waiting = Vec::new();
+        for task in slow {
+            if task.is_finished() {
+                assert_eq!(task.await.unwrap(), (503, "SERVER_BUSY".into()));
+                refused += 1;
+            } else {
+                waiting.push(task);
+            }
+        }
+        assert_eq!((waiting.len(), refused), (GLOBAL / 4, GLOBAL - GLOBAL / 4));
+        assert_eq!(capacity.available(false), GLOBAL - GLOBAL / 4);
+        // The same user is refused while their share is held; the permits other users need are left.
+        let me = "/api/v1/auth/me";
+        assert_eq!(send(&app, "GET", me, &session, Body::empty(), None).await, (503, "SERVER_BUSY".into()));
+
+        for task in &waiting {
+            task.abort();
+        }
+        for task in waiting {
+            let _ = task.await;
+        }
+        assert_eq!(capacity.available(false), GLOBAL, "the permits were not given back");
+        assert_eq!(send(&app, "GET", me, &session, Body::empty(), None).await.0, 200);
 
         db.drop().await;
     }
