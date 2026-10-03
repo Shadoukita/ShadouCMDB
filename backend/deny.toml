@@ -40,6 +40,9 @@ allow = [
   "CC0-1.0",
   # webpki-roots: the Mozilla CA bundle as data.
   "CDLA-Permissive-2.0",
+  # Inter UI font (frontend): fonts only. cargo-deny does not scan the frontend, so this
+  # entry records the policy decision (SHAA-1671); THIRD_PARTY_NOTICES lists the font.
+  "OFL-1.1",
 ]
 confidence-threshold = 0.9
 # Keep common permissive licences allowed before a dependency first needs them.

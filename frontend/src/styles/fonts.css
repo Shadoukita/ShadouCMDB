@@ -1,0 +1,20 @@
+/* Inter 4.1 (SIL OFL-1.1, licence in assets/fonts/inter/LICENSE.txt), self-hosted so air-gapped
+ * installs and the `default-src 'self'` CSP work. The files are the unmodified upstream variable
+ * fonts; Vite content-hashes them into dist/assets/. Browsers only download a face when text needs
+ * it, so the italic file costs nothing until italic text is shown. Until the font has loaded, and
+ * wherever it cannot, text uses the system stack after "Inter" in --font-sans. */
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("../assets/fonts/inter/InterVariable.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Inter";
+  font-style: italic;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("../assets/fonts/inter/InterVariable-Italic.woff2") format("woff2");
+}

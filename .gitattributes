@@ -3,3 +3,4 @@ sql/migrations/meta/*.json linguist-generated=true
 package-lock.json linguist-generated=true
 deploy/windows/*.txt eol=crlf
 backend/fuzz/seeds/** binary
+*.woff2 binary
