@@ -52,6 +52,7 @@ pub struct SetupBody {
     display_name: String,
     /// The administrator's e-mail; a Person CI is created for it
     #[schema(schema_with = required_email_schema)]
+    #[serde(deserialize_with = "schemas::email")]
     email: String,
     #[schema(schema_with = password_schema)]
     password: Secret,
@@ -113,9 +114,11 @@ pub struct PasswordChange {
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EmailEntry {
-    /// Unique regardless of case; the account is linked to the Person with this
-    /// e-mail, which is created when there is none
+    /// Unique regardless of case and Unicode form; a Person CI is created for
+    /// it. Refused when a Person without an account already has the address:
+    /// an administrator links the account to it.
     #[schema(schema_with = required_email_schema)]
+    #[serde(deserialize_with = "schemas::email")]
     email: String,
 }
 impl Check for EmailEntry {}
@@ -1018,8 +1021,8 @@ async fn enter_email(pool: &PgPool, ctx: &RequestContext, b: EmailEntry) -> Resu
             "Your account already has an e-mail address; an administrator can change it (Administration > Users)",
         ));
     }
-    data::set_email(&mut tx, me.user_id, b.email.trim()).await.map_err(AppError::from)?;
-    people::link_user(&mut tx, ctx, me.user_id).await?;
+    data::set_email(&mut tx, me.user_id, &b.email).await.map_err(AppError::from)?;
+    people::link(&mut tx, ctx, me.user_id, people::Linking::SelfService).await?;
     let after = users::load(&mut tx, me.user_id).await?;
     let entry = AuditEntry {
         action: AuditAction::Update,
@@ -1125,7 +1128,7 @@ pub fn routes() -> Vec<Route> {
         route(Method::PUT, "/api/v1/auth/email", "enterOwnEmail")
             .tag(TAG)
             .summary("Enter the e-mail address of your account (accounts without one only)")
-            .description("For an account created before e-mail addresses were required (`emailRequired` in GET /api/v1/auth/me): until it has one, every other route but GET /api/v1/auth/me and sign-out answers 403 EMAIL_REQUIRED. The address must be unique regardless of case (409 CONFLICT otherwise); the account is linked to the Person CI with this e-mail, which is created when there is none. Answers the session as GET /api/v1/auth/me does. 409 CONFLICT for an account that already has an e-mail: an administrator changes it (PATCH /api/v1/admin/users/{id}).")
+            .description("For an account created before e-mail addresses were required (`emailRequired` in GET /api/v1/auth/me): until it has one, every other route but GET /api/v1/auth/me and sign-out answers 403 EMAIL_REQUIRED. The address must be unique regardless of case and Unicode form (409 CONFLICT otherwise); a Person CI is created for it. A user cannot take over an existing Person: when a Person without an account already has the address, the request is refused with 409 CONFLICT (`person_email_taken`) and an administrator sets the address on the account (PATCH /api/v1/admin/users/{id}), which links it to that Person. Answers the session as GET /api/v1/auth/me does. 409 CONFLICT for an account that already has an e-mail: an administrator changes it (PATCH /api/v1/admin/users/{id}).")
             .session_only()
             .before_mfa_enrolment()
             .before_email_entry()

@@ -63,6 +63,23 @@ pub fn trimmed_opt<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D:
     Ok(Option::<String>::deserialize(d)?.map(|s| s.trim().to_owned()))
 }
 
+/// An e-mail address as it is stored: in Unicode NFKC and trimmed, so
+/// look-alike forms (composed or decomposed, full-width) are one address
+/// (GH#531). Case is kept; the database compares addresses with
+/// `cmdb.email_key` (NFKC, then lower case, migration 0045).
+pub fn normalize_email(s: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    s.nfkc().collect::<String>().trim().to_owned()
+}
+
+pub fn email<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    Ok(normalize_email(&String::deserialize(d)?))
+}
+
+pub fn email_opt<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    Ok(Option::<String>::deserialize(d)?.map(|s| normalize_email(&s)))
+}
+
 /// PATCH fields: absent (`None`), explicit null (`Some(None)`) or a value.
 pub fn patch<'de, D, T>(d: D) -> Result<Option<Option<T>>, D::Error>
 where

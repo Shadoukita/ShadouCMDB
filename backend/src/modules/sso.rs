@@ -25,7 +25,7 @@ use super::auth::Changed;
 use super::{people, users};
 use crate::api::context::RequestContext;
 use crate::api::route::{In, Json, NoBody, NoPath, NoQuery, PathInput, QueryInput, Redirect, Route, route};
-use crate::api::schemas::USERNAME_PATTERN;
+use crate::api::schemas::{self, USERNAME_PATTERN};
 use crate::api::validate;
 use crate::auth::events::{self, LoginMethod, ProviderMfa};
 use crate::auth::secret::Secret;
@@ -186,14 +186,15 @@ fn usable_username(name: Option<&str>) -> Option<String> {
     validate::cached_regex(USERNAME_PATTERN).filter(|re| re.is_match(name)).map(|_| name.to_owned())
 }
 
+/// The provider's address in the form it is stored (NFKC, GH#531), if it is one.
 fn usable_email(email: Option<&str>) -> Option<String> {
-    let email = email?.trim();
+    let email = schemas::normalize_email(email?);
     (!email.is_empty()
         && email.len() <= 254
         && email.split_once('@').is_some_and(|(a, b)| !a.is_empty() && !b.is_empty())
         && !email.chars().any(char::is_whitespace)
         && email.matches('@').count() == 1)
-        .then(|| email.to_owned())
+        .then_some(email)
 }
 
 fn display_name(identity: &ExternalIdentity, username: &str) -> String {

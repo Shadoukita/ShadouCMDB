@@ -172,7 +172,7 @@ export interface paths {
         get?: never;
         /**
          * Enter the e-mail address of your account (accounts without one only)
-         * @description For an account created before e-mail addresses were required (`emailRequired` in GET /api/v1/auth/me): until it has one, every other route but GET /api/v1/auth/me and sign-out answers 403 EMAIL_REQUIRED. The address must be unique regardless of case (409 CONFLICT otherwise); the account is linked to the Person CI with this e-mail, which is created when there is none. Answers the session as GET /api/v1/auth/me does. 409 CONFLICT for an account that already has an e-mail: an administrator changes it (PATCH /api/v1/admin/users/{id}). Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description For an account created before e-mail addresses were required (`emailRequired` in GET /api/v1/auth/me): until it has one, every other route but GET /api/v1/auth/me and sign-out answers 403 EMAIL_REQUIRED. The address must be unique regardless of case and Unicode form (409 CONFLICT otherwise); a Person CI is created for it. A user cannot take over an existing Person: when a Person without an account already has the address, the request is refused with 409 CONFLICT (`person_email_taken`) and an administrator sets the address on the account (PATCH /api/v1/admin/users/{id}), which links it to that Person. Answers the session as GET /api/v1/auth/me does. 409 CONFLICT for an account that already has an e-mail: an administrator changes it (PATCH /api/v1/admin/users/{id}). Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         put: operations["enterOwnEmail"];
         post?: never;
@@ -5955,8 +5955,9 @@ export interface components {
             username: string;
             displayName: string;
             /**
-             * @description Unique regardless of case. Null only for accounts created before
-             *     e-mails were required (`signInStatus: email_required`).
+             * @description Unique regardless of case and Unicode form (stored in NFKC). Null only
+             *     for accounts created before e-mails were required
+             *     (`signInStatus: email_required`).
              */
             email: string | null;
             person: components["schemas"]["PersonRef"] | null;
