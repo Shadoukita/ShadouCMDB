@@ -49,6 +49,7 @@ pub fn routes() -> Vec<Route> {
         modules::api_tokens::routes(),
         modules::identity_providers::routes(),
         modules::config_transfer::routes(),
+        modules::workflows::routes(),
     ]
     .into_iter()
     .flatten()

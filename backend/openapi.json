@@ -11071,7 +11071,7 @@
           "CI classes"
         ],
         "summary": "What still refers to a ci class",
-        "description": "Requires `datamodel.manage`. Counts of configurationItems, deletedConfigurationItems, subclasses, attributeDefinitions, referencingAttributes, relationshipRules, permissionGrants. Check it before deleting or restructuring: DELETE only archives it, which no count blocks (`removal` is `purge`). A blocking count makes the purge return 409 IN_USE; the non-blocking ones are removed by the purge. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.",
+        "description": "Requires `datamodel.manage`. Counts of configurationItems, deletedConfigurationItems, subclasses, attributeDefinitions, referencingAttributes, relationshipRules, workflowDefinitions, permissionGrants. Check it before deleting or restructuring: DELETE only archives it, which no count blocks (`removal` is `purge`). A blocking count makes the purge return 409 IN_USE; the non-blocking ones are removed by the purge. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.",
         "operationId": "getCiClassUsage",
         "parameters": [
           {
@@ -12570,7 +12570,7 @@
           "Attribute definitions"
         ],
         "summary": "What still refers to a attribute definition",
-        "description": "Requires `datamodel.manage`. Counts of attributeValues, dependentFields. Check it before deleting or restructuring: DELETE only archives it, which no count blocks (`removal` is `purge`). A blocking count makes the purge return 409 IN_USE; the non-blocking ones are removed by the purge. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.",
+        "description": "Requires `datamodel.manage`. Counts of attributeValues, workflows, dependentFields. Check it before deleting or restructuring: DELETE only archives it, which no count blocks (`removal` is `purge`). A blocking count makes the purge return 409 IN_USE; the non-blocking ones are removed by the purge. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.",
         "operationId": "getAttributeDefinitionUsage",
         "parameters": [
           {
@@ -19414,7 +19414,7 @@
           "Lookup lists"
         ],
         "summary": "Delete a lookup list value",
-        "description": "Requires `datamodel.manage`. Hard delete, allowed only while no CI stores the value, no attribute uses it as default and no value of a dependent list belongs to it (409 IN_USE otherwise; the details name what still refers to it). Retire it with `PATCH {\"isActive\": false}` instead.",
+        "description": "Requires `datamodel.manage`. Hard delete, allowed only while no CI stores the value, no attribute uses it as default, no workflow state maps to it and no value of a dependent list belongs to it (409 IN_USE otherwise; the details name what still refers to it). Retire it with `PATCH {\"isActive\": false}` instead.",
         "operationId": "deleteLookupListValue",
         "parameters": [
           {
@@ -19736,7 +19736,7 @@
           "Lookup lists"
         ],
         "summary": "What still refers to a lookup list value",
-        "description": "Requires `datamodel.manage`. Counts of attributeValues, attributeDefaults, criticality, childValues. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE (`removal` is `delete`); the non-blocking ones are removed with it. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.",
+        "description": "Requires `datamodel.manage`. Counts of attributeValues, attributeDefaults, criticality, workflowStates, childValues. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE (`removal` is `delete`); the non-blocking ones are removed with it. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.",
         "operationId": "getLookupListValueUsage",
         "parameters": [
           {
@@ -28153,6 +28153,2151 @@
           },
           "403": {
             "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the session's owner has not confirmed their credentials in the last 10 minutes (code REAUTHENTICATION_REQUIRED; POST /api/v1/auth/reauthenticate, then send the request again)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large (code PAYLOAD_TOO_LARGE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/workflow-definitions": {
+      "get": {
+        "tags": [
+          "Workflow definitions"
+        ],
+        "summary": "List workflow definitions (paginated; filter by type key, active flag or text)",
+        "description": "Requires `workflows.manage`.",
+        "operationId": "listWorkflowDefinitions",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size (1-200)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Rows to skip",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0,
+              "maximum": 1000000,
+              "minimum": 0
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Case-insensitive substring search",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 200,
+              "minLength": 1
+            }
+          },
+          {
+            "name": "classKey",
+            "in": "query",
+            "description": "Stable machine key, lower_snake_case",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{0,62}$"
+            }
+          },
+          {
+            "name": "active",
+            "in": "query",
+            "description": "Only active (true) or inactive (false) workflows",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "Sort field; prefix with \"-\" for descending. One of: name, key, createdAt, updatedAt",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "name",
+              "enum": [
+                "name",
+                "-name",
+                "key",
+                "-key",
+                "createdAt",
+                "-createdAt",
+                "updatedAt",
+                "-updatedAt"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowDefinitionList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Workflow definitions"
+        ],
+        "summary": "Create a workflow definition with an empty draft (version 1)",
+        "description": "Requires `workflows.manage`. The key and the type never change. A new workflow is inactive unless `isActive: true` is sent. `stateAttributeId` names an active lookup field of the type (own or inherited) that the workflow keeps in step with its state; only one active workflow may drive a field (409 CONFLICT `state_attribute_driven`). An active workflow with a state field returns the `UNINSTANCED_CIS` warning, as for an update. 409 CONFLICT on `key` when it is taken (regardless of case). Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "createWorkflowDefinition",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "key",
+                  "name",
+                  "classId"
+                ],
+                "properties": {
+                  "key": {
+                    "type": "string",
+                    "description": "Stable machine key, lower_snake_case",
+                    "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                  },
+                  "name": {
+                    "type": "string",
+                    "maxLength": 100,
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "description": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 4000
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "x-multiline": true
+                  },
+                  "classId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "description": "The type the workflow runs on; never changes"
+                  },
+                  "includeSubclasses": {
+                    "type": "boolean",
+                    "description": "Default true"
+                  },
+                  "stateAttributeId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "uuid",
+                    "description": "A lookup field of the type (its own or inherited) that the workflow keeps in step with its state"
+                  },
+                  "autoStart": {
+                    "type": "boolean",
+                    "description": "Default false"
+                  },
+                  "isActive": {
+                    "type": "boolean",
+                    "description": "Default false: a new workflow starts inactive"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowDefinitionDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large (code PAYLOAD_TOO_LARGE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/workflow-definitions/{id}": {
+      "get": {
+        "tags": [
+          "Workflow definitions"
+        ],
+        "summary": "Get a workflow definition, with its current version number and its draft's checksum",
+        "description": "Requires `workflows.manage`.",
+        "operationId": "getWorkflowDefinition",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowDefinitionDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Workflow definitions"
+        ],
+        "summary": "Delete a workflow that never ran, with its versions and grants",
+        "description": "Requires `workflows.manage`. 409 IN_USE `has_instances` once the workflow has had an instance on any CI: its history keeps it. Deactivate it instead. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "deleteWorkflowDefinition",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success, no content"
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "Workflow definitions"
+        ],
+        "summary": "Change a workflow's name, description or flags",
+        "description": "Requires `workflows.manage`. Send the `version` you loaded: 409 VERSION_CONFLICT if the workflow, its grants or its versions changed in between. `stateAttributeId` can change only until a version is published (409 CONFLICT `published`). Inactive workflows start no new instances; running ones continue. When the change makes the workflow an active driver of a state field (activating it, or giving an active one a state field), `warnings` carries `UNINSTANCED_CIS` with the number of live CIs it covers that have no running instance: their state field cannot be edited until instances are started on them (`count` is null when the caller may not view all the types it spans). Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "updateWorkflowDefinition",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "version"
+                ],
+                "properties": {
+                  "version": {
+                    "type": "integer",
+                    "format": "int32",
+                    "description": "The version you loaded; if someone saved in between, the request fails with 409 VERSION_CONFLICT",
+                    "minimum": 1
+                  },
+                  "name": {
+                    "type": "string",
+                    "maxLength": 100,
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "description": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 4000
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "x-multiline": true
+                  },
+                  "includeSubclasses": {
+                    "type": "boolean"
+                  },
+                  "stateAttributeId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "uuid",
+                    "description": "Changeable only until the first version is published (409 CONFLICT afterwards)"
+                  },
+                  "autoStart": {
+                    "type": "boolean"
+                  },
+                  "isActive": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowDefinitionDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large (code PAYLOAD_TOO_LARGE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/workflow-definitions/{id}/versions": {
+      "get": {
+        "tags": [
+          "Workflow definitions"
+        ],
+        "summary": "List a workflow's versions, newest first, without their graphs (the draft included)",
+        "description": "Requires `workflows.manage`.",
+        "operationId": "listWorkflowVersions",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size (1-200)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Rows to skip",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0,
+              "maximum": 1000000,
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowVersionList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/workflow-definitions/{id}/versions/{no}": {
+      "get": {
+        "tags": [
+          "Workflow definitions"
+        ],
+        "summary": "Get one version of a workflow with its whole graph",
+        "description": "Requires `workflows.manage`.",
+        "operationId": "getWorkflowVersion",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "no",
+            "in": "path",
+            "description": "Version number",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "maximum": 2147483647,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowVersion"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/workflow-definitions/{id}/versions/{no}/retire": {
+      "post": {
+        "tags": [
+          "Workflow definitions"
+        ],
+        "summary": "Retire a published version: no new instance starts on it",
+        "description": "Requires `workflows.manage`. Running instances stay on it until they are migrated. When it was the current version, the newest version still published becomes current (none: the workflow starts no instances until the next publish). 409 CONFLICT for a draft or an already retired version. Bumps the workflow's `version`. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "retireWorkflowVersion",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "no",
+            "in": "path",
+            "description": "Version number",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "maximum": 2147483647,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowVersionSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/workflow-definitions/{id}/draft": {
+      "get": {
+        "tags": [
+          "Workflow definitions"
+        ],
+        "summary": "Get the draft graph (404 when there is none)",
+        "description": "Requires `workflows.manage`.",
+        "operationId": "getWorkflowDraft",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowVersion"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "Workflow definitions"
+        ],
+        "summary": "Replace the whole draft graph (creating the draft as the next version when there is none)",
+        "description": "Requires `workflows.manage`. States, transitions and their fields are named by key; fields are fields of the workflow's type (own or inherited) and `stateValue` is the key of a value of the state field's list. Anything that cannot be resolved, duplicate keys, transitions to unknown states or to their own state, and malformed or ill-typed conditions are 400 VALIDATION_ERROR with the path of each problem. Whether the graph can be published is the lint's question (`draft/validate`). With `expectedChecksum`, 409 VERSION_CONFLICT if the draft changed (or was published or deleted) since it was loaded. The response carries the new `checksum`. Drafts are not audited; publishing is. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "replaceWorkflowDraft",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "The whole draft graph; it replaces the draft (or creates one)",
+                "required": [
+                  "states",
+                  "transitions"
+                ],
+                "properties": {
+                  "initialState": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "description": "Stable machine key, lower_snake_case",
+                        "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "states": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/WorkflowState"
+                    },
+                    "maxItems": 100
+                  },
+                  "transitions": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/WorkflowTransition"
+                    },
+                    "maxItems": 300
+                  },
+                  "layout": {
+                    "type": "object",
+                    "description": "Designer node positions, free-form (at most 64 KiB). Not part of the checksum."
+                  },
+                  "expectedChecksum": {
+                    "type": "string",
+                    "description": "sha256 of the canonical graph (hex): states, transitions and the initial state, not the layout",
+                    "pattern": "^[0-9a-f]{64}$"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowVersion"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large (code PAYLOAD_TOO_LARGE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Workflow definitions"
+        ],
+        "summary": "Discard the draft",
+        "description": "Requires `workflows.manage`. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "deleteWorkflowDraft",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success, no content"
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/workflow-definitions/{id}/draft/validate": {
+      "post": {
+        "tags": [
+          "Workflow definitions"
+        ],
+        "summary": "Lint the draft as publishing would, without publishing",
+        "description": "Requires `workflows.manage`. Errors refuse publishing: no states, no initial state or a terminal one, unreachable states, non-terminal states without a way out, states from which no terminal state can be reached, terminal states with outgoing transitions, fields or conditions on fields that are not (or no longer) on the type, archived or of the wrong type, and state values outside the state field's list or retired. Warnings do not: a transition no profile is granted (only administrators could run it). Always 200; `valid` tells whether publishing would go ahead.",
+        "operationId": "validateWorkflowDraft",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowValidation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/workflow-definitions/{id}/draft/publish": {
+      "post": {
+        "tags": [
+          "Workflow definitions"
+        ],
+        "summary": "Publish the draft as the workflow's current version",
+        "description": "Requires `workflows.manage`. `expectedDraftChecksum` is the checksum of the draft you validated: 409 VERSION_CONFLICT if it changed in between. A draft the lint finds errors in is 400 VALIDATION_ERROR with one detail per problem (`field` is its path in the draft body, `code` the lint code). The published version can never change again; running instances stay on the version they started on. Every field it depends on is recorded, so archiving, retyping or purging those fields is refused (409 IN_USE). Audited as `workflow.publish` with the whole graph. Bumps the workflow's `version`. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "publishWorkflowDraft",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "expectedDraftChecksum"
+                ],
+                "properties": {
+                  "changeNote": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 2000
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "x-multiline": true
+                  },
+                  "expectedDraftChecksum": {
+                    "type": "string",
+                    "description": "sha256 of the canonical graph (hex): states, transitions and the initial state, not the layout",
+                    "pattern": "^[0-9a-f]{64}$"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowVersion"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large (code PAYLOAD_TOO_LARGE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/workflow-definitions/{id}/grants": {
+      "get": {
+        "tags": [
+          "Workflow definitions"
+        ],
+        "summary": "Who may run which transition of a workflow",
+        "description": "Requires `workflows.manage`. Grants are per transition key and permission profile, for every version of the workflow. `_cancel` is the grant to cancel an instance. Running a transition also needs the edit right on the CI's type; administrators may run every transition.",
+        "operationId": "getWorkflowGrants",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowGrants"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "Workflow definitions"
+        ],
+        "summary": "Replace who may run which transition of a workflow",
+        "description": "Requires `workflows.manage`. `grants` is the complete new set; profiles are given by id or by name. Send the workflow's `version`: 409 VERSION_CONFLICT if it changed in between. An unknown profile is 400 VALIDATION_ERROR `not_found` on `grants[i].profiles[j]`. A change bumps the workflow's version and is audited with the grants before and after, by profile name. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "replaceWorkflowGrants",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "version",
+                  "grants"
+                ],
+                "properties": {
+                  "version": {
+                    "type": "integer",
+                    "format": "int32",
+                    "description": "The version you loaded; if someone saved in between, the request fails with 409 VERSION_CONFLICT",
+                    "minimum": 1
+                  },
+                  "grants": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "transitionKey",
+                        "profiles"
+                      ],
+                      "properties": {
+                        "transitionKey": {
+                          "type": "string",
+                          "description": "A transition key (of any version), or `_cancel` for cancelling an instance",
+                          "pattern": "^(_cancel|[a-z][a-z0-9_]{0,62})$"
+                        },
+                        "profiles": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "maxLength": 200,
+                            "minLength": 1
+                          },
+                          "description": "Permission profiles by id or by name (regardless of case)",
+                          "maxItems": 100
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "description": "Every grant of the workflow (replaces the current set)",
+                    "maxItems": 301
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowGrants"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
             "content": {
               "application/json": {
                 "schema": {
@@ -38326,6 +40471,722 @@
           }
         },
         "additionalProperties": false
+      },
+      "WorkflowDefinition": {
+        "type": "object",
+        "description": "A workflow definition: the identity of a workflow and its mutable settings",
+        "required": [
+          "id",
+          "key",
+          "name",
+          "description",
+          "classId",
+          "classKey",
+          "includeSubclasses",
+          "stateAttributeId",
+          "stateAttributeKey",
+          "autoStart",
+          "isActive",
+          "currentVersionNo",
+          "draftVersionNo",
+          "version",
+          "createdAt",
+          "createdByName",
+          "updatedAt",
+          "updatedByName"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "key": {
+            "type": "string",
+            "description": "Export identity; never changes"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "classId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The type the workflow runs on; never changes"
+          },
+          "classKey": {
+            "type": "string"
+          },
+          "includeSubclasses": {
+            "type": "boolean",
+            "description": "Whether CIs of the types below `classId` run it too"
+          },
+          "stateAttributeId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The lookup field of the type that the workflow keeps in step with its state"
+          },
+          "stateAttributeKey": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "autoStart": {
+            "type": "boolean",
+            "description": "Start an instance when a CI of the type is created"
+          },
+          "isActive": {
+            "type": "boolean",
+            "description": "Inactive: no new instances; running ones continue"
+          },
+          "currentVersionNo": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The newest published version that is not retired; null before the first publish"
+          },
+          "draftVersionNo": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The version number of the draft; null when there is none"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Send it back with a change; a stale one fails with 409 VERSION_CONFLICT"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "createdByName": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedByName": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowDefinitionDetail": {
+        "type": "object",
+        "description": "A workflow definition with its draft's checksum and the warnings of the change that returned it",
+        "required": [
+          "id",
+          "key",
+          "name",
+          "description",
+          "classId",
+          "classKey",
+          "includeSubclasses",
+          "stateAttributeId",
+          "stateAttributeKey",
+          "autoStart",
+          "isActive",
+          "currentVersionNo",
+          "draftVersionNo",
+          "draftChecksum",
+          "version",
+          "createdAt",
+          "createdByName",
+          "updatedAt",
+          "updatedByName",
+          "warnings"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "classId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "classKey": {
+            "type": "string"
+          },
+          "includeSubclasses": {
+            "type": "boolean"
+          },
+          "stateAttributeId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "stateAttributeKey": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "autoStart": {
+            "type": "boolean"
+          },
+          "isActive": {
+            "type": "boolean"
+          },
+          "currentVersionNo": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "draftVersionNo": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "draftChecksum": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The draft's checksum: send it as `expectedDraftChecksum` to publish. Null when there is no draft.",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "createdByName": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedByName": {
+            "type": "string"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowWarning"
+            },
+            "description": "Filled by create and update only (e.g. `UNINSTANCED_CIS` when the workflow is activated); empty otherwise"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowDefinitionList": {
+        "type": "object",
+        "required": [
+          "data",
+          "page"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowDefinition"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageMeta"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowGrant": {
+        "type": "object",
+        "description": "The profiles that may run one transition",
+        "required": [
+          "transitionKey",
+          "profiles"
+        ],
+        "properties": {
+          "transitionKey": {
+            "type": "string",
+            "description": "A transition key, or `_cancel` for cancelling an instance"
+          },
+          "profiles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowGrantProfile"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowGrantProfile": {
+        "type": "object",
+        "description": "A permission profile, by id and name",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowGrants": {
+        "type": "object",
+        "description": "Who may run which transition of a workflow",
+        "required": [
+          "version",
+          "grants"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The definition's version: send it back with a change"
+          },
+          "grants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowGrant"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowProblem": {
+        "type": "object",
+        "description": "One finding of the graph lint",
+        "required": [
+          "path",
+          "code",
+          "message",
+          "severity"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Where in the draft body, e.g. `states[2]`, `transitions[0].fields[1].attribute`"
+          },
+          "code": {
+            "type": "string",
+            "description": "Machine-readable: no_states, no_initial_state, initial_state_terminal, unreachable_state, dead_end,\nno_terminal_reachable, terminal_has_transitions, unknown_attribute, inactive_attribute, attribute_type,\nunknown_value, op_type, no_state_attribute, state_value_list, state_value_inactive, ungranted_transition, ..."
+          },
+          "message": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "error",
+              "warning"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowState": {
+        "type": "object",
+        "description": "A state of a workflow version",
+        "required": [
+          "key",
+          "name",
+          "category"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "Stable machine key, lower_snake_case",
+            "pattern": "^[a-z][a-z0-9_]{0,62}$"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "category": {
+            "type": "string",
+            "description": "What reaching a state means",
+            "enum": [
+              "open",
+              "active",
+              "done",
+              "cancelled"
+            ]
+          },
+          "terminal": {
+            "type": "boolean",
+            "description": "Reaching it completes the instance (default false)"
+          },
+          "stateValue": {
+            "anyOf": [
+              {
+                "type": "string",
+                "description": "Stable machine key, lower_snake_case",
+                "pattern": "^[a-z][a-z0-9_]{0,62}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowTransition": {
+        "type": "object",
+        "description": "A transition of a workflow version: a directed edge between two states",
+        "required": [
+          "key",
+          "name",
+          "from",
+          "to"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "Stable machine key, lower_snake_case",
+            "pattern": "^[a-z][a-z0-9_]{0,62}$"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "from": {
+            "type": "string",
+            "description": "Stable machine key, lower_snake_case",
+            "pattern": "^[a-z][a-z0-9_]{0,62}$"
+          },
+          "to": {
+            "type": "string",
+            "description": "Stable machine key, lower_snake_case",
+            "pattern": "^[a-z][a-z0-9_]{0,62}$"
+          },
+          "requiresComment": {
+            "type": "boolean",
+            "description": "A comment must be given to run it (default false)"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowTransitionField"
+            },
+            "maxItems": 50
+          },
+          "conditions": {
+            "type": "object",
+            "description": "Must hold for the transition to run. A group `{\"all\": [...]}` or `{\"any\": [...]}` of conditions, or a leaf `{\"field\": <field key>, \"op\": <op>, \"value\": <value>}`. Ops: eq, ne, in, notIn (value: array of 1-100), isSet, isNotSet (no value), gt, gte, lt, lte (number, integer, date and datetime fields), contains (text fields). The value has the field's type; enum and lookup values are given by key. At most 4 levels deep, 32 leaves and 16 KiB. The field is one of the workflow type's own or inherited fields."
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowTransitionField": {
+        "type": "object",
+        "description": "A field a transition shows, and whether it must be filled in",
+        "required": [
+          "attribute"
+        ],
+        "properties": {
+          "attribute": {
+            "type": "string",
+            "description": "Stable machine key, lower_snake_case",
+            "pattern": "^[a-z][a-z0-9_]{0,62}$"
+          },
+          "required": {
+            "type": "boolean",
+            "description": "Default true"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowValidation": {
+        "type": "object",
+        "description": "The lint of the draft",
+        "required": [
+          "valid",
+          "checksum",
+          "problems"
+        ],
+        "properties": {
+          "valid": {
+            "type": "boolean",
+            "description": "True when no problem is an error: publishing would go ahead"
+          },
+          "checksum": {
+            "type": "string"
+          },
+          "problems": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowProblem"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowVersion": {
+        "type": "object",
+        "description": "One version of a workflow with its whole graph",
+        "required": [
+          "versionNo",
+          "status",
+          "isCurrent",
+          "initialState",
+          "states",
+          "transitions",
+          "layout",
+          "checksum",
+          "changeNote",
+          "publishedAt",
+          "publishedByName",
+          "createdAt"
+        ],
+        "properties": {
+          "versionNo": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "published",
+              "retired"
+            ]
+          },
+          "isCurrent": {
+            "type": "boolean",
+            "description": "The version new instances start on"
+          },
+          "initialState": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Key of the state an instance starts in; null while a draft has none"
+          },
+          "states": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowState"
+            }
+          },
+          "transitions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowTransition"
+            }
+          },
+          "layout": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "checksum": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "changeNote": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "publishedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "publishedByName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowVersionList": {
+        "type": "object",
+        "required": [
+          "data",
+          "page"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowVersionSummary"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageMeta"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowVersionSummary": {
+        "type": "object",
+        "description": "One version of a workflow, without its graph",
+        "required": [
+          "versionNo",
+          "status",
+          "isCurrent",
+          "stateCount",
+          "transitionCount",
+          "activeInstanceCount",
+          "checksum",
+          "changeNote",
+          "publishedAt",
+          "publishedByName",
+          "createdAt"
+        ],
+        "properties": {
+          "versionNo": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "published",
+              "retired"
+            ]
+          },
+          "isCurrent": {
+            "type": "boolean"
+          },
+          "stateCount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "transitionCount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "activeInstanceCount": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Running instances pinned to this version. Null when withheld: the caller may not view every type the\nworkflow runs on."
+          },
+          "checksum": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "changeNote": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "publishedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "publishedByName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowWarning": {
+        "type": "object",
+        "description": "Something the caller should know about a change that was made anyway",
+        "required": [
+          "code",
+          "count",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "allOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "UNINSTANCED_CIS"
+                ]
+              },
+              {
+                "type": "object",
+                "description": "`UNINSTANCED_CIS`: the workflow drives a state field and is active, and this many live CIs it covers have\nno running instance of it. Their state field cannot be edited (it is driven by the workflow) until an\ninstance is started on them."
+              }
+            ]
+          },
+          "count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Null when withheld: the count spans CIs of types the caller may not view"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
       }
     },
     "securitySchemes": {
@@ -38465,6 +41326,9 @@
     {
       "name": "Configuration export/import",
       "description": "Administration: the whole configuration (data model, lookups, permission profiles, UI settings) as one JSON file, and importing such a file with a dry-run diff first. Needs config.export_import."
+    },
+    {
+      "name": "Workflow definitions"
     }
   ]
 }

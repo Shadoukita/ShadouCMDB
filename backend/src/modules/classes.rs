@@ -31,6 +31,7 @@ use crate::data::classes as data;
 use crate::data::crud::{self, AuditAction, AuditEntry, ColumnSet, Val, Where};
 use crate::data::items as items_data;
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
+use crate::modules::workflows::refs as workflow_refs;
 use crate::paged;
 use crate::schema::model::Model;
 use crate::schema::naming::{self, Ident, NameKind};
@@ -392,6 +393,13 @@ impl Resource for CiClasses {
             sql: "SELECT count(*) FROM relationship_type_rules WHERE source_class_id = $1 OR target_class_id = $1",
             spans: None,
             blocking: false,
+        },
+        Usage {
+            kind: "workflowDefinitions",
+            label: "workflows defined on it (delete them first)",
+            sql: crate::modules::workflows::refs::CLASS_DEFINITIONS,
+            spans: None,
+            blocking: true,
         },
         Usage {
             kind: "permissionGrants",
@@ -770,6 +778,13 @@ pub async fn purge_class_in(
             .fetch_one(&mut *conn)
             .await?,
             "reference fields of other types pointing at it (purge or change them first)",
+        ),
+        (
+            sqlx::query_scalar(crate::modules::workflows::refs::CLASS_DEFINITIONS)
+                .bind(id)
+                .fetch_one(&mut *conn)
+                .await?,
+            "workflows defined on it (delete them first)",
         ),
     ];
     let blocking: Vec<String> =
@@ -1587,6 +1602,16 @@ impl Resource for AttributeDefinitions {
             blocking: false,
         },
         Usage {
+            kind: "workflows",
+            label: "workflow versions or workflows using it (as a transition field, in a condition or as state field)",
+            sql: "SELECT count(*) FROM (SELECT version_id FROM cmdb.workflow_version_attribute_refs WHERE attribute_id = $1
+                  UNION SELECT t.version_id FROM cmdb.workflow_transition_fields f
+                        JOIN cmdb.workflow_transitions t ON t.id = f.transition_id WHERE f.attribute_id = $1
+                  UNION SELECT id FROM cmdb.workflow_definitions WHERE state_attribute_id = $1) u",
+            spans: None,
+            blocking: true,
+        },
+        Usage {
             kind: "dependentFields",
             label: "fields using it as their parent field (unlink them first)",
             sql: "SELECT count(*) FROM ci_attribute_definitions WHERE parent_attribute_id = $1",
@@ -1637,6 +1662,25 @@ impl Resource for AttributeDefinitions {
         previous: Option<&'a AttributeDefinition>,
     ) -> BoxFuture<'a, Result<(), AppError>> {
         Box::pin(async move {
+            // A field a running workflow depends on keeps its type and stays active (SHAA-1423).
+            if let Some(p) = previous {
+                let what = if p.is_active && !row.is_active {
+                    Some("archived")
+                } else if p.data_type != row.data_type {
+                    Some("given another data type")
+                } else if p.lookup_list_id != row.lookup_list_id || p.reference_class_id != row.reference_class_id {
+                    Some("pointed at another list or type")
+                } else if p.enum_values.as_ref().is_some_and(|old| {
+                    old.0.iter().any(|v| !row.enum_values.as_ref().is_some_and(|new| new.0.contains(v)))
+                }) {
+                    Some("stripped of enum values")
+                } else {
+                    None
+                };
+                if let Some(what) = what {
+                    workflow_refs::check_attribute(conn, row.id, &row.key, workflow_refs::Reach::Live, what).await?;
+                }
+            }
             if let Some(clash) = data::attribute_key_clash(conn, row.class_id, &row.key, row.id).await? {
                 return Err(engine::invalid_name(
                     "key",
@@ -1711,6 +1755,7 @@ pub async fn purge_attribute_in(
             .await?
             .ok_or_else(|| AppError::missing(AttributeDefinitions::LABEL, id))?;
     check_purge("field", &row.key, row.is_active, confirm)?;
+    workflow_refs::check_attribute(conn, id, &row.key, workflow_refs::Reach::All, "purged").await?;
     let dependents: Vec<String> = sqlx::query_scalar(
         "SELECT c.key || '.' || d.key FROM ci_attribute_definitions d JOIN ci_classes c ON c.id = d.class_id
          WHERE d.parent_attribute_id = $1 ORDER BY 1",
@@ -2928,11 +2973,22 @@ mod tests {
         assert!(c.contains(&("configurationItems".into(), Some(1), false)), "{c:?}");
 
         let c = counts(&simple::usage::<AttributeDefinitions>(pool, &restricted, code.id).await.unwrap());
-        assert_eq!(c, [("attributeValues".to_string(), None, true), ("dependentFields".to_string(), Some(0), false)]);
+        assert_eq!(
+            c,
+            [
+                ("attributeValues".to_string(), None, true),
+                ("workflows".to_string(), Some(0), false),
+                ("dependentFields".to_string(), Some(0), false)
+            ]
+        );
         let c = counts(&simple::usage::<AttributeDefinitions>(pool, &viewer, code.id).await.unwrap());
         assert_eq!(
             c,
-            [("attributeValues".to_string(), Some(2), false), ("dependentFields".to_string(), Some(0), false)]
+            [
+                ("attributeValues".to_string(), Some(2), false),
+                ("workflows".to_string(), Some(0), false),
+                ("dependentFields".to_string(), Some(0), false)
+            ]
         );
 
         // A relationship type's edges may join any classes; a rule's join its classes.

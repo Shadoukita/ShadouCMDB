@@ -1250,7 +1250,7 @@ impl Resource for LookupListValues {
     const COLUMNS: &'static str =
         "id, list_id, key, name, description, color, sort_order, is_active, created_at, updated_at, parent_value_id";
     const SEARCH_COLUMNS: &'static [&'static str] = &["key", "name", "description"];
-    const DELETE_DESCRIPTION: &'static str = "Hard delete, allowed only while no CI stores the value, no attribute uses it as default and no value of a dependent list belongs to it (409 IN_USE otherwise; the details name what still refers to it). Retire it with `PATCH {\"isActive\": false}` instead.";
+    const DELETE_DESCRIPTION: &'static str = "Hard delete, allowed only while no CI stores the value, no attribute uses it as default, no workflow state maps to it and no value of a dependent list belongs to it (409 IN_USE otherwise; the details name what still refers to it). Retire it with `PATCH {\"isActive\": false}` instead.";
     const UPDATE_DESCRIPTION: &'static str = "`isActive: false` on a value that other values belong to retires those too (and theirs, down the chain), each change audited. It is refused (409 IN_USE) while CIs store one of those active dependent values: the parent could then no longer be chosen while its children stay on the CIs. Reactivating a value does not reactivate its dependents, and a value whose parent value is retired cannot be reactivated or created.";
     const WRITE_ERRORS: &'static [ErrorCode] = &[ErrorCode::InUse];
     const USAGE: &'static [Usage] = &[
@@ -1273,6 +1273,13 @@ impl Resource for LookupListValues {
             label: "configuration items with this criticality",
             sql: "SELECT count(*) FROM configuration_items WHERE criticality_value_id = $1",
             spans: Some(CRITICALITY_VALUE_SPANS),
+            blocking: true,
+        },
+        Usage {
+            kind: "workflowStates",
+            label: "workflow states mapped to it (in published, retired or draft versions)",
+            sql: crate::modules::workflows::refs::LOOKUP_VALUE_STATES,
+            spans: None,
             blocking: true,
         },
         Usage {

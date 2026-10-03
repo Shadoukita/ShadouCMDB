@@ -1222,7 +1222,7 @@ export interface paths {
         };
         /**
          * What still refers to a ci class
-         * @description Requires `datamodel.manage`. Counts of configurationItems, deletedConfigurationItems, subclasses, attributeDefinitions, referencingAttributes, relationshipRules, permissionGrants. Check it before deleting or restructuring: DELETE only archives it, which no count blocks (`removal` is `purge`). A blocking count makes the purge return 409 IN_USE; the non-blocking ones are removed by the purge. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
+         * @description Requires `datamodel.manage`. Counts of configurationItems, deletedConfigurationItems, subclasses, attributeDefinitions, referencingAttributes, relationshipRules, workflowDefinitions, permissionGrants. Check it before deleting or restructuring: DELETE only archives it, which no count blocks (`removal` is `purge`). A blocking count makes the purge return 409 IN_USE; the non-blocking ones are removed by the purge. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
          */
         get: operations["getCiClassUsage"];
         put?: never;
@@ -1331,7 +1331,7 @@ export interface paths {
         };
         /**
          * What still refers to a attribute definition
-         * @description Requires `datamodel.manage`. Counts of attributeValues, dependentFields. Check it before deleting or restructuring: DELETE only archives it, which no count blocks (`removal` is `purge`). A blocking count makes the purge return 409 IN_USE; the non-blocking ones are removed by the purge. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
+         * @description Requires `datamodel.manage`. Counts of attributeValues, workflows, dependentFields. Check it before deleting or restructuring: DELETE only archives it, which no count blocks (`removal` is `purge`). A blocking count makes the purge return 409 IN_USE; the non-blocking ones are removed by the purge. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
          */
         get: operations["getAttributeDefinitionUsage"];
         put?: never;
@@ -2015,7 +2015,7 @@ export interface paths {
         post?: never;
         /**
          * Delete a lookup list value
-         * @description Requires `datamodel.manage`. Hard delete, allowed only while no CI stores the value, no attribute uses it as default and no value of a dependent list belongs to it (409 IN_USE otherwise; the details name what still refers to it). Retire it with `PATCH {"isActive": false}` instead.
+         * @description Requires `datamodel.manage`. Hard delete, allowed only while no CI stores the value, no attribute uses it as default, no workflow state maps to it and no value of a dependent list belongs to it (409 IN_USE otherwise; the details name what still refers to it). Retire it with `PATCH {"isActive": false}` instead.
          */
         delete: operations["deleteLookupListValue"];
         options?: never;
@@ -2036,7 +2036,7 @@ export interface paths {
         };
         /**
          * What still refers to a lookup list value
-         * @description Requires `datamodel.manage`. Counts of attributeValues, attributeDefaults, criticality, childValues. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE (`removal` is `delete`); the non-blocking ones are removed with it. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
+         * @description Requires `datamodel.manage`. Counts of attributeValues, attributeDefaults, criticality, workflowStates, childValues. Check it before deleting or restructuring: a blocking count makes DELETE return 409 IN_USE (`removal` is `delete`); the non-blocking ones are removed with it. A count over CIs is told only when the caller may view every CI class it can include; otherwise `count` is null and `withheld` true. `inUse` is decided on every count, withheld ones included.
          */
         get: operations["getLookupListValueUsage"];
         put?: never;
@@ -2793,6 +2793,210 @@ export interface paths {
          * @description Requires `config.export_import`. `mode=dry_run` validates the file and runs the whole import in a transaction that is rolled back, returning the diff; `mode=apply` does the same and commits. Rows are matched by key (profiles by name) and created or updated; a class or relationship type with a `systemRole` (the built-in business service class and membership type, version 5) is matched to this install's class or type of that role whatever its key, keeps its key and area here, and is reported as a "Matched by role" warning; a grant's `classSystemRole` resolves the same way. An import never sets or clears a role; nothing is deleted, so data missing from the file is kept (counted as `notInFile`). The `uiSettings` section replaces the settings (as a new version) and the logo and favicon. All sections are optional. Problems in the file are reported together as 400 VALIDATION_ERROR with paths into the file; a change the data model does not allow (e.g. making an attribute required while CIs lack a value) fails with the same error the admin API gives, with the file path prefixed. A file holds at most 25,000 entries in all: data-model entries, lookup values (former tables included), permission profiles, saved import mappings and saved views (400 VALIDATION_ERROR with code too_big at the largest section otherwise, dry run included): split a larger configuration across several files. A non-empty `dataModel` or `lookups` section also requires `datamodel.manage`, a `uiSettings` section `customization.manage`, and a non-empty `permissionProfiles` section `profiles.manage`, and a non-empty `importMappings` section `cis.import` (403 otherwise, dry run included). Saved import mappings are matched by class key and name (case-insensitive); an existing one gets the file's description and definition. Keys the target lacks are warnings, and mappings of classes the caller cannot view are skipped. A non-empty `savedViews` section (version 6) needs `views.share`; shared views are matched by context and name (case-insensitive), an existing one gets the file's description and definition (keeping the class keys the importer may not view), nothing is deleted, keys the target lacks are warnings, and a view naming a class the importer cannot view is skipped. Profiles cannot grant more than the importing user holds (403). Every applied change is audited. Files of earlier versions (0.1.0-rc.1) may carry `lookups.statuses`, `environments`, `locations` and `owners` (the former tables): they are imported as the lookup lists `status`, `environment`, `location` and `owner`, as migration 0016 converts those tables, or skipped when the file's lists already hold them; either way a warning names the section. Needs a signed-in session: API tokens get 403 FORBIDDEN. The session's owner must have signed in or confirmed their credentials (`reauthenticate`, POST /api/v1/auth/reauthenticate) in the last 10 minutes: 403 REAUTHENTICATION_REQUIRED otherwise, audited as `session.reauthentication_required`.
          */
         post: operations["importConfig"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/workflow-definitions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List workflow definitions (paginated; filter by type key, active flag or text)
+         * @description Requires `workflows.manage`.
+         */
+        get: operations["listWorkflowDefinitions"];
+        put?: never;
+        /**
+         * Create a workflow definition with an empty draft (version 1)
+         * @description Requires `workflows.manage`. The key and the type never change. A new workflow is inactive unless `isActive: true` is sent. `stateAttributeId` names an active lookup field of the type (own or inherited) that the workflow keeps in step with its state; only one active workflow may drive a field (409 CONFLICT `state_attribute_driven`). An active workflow with a state field returns the `UNINSTANCED_CIS` warning, as for an update. 409 CONFLICT on `key` when it is taken (regardless of case). Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        post: operations["createWorkflowDefinition"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/workflow-definitions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a workflow definition, with its current version number and its draft's checksum
+         * @description Requires `workflows.manage`.
+         */
+        get: operations["getWorkflowDefinition"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a workflow that never ran, with its versions and grants
+         * @description Requires `workflows.manage`. 409 IN_USE `has_instances` once the workflow has had an instance on any CI: its history keeps it. Deactivate it instead. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        delete: operations["deleteWorkflowDefinition"];
+        options?: never;
+        head?: never;
+        /**
+         * Change a workflow's name, description or flags
+         * @description Requires `workflows.manage`. Send the `version` you loaded: 409 VERSION_CONFLICT if the workflow, its grants or its versions changed in between. `stateAttributeId` can change only until a version is published (409 CONFLICT `published`). Inactive workflows start no new instances; running ones continue. When the change makes the workflow an active driver of a state field (activating it, or giving an active one a state field), `warnings` carries `UNINSTANCED_CIS` with the number of live CIs it covers that have no running instance: their state field cannot be edited until instances are started on them (`count` is null when the caller may not view all the types it spans). Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        patch: operations["updateWorkflowDefinition"];
+        trace?: never;
+    };
+    "/api/v1/admin/workflow-definitions/{id}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List a workflow's versions, newest first, without their graphs (the draft included)
+         * @description Requires `workflows.manage`.
+         */
+        get: operations["listWorkflowVersions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/workflow-definitions/{id}/versions/{no}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get one version of a workflow with its whole graph
+         * @description Requires `workflows.manage`.
+         */
+        get: operations["getWorkflowVersion"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/workflow-definitions/{id}/versions/{no}/retire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retire a published version: no new instance starts on it
+         * @description Requires `workflows.manage`. Running instances stay on it until they are migrated. When it was the current version, the newest version still published becomes current (none: the workflow starts no instances until the next publish). 409 CONFLICT for a draft or an already retired version. Bumps the workflow's `version`. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        post: operations["retireWorkflowVersion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/workflow-definitions/{id}/draft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the draft graph (404 when there is none)
+         * @description Requires `workflows.manage`.
+         */
+        get: operations["getWorkflowDraft"];
+        /**
+         * Replace the whole draft graph (creating the draft as the next version when there is none)
+         * @description Requires `workflows.manage`. States, transitions and their fields are named by key; fields are fields of the workflow's type (own or inherited) and `stateValue` is the key of a value of the state field's list. Anything that cannot be resolved, duplicate keys, transitions to unknown states or to their own state, and malformed or ill-typed conditions are 400 VALIDATION_ERROR with the path of each problem. Whether the graph can be published is the lint's question (`draft/validate`). With `expectedChecksum`, 409 VERSION_CONFLICT if the draft changed (or was published or deleted) since it was loaded. The response carries the new `checksum`. Drafts are not audited; publishing is. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        put: operations["replaceWorkflowDraft"];
+        post?: never;
+        /**
+         * Discard the draft
+         * @description Requires `workflows.manage`. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        delete: operations["deleteWorkflowDraft"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/workflow-definitions/{id}/draft/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Lint the draft as publishing would, without publishing
+         * @description Requires `workflows.manage`. Errors refuse publishing: no states, no initial state or a terminal one, unreachable states, non-terminal states without a way out, states from which no terminal state can be reached, terminal states with outgoing transitions, fields or conditions on fields that are not (or no longer) on the type, archived or of the wrong type, and state values outside the state field's list or retired. Warnings do not: a transition no profile is granted (only administrators could run it). Always 200; `valid` tells whether publishing would go ahead.
+         */
+        post: operations["validateWorkflowDraft"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/workflow-definitions/{id}/draft/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Publish the draft as the workflow's current version
+         * @description Requires `workflows.manage`. `expectedDraftChecksum` is the checksum of the draft you validated: 409 VERSION_CONFLICT if it changed in between. A draft the lint finds errors in is 400 VALIDATION_ERROR with one detail per problem (`field` is its path in the draft body, `code` the lint code). The published version can never change again; running instances stay on the version they started on. Every field it depends on is recorded, so archiving, retyping or purging those fields is refused (409 IN_USE). Audited as `workflow.publish` with the whole graph. Bumps the workflow's `version`. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        post: operations["publishWorkflowDraft"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/workflow-definitions/{id}/grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Who may run which transition of a workflow
+         * @description Requires `workflows.manage`. Grants are per transition key and permission profile, for every version of the workflow. `_cancel` is the grant to cancel an instance. Running a transition also needs the edit right on the CI's type; administrators may run every transition.
+         */
+        get: operations["getWorkflowGrants"];
+        /**
+         * Replace who may run which transition of a workflow
+         * @description Requires `workflows.manage`. `grants` is the complete new set; profiles are given by id or by name. Send the workflow's `version`: 409 VERSION_CONFLICT if it changed in between. An unknown profile is 400 VALIDATION_ERROR `not_found` on `grants[i].profiles[j]`. A change bumps the workflow's version and is audited with the grants before and after, by profile name. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        put: operations["replaceWorkflowGrants"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -6065,6 +6269,229 @@ export interface components {
             apiVersion: string;
             /** @description Database migrations shipped with this build */
             migrations: number;
+        };
+        /** @description A workflow definition: the identity of a workflow and its mutable settings */
+        WorkflowDefinition: {
+            /** Format: uuid */
+            id: string;
+            /** @description Export identity; never changes */
+            key: string;
+            name: string;
+            description: string | null;
+            /**
+             * Format: uuid
+             * @description The type the workflow runs on; never changes
+             */
+            classId: string;
+            classKey: string;
+            /** @description Whether CIs of the types below `classId` run it too */
+            includeSubclasses: boolean;
+            /**
+             * Format: uuid
+             * @description The lookup field of the type that the workflow keeps in step with its state
+             */
+            stateAttributeId: string | null;
+            stateAttributeKey: string | null;
+            /** @description Start an instance when a CI of the type is created */
+            autoStart: boolean;
+            /** @description Inactive: no new instances; running ones continue */
+            isActive: boolean;
+            /**
+             * Format: int32
+             * @description The newest published version that is not retired; null before the first publish
+             */
+            currentVersionNo: number | null;
+            /**
+             * Format: int32
+             * @description The version number of the draft; null when there is none
+             */
+            draftVersionNo: number | null;
+            /**
+             * Format: int32
+             * @description Send it back with a change; a stale one fails with 409 VERSION_CONFLICT
+             */
+            version: number;
+            /** Format: date-time */
+            createdAt: string;
+            createdByName: string;
+            /** Format: date-time */
+            updatedAt: string;
+            updatedByName: string;
+        };
+        /** @description A workflow definition with its draft's checksum and the warnings of the change that returned it */
+        WorkflowDefinitionDetail: {
+            /** Format: uuid */
+            id: string;
+            key: string;
+            name: string;
+            description: string | null;
+            /** Format: uuid */
+            classId: string;
+            classKey: string;
+            includeSubclasses: boolean;
+            /** Format: uuid */
+            stateAttributeId: string | null;
+            stateAttributeKey: string | null;
+            autoStart: boolean;
+            isActive: boolean;
+            /** Format: int32 */
+            currentVersionNo: number | null;
+            /** Format: int32 */
+            draftVersionNo: number | null;
+            /** @description The draft's checksum: send it as `expectedDraftChecksum` to publish. Null when there is no draft. */
+            draftChecksum: string | null;
+            /** Format: int32 */
+            version: number;
+            /** Format: date-time */
+            createdAt: string;
+            createdByName: string;
+            /** Format: date-time */
+            updatedAt: string;
+            updatedByName: string;
+            /** @description Filled by create and update only (e.g. `UNINSTANCED_CIS` when the workflow is activated); empty otherwise */
+            warnings: components["schemas"]["WorkflowWarning"][];
+        };
+        WorkflowDefinitionList: {
+            data: components["schemas"]["WorkflowDefinition"][];
+            page: components["schemas"]["PageMeta"];
+        };
+        /** @description The profiles that may run one transition */
+        WorkflowGrant: {
+            /** @description A transition key, or `_cancel` for cancelling an instance */
+            transitionKey: string;
+            profiles: components["schemas"]["WorkflowGrantProfile"][];
+        };
+        /** @description A permission profile, by id and name */
+        WorkflowGrantProfile: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+        };
+        /** @description Who may run which transition of a workflow */
+        WorkflowGrants: {
+            /**
+             * Format: int32
+             * @description The definition's version: send it back with a change
+             */
+            version: number;
+            grants: components["schemas"]["WorkflowGrant"][];
+        };
+        /** @description One finding of the graph lint */
+        WorkflowProblem: {
+            /** @description Where in the draft body, e.g. `states[2]`, `transitions[0].fields[1].attribute` */
+            path: string;
+            /**
+             * @description Machine-readable: no_states, no_initial_state, initial_state_terminal, unreachable_state, dead_end,
+             *     no_terminal_reachable, terminal_has_transitions, unknown_attribute, inactive_attribute, attribute_type,
+             *     unknown_value, op_type, no_state_attribute, state_value_list, state_value_inactive, ungranted_transition, ...
+             */
+            code: string;
+            message: string;
+            /** @enum {string} */
+            severity: "error" | "warning";
+        };
+        /** @description A state of a workflow version */
+        WorkflowState: {
+            /** @description Stable machine key, lower_snake_case */
+            key: string;
+            name: string;
+            /**
+             * @description What reaching a state means
+             * @enum {string}
+             */
+            category: "open" | "active" | "done" | "cancelled";
+            /** @description Reaching it completes the instance (default false) */
+            terminal?: boolean;
+            stateValue?: string | null;
+        };
+        /** @description A transition of a workflow version: a directed edge between two states */
+        WorkflowTransition: {
+            /** @description Stable machine key, lower_snake_case */
+            key: string;
+            name: string;
+            /** @description Stable machine key, lower_snake_case */
+            from: string;
+            /** @description Stable machine key, lower_snake_case */
+            to: string;
+            /** @description A comment must be given to run it (default false) */
+            requiresComment?: boolean;
+            fields?: components["schemas"]["WorkflowTransitionField"][];
+            /** @description Must hold for the transition to run. A group `{"all": [...]}` or `{"any": [...]}` of conditions, or a leaf `{"field": <field key>, "op": <op>, "value": <value>}`. Ops: eq, ne, in, notIn (value: array of 1-100), isSet, isNotSet (no value), gt, gte, lt, lte (number, integer, date and datetime fields), contains (text fields). The value has the field's type; enum and lookup values are given by key. At most 4 levels deep, 32 leaves and 16 KiB. The field is one of the workflow type's own or inherited fields. */
+            conditions?: Record<string, never>;
+        };
+        /** @description A field a transition shows, and whether it must be filled in */
+        WorkflowTransitionField: {
+            /** @description Stable machine key, lower_snake_case */
+            attribute: string;
+            /** @description Default true */
+            required?: boolean;
+        };
+        /** @description The lint of the draft */
+        WorkflowValidation: {
+            /** @description True when no problem is an error: publishing would go ahead */
+            valid: boolean;
+            checksum: string;
+            problems: components["schemas"]["WorkflowProblem"][];
+        };
+        /** @description One version of a workflow with its whole graph */
+        WorkflowVersion: {
+            /** Format: int32 */
+            versionNo: number;
+            /** @enum {string} */
+            status: "draft" | "published" | "retired";
+            /** @description The version new instances start on */
+            isCurrent: boolean;
+            /** @description Key of the state an instance starts in; null while a draft has none */
+            initialState: string | null;
+            states: components["schemas"]["WorkflowState"][];
+            transitions: components["schemas"]["WorkflowTransition"][];
+            layout: Record<string, never> | null;
+            checksum: string | null;
+            changeNote: string | null;
+            /** Format: date-time */
+            publishedAt: string | null;
+            publishedByName: string | null;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        WorkflowVersionList: {
+            data: components["schemas"]["WorkflowVersionSummary"][];
+            page: components["schemas"]["PageMeta"];
+        };
+        /** @description One version of a workflow, without its graph */
+        WorkflowVersionSummary: {
+            /** Format: int32 */
+            versionNo: number;
+            /** @enum {string} */
+            status: "draft" | "published" | "retired";
+            isCurrent: boolean;
+            /** Format: int64 */
+            stateCount: number;
+            /** Format: int64 */
+            transitionCount: number;
+            /**
+             * Format: int64
+             * @description Running instances pinned to this version. Null when withheld: the caller may not view every type the
+             *     workflow runs on.
+             */
+            activeInstanceCount: number | null;
+            checksum: string | null;
+            changeNote: string | null;
+            /** Format: date-time */
+            publishedAt: string | null;
+            publishedByName: string | null;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        /** @description Something the caller should know about a change that was made anyway */
+        WorkflowWarning: {
+            code: "UNINSTANCED_CIS" & Record<string, never>;
+            /**
+             * Format: int64
+             * @description Null when withheld: the count spans CIs of types the caller may not view
+             */
+            count: number | null;
+            message: string;
         };
     };
     responses: never;
@@ -24881,6 +25308,1512 @@ export interface operations {
             };
             /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the session's owner has not confirmed their credentials in the last 10 minutes (code REAUTHENTICATION_REQUIRED; POST /api/v1/auth/reauthenticate, then send the request again) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listWorkflowDefinitions: {
+        parameters: {
+            query?: {
+                /** @description Page size (1-200) */
+                limit?: number;
+                /** @description Rows to skip */
+                offset?: number;
+                /** @description Case-insensitive substring search */
+                q?: string;
+                /** @description Stable machine key, lower_snake_case */
+                classKey?: string;
+                /** @description Only active (true) or inactive (false) workflows */
+                active?: "true" | "false";
+                /** @description Sort field; prefix with "-" for descending. One of: name, key, createdAt, updatedAt */
+                sort?: "name" | "-name" | "key" | "-key" | "createdAt" | "-createdAt" | "updatedAt" | "-updatedAt";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowDefinitionList"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    createWorkflowDefinition: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Stable machine key, lower_snake_case */
+                    key: string;
+                    name: string;
+                    description?: string | null;
+                    /**
+                     * Format: uuid
+                     * @description The type the workflow runs on; never changes
+                     */
+                    classId: string;
+                    /** @description Default true */
+                    includeSubclasses?: boolean;
+                    /**
+                     * Format: uuid
+                     * @description A lookup field of the type (its own or inherited) that the workflow keeps in step with its state
+                     */
+                    stateAttributeId?: string | null;
+                    /** @description Default false */
+                    autoStart?: boolean;
+                    /** @description Default false: a new workflow starts inactive */
+                    isActive?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowDefinitionDetail"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getWorkflowDefinition: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowDefinitionDetail"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    deleteWorkflowDefinition: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success, no content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    updateWorkflowDefinition: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * Format: int32
+                     * @description The version you loaded; if someone saved in between, the request fails with 409 VERSION_CONFLICT
+                     */
+                    version: number;
+                    name?: string;
+                    description?: string | null;
+                    includeSubclasses?: boolean;
+                    /**
+                     * Format: uuid
+                     * @description Changeable only until the first version is published (409 CONFLICT afterwards)
+                     */
+                    stateAttributeId?: string | null;
+                    autoStart?: boolean;
+                    isActive?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowDefinitionDetail"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listWorkflowVersions: {
+        parameters: {
+            query?: {
+                /** @description Page size (1-200) */
+                limit?: number;
+                /** @description Rows to skip */
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowVersionList"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getWorkflowVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                /** @description Version number */
+                no: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowVersion"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    retireWorkflowVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                /** @description Version number */
+                no: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowVersionSummary"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getWorkflowDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowVersion"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    replaceWorkflowDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    initialState?: string | null;
+                    states: components["schemas"]["WorkflowState"][];
+                    transitions: components["schemas"]["WorkflowTransition"][];
+                    /** @description Designer node positions, free-form (at most 64 KiB). Not part of the checksum. */
+                    layout?: Record<string, never>;
+                    /** @description sha256 of the canonical graph (hex): states, transitions and the initial state, not the layout */
+                    expectedChecksum?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowVersion"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    deleteWorkflowDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success, no content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    validateWorkflowDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowValidation"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    publishWorkflowDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    changeNote?: string | null;
+                    /** @description sha256 of the canonical graph (hex): states, transitions and the initial state, not the layout */
+                    expectedDraftChecksum: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowVersion"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getWorkflowGrants: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowGrants"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    replaceWorkflowGrants: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * Format: int32
+                     * @description The version you loaded; if someone saved in between, the request fails with 409 VERSION_CONFLICT
+                     */
+                    version: number;
+                    /** @description Every grant of the workflow (replaces the current set) */
+                    grants: {
+                        /** @description A transition key (of any version), or `_cancel` for cancelling an instance */
+                        transitionKey: string;
+                        /** @description Permission profiles by id or by name (regardless of case) */
+                        profiles: string[];
+                    }[];
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowGrants"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
