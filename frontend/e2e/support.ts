@@ -165,7 +165,9 @@ export async function resetUiSettings(request: APIRequestContext) {
   const s = await apiGet<{ version: number; settings: unknown; assets: { logo: unknown; favicon: unknown } }>(request, "/ui-settings");
   const headers = { "X-CSRF-Token": await csrf(request) };
   if (JSON.stringify(s.settings) !== JSON.stringify(BUILT_IN_SETTINGS)) {
-    const res = await request.put("/api/v1/ui-settings", { data: { version: s.version, settings: {}, comment: "e2e reset" }, headers });
+    // Standard sent empty: left out, it keeps the layout it has (GH#521).
+    const settings = { layoutTemplates: [{ key: "standard", name: "Standard", layout: {} }] };
+    const res = await request.put("/api/v1/ui-settings", { data: { version: s.version, settings, comment: "e2e reset" }, headers });
     expect(res.ok(), `reset → ${res.status()} ${await res.text()}`).toBeTruthy();
   }
   for (const kind of ["logo", "favicon"] as const) {

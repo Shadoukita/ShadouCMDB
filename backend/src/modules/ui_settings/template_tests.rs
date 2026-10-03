@@ -631,5 +631,15 @@ async fn a_put_without_the_standard_template_keeps_its_layout() {
     assert_eq!(standard["layout"]["readOnlyFields"], json!(["label"]), "{standard}");
     assert_eq!(standard["name"], "Standard");
 
+    // Standard sent with an empty layout: that clears it.
+    let empty = json!({ "key": "standard", "name": "Standard", "layout": {} });
+    let (status, v) = w.put(json!({ "layoutTemplates": [empty] })).await;
+    assert_eq!(status, 200, "{v}");
+    let raw = w.raw().await;
+    assert_eq!(keys(&raw["layoutTemplates"]), ["standard"]);
+    let standard = template(&raw, "standard");
+    assert!(standard["layout"].get("readOnlyFields").is_none_or(|f| f == &json!([])), "{standard}");
+    assert!(standard["layout"].get("hiddenFields").is_none_or(|f| f == &json!([])), "{standard}");
+
     db.drop().await;
 }
