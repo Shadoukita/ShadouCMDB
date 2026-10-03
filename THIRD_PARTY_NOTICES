@@ -19,3 +19,20 @@ Licence text: frontend/src/assets/fonts/inter/LICENSE.txt, shipped in the web UI
 Source:     https://github.com/rsms/inter/releases/tag/v4.1
             (release archive Inter-4.1.zip, files web/InterVariable.woff2,
             web/InterVariable-Italic.woff2 and LICENSE.txt)
+
+
+JetBrains Mono
+--------------
+
+Component:  JetBrains Mono typeface, version 2.304 (web fonts JetBrainsMono-Regular.woff2,
+            JetBrainsMono-Medium.woff2 and JetBrainsMono-SemiBold.woff2, unmodified)
+Used in:    Web UI (frontend/src/assets/fonts/jetbrains-mono/; built into dist/assets/)
+Copyright:  Copyright 2020 The JetBrains Mono Project Authors
+            (https://github.com/JetBrains/JetBrainsMono)
+Licence:    SIL Open Font License, Version 1.1 (OFL-1.1)
+Licence text: frontend/src/assets/fonts/jetbrains-mono/LICENSE.txt, shipped in the web UI as
+            /assets/JetBrainsMono-LICENSE.txt
+Source:     https://github.com/JetBrains/JetBrainsMono/releases/tag/v2.304
+            (release archive JetBrainsMono-2.304.zip, files fonts/webfonts/JetBrainsMono-Regular.woff2,
+            fonts/webfonts/JetBrainsMono-Medium.woff2, fonts/webfonts/JetBrainsMono-SemiBold.woff2
+            and OFL.txt)

@@ -2,18 +2,21 @@ import { readFileSync } from "node:fs";
 import { defineConfig, loadEnv, type Plugin } from "vite";
 import vue from "@vitejs/plugin-vue";
 
-// The Inter font's OFL-1.1 licence has to ship with the font, so the build puts it in
+// The fonts' OFL-1.1 licences have to ship with the fonts, so the build puts them in
 // dist/assets/ next to the content-hashed woff2 files.
-function interLicense(): Plugin {
+const FONT_LICENSES = {
+  "assets/Inter-LICENSE.txt": "./src/assets/fonts/inter/LICENSE.txt",
+  "assets/JetBrainsMono-LICENSE.txt": "./src/assets/fonts/jetbrains-mono/LICENSE.txt",
+};
+
+function fontLicenses(): Plugin {
   return {
-    name: "inter-license",
+    name: "font-licenses",
     apply: "build",
     generateBundle() {
-      this.emitFile({
-        type: "asset",
-        fileName: "assets/Inter-LICENSE.txt",
-        source: readFileSync(new URL("./src/assets/fonts/inter/LICENSE.txt", import.meta.url)),
-      });
+      for (const [fileName, path] of Object.entries(FONT_LICENSES)) {
+        this.emitFile({ type: "asset", fileName, source: readFileSync(new URL(path, import.meta.url)) });
+      }
     },
   };
 }
@@ -24,7 +27,7 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const proxyTarget = env.API_PROXY_TARGET;
   return {
-    plugins: [vue(), interLicense()],
+    plugins: [vue(), fontLicenses()],
     server: {
       port: Number(env.WEB_PORT ?? 5173),
       proxy: proxyTarget ? { "/api": { target: proxyTarget, changeOrigin: true } } : undefined,
