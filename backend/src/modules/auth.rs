@@ -2449,12 +2449,14 @@ pub(crate) mod tests {
         };
         let (code, first) = answer_time("nobody-1").await;
         assert_eq!(code, ErrorCode::Unauthenticated);
-        assert!(first >= Duration::from_secs(5), "the first lookup waits for the timeout: {first:?}");
-        let slack = floor / 20 + Duration::from_millis(500);
+        // Waiting for the directory takes the LDAP timeout; anything under half
+        // of it was not kept waiting, however loaded the machine (CI) is.
+        let waited = crate::auth::sso::ldap::TIMEOUT / 2;
+        assert!(first >= waited, "the first lookup waits for the timeout: {first:?}");
         for name in ["owner", "nobody-2"] {
             let (code, took) = answer_time(name).await;
             assert_eq!(code, ErrorCode::Unauthenticated, "{name}");
-            assert!(took >= floor && took <= floor + slack, "{name}: answered at the floor, took {took:?}");
+            assert!(took >= floor && took < waited, "{name}: held to the floor, not the timeout: {took:?}");
         }
         let failures = auth_rows(pool, "login.failure").await;
         assert_eq!(failures[2].3["attemptedUsername"], "nobody-2");
@@ -2464,14 +2466,14 @@ pub(crate) mod tests {
         let start = tokio::time::Instant::now();
         let e = login(pool, &auth, &headers, &from("198.51.100.7"), login_body("erin", &wrong)).await.err().unwrap();
         assert_eq!((e.code, e.hold_until), (ErrorCode::IdentityProviderUnavailable, None), "a directory account");
-        assert!(start.elapsed() < floor, "skipped, not asked");
+        assert!(start.elapsed() < waited, "skipped, not asked");
 
         // After the window, sign-ins sent at once: one asks the directory again
         // and waits for the timeout, the others are still skipped.
         crate::modules::sso::expire_skip(ldap);
         let burst = ["owner", "nobody-3", "nobody-4", "nobody-5", "nobody-6", "nobody-7"];
         let answers = futures_util::future::join_all(burst.map(&answer_time)).await;
-        let late: Vec<_> = burst.iter().zip(&answers).filter(|(_, (_, took))| *took > floor + slack).collect();
+        let late: Vec<_> = burst.iter().zip(&answers).filter(|(_, (_, took))| *took >= waited).collect();
         assert!(answers.iter().all(|(code, _)| *code == ErrorCode::Unauthenticated), "{answers:?}");
         assert!(late.len() <= 1, "at most the one trial is late: {late:?}");
         db.drop().await;

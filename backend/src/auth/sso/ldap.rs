@@ -26,7 +26,7 @@ use super::tls;
 use crate::auth::secret::Secret;
 
 /// Timeout for connecting and for each operation.
-const TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const TIMEOUT: Duration = Duration::from_secs(10);
 /// LDAP result code invalidCredentials.
 const INVALID_CREDENTIALS: u32 = 49;
 
