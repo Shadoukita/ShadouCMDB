@@ -11,7 +11,6 @@ import { t } from "../../i18n";
 import { useDebounced, useDocumentTitle } from "../../lib/composables";
 import { formatRelative } from "../../lib/format";
 import { useListQuery } from "../../lib/listQuery";
-import { useFlashStore } from "../../stores/flash";
 import SortIcon from "../../components/SortIcon.vue";
 
 /** Administration › Groups. Search, sort and page live in the URL; the API searches and pages. */
@@ -35,8 +34,6 @@ const query = computed<GroupListQuery>(() => ({
 }));
 const list = useGroupList(query);
 // Set by the edit page after a delete.
-const flash = useFlashStore();
-const flashText = computed(() => flash.forCi("groups"));
 
 const qText = ref(get("q"));
 const debouncedQ = useDebounced(qText, 300);
@@ -68,7 +65,6 @@ function clearSearch() {
       <RouterLink class="btn btn-primary" to="/admin/groups/new">+ {{ t("groups.create") }}</RouterLink>
     </div>
   </div>
-  <div v-if="flashText" class="alert alert-success" role="status">{{ flashText }}</div>
 
   <section class="panel" :aria-label="t('groups.title')">
     <form class="toolbar" role="search" @submit.prevent>

@@ -3,7 +3,7 @@
  * warning, danger), an icon, the subtle background and a 3 px left accent in the solid colour, so
  * the tone never rests on colour alone (audit F1, F4).
  *   .alert              info: notes and neutral messages
- *   .alert-success      a change was saved (the flash after Save)
+ *   .alert-success      a change was saved; ToastHost draws its toasts in this tone
  *   .alert-warn         needs attention, nothing failed
  *   .alert-error        failed; ErrorAlert renders it with the API's message and request ID
  */
@@ -118,5 +118,56 @@
 @media (prefers-reduced-motion: reduce) {
   .spinner {
     animation-duration: 2.4s;
+  }
+}
+
+/* ---------- Toasts: one-shot confirmations in the bottom-right corner (ToastHost) ---------- */
+.toast-host {
+  position: fixed;
+  right: var(--space-4);
+  bottom: var(--space-4);
+  z-index: var(--z-toast);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-2);
+  width: min(360px, calc(100vw - 2 * var(--space-4)));
+  /* The empty corner never takes a click; only the toasts do. */
+  pointer-events: none;
+}
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  width: 100%;
+  margin: 0;
+  padding-right: var(--space-1);
+  box-shadow: var(--shadow-md);
+  pointer-events: auto;
+}
+.alert-success.toast {
+  /* Opaque, so the page underneath never shows through the subtle tone. */
+  border-color: var(--c-border);
+  border-left-color: var(--alert-accent);
+  background: var(--c-surface);
+}
+.toast-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.toast-close {
+  flex: none;
+  margin-top: -2px;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .toast {
+    animation: toast-in 0.16s ease-out;
+  }
+}
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
   }
 }

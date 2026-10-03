@@ -1,0 +1,3 @@
+### Changed: Confirmations appear as notifications in the corner of the web UI
+
+Confirmations such as "Created crm-app-01." or "Deleted group Database team." now appear as a notification in the bottom-right corner instead of a message at the top of the page. The page content no longer moves down when the message appears or up when it closes. A notification closes after six seconds or with its close button, and stays open while keyboard focus is on it. Up to four are shown at once. Screen readers announce each one as before. Error messages are unchanged: they still appear next to the form or field that failed.

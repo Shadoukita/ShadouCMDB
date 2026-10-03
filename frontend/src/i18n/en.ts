@@ -468,6 +468,7 @@ export const en = {
   "shell.nav.collapse": "Collapse sidebar",
   "shell.nav.expand": "Expand sidebar",
   "shell.breadcrumb": "Breadcrumb",
+  "shell.toast.dismiss": "Dismiss notification",
   "nav.page.dashboard": "Dashboard",
   "nav.page.inventory": "All configuration items",
   "nav.page.search": "Search",

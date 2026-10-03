@@ -355,7 +355,7 @@ function confirmPublish() {
         lint.value = null;
         savedFingerprint.value = "";
         selected.value = null;
-        flash.show(wid.value, `Version ${v.versionNo} published. New instances start on it; running ones stay on their version.`);
+        flash.show(`Version ${v.versionNo} published. New instances start on it; running ones stay on their version.`);
         void router.push({ query: { tab: "versions" } });
       },
     },

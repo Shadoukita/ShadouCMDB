@@ -46,7 +46,6 @@ const remove = useRemove("ci-classes");
 const purge = usePurge("ci-classes");
 const flow = useSchemaChangeFlow();
 const pending = computed(() => create.isPending.value || update.isPending.value || remove.isPending.value || flow.state.loading);
-const flashText = computed(() => (id.value ? flash.forCi(id.value) : undefined));
 useDocumentTitle(() => (isNew.value ? "New class" : cls.data.value?.name));
 
 const name = ref("");
@@ -163,7 +162,7 @@ async function submit() {
     });
     if (outcome.status === "applied") {
       const created = outcome.result as CiClass;
-      flash.show(created.id, `Created class ${created.name} (table ${created.tableName}). Add its attributes below.`);
+      flash.show(`Created class ${created.name} (table ${created.tableName}). Add its attributes below.`);
       await router.push(`/admin/classes/${created.id}`);
     } else if (outcome.status === "refused") error.value = outcome.error;
     return;
@@ -224,7 +223,7 @@ async function purgeClass() {
     confirmName: c.key,
   });
   if (outcome.status === "applied") {
-    flash.show("classes", `Purged class ${c.name}: table ${c.tableName} was dropped.`);
+    flash.show(`Purged class ${c.name}: table ${c.tableName} was dropped.`);
     await router.replace("/admin/classes");
   } else if (outcome.status === "refused") error.value = outcome.error;
 }
@@ -267,7 +266,6 @@ const notFound = computed(() => {
         <button v-if="!cls.data.value.isActive" type="button" class="btn btn-danger" :disabled="pending" @click="purgeClass">Purge…</button>
       </div>
     </div>
-    <div v-if="flashText" class="alert alert-success" role="status">{{ flashText }}</div>
     <div v-if="cls.data.value && !cls.data.value.isActive" class="alert alert-warn" role="note">
       This class is archived: its CIs and its table <code>{{ cls.data.value.tableName }}</code> are kept and still shown, but
       no new CIs can be created. Restore it to allow new CIs, or purge it to drop the table and delete its CIs.

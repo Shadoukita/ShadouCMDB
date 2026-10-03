@@ -165,7 +165,7 @@ async function save() {
       });
       // The activation warning (a new active workflow with a state field) must not get lost with the navigation.
       const w = created.warnings.find((x) => x.code === "UNINSTANCED_CIS");
-      flash.show(created.id, `Workflow ${created.name} created. ${w ? uninstancedText(w) : "Design its states and transitions, then publish it."}`);
+      flash.show(`Workflow ${created.name} created. ${w ? uninstancedText(w) : "Design its states and transitions, then publish it."}`);
       await router.push({ path: `/admin/workflows/${created.id}`, query: { tab: "designer" } });
       return;
     }
@@ -209,7 +209,7 @@ function confirmDelete() {
   if (!w) return;
   del.mutate(w.id, {
     onSuccess: () => {
-      flash.show("workflows", `Workflow ${w.name} deleted.`);
+      flash.show(`Workflow ${w.name} deleted.`);
       void router.replace("/admin/workflows");
     },
   });

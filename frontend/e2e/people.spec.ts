@@ -65,7 +65,7 @@ test("an administrator creates a user: the e-mail is required, unique, and links
 
   await page.locator("#user-email").fill(EMAIL);
   await page.getByRole("button", { name: "Create user" }).click();
-  await expect(page.getByRole("status").first()).toContainText(`Created user ${USERNAME}.`);
+  await expect(page.getByRole("status").filter({ hasText: `Created user ${USERNAME}.` })).toBeVisible();
   userId = page.url().split("/").pop()!;
 
   // The Person was created for it (Name = display name) and the user page links to it.

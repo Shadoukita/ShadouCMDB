@@ -12,7 +12,6 @@ import SortIcon from "../../../components/SortIcon.vue";
 import { useDebounced, useDocumentTitle } from "../../../lib/composables";
 import { formatRelative } from "../../../lib/format";
 import { useListQuery } from "../../../lib/listQuery";
-import { useFlashStore } from "../../../stores/flash";
 
 /**
  * Administration › Workflows: every workflow definition, filtered by the CI type it runs on.
@@ -45,8 +44,6 @@ const query = computed<WorkflowListQuery>(() => ({
 const list = useWorkflowList(query);
 const classes = useCiClasses();
 const classByKey = computed(() => new Map((classes.data.value ?? []).map((c) => [c.key, c])));
-const flash = useFlashStore();
-const flashText = computed(() => flash.forCi("workflows"));
 
 const qText = ref(get("q"));
 const debouncedQ = useDebounced(qText, 300);
@@ -86,7 +83,6 @@ function clearFilters() {
     A workflow moves the CIs of one type through states by named transitions. Edit a draft, check it, publish it as a version,
     then decide which permission profiles may run each transition.
   </p>
-  <div v-if="flashText" class="alert" role="status">{{ flashText }}</div>
 
   <section class="panel" aria-label="Workflows">
     <form class="toolbar" role="search" @submit.prevent>

@@ -7,6 +7,7 @@ import GlobalSearch from "./components/GlobalSearch.vue";
 import LoadingState from "./components/LoadingState.vue";
 import MainNav from "./components/MainNav.vue";
 import ReauthenticateDialog from "./components/ReauthenticateDialog.vue";
+import ToastHost from "./components/ToastHost.vue";
 import UserMenu from "./components/UserMenu.vue";
 import { t } from "./i18n";
 import { useMediaQuery } from "./lib/composables";
@@ -121,6 +122,7 @@ function retry() {
     <main id="main" class="shell-main">
       <RouterView />
     </main>
+    <ToastHost />
     <ReauthenticateDialog />
   </div>
   <LoadingState v-else :label="t('shell.starting')" />
