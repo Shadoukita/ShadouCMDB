@@ -22,12 +22,13 @@ use uuid::Uuid;
 
 use super::schemas::{ConfigurationItem, CreateItemBody, UpdateItemBody};
 use crate::api::context::RequestContext;
+use crate::api::schemas::normalize_email;
 use crate::api::{pg_error, validate};
 use crate::auth::permissions::ClassOp;
 use crate::data::classes::EffectiveAttributeRow;
 use crate::data::items::{self as data, StoredValue};
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
-use crate::modules::classes::AttributeDataType;
+use crate::modules::classes::{AttributeDataType, AttributeSystemRole};
 use crate::schema::model::{Field, Model};
 
 // ---------------------------------------------------------------------------
@@ -298,10 +299,14 @@ fn prepare_attributes<'d>(
             }
             continue;
         }
-        let Some(stored) = to_stored(def, value) else {
+        let Some(mut stored) = to_stored(def, value) else {
             errors.push(body_error(field, "Invalid input", "invalid_type"));
             continue;
         };
+        // The Person's Email is stored in the accounts' form (GH#531).
+        if let (Some(AttributeSystemRole::PersonEmail), StoredValue::Text(s)) = (def.system_role, &mut stored) {
+            *s = normalize_email(s);
+        }
         match stored {
             StoredValue::Reference(id) if current.and_then(|c| c.get(&def.id)) == Some(&id) => continue,
             StoredValue::Reference(id) if Some(id) == self_id => {
@@ -691,7 +696,7 @@ fn field_write_error(err: sqlx::Error, model: &Model) -> AppError {
     let pg = db.try_downcast_ref::<sqlx::postgres::PgDatabaseError>();
     let column = pg.and_then(|p| p.column()).map(str::to_owned);
     let constraint = db.constraint().map(str::to_owned);
-    // The Person's Email is unique ignoring case (uq_<field id hex>, SHAA-1505).
+    // The Person's Email is unique ignoring case and Unicode form (uq_<field id hex>, SHAA-1505).
     if let Some(f) = constraint.as_deref().and_then(|c| {
         let hex = c.strip_prefix("uq_")?.get(..32)?;
         model.fields.iter().find(|f| f.hex() == hex)
@@ -776,7 +781,8 @@ async fn check_linked_person(
             "person_linked",
         ));
     }
-    if new_email.is_some() && new_email == account.email {
+    // Resending the account's address is no change, in any of its Unicode forms.
+    if new_email.is_some() && new_email == account.email.as_deref().map(normalize_email) {
         return Ok(());
     }
     let message = format!(

@@ -41,13 +41,14 @@ pub struct PersonMatch {
     pub linked_to: Option<String>,
 }
 
-/// The Person whose e-mail is `email` ignoring case (deleted ones included;
-/// the unique index allows one), locked until the transaction ends.
+/// The Person whose e-mail is `email` ignoring case and Unicode form
+/// (`cmdb.email_key`, as its unique index compares; deleted ones included, the
+/// index allows one), locked until the transaction ends.
 pub async fn find_by_email(conn: &mut PgConnection, t: &PersonType, email: &str) -> sqlx::Result<Option<PersonMatch>> {
     sqlx::query_as(AssertSqlSafe(format!(
         "SELECT ci.id, (SELECT u.username FROM cmdb.users u WHERE u.person_ci_id = ci.id) AS linked_to
          FROM {} p JOIN cmdb.configuration_items ci ON ci.id = p.id
-         WHERE lower(p.{}) = lower($1)
+         WHERE cmdb.email_key(p.{}) = cmdb.email_key($1)
          FOR UPDATE OF ci",
         t.table.sql(),
         t.email.column()
@@ -96,9 +97,9 @@ pub async fn set_link(conn: &mut PgConnection, user_id: Uuid, person: Option<Uui
 
 /// Accounts with an e-mail that no Person is linked to yet (after the upgrade
 /// to 0044), oldest first.
-pub async fn unlinked_accounts(conn: &mut PgConnection) -> sqlx::Result<Vec<Uuid>> {
-    sqlx::query_scalar(
-        "SELECT id FROM cmdb.users WHERE email IS NOT NULL AND person_ci_id IS NULL ORDER BY created_at, id",
+pub async fn unlinked_accounts(conn: &mut PgConnection) -> sqlx::Result<Vec<(Uuid, String)>> {
+    sqlx::query_as(
+        "SELECT id, username FROM cmdb.users WHERE email IS NOT NULL AND person_ci_id IS NULL ORDER BY created_at, id",
     )
     .fetch_all(conn)
     .await
@@ -126,10 +127,11 @@ pub async fn labels(conn: &mut PgConnection, ids: &[Uuid]) -> sqlx::Result<Vec<(
     sqlx::query_as("SELECT id, label FROM cmdb.configuration_items WHERE id = ANY($1)").bind(ids).fetch_all(conn).await
 }
 
-/// Whether an account other than `except` has this e-mail, ignoring case.
+/// Whether an account other than `except` has this e-mail, ignoring case and
+/// Unicode form (`users_email_uq`).
 pub async fn email_taken(conn: &mut PgConnection, email: &str, except: Option<Uuid>) -> sqlx::Result<bool> {
     sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM cmdb.users WHERE lower(email) = lower($1) AND id IS DISTINCT FROM $2)",
+        "SELECT EXISTS (SELECT 1 FROM cmdb.users WHERE cmdb.email_key(email) = cmdb.email_key($1) AND id IS DISTINCT FROM $2)",
     )
     .bind(email)
     .bind(except)

@@ -370,6 +370,27 @@ pub async fn refuse_planted_code(conn: &mut sqlx::PgConnection) -> anyhow::Resul
     );
 }
 
+/// GH#545: a database error inside a migration (a `RAISE EXCEPTION` stop such as
+/// 0044's duplicate e-mails, or a failing statement) is reported once, with the
+/// migration's name. sqlx repeats the message at every level of its error chain,
+/// each with the line of the PostgreSQL source file that raised it, which means
+/// nothing to an operator; DETAIL and HINT are kept.
+fn migration_error(e: sqlx::migrate::MigrateError) -> anyhow::Error {
+    let sqlx::migrate::MigrateError::ExecuteMigration(sqlx::Error::Database(db), version) = &e else {
+        return anyhow::Error::new(e).context("migration failed");
+    };
+    let name = MIGRATOR.iter().find(|m| m.version == *version).map_or_else(|| version.to_string(), label);
+    let mut msg = format!("migration {name} stopped: {}", db.message());
+    if let Some(pg) = db.try_downcast_ref::<sqlx::postgres::PgDatabaseError>() {
+        for (key, value) in [("DETAIL", pg.detail()), ("HINT", pg.hint())] {
+            if let Some(value) = value {
+                msg.push_str(&format!("\n{key}: {value}"));
+            }
+        }
+    }
+    anyhow::Error::msg(msg)
+}
+
 async fn migrate_with(pool: &PgPool, cfg: &DatabaseConfig, adopt_drizzle: bool) -> anyhow::Result<()> {
     let (db, version): (String, String) =
         sqlx::query_as("SELECT current_database(), current_setting('server_version')").fetch_one(pool).await?;
@@ -412,11 +433,16 @@ async fn migrate_with(pool: &PgPool, cfg: &DatabaseConfig, adopt_drizzle: bool) 
         }
     }
 
+    // The accounts table comes with 0003: nothing to check on an empty database.
+    if applied.contains(&3) && pending.iter().any(|m| m.version == 44) {
+        refuse_accounts_person_refuses(pool).await?;
+    }
+
     // Each pending migration runs in its own transaction together with its
     // bookkeeping row, under an advisory lock; re-running is a no-op.
     MIGRATOR.run(pool).await.map_err(|e| {
         let denied = e.to_string().contains("permission denied");
-        let err = anyhow::Error::new(e).context("migration failed");
+        let err = migration_error(e);
         if denied {
             // The usual cause on a three-role install: migrating with the API's DATABASE_URL.
             err.context("this database user may not change the schema; set MIGRATION_DATABASE_URL to the schema owner role (shadoucmdb_owner in sql/bootstrap/)")
@@ -430,9 +456,25 @@ async fn migrate_with(pool: &PgPool, cfg: &DatabaseConfig, adopt_drizzle: bool) 
     }
     let after = applied_count(pool).await?;
 
-    let (change, linked) = reconcile_and_link(pool).await?;
-    if linked > 0 {
-        println!("Users: {linked} accounts linked to their Person (created where none had the account's e-mail)");
+    let (change, links) = reconcile_and_link(pool).await?;
+    if links.linked > 0 {
+        println!(
+            "Users: {} accounts linked to their Person (created where none had the account's e-mail)",
+            links.linked
+        );
+    }
+    if !links.refused.is_empty() {
+        println!(
+            "Warning: {} accounts could not be linked to a Person; they cannot sign in, and their API tokens are \
+             refused, until they are (GET /api/v1/admin/users?signInStatus=person_missing lists them). Correct each \
+             account's e-mail or display name (Administration > Users), then run `shadoucmdb migrate` again; the \
+             other accounts are linked. If your own administrator account is listed, create a recovery administrator with \
+             `shadoucmdb create-admin`:",
+            links.refused.len()
+        );
+        for r in &links.refused {
+            println!("  {r}");
+        }
     }
     let waiting = crate::data::auth::count_without_email(&mut *pool.acquire().await?).await?;
     if waiting > 0 {
@@ -454,6 +496,9 @@ async fn migrate_with(pool: &PgPool, cfg: &DatabaseConfig, adopt_drizzle: bool) 
     if let Some(notice) = crate::data::api_tokens::second_factor_refusal_notice(&mut *pool.acquire().await?).await? {
         println!("Warning: {notice}");
     }
+    if let Some(notice) = crate::data::api_tokens::email_required_refusal_notice(&mut *pool.acquire().await?).await? {
+        println!("Warning: {notice}");
+    }
     println!(
         "Database is at migration {after}/{expected}{}",
         if pending.is_empty() && !reconciled { " (nothing to do)" } else { "" }
@@ -465,20 +510,55 @@ async fn migrate_with(pool: &PgPool, cfg: &DatabaseConfig, adopt_drizzle: bool) 
 /// reporting views follow the data model (anything missing after migration
 /// 0009, a new reporting role, the Person type of 0044), then every account
 /// with an e-mail gets its Person (SHAA-1505), in the same transaction as the
-/// reconcile that built its table: all or nothing. Returns the schema change
-/// and how many accounts were linked.
-pub async fn reconcile_and_link(pool: &PgPool) -> anyhow::Result<(Option<crate::schema::SchemaChange>, usize)> {
+/// reconcile that built its table. An account the Person type refuses stays
+/// unlinked and is reported, the others are linked (GH#543). Returns the
+/// schema change and what the linking did.
+pub async fn reconcile_and_link(
+    pool: &PgPool,
+) -> anyhow::Result<(Option<crate::schema::SchemaChange>, crate::modules::people::LinkReport)> {
     let ctx = crate::api::context::RequestContext::system("migrate", "migrate");
     let mut tx = pool.begin().await?;
     act_as_api_role(&mut tx).await?;
     let change = crate::schema::reconcile(&mut tx, &ctx, "Reconcile after migrate")
         .await
         .map_err(|e| anyhow::anyhow!("reconciling the data model failed: {}", e.message))?;
-    let linked = crate::modules::people::link_all(&mut tx, &ctx)
+    let links = crate::modules::people::link_all(&mut tx, &ctx)
         .await
         .map_err(|e| anyhow::anyhow!("linking the user accounts to their persons failed: {}", e.message))?;
     tx.commit().await?;
-    Ok((change, linked))
+    Ok((change, links))
+}
+
+/// Before migration 0044 (GH#543): accounts whose e-mail or display name the
+/// new Person type would refuse stop the upgrade with the list, before
+/// anything changes. Once 0044 is applied, linking such an account fails and
+/// it cannot sign in.
+pub(crate) async fn refuse_accounts_person_refuses(pool: &PgPool) -> anyhow::Result<()> {
+    // Unqualified: before migration 0008 (v0.1.0-rc.1) the table is in `public`,
+    // and the search_path finds it in either schema.
+    let accounts: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT username, email, display_name FROM users WHERE email IS NOT NULL ORDER BY lower(username)",
+    )
+    .fetch_all(pool)
+    .await?;
+    let refused: Vec<String> = accounts
+        .iter()
+        .filter_map(|(username, email, name)| {
+            crate::modules::people::person_refuses(email, name).map(|why| format!("  {username}: {why}"))
+        })
+        .collect();
+    if refused.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "migration 0044 links every account with an e-mail to a Person, whose Email holds at most {} characters \
+         and whose Name (the display name) at most {}, and these accounts do not fit:\n{}\nGive each account a \
+         shorter e-mail or display name (Administration > Users) with the previous release, then run \
+         `shadoucmdb migrate` again. Nothing was changed.",
+        crate::modules::people::PERSON_EMAIL_MAX,
+        crate::modules::people::PERSON_NAME_MAX,
+        refused.join("\n")
+    );
 }
 
 /// One-time hand-over from the Node/Drizzle runner: checks that every row in
@@ -714,6 +794,27 @@ mod tests {
         db.drop().await;
     }
 
+    /// GH#545: a migration's `RAISE EXCEPTION` stop prints its message once,
+    /// without sqlx's chain and the `at line N` of the PostgreSQL source.
+    #[tokio::test]
+    async fn a_migration_stop_reports_the_database_message_once() {
+        let Some(db) = super::scratch::empty("a_migration_stop_reports_once").await else { return };
+        let err = sqlx::query(
+            "DO $$ BEGIN RAISE EXCEPTION 'users: e-mail addresses must be unique: %', 'alice@acme.test'
+               USING ERRCODE = 'unique_violation', HINT = 'Give each account its own address.'; END $$",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap_err();
+        let e = super::migration_error(sqlx::migrate::MigrateError::ExecuteMigration(err, 44));
+        assert_eq!(
+            format!("{e:#}"),
+            "migration 0044_users_person stopped: users: e-mail addresses must be unique: alice@acme.test\n\
+             HINT: Give each account its own address."
+        );
+        db.drop().await;
+    }
+
     /// GH#416: a migrated three-role database with a data model passes; code
     /// planted where the API role can put it stops `migrate`.
     #[tokio::test]
@@ -865,3 +966,5 @@ mod upgrade_0041;
 mod upgrade_0042;
 #[cfg(test)]
 mod upgrade_0044;
+#[cfg(test)]
+mod upgrade_0045;

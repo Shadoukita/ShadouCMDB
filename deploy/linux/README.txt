@@ -161,6 +161,13 @@ encrypts the existing authenticator secrets; nobody has to set up two-factor
 sign-in again. Going back to the previous release afterwards needs a restore of
 a backup taken before the upgrade.
 
+Upgrading from a release where e-mail addresses were optional: from then on
+API tokens of an account without an e-mail are refused (403 EMAIL_REQUIRED)
+until it has one. Before the upgrade, give every service account that scripts
+use (backup, monitoring, import) a unique e-mail under Administration > Users,
+or right after migrate the same way. migrate prints the accounts without an
+e-mail that own working tokens; their tokens work again once they have one.
+
   sudo install -m 0755 shadoucmdb /usr/local/bin/shadoucmdb
   read -rsp 'shadoucmdb_owner password: ' PW; echo
   export MIGRATION_DATABASE_URL="postgres://shadoucmdb_owner:$PW@db.example.internal:5432/shadoucmdb"

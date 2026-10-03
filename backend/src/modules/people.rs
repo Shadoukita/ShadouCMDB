@@ -7,7 +7,11 @@
 //! - creating an account, provisioning one through an identity provider, or
 //!   giving an account its first e-mail links it to the Person with that
 //!   e-mail (a deleted one is restored), or creates one (Name = the display
-//!   name). Administrators never make the Person by hand.
+//!   name). Administrators never make the Person by hand. A user entering
+//!   their own first e-mail may not adopt a Person without an account
+//!   (GH#530): only a new one is created for them.
+//! - e-mails are compared ignoring case and Unicode form (`cmdb.email_key`,
+//!   GH#531) and stored in NFKC.
 //! - changing a linked account's e-mail changes its Person's Email in the same
 //!   transaction; when another Person has the new address the change is
 //!   refused.
@@ -28,6 +32,7 @@ use uuid::Uuid;
 
 use crate::api::context::{Caller, RequestContext};
 use crate::api::route::{IdPath, In, Json, NoBody, NoQuery, Route, route};
+use crate::api::schemas::normalize_email;
 use crate::auth::permissions::GlobalPermission;
 use crate::data::crud::{self, AuditAction, AuditEntry};
 use crate::data::people::{self as data, PersonType};
@@ -101,17 +106,49 @@ fn email_value(t: &PersonType, email: &str) -> Map<String, Value> {
     m
 }
 
+/// A user entering their own e-mail may not take over a Person without an
+/// account (GH#530): the Person is someone's record in the CMDB, and only an
+/// administrator decides it is this user's.
+fn email_of_unlinked_person(email: &str) -> AppError {
+    let message = format!(
+        "A person in the CMDB already has the e-mail address {email}. Ask an administrator to set this address on \
+         your account (Administration > Users); it is then linked to that person"
+    );
+    AppError::new(ErrorCode::Conflict, message.clone()).with_details(vec![FieldError {
+        location: FieldLocation::Body,
+        field: "email".into(),
+        message,
+        code: "person_email_taken".into(),
+    }])
+}
+
+/// Who links an account to its Person: an administrator or the identity
+/// provider may adopt a Person without an account; the user entering their
+/// own e-mail may not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Linking {
+    Administrator,
+    SelfService,
+}
+
 /// Links the account to its Person after its e-mail was set or changed in
 /// this transaction (see the module documentation). An account without an
 /// e-mail is left alone. Writes the audit rows of the Person changes; the
 /// caller writes the account's own row, which shows the link.
 pub async fn link_user(conn: &mut PgConnection, ctx: &RequestContext, user_id: Uuid) -> Result<(), AppError> {
+    link(conn, ctx, user_id, Linking::Administrator).await
+}
+
+/// [`link_user`] for the given path: the self-service one refuses to adopt a
+/// Person (409 CONFLICT, `person_email_taken`), on the same locked lookup.
+pub async fn link(conn: &mut PgConnection, ctx: &RequestContext, user_id: Uuid, by: Linking) -> Result<(), AppError> {
     let t = ready_type(conn, ctx).await?;
     let a = data::lock_account(conn, user_id).await?.ok_or_else(|| AppError::missing("User", user_id))?;
     let Some(email) = a.email.clone() else { return Ok(()) };
     match a.person_ci_id {
         Some(person) => {
-            if data::email_of(conn, &t, person).await?.as_deref() == Some(email.as_str()) {
+            // The Person holds the address in its stored form (NFKC).
+            if data::email_of(conn, &t, person).await? == Some(normalize_email(&email)) {
                 return Ok(());
             }
             if data::find_by_email(conn, &t, &email).await?.is_some_and(|other| other.id != person) {
@@ -127,6 +164,7 @@ pub async fn link_user(conn: &mut PgConnection, ctx: &RequestContext, user_id: U
                     // users_email_uq makes this unreachable: the linked account has the same address.
                     return Err(email_taken_by_person(&email));
                 }
+                Some(_) if by == Linking::SelfService => return Err(email_of_unlinked_person(&email)),
                 Some(found) => {
                     // A Person without an account (decision 6) is adopted.
                     items::restore_on_behalf(conn, ctx, found.id).await?;
@@ -173,26 +211,90 @@ pub async fn email_usable(conn: &mut PgConnection, user_id: Option<Uuid>, email:
     })
 }
 
+/// What [`link_all`] did: how many accounts it linked, and the accounts it
+/// could not link, each with the reason ("alice (email: ...)").
+#[derive(Debug, Default)]
+pub struct LinkReport {
+    pub linked: usize,
+    pub refused: Vec<String>,
+}
+
 /// Links every account with an e-mail that has no Person yet (the upgrade to
 /// 0044; `shadoucmdb migrate` runs it after the reconcile that builds the
 /// Person table, so it is a no-op once done). Each link is an `update` row on
-/// the account. Returns how many were linked.
-pub async fn link_all(conn: &mut PgConnection, ctx: &RequestContext) -> Result<usize, AppError> {
-    let ids = data::unlinked_accounts(conn).await?;
-    for id in &ids {
-        let before = users::load(conn, *id).await?;
-        link_user(conn, ctx, *id).await?;
-        let after = users::load(conn, *id).await?;
-        let entry = AuditEntry {
-            action: AuditAction::Update,
-            entity_type: "users",
-            entity_id: *id,
-            old_value: Some(crud::json(&before)),
-            new_value: Some(crud::json(&after)),
-        };
-        crud::write_audit(conn, ctx, vec![entry]).await?;
+/// the account.
+///
+/// Each account is linked in its own savepoint (GH#543): an account the Person
+/// type refuses is reported and stays unlinked (it cannot sign in until an
+/// administrator corrects it), and the others are linked anyway, so one bad
+/// address does not lock every account out.
+pub async fn link_all(conn: &mut PgConnection, ctx: &RequestContext) -> Result<LinkReport, AppError> {
+    let mut report = LinkReport::default();
+    for (id, username) in data::unlinked_accounts(conn).await? {
+        let mut sp = sqlx::Connection::begin(&mut *conn).await?;
+        match link_audited(&mut sp, ctx, id).await {
+            Ok(()) => {
+                sp.commit().await?;
+                report.linked += 1;
+            }
+            Err(e) => {
+                sp.rollback().await?;
+                tracing::warn!(user = %username, error = %e.message, "account not linked to a person");
+                report.refused.push(format!("{username} ({})", refusal(&e)));
+            }
+        }
     }
-    Ok(ids.len())
+    Ok(report)
+}
+
+async fn link_audited(conn: &mut PgConnection, ctx: &RequestContext, id: Uuid) -> Result<(), AppError> {
+    let before = users::load(conn, id).await?;
+    link_user(conn, ctx, id).await?;
+    let after = users::load(conn, id).await?;
+    let entry = AuditEntry {
+        action: AuditAction::Update,
+        entity_type: "users",
+        entity_id: id,
+        old_value: Some(crud::json(&before)),
+        new_value: Some(crud::json(&after)),
+    };
+    crud::write_audit(conn, ctx, vec![entry]).await?;
+    Ok(())
+}
+
+/// "email: ...; displayName: ..." from the field details, or the message.
+fn refusal(e: &AppError) -> String {
+    match e.details.as_deref() {
+        Some(details) if !details.is_empty() => {
+            details.iter().map(|d| format!("{}: {}", d.field, d.message)).collect::<Vec<_>>().join("; ")
+        }
+        _ => e.message.clone(),
+    }
+}
+
+/// The limits of the Person's Name and Email fields as migration 0044 creates
+/// them. Accounts of earlier releases could exceed them (e-mails up to 320
+/// characters).
+pub const PERSON_NAME_MAX: usize = 200;
+pub const PERSON_EMAIL_MAX: usize = 254;
+
+/// Why the Person type of 0044 would refuse an account's e-mail or display
+/// name, if it would; checked by `shadoucmdb migrate` before it applies 0044
+/// (GH#543). The address counts in its stored form (NFKC) as well.
+pub fn person_refuses(email: &str, display_name: &str) -> Option<String> {
+    let mut why = Vec::new();
+    let length = email.chars().count().max(normalize_email(email).chars().count());
+    if length > PERSON_EMAIL_MAX {
+        why.push(format!("e-mail has {length} characters, at most {PERSON_EMAIL_MAX}"));
+    }
+    let length = display_name.chars().count();
+    if length > PERSON_NAME_MAX {
+        why.push(format!("display name has {length} characters, at most {PERSON_NAME_MAX}"));
+    }
+    if display_name.trim().is_empty() {
+        why.push("display name is blank".into());
+    }
+    (!why.is_empty()).then(|| why.join("; "))
 }
 
 // ---------------------------------------------------------------------------
@@ -522,6 +624,17 @@ mod tests {
         assert_eq!(last_outcome().await.as_deref(), Some("email_required"));
         let (status, _, _) = call(&app, "GET", "/api/v1/configuration-items", erin_token, None).await;
         assert_eq!(status, 200);
+        // `migrate` and `verify` name the accounts whose tokens are refused (GH#544).
+        let notice = async || {
+            crate::data::api_tokens::email_required_refusal_notice(&mut pool.acquire().await.unwrap()).await.unwrap()
+        };
+        let text = notice().await.unwrap();
+        assert!(
+            text.starts_with("1 API token of 1 account without an e-mail is refused (403 EMAIL_REQUIRED)"),
+            "{text}"
+        );
+        assert!(text.contains(": legacy."), "{text}");
+        assert!(text.contains("PATCH /api/v1/admin/users/{id}"), "{text}");
 
         let (status, me, creds) = login(&app, "legacy").await;
         assert_eq!((status, &me["emailRequired"]), (200, &json!(true)), "{me}");
@@ -545,6 +658,7 @@ mod tests {
         assert_eq!(status, 200, "the session goes on");
         let (status, _, _) = call(&app, "GET", "/api/v1/configuration-items", legacy_token, None).await;
         assert_eq!(status, 200, "and the token works");
+        assert_eq!(notice().await, None);
         let (status, v, _) =
             call(&app, "PUT", "/api/v1/auth/email", &creds, Some(json!({ "email": "other@example.test" }))).await;
         assert_eq!((status, code(&v)), (409, "CONFLICT"), "set once; an administrator changes it: {v}");
@@ -580,6 +694,107 @@ mod tests {
         assert_eq!(status, 200);
         let (status, _, _) = call(&app, "GET", "/api/v1/configuration-items", erin_token, None).await;
         assert_eq!(status, 200);
+
+        db.drop().await;
+    }
+
+    /// GH#530: a user entering their own e-mail cannot take over a Person
+    /// without an account; an administrator can link them. GH#531: e-mails
+    /// compare ignoring Unicode form and are stored in NFKC.
+    #[tokio::test]
+    async fn own_email_does_not_adopt_a_person_and_look_alikes_are_one_address() {
+        let Some(db) = scratch::database("own_email_does_not_adopt_a_person").await else { return };
+        let (app, pool) = (app(db.pool.clone()), &db.pool);
+        let (admin, _) = setup(&app).await;
+        let class = person_class(pool).await;
+
+        let hash = crate::auth::password::hash(&PASSWORD).await.unwrap();
+        let legacy: Uuid = sqlx::query_scalar(
+            "INSERT INTO users (username, display_name, password_hash) VALUES ('legacy', 'Legacy User', $1) RETURNING id",
+        )
+        .bind(&hash)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO user_permission_profiles (user_id, profile_id) SELECT $1, id FROM permission_profiles WHERE is_builtin")
+            .bind(legacy)
+            .execute(pool)
+            .await
+            .unwrap();
+        let grace = create_person(&app, &admin, class, "Grace Hopper", "grace@example.test").await;
+        let grace_id: Uuid = grace["id"].as_str().unwrap().parse().unwrap();
+
+        // The user cannot claim Grace's record, in any case or Unicode form.
+        let (_, _, creds) = login(&app, "legacy").await;
+        for email in ["grace@example.test", "GRACE@example.test"] {
+            let (status, v, _) = call(&app, "PUT", "/api/v1/auth/email", &creds, Some(json!({ "email": email }))).await;
+            assert_eq!((status, &v["error"]["details"][0]["code"]), (409, &json!("person_email_taken")), "{v}");
+            assert!(v["error"]["message"].as_str().unwrap().contains("Ask an administrator"), "{v}");
+        }
+        let email: Option<String> =
+            sqlx::query_scalar("SELECT email FROM users WHERE id = $1").bind(legacy).fetch_one(pool).await.unwrap();
+        assert_eq!(email, None, "nothing changed");
+        let (_, v, _) =
+            call(&app, "GET", &format!("/api/v1/configuration-items/{grace_id}/sign-in-account"), &admin, None).await;
+        assert_eq!(v["account"], Value::Null);
+        // A deleted Person is someone's record too.
+        let (status, _, _) =
+            call(&app, "DELETE", &format!("/api/v1/configuration-items/{grace_id}"), &admin, None).await;
+        assert_eq!(status, 204);
+        let (status, v, _) =
+            call(&app, "PUT", "/api/v1/auth/email", &creds, Some(json!({ "email": "grace@example.test" }))).await;
+        assert_eq!((status, &v["error"]["details"][0]["code"]), (409, &json!("person_email_taken")), "{v}");
+        assert!(person(pool, grace_id).await.2, "still deleted");
+
+        // An administrator links the account to it (and restores it).
+        let patch = json!({ "email": "Grace@example.test" });
+        let (status, v, _) = call(&app, "PATCH", &format!("/api/v1/admin/users/{legacy}"), &admin, Some(patch)).await;
+        assert_eq!((status, &v["person"]["id"], &v["signInStatus"]), (200, &json!(grace_id), &json!("ready")), "{v}");
+        assert_eq!(person(pool, grace_id).await, ("Grace Hopper".into(), "Grace@example.test".into(), false));
+
+        // An address no Person has: the user's own Person is created.
+        let legacy2: Uuid = sqlx::query_scalar(
+            "INSERT INTO users (username, display_name, password_hash) VALUES ('legacy2', 'Second User', $1) RETURNING id",
+        )
+        .bind(&hash)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO user_permission_profiles (user_id, profile_id) SELECT $1, id FROM permission_profiles WHERE is_builtin")
+            .bind(legacy2)
+            .execute(pool)
+            .await
+            .unwrap();
+        let (_, _, creds) = login(&app, "legacy2").await;
+        let (status, me, _) =
+            call(&app, "PUT", "/api/v1/auth/email", &creds, Some(json!({ "email": "second@example.test" }))).await;
+        assert_eq!(status, 200, "{me}");
+        assert_eq!(
+            person(pool, person_id(&me["user"])).await,
+            ("Second User".into(), "second@example.test".into(), false)
+        );
+
+        // GH#531: a Person's Email is stored in NFKC (full-width letters become ASCII) ...
+        let heidi =
+            create_person(&app, &admin, class, "Heidi", "\u{ff48}\u{ff45}\u{ff49}\u{ff44}\u{ff49}@example.test").await;
+        let heidi_id: Uuid = heidi["id"].as_str().unwrap().parse().unwrap();
+        assert_eq!(person(pool, heidi_id).await.1, "heidi@example.test");
+        // ... so another Person with a look-alike address is refused ...
+        let body =
+            json!({ "classId": class, "attributes": { "name": "Heidi 2", "email": "\u{ff28}EIDI@example.test" } });
+        let (status, v, _) = call(&app, "POST", "/api/v1/configuration-items", &admin, Some(body)).await;
+        assert_eq!((status, &v["error"]["details"][0]["field"]), (409, &json!("attributes.email")), "{v}");
+        // ... and one stored in another form (written by an older release) is still found and adopted.
+        let ivan = create_person(&app, &admin, class, "Ivan", "placeholder@example.test").await;
+        let ivan_id: Uuid = ivan["id"].as_str().unwrap().parse().unwrap();
+        sqlx::query("UPDATE people.person SET email = '\u{ff49}\u{ff56}\u{ff41}\u{ff4e}@example.test' WHERE id = $1")
+            .bind(ivan_id)
+            .execute(pool)
+            .await
+            .unwrap();
+        let (status, ivan_user) = create_user(&app, &admin, "ivan", "IVAN@example.test").await;
+        assert_eq!((status, person_id(&ivan_user)), (201, ivan_id), "{ivan_user}");
+        assert_eq!(person(pool, ivan_id).await.1, "IVAN@example.test", "it takes the account's address");
 
         db.drop().await;
     }

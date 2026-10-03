@@ -120,8 +120,9 @@ pub struct User {
     /// Sign-in name, unique regardless of case
     pub username: String,
     pub display_name: String,
-    /// Unique regardless of case. Null only for accounts created before
-    /// e-mails were required (`signInStatus: email_required`).
+    /// Unique regardless of case and Unicode form (stored in NFKC). Null only
+    /// for accounts created before e-mails were required
+    /// (`signInStatus: email_required`).
     #[schema(required = true)]
     pub email: Option<String>,
     /// The Person CI linked to the account (same e-mail); null while
@@ -196,9 +197,11 @@ pub struct UserCreate {
     #[schema(schema_with = name_schema)]
     #[serde(deserialize_with = "trimmed")]
     pub display_name: String,
-    /// Unique regardless of case. The account is linked to the Person with this
-    /// e-mail, which is created when there is none (Name = the display name).
+    /// Unique regardless of case and Unicode form (stored in NFKC). The account
+    /// is linked to the Person with this e-mail, which is created when there is
+    /// none (Name = the display name).
     #[schema(schema_with = required_email_schema)]
+    #[serde(deserialize_with = "schemas::email")]
     pub email: String,
     #[schema(schema_with = password_schema)]
     pub password: Secret,
@@ -228,6 +231,7 @@ pub struct UserUpdate {
     /// when another account or another Person has the address); an account
     /// without a Person is linked to the Person with the address, or one is created.
     #[schema(schema_with = required_email_schema)]
+    #[serde(default, deserialize_with = "schemas::email_opt")]
     email: Option<String>,
     /// false disables the account and ends its sessions
     #[schema(nullable = false)]
@@ -505,12 +509,14 @@ pub async fn get(pool: &PgPool, id: Uuid) -> Result<User, AppError> {
 pub async fn create_in(conn: &mut PgConnection, ctx: &RequestContext, b: &UserCreate) -> Result<User, AppError> {
     check_profiles(conn, ctx, &b.profile_ids).await?;
     let hash = password::hash(&b.password).await?;
+    // The CLI and first-run setup build the request in code.
+    let email = schemas::normalize_email(&b.email);
     let id = data::insert_user(
         conn,
         &data::NewUser {
             username: &b.username,
             display_name: &b.display_name,
-            email: Some(&b.email),
+            email: Some(&email),
             password_hash: &hash,
             is_active: b.is_active.unwrap_or(true),
         },
