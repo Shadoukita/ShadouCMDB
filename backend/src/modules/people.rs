@@ -303,7 +303,10 @@ mod tests {
     use super::*;
     use crate::db::scratch;
     use crate::modules::api_tokens::tests::{Creds, app, call, code};
-    use crate::modules::mfa::tests::{PASSWORD, setup};
+    use crate::modules::mfa::tests::setup;
+
+    /// The accounts' password, made up per run so no test value reaches the hasher.
+    static PASSWORD: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| Uuid::new_v4().to_string());
 
     fn session(me: &Value, headers: &HeaderMap) -> Creds {
         let cookie = headers
@@ -317,7 +320,7 @@ mod tests {
     }
 
     async fn login(app: &Router, username: &str) -> (u16, Value, Creds) {
-        let body = json!({ "username": username, "password": PASSWORD });
+        let body = json!({ "username": username, "password": *PASSWORD });
         let (status, v, headers) = call(app, "POST", "/api/v1/auth/login", &Creds::default(), Some(body)).await;
         let creds = session(&v, &headers);
         (status, v, creds)
@@ -340,8 +343,7 @@ mod tests {
     }
 
     async fn create_user(app: &Router, admin: &Creds, name: &str, email: &str) -> (u16, Value) {
-        let body =
-            json!({ "username": name, "displayName": format!("{name} Example"), "email": email, "password": PASSWORD });
+        let body = json!({ "username": name, "displayName": format!("{name} Example"), "email": email, "password": *PASSWORD });
         let (status, v, _) = call(app, "POST", "/api/v1/admin/users", admin, Some(body)).await;
         (status, v)
     }

@@ -1,0 +1,13 @@
+{
+  "$comment": "Advisories that tools/sbom/audit.mjs tolerates in this directory only. Every entry needs a reason, an issue link, the date it was added and an expiry at most 90 days later; after the expiry the audit fails again. Drop the entry as soon as a patched version can be pinned with an npm `overrides` entry.",
+  "advisories": [
+    {
+      "id": "GHSA-ch52-4w7c-c8xp",
+      "package": "http-cache-semantics",
+      "reason": "Build-time only: reached through @cyclonedx/cyclonedx-npm -> cyclonedx-library -> libxmljs2 -> node-gyp -> make-fetch-happen, all optional in package-lock.json. The workflows install tools/sbom with --omit=optional --ignore-scripts, so the package is not even installed there, and nothing in tools/sbom is shipped. No patched release exists (advisory covers <= 4.2.0, the latest on npm as of 2026-10-03), so no override is possible yet.",
+      "issue": "https://github.com/Shadoukita/ShadouCMDB/issues/538",
+      "added": "2026-10-03",
+      "expires": "2026-12-31"
+    }
+  ]
+}

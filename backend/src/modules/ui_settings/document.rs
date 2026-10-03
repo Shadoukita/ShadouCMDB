@@ -834,9 +834,14 @@ pub const STANDARD_TEMPLATE: &str = "standard";
 pub const STANDARD_TEMPLATE_NAME: &str = "Standard";
 pub const TEMPLATE_NAME_MAX: usize = 100;
 
+/// Largest layout of a template or a CI's own, as stored (normalised) JSON. The database check on
+/// `ci_layout_overrides.layout` (512 KiB, compressed) stays as the backstop.
+pub const LAYOUT_MAX_BYTES: usize = 256 * 1024;
+
 /// A detail page and form layout on its own, without a class: the body of a template and of a CI's own
 /// layout. The same tabs, hidden and read-only fields as a class layout; attribute fields are resolved
-/// against the class of the CI that shows it, and ones the class does not have are left out.
+/// against the class of the CI that shows it, and ones the class does not have are left out. At most 256 KiB
+/// as JSON, counted after the server fills in section frames (400 VALIDATION_ERROR, code `too_large`).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 pub struct UiLayout {
@@ -861,9 +866,18 @@ impl UiLayout {
         self
     }
 
-    /// Structural problems, with field paths below `prefix` (e.g. "layout").
+    /// Structural problems, with field paths below `prefix` (e.g. "layout"), and the size limit.
     pub fn problems(&self, prefix: &str) -> Vec<FieldError> {
-        layout_problems(prefix, &self.tabs, &self.hidden_fields)
+        let mut e = layout_problems(prefix, &self.tabs, &self.hidden_fields);
+        if serde_json::to_vec(&self.clone().normalized()).map_or(usize::MAX, |v| v.len()) > LAYOUT_MAX_BYTES {
+            e.push(FieldError {
+                location: FieldLocation::Body,
+                field: prefix.into(),
+                message: format!("The layout is larger than {} KiB", LAYOUT_MAX_BYTES / 1024),
+                code: "too_large".into(),
+            });
+        }
+        e
     }
 }
 
@@ -1265,7 +1279,8 @@ fn standard_template(taken: &HashSet<String>, layout: UiLayout) -> UiLayoutTempl
 /// * tabs or fields sent with a `templateKey` replace that template's layout, unless they are the layout it
 ///   has (now or in `previous`), as when the settings the API returned are sent back;
 /// * class layouts keep only `classKey` and `templateKey`;
-/// * the Standard template is added when missing.
+/// * the Standard template is added when missing, as it is in `previous` (an administrator who sends only
+///   the templates they edit keeps Standard's layout; GH#521), else empty.
 ///
 /// A class layout naming a template that does not exist, and two different layouts sent for one
 /// template, are refused.
@@ -1283,7 +1298,10 @@ pub fn contract(
     }
     let sent: HashMap<String, UiLayout> =
         doc.layout_templates.iter().map(|t| (t.key.clone(), t.layout.clone())).collect();
+    // Standard when `doc` leaves it out: as in the version it replaces.
+    let kept_standard = previous.iter().find(|t| t.key == STANDARD_TEMPLATE);
     let empty = UiLayout::default();
+    let standard_layout = kept_standard.map_or(&empty, |t| &t.layout);
     let mut edited: HashMap<String, UiLayout> = HashMap::new();
     let mut created = Vec::new();
     for (i, l) in doc.layouts.iter_mut().enumerate() {
@@ -1303,7 +1321,7 @@ pub fn contract(
             l.template_key = Some(key);
             continue;
         };
-        let Some(current) = sent.get(&key).or((key == STANDARD_TEMPLATE).then_some(&empty)) else {
+        let Some(current) = sent.get(&key).or((key == STANDARD_TEMPLATE).then_some(standard_layout)) else {
             errors.push(custom(
                 format!("settings.layouts.{i}.templateKey"),
                 format!("No layout template has the key \"{key}\""),
@@ -1341,8 +1359,15 @@ pub fn contract(
         }
     }
     if !doc.layout_templates.iter().any(|t| t.key == STANDARD_TEMPLATE) {
-        let layout = edited.remove(STANDARD_TEMPLATE).unwrap_or_default();
-        doc.layout_templates.insert(0, standard_template(&names, layout));
+        let layout = edited.remove(STANDARD_TEMPLATE).unwrap_or_else(|| standard_layout.clone());
+        let mut standard = standard_template(&names, layout);
+        if let Some(kept) = kept_standard {
+            standard.description = kept.description.clone();
+            if !names.contains(&kept.name.trim().to_lowercase()) {
+                standard.name = kept.name.clone();
+            }
+        }
+        doc.layout_templates.insert(0, standard);
     }
     doc.layout_templates.extend(created);
     Ok(doc)

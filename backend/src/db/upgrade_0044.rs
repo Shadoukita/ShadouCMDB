@@ -128,7 +128,12 @@ async fn shared_emails_stop_the_upgrade_with_the_list() {
     .await
     .unwrap();
 
-    let err = MIGRATOR.run(pool).await.expect_err("shared e-mails stop the upgrade").to_string();
+    // A failed run returns without releasing sqlx's session-level migration
+    // lock. `migrate` exits, which ends the session; here the connection is
+    // closed, or the next run would wait on the lock from another one.
+    let mut conn = pool.acquire().await.unwrap();
+    let err = MIGRATOR.run(&mut *conn).await.expect_err("shared e-mails stop the upgrade").to_string();
+    conn.close().await.unwrap();
     assert!(err.contains("ops@example.test (users: ops, Ops2); svc@example.test (users: backup, monitor)"), "{err}");
     assert!(!err.contains("dana"), "{err}");
     assert!(err.contains("Nothing was changed"), "{err}");

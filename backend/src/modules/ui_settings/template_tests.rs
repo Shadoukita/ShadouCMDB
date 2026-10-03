@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use super::document;
 use crate::db::scratch;
 use crate::modules::api_tokens::tests::{Creds, app, call, code, session_of};
 
@@ -593,4 +594,134 @@ async fn usage_counts_own_layouts_names_a_sample_ci_and_the_list_filters_by_them
     assert_eq!(status, 400, "{v}");
 
     db.drop().await;
+}
+
+/// A PUT that leaves the Standard template out keeps it as it was, with its layout, name and description,
+/// instead of resetting it to an empty layout for every class and CI using it (GH#521).
+#[tokio::test]
+async fn a_put_without_the_standard_template_keeps_its_layout() {
+    let Some(db) = scratch::database("a_put_without_the_standard_template_keeps_its_layout").await else {
+        return;
+    };
+    let w = world(&db).await;
+    let mut settings = w.stored().await;
+    let i = keys(&settings["layoutTemplates"]).iter().position(|k| *k == "standard").unwrap();
+    settings["layoutTemplates"][i]["layout"]["hiddenFields"] = json!(["attributes.cpu_cores"]);
+    settings["layoutTemplates"][i]["description"] = json!("Every class without its own template");
+    let (status, v) = w.put(settings).await;
+    assert_eq!(status, 200, "{v}");
+    let before = template(&w.raw().await, "standard").clone();
+    assert_eq!(before["layout"]["hiddenFields"], json!(["attributes.cpu_cores"]), "{before}");
+
+    // Only another template sent: Standard is carried over.
+    let compact = json!({ "key": "compact", "name": "Compact", "layout": { "tabs": [tab("Compact", &["ident"])] } });
+    let (status, v) = w.put(json!({ "layoutTemplates": [compact] })).await;
+    assert_eq!(status, 200, "{v}");
+    let raw = w.raw().await;
+    assert_eq!(keys(&raw["layoutTemplates"]), ["standard", "compact"]);
+    assert_eq!(template(&raw, "standard"), &before, "{raw}");
+    assert_eq!(
+        w.settings().await["settings"]["layoutTemplates"][0]["layout"]["hiddenFields"],
+        json!(["attributes.cpu_cores"])
+    );
+
+    // A class edits Standard through its layout while the template itself is left out: the edit counts.
+    let sent = json!({ "classKey": "server", "templateKey": "standard", "readOnlyFields": ["label"] });
+    let (status, v) = w.put(json!({ "layouts": [sent], "layoutTemplates": [template(&raw, "compact")] })).await;
+    assert_eq!(status, 200, "{v}");
+    let standard = template(&w.raw().await, "standard").clone();
+    assert_eq!(standard["layout"]["readOnlyFields"], json!(["label"]), "{standard}");
+    assert_eq!(standard["name"], "Standard");
+
+    // Standard sent with an empty layout: that clears it.
+    let empty = json!({ "key": "standard", "name": "Standard", "layout": {} });
+    let (status, v) = w.put(json!({ "layoutTemplates": [empty] })).await;
+    assert_eq!(status, 200, "{v}");
+    let raw = w.raw().await;
+    assert_eq!(keys(&raw["layoutTemplates"]), ["standard"]);
+    let standard = template(&raw, "standard");
+    assert!(standard["layout"].get("readOnlyFields").is_none_or(|f| f == &json!([])), "{standard}");
+    assert!(standard["layout"].get("hiddenFields").is_none_or(|f| f == &json!([])), "{standard}");
+
+    db.drop().await;
+}
+
+/// A layout of `notes` note sections of random text (8 to a tab), the last one `last` characters long:
+/// random text compresses badly, so the database's own check would be the first to see it.
+fn noisy_layout(notes: usize, last: usize) -> Value {
+    let mut seed: u64 = 0x2545_f491_4f6c_dd1d;
+    let mut text = |len: usize| -> String {
+        (0..len)
+            .map(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                char::from(b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"[(seed % 62) as usize])
+            })
+            .collect()
+    };
+    let mut tabs: Vec<Value> = Vec::new();
+    for i in 0..notes {
+        if i % 8 == 0 {
+            tabs.push(json!({ "key": format!("t{i}"), "label": "Notes", "sections": [] }));
+        }
+        let len = if i + 1 == notes { last } else { document::NOTE_MAX_CHARS };
+        let section = json!({ "key": format!("n{i}"), "label": "Note", "kind": "note", "text": text(len) });
+        tabs.last_mut().unwrap()["sections"].as_array_mut().unwrap().push(section);
+    }
+    json!({ "tabs": tabs })
+}
+
+/// The layout's size as the server counts it: stored (normalised) JSON.
+fn stored_size(layout: &Value) -> usize {
+    let l: document::UiLayout = serde_json::from_value(layout.clone()).unwrap();
+    serde_json::to_vec(&l.normalized()).unwrap().len()
+}
+
+/// GH#533: a CI's own layout and a template are limited to 256 KiB before the database's check on
+/// `ci_layout_overrides.layout` is reached, with an error on the field instead of the constraint's text.
+#[tokio::test]
+async fn layouts_over_256_kib_are_refused_on_the_field() {
+    let Some(db) = scratch::database("layouts_over_256_kib_are_refused_on_the_field").await else { return };
+    let w = world(&db).await;
+    let ci = w.ci().await;
+    let path = format!("/api/v1/configuration-items/{ci}/layout");
+
+    // The reporter's layout: 20 tabs of 8 random notes (about 650 KB).
+    let (status, v, _) = call(&w.app, "PUT", &path, &w.admin, Some(json!({ "layout": noisy_layout(160, 4000) }))).await;
+    assert_eq!((status, code(&v)), (400, "VALIDATION_ERROR"), "{v}");
+    let details = &v["error"]["details"];
+    assert_eq!(details.as_array().unwrap().len(), 1, "{v}");
+    assert_eq!((details[0]["field"].as_str(), details[0]["code"].as_str()), (Some("layout"), Some("too_large")));
+    assert_eq!(details[0]["message"], "The layout is larger than 256 KiB");
+
+    // Exactly 256 KiB is stored (the database check does not fire first), one byte more is not.
+    let notes =
+        (1..).find(|&n| stored_size(&noisy_layout(n, document::NOTE_MAX_CHARS)) >= document::LAYOUT_MAX_BYTES).unwrap();
+    let last = document::LAYOUT_MAX_BYTES - stored_size(&noisy_layout(notes, 0));
+    let at_limit = noisy_layout(notes, last);
+    assert_eq!(stored_size(&at_limit), document::LAYOUT_MAX_BYTES);
+    let over = noisy_layout(notes, last + 1);
+    let (status, v, _) = call(&w.app, "PUT", &path, &w.admin, Some(json!({ "layout": over.clone() }))).await;
+    assert_eq!((status, details_code(&v)), (400, Some("too_large")), "{v}");
+    let (_, v, _) = call(&w.app, "GET", &path, &w.admin, None).await;
+    assert_eq!(v["source"], "class_default", "nothing stored");
+    let (status, v, _) = call(&w.app, "PUT", &path, &w.admin, Some(json!({ "layout": at_limit }))).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(v["source"], "custom");
+
+    // The same limit for a template of the settings.
+    let mut settings = w.stored().await;
+    let standard = template(&settings, "standard").clone();
+    settings["layoutTemplates"] = json!([standard, { "key": "big", "name": "Big", "layout": over }]);
+    let (status, v) = w.put(settings).await;
+    assert_eq!((status, code(&v)), (400, "VALIDATION_ERROR"), "{v}");
+    assert_eq!(v["error"]["details"][0]["field"], "settings.layoutTemplates.1.layout", "{v}");
+    assert_eq!(v["error"]["details"][0]["code"], "too_large");
+
+    db.drop().await;
+}
+
+fn details_code(v: &Value) -> Option<&str> {
+    v["error"]["details"][0]["code"].as_str()
 }

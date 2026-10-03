@@ -479,7 +479,8 @@ pub fn routes() -> Vec<Route> {
                 "Send `templateKey` (a template of the UI settings) or `layout` (for this CI only), not both. \
                  Needs `customization.manage` and edit on the CI's class (403 otherwise; 404 for a CI that is \
                  missing, deleted or in a class you may not view). Audited (entity type ci_layout_overrides, the \
-                 CI's id). Saving what the CI already has changes nothing.",
+                 CI's id). Saving what the CI already has changes nothing. A `layout` larger than 256 KiB as \
+                 JSON is refused (400 VALIDATION_ERROR, field `layout`, code `too_large`).",
             )
             .requires(GlobalPermission::CustomizationManage)
             .errors(&[ErrorCode::NotFound, ErrorCode::VersionConflict])
