@@ -97,7 +97,7 @@ async function submit() {
             <input :id="id" v-model="form.displayName" type="text" autocomplete="name" :aria-invalid="invalid" :aria-describedby="describedBy" />
           </template>
         </FormField>
-        <FormField id="setup-email" :label="t('auth.setup.email')" :error="fieldErrors.email">
+        <FormField id="setup-email" :label="t('auth.setup.email')" required :error="fieldErrors.email" :hint="t('people.setup.emailHint')">
           <template #default="{ id, invalid, describedBy }">
             <input :id="id" v-model="form.email" type="email" autocomplete="email" :aria-invalid="invalid" :aria-describedby="describedBy" />
           </template>

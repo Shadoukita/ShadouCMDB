@@ -7,9 +7,11 @@ import Breadcrumbs from "../../components/Breadcrumbs.vue";
 import EmptyState from "../../components/EmptyState.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
 import LoadingState from "../../components/LoadingState.vue";
+import { t } from "../../i18n";
 import { useDocumentTitle } from "../../lib/composables";
 import { vAutofocus } from "../../lib/directives";
 import { formatDateTime } from "../../lib/format";
+import { emailErrorMessage, signInStatusLabel, userEmailError } from "../../lib/people";
 import { useFlashStore } from "../../stores/flash";
 import { useSessionStore } from "../../stores/session";
 import FormErrorBanner from "../form/FormErrorBanner.vue";
@@ -70,7 +72,11 @@ watch(id, () => {
 });
 
 const FIELDS = ["username", "displayName", "email", "password", "isActive", "profileIds"];
-const fieldErrors = computed(() => ({ ...(error.value instanceof ApiError ? error.value.fieldErrors() : {}), ...local.value }));
+const fieldErrors = computed<Record<string, string>>(() => {
+  const api: Record<string, string> = error.value instanceof ApiError ? error.value.fieldErrors() : {};
+  const email = error.value instanceof ApiError ? emailErrorMessage(error.value.details) : undefined;
+  return { ...api, ...(email ? { email } : {}), ...local.value };
+});
 const unplaced = computed(() => (error.value instanceof ApiError ? error.value.details.filter((d) => !FIELDS.includes(d.field.split(".")[0])) : []));
 const isSelf = computed(() => !!id.value && id.value === session.user?.id);
 /** Set for an account created by an identity provider: its name, e-mail and profiles are overwritten at every sign-in. */
@@ -83,6 +89,10 @@ async function submit() {
   const errs: Record<string, string> = {};
   if (!f.username.trim()) errs.username = "Required";
   if (!f.displayName.trim()) errs.displayName = "Required";
+  // Required since SHAA-1505: it links the account to its Person CI. An account from before then may stay
+  // without one here (its owner enters it at their next sign-in), so its other fields can still be changed.
+  const emailError = userEmailError(f.email, !isNew.value && user.data.value?.email === null);
+  if (emailError) errs.email = emailError;
   if (isNew.value) {
     if ([...f.password].length < 12) errs.password = "Too short";
     if (f.password !== f.confirm) errs.confirm = "The passwords do not match";
@@ -92,7 +102,6 @@ async function submit() {
     document.getElementById(`user-${Object.keys(errs)[0]}`)?.focus();
     return;
   }
-  // Required since SHAA-1505: an empty value is refused by the API with a field error.
   const email = f.email.trim();
   try {
     if (isNew.value) {
@@ -112,7 +121,8 @@ async function submit() {
     const body: UserUpdateBody = {};
     if (f.username.trim() !== u.username) body.username = f.username.trim();
     if (f.displayName.trim() !== u.displayName) body.displayName = f.displayName.trim();
-    if (email !== u.email) body.email = email;
+    // An incomplete account (an e-mail but no Person) is linked by sending its e-mail again.
+    if (email !== (u.email ?? "") || (u.signInStatus === "person_missing" && email)) body.email = email;
     const before = u.profiles.map((p) => p.id).sort();
     const after = [...f.profileIds].sort();
     if (before.join() !== after.join()) body.profileIds = f.profileIds;
@@ -161,6 +171,14 @@ const notFound = computed(() => {
           <span v-if="user.data.value.mfaEnabled" class="badge ok" title="Signs in with a password and an authenticator code">Two-factor on</span>
           <span v-if="provider" class="badge" data-testid="user-provider">Signs in with {{ provider.name }}</span>
           <span v-if="isSelf" class="badge">You</span>
+          <span
+            v-if="user.data.value.signInStatus !== 'ready'"
+            :class="['badge', user.data.value.signInStatus === 'person_missing' ? 'danger' : 'warn']"
+            :title="user.data.value.signInStatus === 'person_missing' ? t('people.users.incompleteTitle') : t('people.users.emailRequiredTitle')"
+            data-testid="user-sign-in-status"
+          >
+            {{ signInStatusLabel(user.data.value.signInStatus) }}
+          </span>
         </template>
       </div>
       <div v-if="user.data.value && !isNew" class="actions">
@@ -199,7 +217,13 @@ const notFound = computed(() => {
                 <input :id="fid" v-model="form.displayName" type="text" autocomplete="off" :aria-invalid="invalid" :aria-describedby="describedBy" />
               </template>
             </FormField>
-            <FormField id="user-email" label="Email" :error="fieldErrors.email">
+            <FormField
+              id="user-email"
+              label="Email"
+              :required="isNew || user.data.value?.email !== null"
+              :error="fieldErrors.email"
+              :hint="user.data.value?.email === null && !isNew ? t('people.users.emailLegacyHint') : t('people.users.emailHint')"
+            >
               <template #default="{ id: fid, invalid, describedBy }">
                 <input :id="fid" v-model="form.email" type="email" autocomplete="off" :aria-invalid="invalid" :aria-describedby="describedBy" />
               </template>
@@ -236,6 +260,12 @@ const notFound = computed(() => {
           <div class="panel-header"><h2 id="user-facts-title">Activity</h2></div>
           <div class="panel-body">
             <dl class="props">
+              <dt>{{ t("people.users.col.person") }}</dt>
+              <dd data-testid="user-person">
+                <RouterLink v-if="user.data.value.person" :to="`/cis/${user.data.value.person.id}`" dir="auto">{{ user.data.value.person.label }}</RouterLink>
+                <template v-else-if="user.data.value.signInStatus === 'email_required'">{{ t("people.users.personAfterEmail") }}</template>
+                <template v-else>{{ t("people.users.incompleteTitle") }}</template>
+              </dd>
               <dt>Last sign-in</dt>
               <dd>{{ user.data.value.lastLoginAt ? formatDateTime(user.data.value.lastLoginAt) : "Never" }}</dd>
               <dt>Two-factor authentication</dt>

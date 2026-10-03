@@ -10,6 +10,8 @@ import PaginationBar from "../../components/PaginationBar.vue";
 import { useDebounced, useDocumentTitle } from "../../lib/composables";
 import { formatRelative } from "../../lib/format";
 import { useListQuery } from "../../lib/listQuery";
+import { parseSignInStatus, SIGN_IN_STATUSES, signInStatusLabel } from "../../lib/people";
+import { t } from "../../i18n";
 import { useFlashStore } from "../../stores/flash";
 
 /** Administration › Users. Search, filters, sort and page live in the URL; the API filters and pages. */
@@ -20,6 +22,7 @@ const COLUMNS: { key: string; label: string; sort?: string }[] = [
   { key: "username", label: "Username", sort: "username" },
   { key: "displayName", label: "Display name", sort: "displayName" },
   { key: "email", label: "Email" },
+  { key: "person", label: t("people.users.col.person") },
   { key: "profiles", label: "Permission profiles" },
   { key: "status", label: "Status" },
   { key: "signIn", label: "Signs in with" },
@@ -34,6 +37,7 @@ const query = computed<UserListQuery>(() => ({
   q: get("q") || undefined,
   isActive: get("isActive") === "true" || get("isActive") === "false" ? (get("isActive") as "true" | "false") : undefined,
   profileId: get("profileId") || undefined,
+  signInStatus: parseSignInStatus(get("signInStatus")),
   sort: lq.sort.value as SortField,
   limit: limit.value,
   offset: offset.value,
@@ -52,13 +56,13 @@ watch(
   (v) => (qText.value = v),
 );
 
-const filtered = computed(() => !!(get("q") || get("isActive") || get("profileId")));
+const filtered = computed(() => !!(get("q") || get("isActive") || get("profileId") || query.value.signInStatus));
 const total = computed(() => list.data.value?.page.total ?? 0);
 const rows = computed(() => list.data.value?.data ?? []);
 
 function clearFilters() {
   qText.value = "";
-  update({ q: undefined, isActive: undefined, profileId: undefined });
+  update({ q: undefined, isActive: undefined, profileId: undefined, signInStatus: undefined });
 }
 </script>
 
@@ -98,6 +102,17 @@ function clearFilters() {
           <option v-for="p in profiles.data.value?.data ?? []" :key="p.id" :value="p.id">{{ p.name }}</option>
         </select>
       </div>
+      <div class="field">
+        <label for="u-sign-in">{{ t("people.users.filter.label") }}</label>
+        <select
+          id="u-sign-in"
+          :value="query.signInStatus ?? ''"
+          @change="update({ signInStatus: ($event.target as HTMLSelectElement).value || undefined })"
+        >
+          <option value="">{{ t("people.users.filter.any") }}</option>
+          <option v-for="s in SIGN_IN_STATUSES" :key="s" :value="s">{{ signInStatusLabel(s) }}</option>
+        </select>
+      </div>
       <button v-if="filtered" type="button" class="btn" @click="clearFilters">Clear filters</button>
     </form>
 
@@ -129,7 +144,19 @@ function clearFilters() {
             <tr v-for="u in rows" :key="u.id" :class="{ disabled: !u.isActive }">
               <td><RouterLink :to="`/admin/users/${u.id}`">{{ u.username }}</RouterLink></td>
               <td>{{ u.displayName }}</td>
-              <td>{{ u.email ?? "" }}</td>
+              <td>
+                <template v-if="u.email">{{ u.email }}</template>
+                <span v-else class="badge warn" :title="t('people.users.emailRequiredTitle')" data-testid="email-required">
+                  {{ signInStatusLabel("email_required") }}
+                </span>
+              </td>
+              <td>
+                <RouterLink v-if="u.person" :to="`/cis/${u.person.id}`" dir="auto">{{ u.person.label }}</RouterLink>
+                <span v-else-if="u.signInStatus === 'person_missing'" class="badge danger" :title="t('people.users.incompleteTitle')" data-testid="account-incomplete">
+                  {{ signInStatusLabel("person_missing") }}
+                </span>
+                <span v-else class="muted">{{ t("people.users.noPerson") }}</span>
+              </td>
               <td :title="u.profiles.map((p) => p.name).join(', ')">
                 <span v-if="u.profiles.length === 0" class="muted">None — cannot see any CI</span>
                 <template v-for="(p, i) in u.profiles" :key="p.id"><template v-if="i > 0">, </template>{{ p.name }}</template>

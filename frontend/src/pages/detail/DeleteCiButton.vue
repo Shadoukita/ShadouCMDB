@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useRouter } from "vue-router";
+import { useIsPersonClass, useSignInAccount } from "../../api/admin";
 import { useDeleteCi, useRelationships, type Ci } from "../../api/queries";
 import ConfirmDialog from "../../components/ConfirmDialog.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
 import LoadingState from "../../components/LoadingState.vue";
+import { t } from "../../i18n";
 import { plural } from "../../lib/format";
 import { describeEdge } from "../../lib/relationships";
 
@@ -16,6 +18,10 @@ const rels = useRelationships(() => props.ci.id);
 const del = useDeleteCi();
 const edges = computed(() => (rels.data.value?.data ?? []).map((r) => ({ r, d: describeEdge(r, props.ci.id) })));
 const total = computed(() => rels.data.value?.page.total ?? 0);
+// A Person linked to a sign-in account cannot be deleted (409 person_linked): say so before the operator confirms.
+const isPerson = useIsPersonClass(() => props.ci.classId);
+const signInAccount = useSignInAccount(() => props.ci.id, () => open.value && isPerson.value);
+const linkedTo = computed(() => signInAccount.data.value?.account ?? null);
 
 function cancel() {
   del.reset();
@@ -34,10 +40,14 @@ function confirm() {
     :title="`Delete ${ci.class.name.toLowerCase()} “${ci.label}”?`"
     :confirm-label="total > 0 ? `Delete CI and ${plural(total, 'relationship')}` : 'Delete CI'"
     :busy="del.isPending.value"
+    :confirm-disabled="!!linkedTo || (isPerson && signInAccount.isPending.value)"
     @cancel="cancel"
     @confirm="confirm"
   >
     <ErrorAlert v-if="del.isError.value" :error="del.error.value" title="Delete failed" />
+    <div v-if="linkedTo" class="alert alert-warn" role="alert" data-testid="person-linked">
+      {{ t("people.delete.linked", { username: linkedTo.username }) }}
+    </div>
     <p>
       <strong dir="auto">{{ ci.label }}</strong> (<bdi>{{ ci.class.name }}</bdi>, <bdi>{{ ci.ident }}</bdi>) will be removed from the
       inventory. The record and its history stay available as a deleted CI.

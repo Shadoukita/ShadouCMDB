@@ -16,6 +16,7 @@ import AttributeInput from "../../../components/AttributeInput.vue";
 import FormDialog from "../../../components/FormDialog.vue";
 import SchemaChangeDialog from "../../../components/SchemaChangeDialog.vue";
 import TechnicalNameField from "../../../components/TechnicalNameField.vue";
+import { t } from "../../../i18n";
 import { toApiValue, toFormValue, type AttributeShape } from "../../../lib/attributeValues";
 import { changedFields } from "../../../lib/changes";
 import { DATA_TYPES, validationKind } from "../../../lib/dataTypes";
@@ -122,7 +123,9 @@ watch(dataType, (t) => {
 
 /** Types a stored column can be converted between; reference and lookup columns are foreign keys and stay what they are. */
 const CONVERTIBLE = new Set<DataType>(["text", "number", "integer", "boolean", "enum", "date", "datetime", "ip", "cidr"]);
-const typeLocked = computed(() => !isNew.value && !CONVERTIBLE.has(props.def!.dataType as DataType));
+/** The Person's Name and Email (SHAA-1505): the API refuses to archive them, make them optional or change their type. */
+const systemField = computed(() => !!props.def?.systemRole);
+const typeLocked = computed(() => !isNew.value && (systemField.value || !CONVERTIBLE.has(props.def!.dataType as DataType)));
 const typeOptions = computed(() => (isNew.value ? DATA_TYPES : DATA_TYPES.filter((t) => (typeLocked.value ? t.key === dataType.value : CONVERTIBLE.has(t.key as DataType)))));
 const typeChanged = computed(() => !isNew.value && dataType.value !== props.def?.dataType);
 
@@ -343,7 +346,9 @@ async function submit() {
         required
         :error="errorFor('dataType')"
         :hint="
-          typeLocked
+          systemField
+            ? t('people.datamodel.systemTitle')
+            : typeLocked
             ? 'Reference and lookup columns cannot change type'
             : typeChanged
               ? 'Stored values are converted; refused if any would not convert'
@@ -397,9 +402,10 @@ async function submit() {
       <div class="field">
         <span class="label">Required</span>
         <label class="checkbox-row">
-          <input id="ad-required" v-model="isRequired" type="checkbox" />
+          <input id="ad-required" v-model="isRequired" type="checkbox" :disabled="systemField" />
           Every CI of this class must have a value
         </label>
+        <span v-if="systemField" class="hint">{{ t("people.datamodel.systemTitle") }}</span>
         <span v-if="!isNew && isRequired && !def?.isRequired" class="hint">Refused while a CI of this class has no value</span>
         <span v-if="errorFor('isRequired')" class="error">{{ errorFor("isRequired") }}</span>
       </div>

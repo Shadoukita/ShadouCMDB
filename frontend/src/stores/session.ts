@@ -27,6 +27,11 @@ export const useSessionStore = defineStore("session", () => {
   const permissions = computed(() => session.value?.permissions);
   /** A profile the user holds requires two-factor authentication and they have not set it up: only the set-up screen works. */
   const enrolmentRequired = computed(() => !!session.value?.mfa.enrolmentRequired);
+  /**
+   * The account was created before e-mails were required and has none: only the e-mail step works until it is
+   * entered. The API checks it before the two-factor requirement, so this step comes first.
+   */
+  const emailRequired = computed(() => !!session.value?.emailRequired);
 
   /** A different user may sign in next: never show them the previous user's cached data. */
   function signIn(s: Session) {
@@ -86,6 +91,11 @@ export const useSessionStore = defineStore("session", () => {
     signIn(await authApi.loginMfa(code));
   }
 
+  /** The forced e-mail step: the answer is the session, now linked to the account's Person CI. */
+  async function enterEmail(email: string) {
+    apply(await authApi.enterEmail(email));
+  }
+
   async function setup(body: SetupBody) {
     signIn(await authApi.setup(body));
   }
@@ -133,11 +143,13 @@ export const useSessionStore = defineStore("session", () => {
     user,
     permissions,
     enrolmentRequired,
+    emailRequired,
     expired,
     bootError,
     ensureLoaded,
     login,
     loginMfa,
+    enterEmail,
     setup,
     logout,
     markExpired,

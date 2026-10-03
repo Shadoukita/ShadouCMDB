@@ -58,6 +58,13 @@ export function onMfaEnrolmentRequired(handler: () => void) {
   enrolmentRequiredHandler = handler;
 }
 
+let emailRequiredHandler: (() => void) | undefined;
+
+/** Called when a request answers 403 EMAIL_REQUIRED: the account has no e-mail yet and must enter one first. */
+export function onEmailRequired(handler: () => void) {
+  emailRequiredHandler = handler;
+}
+
 let reauthenticationRequiredHandler: (() => void) | undefined;
 
 /**
@@ -91,6 +98,7 @@ api.use({
     if (response.status === 403 && requestEpoch.get(request) === sessionEpoch) {
       const body = (await response.clone().json().catch(() => null)) as Envelope | null;
       if (body?.error?.code === "MFA_ENROLMENT_REQUIRED") enrolmentRequiredHandler?.();
+      if (body?.error?.code === "EMAIL_REQUIRED") emailRequiredHandler?.();
       if (body?.error?.code === "REAUTHENTICATION_REQUIRED") reauthenticationRequiredHandler?.();
     }
     return response;
