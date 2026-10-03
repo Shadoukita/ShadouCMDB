@@ -2087,27 +2087,27 @@ pub async fn import(
     let mut tx = pool.begin().await?;
     // Audit rows lock the audit chain head until commit, which would stall
     // every sign-in for the whole import (GH#500): a dry run writes none, and
-    // an apply writes them all at the end.
-    match mode {
-        ImportMode::DryRun => {
-            let run = engine::collect_previews(run(&mut tx, ctx, file, mode));
-            let (result, schema_changes) = crud::discard_audit(run).await;
-            let mut result = result?;
-            result.schema_changes = schema_changes;
-            tx.rollback().await?;
-            Ok(result)
-        }
+    // an apply writes them all at the end. Boxed: the import future is too
+    // large to sit on a test thread's stack inside the audit scope.
+    let run = Box::pin(engine::collect_previews(run(&mut tx, ctx, file, mode)));
+    let ((result, schema_changes), audit) = match mode {
+        ImportMode::DryRun => (crud::discard_audit(run).await, None),
         ImportMode::Apply => {
-            let run = engine::collect_previews(run(&mut tx, ctx, file, mode));
-            let ((result, schema_changes), audit) = crud::hold_audit(run).await;
-            let mut result = result?;
-            result.schema_changes = schema_changes;
+            let (out, audit) = crud::hold_audit(run).await;
+            (out, Some(audit))
+        }
+    };
+    let mut result = result?;
+    result.schema_changes = schema_changes;
+    match audit {
+        None => tx.rollback().await?,
+        Some(audit) => {
             audit.write(&mut tx).await?;
             tx.commit().await?;
             result.applied = true;
-            Ok(result)
         }
     }
+    Ok(result)
 }
 
 // ---------------------------------------------------------------------------
