@@ -30,7 +30,7 @@ const local = ref<string | undefined>();
 const signOutError = ref<unknown>(null);
 
 /** A refused address is told next to the field; anything else (a lost connection, a server error) above the form. */
-const fieldError = computed(() => local.value ?? (error.value instanceof ApiError ? emailErrorMessage(error.value.details) : undefined));
+const fieldError = computed(() => local.value ?? (error.value instanceof ApiError ? emailErrorMessage(error.value.details, true) : undefined));
 const otherError = computed(() => (error.value && !fieldError.value ? error.value : null));
 
 async function submit() {

@@ -23,6 +23,18 @@ describe("emailErrorMessage", () => {
     const m = emailErrorMessage([{ field: "email", code: "person_email_taken", message: "Another person already has …" }]);
     assert.match(m ?? "", /^A person who is not this account's already has this e-mail address/);
   });
+  test("another person's address, entered as one's own: ask an administrator", () => {
+    const details = [{ field: "email", code: "person_email_taken", message: "Another person already has …" }];
+    assert.match(emailErrorMessage(details, true) ?? "", /Ask an administrator to set it on your account \(Administration › Users\)/);
+    const unique = [{ field: "email", code: "unique", message: "" }];
+    assert.equal(emailErrorMessage(unique, true), "Another account already uses this e-mail address.");
+    setLocaleForTests("de");
+    try {
+      assert.match(emailErrorMessage(details, true) ?? "", /Bitten Sie einen Administrator/);
+    } finally {
+      setLocaleForTests(null);
+    }
+  });
   test("an unknown code keeps the API's message; other fields are not the e-mail's", () => {
     assert.equal(emailErrorMessage([{ field: "email", code: "too_long", message: "At most 254 characters" }]), "At most 254 characters");
     assert.equal(emailErrorMessage([{ field: "username", code: "unique", message: "Already exists" }]), undefined);
