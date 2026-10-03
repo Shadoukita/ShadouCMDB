@@ -59,7 +59,7 @@ test("create a workflow for Server with Status as its state field", async ({ pag
   await page.getByLabel("Name").fill(NAME);
   await expect(page.getByLabel("Key")).toHaveValue(KEY);
   await page.getByLabel("CI type").selectOption({ label: "Server" });
-  await page.getByLabel("State field").selectOption({ label: "Status (status)" });
+  await page.getByLabel("State field", { exact: true }).selectOption({ label: "Status (status)" });
   await page.getByLabel("Description").fill("Plan, approve and run servers");
   await page.getByRole("button", { name: "Create workflow" }).click();
 
