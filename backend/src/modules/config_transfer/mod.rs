@@ -56,12 +56,15 @@ const TAG: &str = "Configuration export/import";
 
 /// Largest accepted import file (the images alone can be ~850 KiB base64).
 const IMPORT_BODY_LIMIT: usize = 16 * 1024 * 1024;
-/// Lookup values per file, the rows of the former tables included. An applied
-/// import writes an audit row per value just before commit, and those rows
-/// hold the audit chain head, so every sign-in waits for them; the per-list
-/// limit alone still let a file within the body limit carry half a million
-/// (GH#546). Checked before anything touches the database, dry runs included.
-const MAX_LOOKUP_VALUES: usize = 25_000;
+/// Entries per file: lookup values (the rows of the former tables included),
+/// data-model entries, permission profiles, saved import mappings and shared
+/// saved views. An applied import writes an audit row per changed entry just
+/// before commit, and those rows hold the audit chain head, so every sign-in
+/// waits for them; the per-list limits alone still let a file within the body
+/// limit carry half a million lookup values (GH#546) or ~77,000 data-model
+/// entries (GH#551). Checked before anything touches the database, dry runs
+/// included.
+const MAX_ENTRIES: usize = 25_000;
 
 // ---------------------------------------------------------------------------
 // Import result
@@ -2046,12 +2049,28 @@ fn check_format(file: &ConfigFile) -> Result<(), AppError> {
             + l.owners.len()
             + l.lists.iter().map(|list| list.values.len()).sum::<usize>()
     });
-    if lookups > MAX_LOOKUP_VALUES {
+    let data_model = file.data_model.as_ref().map_or(0, |d| {
+        d.areas.len() + d.classes.len() + d.attributes.len() + d.relationship_types.len() + d.relationship_rules.len()
+    });
+    let sections = [
+        ("dataModel", data_model),
+        ("lookups", lookups),
+        ("permissionProfiles", file.permission_profiles.as_ref().map_or(0, Vec::len)),
+        ("importMappings", file.import_mappings.as_ref().map_or(0, Vec::len)),
+        ("savedViews", file.saved_views.as_ref().map_or(0, Vec::len)),
+    ];
+    let total: usize = sections.iter().map(|s| s.1).sum();
+    if total > MAX_ENTRIES {
+        // Reported at the largest section, the one to split.
+        let (field, _) = sections.iter().max_by_key(|s| s.1).expect("five sections");
+        let held: Vec<String> =
+            sections.iter().filter(|s| s.1 > 0).map(|(section, n)| format!("{section}: {n}")).collect();
         return Err(AppError::field(
-            "lookups",
+            *field,
             format!(
-                "The file holds {lookups} lookup values; one file may hold at most {MAX_LOOKUP_VALUES}. Split the \
-                 lists across several files and import them one after the other"
+                "The file holds {total} entries ({}); one file may hold at most {MAX_ENTRIES}. Split it into \
+                 several files and import them one after the other",
+                held.join(", ")
             ),
             "too_big",
         ));
@@ -2185,9 +2204,10 @@ pub fn routes() -> Vec<Route> {
                  and the logo and favicon. All sections are optional. Problems in the file are reported together as \
                  400 VALIDATION_ERROR with paths into the file; a change the data model does not allow (e.g. making \
                  an attribute required while CIs lack a value) fails with the same error the admin API gives, with \
-                 the file path prefixed. A file holds at most 25,000 lookup values in all (former tables included; \
-                 400 VALIDATION_ERROR with code too_big at `lookups` otherwise, dry run included): split larger \
-                 lookups across several files. A non-empty `dataModel` or `lookups` section also requires \
+                 the file path prefixed. A file holds at most 25,000 entries in all: data-model entries, lookup values \
+                 (former tables included), permission profiles, saved import mappings and saved views (400 \
+                 VALIDATION_ERROR with code too_big at the largest section otherwise, dry run included): split a \
+                 larger configuration across several files. A non-empty `dataModel` or `lookups` section also requires \
                  `datamodel.manage`, a `uiSettings` section `customization.manage`, and a non-empty \
                  `permissionProfiles` section `profiles.manage`, and a non-empty `importMappings` section \
                  `cis.import` (403 otherwise, dry run included). Saved import mappings are matched by class key and \
@@ -2763,28 +2783,61 @@ mod tests {
         assert!(p.class_permissions[1].view, "edit implies view");
     }
 
-    /// GH#546: the audit rows of an applied import hold sign-ins while they
-    /// are written, so a file carries a bounded number of lookup values.
+    /// GH#546, GH#551: the audit rows of an applied import hold sign-ins
+    /// while they are written, so a file carries a bounded number of entries,
+    /// counted across its sections.
     #[test]
-    fn a_file_with_too_many_lookup_values_is_refused() {
-        let file = |owners: usize| -> ConfigFile {
+    fn a_file_with_too_many_entries_is_refused() {
+        let lookups = |owners: usize| -> Value {
             let values: Vec<Value> =
                 (0..5000).map(|i| serde_json::json!({ "key": format!("v{i}"), "name": "V" })).collect();
             let lists: Vec<Value> =
                 (0..4).map(|n| serde_json::json!({ "key": format!("l{n}"), "name": "L", "values": values })).collect();
             let owners: Vec<Value> =
                 (0..owners).map(|i| serde_json::json!({ "kind": "team", "name": format!("o{i}") })).collect();
-            serde_json::from_value(serde_json::json!({
-                "format": FORMAT, "formatVersion": 1, "lookups": { "lists": lists, "owners": owners }
-            }))
-            .unwrap()
+            serde_json::json!({ "lists": lists, "owners": owners })
         };
-        assert!(check_format(&file(MAX_LOOKUP_VALUES - 20_000)).is_ok());
-        let e = check_format(&file(MAX_LOOKUP_VALUES - 20_000 + 1)).unwrap_err();
-        assert_eq!(e.code, ErrorCode::ValidationError);
-        let d = &e.details.unwrap()[0];
-        assert_eq!((d.field.as_str(), d.code.as_str()), ("lookups", "too_big"));
-        assert!(d.message.starts_with("The file holds 25001 lookup values"), "{}", d.message);
+        let file = |body: Value| -> ConfigFile {
+            let mut file = serde_json::json!({ "format": FORMAT, "formatVersion": 1 });
+            file.as_object_mut().unwrap().extend(body.as_object().unwrap().clone());
+            serde_json::from_value(file).unwrap()
+        };
+        let refused = |f: ConfigFile| {
+            let e = check_format(&f).unwrap_err();
+            assert_eq!(e.code, ErrorCode::ValidationError);
+            let d = e.details.unwrap().remove(0);
+            assert_eq!(d.code, "too_big");
+            (d.field, d.message)
+        };
+
+        assert!(check_format(&file(serde_json::json!({ "lookups": lookups(MAX_ENTRIES - 20_000) }))).is_ok());
+        let (field, message) = refused(file(serde_json::json!({ "lookups": lookups(MAX_ENTRIES - 20_000 + 1) })));
+        assert_eq!(field, "lookups");
+        assert!(message.starts_with("The file holds 25001 entries (lookups: 25001)"), "{message}");
+
+        // The data model counts against the same budget: one class, 20,000
+        // attributes and 4,999 rules fit; another rule, or a lookup value
+        // next to them, does not.
+        let data_model = |rules: usize| -> Value {
+            let attributes: Vec<Value> = (0..20_000)
+                .map(|i| serde_json::json!({ "class": "c", "key": format!("a{i}"), "label": "A", "dataType": "text" }))
+                .collect();
+            let rules: Vec<Value> = (0..rules)
+                .map(|i| serde_json::json!({ "relationshipType": format!("t{i}"), "sourceClass": "c", "targetClass": "c" }))
+                .collect();
+            serde_json::json!({
+                "classes": [{ "key": "c", "name": "C" }], "attributes": attributes, "relationshipRules": rules
+            })
+        };
+        assert!(check_format(&file(serde_json::json!({ "dataModel": data_model(4_999) }))).is_ok());
+        let (field, message) = refused(file(serde_json::json!({ "dataModel": data_model(5_000) })));
+        assert_eq!(field, "dataModel");
+        assert!(message.starts_with("The file holds 25001 entries (dataModel: 25001)"), "{message}");
+        let (field, message) = refused(file(serde_json::json!({
+            "dataModel": data_model(4_999), "lookups": { "owners": [{ "kind": "team", "name": "o" }] }
+        })));
+        assert_eq!(field, "dataModel", "reported at the largest section");
+        assert!(message.contains("(dataModel: 25000, lookups: 1)"), "{message}");
     }
 
     #[test]
@@ -3108,7 +3161,7 @@ mod tests {
 
     /// GH#344: 20,000 owners with the same key, and lists to look through for
     /// the statuses, import within the request timeout. Four lists keep the
-    /// file within `MAX_LOOKUP_VALUES`; the fold of 200 lists, more than a
+    /// file within `MAX_ENTRIES`; the fold of 200 lists, more than a
     /// file may carry, is timed in `legacy`.
     #[tokio::test]
     async fn the_largest_legacy_sections_import_quickly() {
@@ -3556,6 +3609,38 @@ mod tests {
         assert_eq!(names, ["First v1", "v1", "login.failure", "login.failure", "First v3", "v3"]);
         let broken: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_log_verify()").fetch_one(pool).await.unwrap();
         assert_eq!(broken, 0);
+        db.drop().await;
+    }
+
+    /// GH#551: a data model past the entry budget is refused before the
+    /// import touches the database: nothing is created and nothing audited.
+    #[tokio::test]
+    async fn a_data_model_past_the_entry_budget_writes_nothing() {
+        let Some(db) = scratch::database("a_data_model_past_the_entry_budget_writes_nothing").await else { return };
+        let pool = &db.pool;
+        crate::seed::seed_system_rows(pool).await.unwrap();
+        let ctx = RequestContext::system("test", "test");
+        let attributes: Vec<Value> = (0..MAX_ENTRIES)
+            .map(|i| serde_json::json!({ "class": "budget", "key": format!("a{i}"), "label": "A", "dataType": "text" }))
+            .collect();
+        let file: ConfigFile = serde_json::from_value(serde_json::json!({
+            "format": FORMAT, "formatVersion": FORMAT_VERSION,
+            "dataModel": { "classes": [{ "key": "budget", "name": "Budget" }], "attributes": attributes }
+        }))
+        .unwrap();
+        let audit_rows =
+            || async { sqlx::query_scalar::<_, i64>("SELECT count(*) FROM audit_log").fetch_one(pool).await.unwrap() };
+        let before = audit_rows().await;
+        for mode in [ImportMode::DryRun, ImportMode::Apply] {
+            let err = import(pool, &ctx, &file, mode).await.unwrap_err();
+            assert_eq!(err.code, ErrorCode::ValidationError);
+            let d = &err.details.unwrap()[0];
+            assert_eq!((d.field.as_str(), d.code.as_str()), ("dataModel", "too_big"), "{}", d.message);
+        }
+        let classes: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM ci_classes WHERE key = 'budget'").fetch_one(pool).await.unwrap();
+        assert_eq!(classes, 0);
+        assert_eq!(audit_rows().await, before);
         db.drop().await;
     }
 }
