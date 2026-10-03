@@ -813,7 +813,9 @@ pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'sta
             }
         }
     };
-    accept_loop(listener, app, &cfg.http, stop).await;
+    let max_connections = connection_limit(cfg.http.max_concurrent_requests, open_files_limit());
+    tracing::info!(max_connections, "connection limit");
+    accept_loop(listener, app, &cfg.http, max_connections, stop).await;
     // Before the exporter's last pass, so the summary rows leave too.
     refusals.stop().await;
     if let Some(exporter) = exporter {
@@ -833,13 +835,46 @@ pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'sta
 /// Requests one HTTP/2 connection may have open at once (RFC 9113 recommends no fewer than 100).
 const HTTP2_MAX_CONCURRENT_STREAMS: u32 = 100;
 
+/// Connections open at once per request slot (GH#557): room for keep-alive
+/// browsers and proxy pools, while idle or half-sent connections cannot grow
+/// without bound.
+const CONNECTIONS_PER_REQUEST_SLOT: usize = 4;
+/// Share of the open-files limit kept back for the database pool, import
+/// files and logs, and its floor.
+const FD_RESERVE_DIVISOR: u64 = 4;
+const FD_RESERVE_MIN: u64 = 64;
+/// At most one "connection refused" warning per interval.
+const REFUSED_WARN_INTERVAL: Duration = Duration::from_secs(10);
+
+/// Connections the server keeps open at once: `CONNECTIONS_PER_REQUEST_SLOT`
+/// per request slot, and below the open-files limit, so that the listener
+/// never reaches EMFILE and the process keeps descriptors for its own work.
+fn connection_limit(max_concurrent_requests: usize, open_files: Option<u64>) -> usize {
+    let by_slots = max_concurrent_requests.saturating_mul(CONNECTIONS_PER_REQUEST_SLOT);
+    let by_files = open_files.map_or(usize::MAX, |n| {
+        let reserve = (n / FD_RESERVE_DIVISOR).max(FD_RESERVE_MIN);
+        usize::try_from(n.saturating_sub(reserve)).unwrap_or(usize::MAX)
+    });
+    by_slots.min(by_files).clamp(1, tokio::sync::Semaphore::MAX_PERMITS)
+}
+
+/// Soft `RLIMIT_NOFILE` of this process, where the platform shows it.
+fn open_files_limit() -> Option<u64> {
+    let limits = std::fs::read_to_string("/proc/self/limits").ok()?;
+    let line = limits.lines().find(|l| l.starts_with("Max open files"))?;
+    // "Max open files  <soft>  <hard>  files"; "unlimited" means no cap here.
+    line["Max open files".len()..].split_whitespace().next()?.parse().ok()
+}
+
 /// Accepts connections until `shutdown`, then waits for open ones to finish
 /// their current request. axum::serve sets no timer on hyper, which leaves
-/// HTTP/1 header reads unbounded; this loop sets one.
+/// HTTP/1 header reads unbounded; this loop sets one. Past `max_connections`
+/// open connections, new ones are closed at once (GH#557).
 async fn accept_loop(
     listener: TcpListener,
     app: Router,
     http: &crate::config::HttpConfig,
+    max_connections: usize,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) {
     use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
@@ -861,6 +896,9 @@ async fn accept_loop(
         .keep_alive_timeout(Duration::from_secs(20));
 
     let graceful = GracefulShutdown::new();
+    let connections = Arc::new(tokio::sync::Semaphore::new(max_connections));
+    let mut refused: u64 = 0;
+    let mut last_warned: Option<tokio::time::Instant> = None;
     let mut shutdown = std::pin::pin!(shutdown);
     loop {
         let (stream, peer) = tokio::select! {
@@ -875,6 +913,22 @@ async fn accept_loop(
             },
             () = &mut shutdown => break,
         };
+        let Ok(permit) = connections.clone().try_acquire_owned() else {
+            // Closed before any byte is read; the client sees a reset or EOF.
+            drop(stream);
+            refused += 1;
+            if last_warned.is_none_or(|at| at.elapsed() >= REFUSED_WARN_INTERVAL) {
+                tracing::warn!(
+                    max_connections,
+                    refused,
+                    "connections refused: open connection limit reached (4 x HTTP_MAX_CONCURRENT_REQUESTS, \
+                     or the open-files limit)"
+                );
+                last_warned = Some(tokio::time::Instant::now());
+                refused = 0;
+            }
+            continue;
+        };
         let _ = stream.set_nodelay(true);
         // The peer address is the client IP of last resort for the audit trail (auth::session::client_ip).
         let service = app.clone().map_request(move |req: axum::http::Request<hyper::body::Incoming>| {
@@ -888,6 +942,7 @@ async fn accept_loop(
             if let Err(e) = conn.await {
                 tracing::debug!(error = %e, "connection closed with an error");
             }
+            drop(permit);
         });
     }
     drop(listener);
@@ -1315,7 +1370,7 @@ mod tests {
         };
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
         let server = tokio::spawn(async move {
-            accept_loop(listener, app(), &http, async {
+            accept_loop(listener, app(), &http, 16, async {
                 let _ = rx.await;
             })
             .await
@@ -1327,6 +1382,83 @@ mod tests {
         assert!(read.is_ok(), "connection still open after the header read timeout");
         let _ = tx.send(());
         server.await.unwrap();
+    }
+
+    /// GH#557: connections that never finish their headers could pile up
+    /// until the process ran out of file descriptors. Past the limit, new
+    /// connections are closed at once, and closed ones free their place.
+    #[tokio::test]
+    async fn connections_past_the_limit_are_closed_until_one_closes() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let http = crate::config::HttpConfig {
+            header_read_timeout: Duration::from_secs(30),
+            request_timeout: Duration::from_secs(5),
+            max_concurrent_requests: 512,
+        };
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(async move {
+            accept_loop(listener, app(), &http, 2, async {
+                let _ = rx.await;
+            })
+            .await
+        });
+        // Answers the request in full, or None when the server closed the connection unanswered.
+        async fn healthz(addr: std::net::SocketAddr) -> Option<String> {
+            let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+            let _ = stream.write_all(b"GET /healthz HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").await;
+            let mut buf = Vec::new();
+            let read = tokio::time::timeout(Duration::from_secs(3), stream.read_to_end(&mut buf)).await;
+            let read = read.expect("the server neither answered nor closed the connection");
+            (read.is_ok() && !buf.is_empty()).then(|| String::from_utf8_lossy(&buf).into_owned())
+        }
+        let mut slow = Vec::new();
+        for _ in 0..2 {
+            let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+            stream.write_all(b"GET /healthz HTTP/1.1\r\nHost: x\r\n").await.unwrap();
+            slow.push(stream);
+        }
+        // Both places taken by connections that are still sending headers.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(healthz(addr).await, None, "a connection past the limit was served");
+
+        // One slow client leaves; its place is freed for the next client.
+        drop(slow.pop());
+        let mut answer = None;
+        for _ in 0..50 {
+            answer = healthz(addr).await;
+            if answer.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let answer = answer.expect("the freed place was never given to a new connection");
+        assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+
+        drop(slow);
+        let _ = tx.send(());
+        server.await.unwrap();
+    }
+
+    #[test]
+    fn the_connection_limit_follows_request_slots_and_open_files() {
+        // Four per request slot when descriptors are plentiful.
+        assert_eq!(connection_limit(512, Some(1_048_576)), 2048);
+        assert_eq!(connection_limit(512, None), 2048);
+        // A quarter of the open-files limit (at least 64) stays free.
+        assert_eq!(connection_limit(512, Some(1024)), 768);
+        assert_eq!(connection_limit(512, Some(200)), 136);
+        // Never zero, and never more than a semaphore holds.
+        assert_eq!(connection_limit(512, Some(10)), 1);
+        assert_eq!(connection_limit(usize::MAX, None), tokio::sync::Semaphore::MAX_PERMITS);
+    }
+
+    #[test]
+    fn the_open_files_limit_is_read_where_the_platform_shows_it() {
+        if cfg!(target_os = "linux") {
+            assert!(open_files_limit().is_some_and(|n| n > 0));
+        }
     }
 
     /// GH#342: the public body budget grew with HTTP_MAX_CONCURRENT_REQUESTS
