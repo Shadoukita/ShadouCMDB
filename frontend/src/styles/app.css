@@ -1186,6 +1186,17 @@ button.who:hover {
   .global-search {
     min-width: 120px;
   }
+  /* The 16 px icons are wider than the glyphs they replaced; tighten so 320 px still fits. */
+  .new-ci {
+    padding: 0 var(--sp-2);
+  }
+  .user-menu button.who {
+    gap: var(--sp-1);
+  }
+  .user-menu button.who .icon {
+    width: 12px;
+    height: 12px;
+  }
   .user-menu button.who .who-name {
     position: absolute;
     width: 1px;
