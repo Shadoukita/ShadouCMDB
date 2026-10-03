@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { RouterLink } from "vue-router";
 import { STEPS, type WizardStep } from "../../lib/imports";
+import Icon from "../../components/Icon.vue";
 
 /**
  * 1 Upload · 2 Map columns · 3 Check · 4 Import (§1.4): an ordered list, the current step marked with
@@ -18,7 +19,7 @@ defineProps<{ current: WizardStep; last: WizardStep; linkTo: (step: WizardStep) 
         :class="{ current: s.step === current, done: s.step < current, future: s.step > last }"
         :aria-current="s.step === current ? 'step' : undefined"
       >
-        <span class="num" aria-hidden="true">{{ s.step < current ? "✓" : s.step }}</span>
+        <span class="num" aria-hidden="true"><Icon v-if="s.step < current" name="check" :size="14" /><template v-else>{{ s.step }}</template></span>
         <RouterLink v-if="s.step !== current && s.step <= last && linkTo(s.step)" :to="linkTo(s.step)!">
           {{ s.label }}<span v-if="s.step < current" class="sr-only"> (done)</span>
         </RouterLink>

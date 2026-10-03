@@ -7,6 +7,7 @@ import { t } from "../../i18n";
 import { edgeLabel, type ImpactAnalysis } from "../../lib/impact";
 import { affectedServices } from "../../lib/serviceMembers";
 import type { TrailStep } from "../../lib/trail";
+import Icon from "../../components/Icon.vue";
 
 /**
  * The Impact tab's pinned "Affected business services (N)" (spec SHAA-927 §2, §5.7): the result's items of the
@@ -36,7 +37,7 @@ const bodyId = `impact-services-${useId()}`;
   <section v-if="services.length > 0" class="impact-services" :aria-labelledby="`${bodyId}-title`">
     <h3 :id="`${bodyId}-title`" class="impact-services-title">
       <button type="button" class="group-toggle" :aria-expanded="open" :aria-controls="bodyId" @click="open = !open">
-        <span aria-hidden="true">{{ open ? "▾" : "▸" }}</span> {{ t("impact.services.title", { n: services.length }) }}
+        <Icon :name="open ? 'chevron-down' : 'chevron-right'" /> {{ t("impact.services.title", { n: services.length }) }}
       </button>
       <span v-if="incomplete" class="muted impact-services-caveat">· {{ t("impact.services.incomplete", { depth: analysis.parameters.depth }) }}</span>
     </h3>

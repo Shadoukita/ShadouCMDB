@@ -28,6 +28,7 @@ import {
 import type { TrailStep } from "../../lib/trail";
 import { useSessionStore } from "../../stores/session";
 import MemberPickerDialog from "./MemberPickerDialog.vue";
+import SortIcon from "../../components/SortIcon.vue";
 
 /**
  * A business service's Members tab (spec SHAA-927 §5.3): search, Class and Kind filters, sort and page in the URL
@@ -116,7 +117,6 @@ const SORTABLE = [
 ] as const;
 const field = computed(() => state.value.sort.replace(/^-/, ""));
 const ariaSort = (key: string) => (field.value !== key ? "none" : state.value.sort.startsWith("-") ? "descending" : "ascending");
-const indicator = (key: string) => (field.value !== key ? "" : state.value.sort.startsWith("-") ? "▼" : "▲");
 const toggleSort = (key: string) => setState({ sort: (state.value.sort === key ? `-${key}` : key) as MembersState["sort"] });
 
 // ---------- Selection (this page) ----------
@@ -296,12 +296,12 @@ const kindLabel = (m: ServiceMember) => (m.isService ? t("services.badge") : t("
                 />
               </th>
               <th v-for="c in SORTABLE" :key="c.key" scope="col" :aria-sort="ariaSort(c.key)">
-                <button type="button" class="sort" @click="toggleSort(c.key)">{{ c.label() }} {{ indicator(c.key) }}</button>
+                <button type="button" class="sort" @click="toggleSort(c.key)">{{ c.label() }} <SortIcon :dir="ariaSort(c.key)" /></button>
               </th>
               <th scope="col">{{ t("services.members.col.kind") }}</th>
               <th scope="col">{{ t("services.col.active") }}</th>
               <th scope="col" :aria-sort="ariaSort('addedAt')">
-                <button type="button" class="sort" @click="toggleSort('addedAt')">{{ t("services.members.col.added") }} {{ indicator("addedAt") }}</button>
+                <button type="button" class="sort" @click="toggleSort('addedAt')">{{ t("services.members.col.added") }} <SortIcon :dir="ariaSort('addedAt')" /></button>
               </th>
               <th scope="col"><span class="sr-only">{{ t("services.members.col.actions") }}</span></th>
             </tr>

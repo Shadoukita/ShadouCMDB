@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { moveItem } from "../../../lib/reorder";
+import Icon from "../../../components/Icon.vue";
 
 /**
  * An ordered list of fields (list columns, a layout panel's fields): move up or
@@ -27,8 +28,8 @@ const remove = (i: number) => (model.value = model.value.filter((_, j) => j !== 
       <li v-for="(f, i) in model" :key="f">
         <span class="field-list-name">{{ labelOf(f) }} <code class="muted">{{ f }}</code></span>
         <span class="row-actions">
-          <button type="button" class="btn btn-sm" :disabled="i === 0" :aria-label="`Move ${labelOf(f)} up`" @click="move(i, i - 1)">↑</button>
-          <button type="button" class="btn btn-sm" :disabled="i === model.length - 1" :aria-label="`Move ${labelOf(f)} down`" @click="move(i, i + 1)">↓</button>
+          <button type="button" class="btn btn-sm btn-icon" :disabled="i === 0" :aria-label="`Move ${labelOf(f)} up`" @click="move(i, i - 1)"><Icon name="arrow-up" /></button>
+          <button type="button" class="btn btn-sm btn-icon" :disabled="i === model.length - 1" :aria-label="`Move ${labelOf(f)} down`" @click="move(i, i + 1)"><Icon name="arrow-down" /></button>
           <button type="button" class="btn btn-sm" :aria-label="`Remove ${labelOf(f)}`" @click="remove(i)">Remove</button>
         </span>
       </li>
