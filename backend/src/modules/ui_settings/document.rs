@@ -834,9 +834,14 @@ pub const STANDARD_TEMPLATE: &str = "standard";
 pub const STANDARD_TEMPLATE_NAME: &str = "Standard";
 pub const TEMPLATE_NAME_MAX: usize = 100;
 
+/// Largest layout of a template or a CI's own, as stored (normalised) JSON. The database check on
+/// `ci_layout_overrides.layout` (512 KiB, compressed) stays as the backstop.
+pub const LAYOUT_MAX_BYTES: usize = 256 * 1024;
+
 /// A detail page and form layout on its own, without a class: the body of a template and of a CI's own
 /// layout. The same tabs, hidden and read-only fields as a class layout; attribute fields are resolved
-/// against the class of the CI that shows it, and ones the class does not have are left out.
+/// against the class of the CI that shows it, and ones the class does not have are left out. At most 256 KiB
+/// as JSON, counted after the server fills in section frames (400 VALIDATION_ERROR, code `too_large`).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 pub struct UiLayout {
@@ -861,9 +866,18 @@ impl UiLayout {
         self
     }
 
-    /// Structural problems, with field paths below `prefix` (e.g. "layout").
+    /// Structural problems, with field paths below `prefix` (e.g. "layout"), and the size limit.
     pub fn problems(&self, prefix: &str) -> Vec<FieldError> {
-        layout_problems(prefix, &self.tabs, &self.hidden_fields)
+        let mut e = layout_problems(prefix, &self.tabs, &self.hidden_fields);
+        if serde_json::to_vec(&self.clone().normalized()).map_or(usize::MAX, |v| v.len()) > LAYOUT_MAX_BYTES {
+            e.push(FieldError {
+                location: FieldLocation::Body,
+                field: prefix.into(),
+                message: format!("The layout is larger than {} KiB", LAYOUT_MAX_BYTES / 1024),
+                code: "too_large".into(),
+            });
+        }
+        e
     }
 }
 

@@ -2253,7 +2253,7 @@ export interface paths {
         get: operations["getConfigurationItemLayout"];
         /**
          * Give a CI another template or a layout of its own
-         * @description Requires `customization.manage`. Send `templateKey` (a template of the UI settings) or `layout` (for this CI only), not both. Needs `customization.manage` and edit on the CI's class (403 otherwise; 404 for a CI that is missing, deleted or in a class you may not view). Audited (entity type ci_layout_overrides, the CI's id). Saving what the CI already has changes nothing.
+         * @description Requires `customization.manage`. Send `templateKey` (a template of the UI settings) or `layout` (for this CI only), not both. Needs `customization.manage` and edit on the CI's class (403 otherwise; 404 for a CI that is missing, deleted or in a class you may not view). Audited (entity type ci_layout_overrides, the CI's id). Saving what the CI already has changes nothing. A `layout` larger than 256 KiB as JSON is refused (400 VALIDATION_ERROR, field `layout`, code `too_large`).
          */
         put: operations["setConfigurationItemLayout"];
         post?: never;
@@ -5486,7 +5486,8 @@ export interface components {
         /**
          * @description A detail page and form layout on its own, without a class: the body of a template and of a CI's own
          *     layout. The same tabs, hidden and read-only fields as a class layout; attribute fields are resolved
-         *     against the class of the CI that shows it, and ones the class does not have are left out.
+         *     against the class of the CI that shows it, and ones the class does not have are left out. At most 256 KiB
+         *     as JSON, counted after the server fills in section frames (400 VALIDATION_ERROR, code `too_large`).
          */
         UiLayout: {
             /** @default [] */
