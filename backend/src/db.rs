@@ -534,8 +534,10 @@ pub async fn reconcile_and_link(
 /// anything changes. Once 0044 is applied, linking such an account fails and
 /// it cannot sign in.
 pub(crate) async fn refuse_accounts_person_refuses(pool: &PgPool) -> anyhow::Result<()> {
+    // Unqualified: before migration 0008 (v0.1.0-rc.1) the table is in `public`,
+    // and the search_path finds it in either schema.
     let accounts: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT username, email, display_name FROM cmdb.users WHERE email IS NOT NULL ORDER BY lower(username)",
+        "SELECT username, email, display_name FROM users WHERE email IS NOT NULL ORDER BY lower(username)",
     )
     .fetch_all(pool)
     .await?;

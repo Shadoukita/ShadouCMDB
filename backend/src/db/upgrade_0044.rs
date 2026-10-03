@@ -171,7 +171,9 @@ fn long_email() -> String {
 async fn emails_the_person_type_refuses_stop_the_upgrade_with_the_list() {
     let Some(db) = scratch::empty("upgrade_0044_refused_emails").await else { return };
     let pool = &db.pool;
-    MIGRATOR.run_to(43, pool).await.expect("migrations up to 0043");
+    // The oldest release (v0.1.0-rc.1, migration 0006): the accounts are still
+    // in `public`, the `cmdb` schema comes with 0008.
+    MIGRATOR.run_to(6, pool).await.expect("migrations up to 0006");
     sqlx::query(
         "INSERT INTO users (username, display_name, email, password_hash) VALUES
            ('admin', 'Ada Admin', 'Ada.Admin@Acme.test', '$argon2id$x'),
