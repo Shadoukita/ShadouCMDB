@@ -813,3 +813,57 @@ async fn workflows_round_trip_through_the_configuration_file() {
     src.drop().await;
     dst.drop().await;
 }
+
+/// GH#573: a small invalid body cannot answer with tens of thousands of
+/// details. Both bodies are the reproductions of the issue; each answers 100
+/// details plus one `truncated` entry counting the rest.
+#[tokio::test]
+async fn validation_details_are_capped() {
+    use crate::http::error::MAX_DETAILS;
+
+    let Some(db) = scratch::database("workflow_validation_details_capped").await else { return };
+    let w = world(&db).await;
+    let (status, d) = w.call("POST", BASE, Some(json!({ "key": "flow", "name": "Flow", "classId": w.server }))).await;
+    assert_eq!(status, 201, "{d}");
+    let by_id = format!("{BASE}/{}", id(&d));
+    let capped = |v: &Value| {
+        let found = details(v);
+        assert_eq!(found.len(), MAX_DETAILS + 1, "{found:?}");
+        assert_eq!(found[MAX_DETAILS], (String::new(), "truncated".to_owned()));
+        assert!(serde_json::to_vec(v).unwrap().len() < 32 * 1024, "{v}");
+        v["error"]["details"][MAX_DETAILS]["message"].as_str().unwrap().to_owned()
+    };
+
+    // 301 grants × 100 unknown profiles: 30,100 problems.
+    let grants: Vec<Value> =
+        (0..301).map(|i| json!({ "transitionKey": format!("t{i}"), "profiles": vec!["a"; 100] })).collect();
+    let (status, v) = w.call("PUT", &format!("{by_id}/grants"), Some(json!({ "version": 1, "grants": grants }))).await;
+    assert_eq!((status, code(&v)), (400, "VALIDATION_ERROR"), "{v}");
+    assert_eq!(details(&v)[0], ("grants[0].profiles[0]".to_owned(), "not_found".to_owned()));
+    assert_eq!(capped(&v), "30000 more problems not shown");
+
+    // 300 transitions with a condition of 200 leaves naming an unknown field each.
+    let states = json!([
+        { "key": "a", "name": "A", "category": "open", "terminal": false },
+        { "key": "b", "name": "B", "category": "done", "terminal": true }
+    ]);
+    let transitions: Vec<Value> = (0..300)
+        .map(|i| {
+            json!({ "key": format!("t{i}"), "name": "T", "from": "a", "to": "b", "requiresComment": false,
+                "fields": [], "conditions": { "any": vec![json!({ "field": "x" }); 200] } })
+        })
+        .collect();
+    let body = json!({ "initialState": "a", "states": states, "transitions": transitions });
+    let (status, v) = w.call("PUT", &format!("{by_id}/draft"), Some(body)).await;
+    assert_eq!((status, code(&v)), (400, "VALIDATION_ERROR"), "{v}");
+    assert!(capped(&v).ends_with(" more problems not shown"));
+
+    // At the cap nothing is truncated.
+    let grants = json!([{ "transitionKey": "t0", "profiles": vec!["a"; 100] }]);
+    let (status, v) = w.call("PUT", &format!("{by_id}/grants"), Some(json!({ "version": 1, "grants": grants }))).await;
+    assert_eq!(status, 400, "{v}");
+    let found = details(&v);
+    assert_eq!(found.len(), MAX_DETAILS);
+    assert!(found.iter().all(|(_, c)| c == "not_found"), "{found:?}");
+    db.drop().await;
+}

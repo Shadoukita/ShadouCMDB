@@ -33912,7 +33912,8 @@
                     }
                   },
                   "additionalProperties": false
-                }
+                },
+                "description": "At most 100 problems; when there are more, a last entry with code `truncated` counts the rest"
               },
               "requestId": {
                 "type": "string"
