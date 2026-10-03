@@ -2728,6 +2728,268 @@
         ]
       }
     },
+    "/api/v1/configuration-items/change-histogram": {
+      "get": {
+        "tags": [
+          "Configuration items"
+        ],
+        "summary": "Changes per hour or day to the CIs of an inventory query",
+        "description": "Requires `audit.view`. Takes the filters of `listConfigurationItems` and counts, per bucket, the audit log entries on the CIs that match them now: `created` (create), `statusChanged` (an update that changed the `status` attribute, with or without other fields) and `updated` (every other update, deletion and restore). Exports and other read events are not counted. Buckets are aligned to UTC hours or days and every bucket of the range is returned, empty ones included. The range is `from` (inclusive) to `to` (exclusive), at most 7 days with `bucket=hour` and 90 days with `bucket=day` (400 `range_too_large` on `from`; 400 `invalid_range` when `from` is not before `to`). Needs `audit.view`, like the audit log the counts come from; a caller whose profile limits the classes they may view counts only CIs of those classes, and only the entries `listAuditLog` would show them.",
+        "operationId": "getConfigurationItemChangeHistogram",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Start of the range (ISO 8601, inclusive). Default: 24 hours before `to` for hour buckets, 30 days before for day buckets.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "End of the range (ISO 8601, exclusive). Default: now.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "bucket",
+            "in": "query",
+            "description": "Bucket width, aligned to UTC hours or days. hour covers at most 7 days per request, day at most 90 days.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "hour",
+              "enum": [
+                "hour",
+                "day"
+              ]
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Search label, ident and attribute values",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 200,
+              "minLength": 1
+            }
+          },
+          {
+            "name": "classId",
+            "in": "query",
+            "description": "Filter by class (includes subclasses unless includeSubclasses=false)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "includeSubclasses",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "true",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          },
+          {
+            "name": "active",
+            "in": "query",
+            "description": "true: only CIs inside their validity period (validFrom <= now < validUntil); false: only those outside it; all: both",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "true",
+              "enum": [
+                "true",
+                "false",
+                "all"
+              ]
+            }
+          },
+          {
+            "name": "lookupValueId",
+            "in": "query",
+            "description": "Lookup list value ids, comma-separated: CIs holding one of them in a lookup attribute. Values of different lists must all match (status A or B, and environment C).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "ipWithin",
+            "in": "query",
+            "description": "Only CIs with a value of an IP attribute inside this CIDR, e.g. 10.20.0.0/16",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "cidrv4"
+                },
+                {
+                  "type": "string",
+                  "format": "cidrv6"
+                }
+              ]
+            }
+          },
+          {
+            "name": "criticalityValueId",
+            "in": "query",
+            "description": "Criticality value ids, comma-separated: CIs holding one of them",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "deleted",
+            "in": "query",
+            "description": "Soft-deleted CIs: exclude (default), include, or only",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "exclude",
+              "enum": [
+                "exclude",
+                "include",
+                "only"
+              ]
+            }
+          },
+          {
+            "name": "ownLayout",
+            "in": "query",
+            "description": "true: only CIs with a layout of their own (another template or a custom layout, see /configuration-items/{id}/layout); false: only CIs that show their class's default template",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          },
+          {
+            "name": "layoutTemplate",
+            "in": "query",
+            "description": "Only CIs that show this layout template (`layoutTemplates[].key`) as their own layout, not as their class's default",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{0,62}$"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "CIs by the kind of their type: asset, process (records such as change requests) or any. Without it, process records are left out unless their type is named in classId.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "asset",
+                "process",
+                "any"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeHistogram"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
     "/api/v1/configuration-items/{id}": {
       "get": {
         "tags": [
@@ -31273,6 +31535,81 @@
             "type": "integer",
             "format": "int32",
             "description": "The CI's optimistic-locking version (send it to PUT .../owners)"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ChangeHistogram": {
+        "type": "object",
+        "required": [
+          "from",
+          "to",
+          "bucket",
+          "buckets",
+          "total"
+        ],
+        "properties": {
+          "from": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The range counted, as sent or defaulted: `from` inclusive, `to` exclusive"
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "bucket": {
+            "type": "string",
+            "description": "Width of a change histogram bucket.",
+            "enum": [
+              "hour",
+              "day"
+            ]
+          },
+          "buckets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChangeHistogramBucket"
+            },
+            "description": "Every bucket of the range in order, empty ones included. The first starts at `from` rounded down to the\nbucket width and may count only part of its hour or day; so may the last."
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of all counts over all buckets"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ChangeHistogramBucket": {
+        "type": "object",
+        "description": "Changes to the CIs of one bucket. The three counts do not overlap.",
+        "required": [
+          "start",
+          "created",
+          "updated",
+          "statusChanged"
+        ],
+        "properties": {
+          "start": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Start of the bucket (UTC)"
+          },
+          "created": {
+            "type": "integer",
+            "format": "int64",
+            "description": "CIs created"
+          },
+          "updated": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Other changes: updates that leave the status as it was, deletions and restores"
+          },
+          "statusChanged": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Updates that changed the CI's `status` attribute"
           }
         },
         "additionalProperties": false

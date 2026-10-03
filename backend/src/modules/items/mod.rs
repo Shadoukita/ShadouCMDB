@@ -8,9 +8,11 @@ pub use plan::value_schema;
 
 use axum::http::{Method, StatusCode};
 
+use crate::auth::permissions::GlobalPermission;
+
 use crate::api::route::{CheckedBody, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, Query, Route, route};
 use crate::http::error::ErrorCode;
-use schemas::{CreateItemBody, GraphQuery, ListItemsQuery, SearchQuery, UpdateItemBody};
+use schemas::{ChangeHistogramQuery, CreateItemBody, GraphQuery, ListItemsQuery, SearchQuery, UpdateItemBody};
 
 const TAG: &str = "Configuration items";
 const BASE: &str = "/api/v1/configuration-items";
@@ -26,6 +28,16 @@ pub fn routes() -> Vec<Route> {
             )
             .handle(|api, In(NoPath, Query(q), NoBody): In<NoPath, Query<ListItemsQuery>, NoBody>| async move {
                 Ok(Json(service::list(&api.pool, &api.ctx, &q).await?))
+            }),
+        route(Method::GET, "/api/v1/configuration-items/change-histogram", "getConfigurationItemChangeHistogram")
+            .tag(TAG)
+            .summary("Changes per hour or day to the CIs of an inventory query")
+            .description(
+                "Takes the filters of `listConfigurationItems` and counts, per bucket, the audit log entries on the CIs that match them now: `created` (create), `statusChanged` (an update that changed the `status` attribute, with or without other fields) and `updated` (every other update, deletion and restore). Exports and other read events are not counted. Buckets are aligned to UTC hours or days and every bucket of the range is returned, empty ones included. The range is `from` (inclusive) to `to` (exclusive), at most 7 days with `bucket=hour` and 90 days with `bucket=day` (400 `range_too_large` on `from`; 400 `invalid_range` when `from` is not before `to`). Needs `audit.view`, like the audit log the counts come from; a caller whose profile limits the classes they may view counts only CIs of those classes, and only the entries `listAuditLog` would show them.",
+            )
+            .requires(GlobalPermission::AuditView)
+            .handle(|api, In(NoPath, Query(q), NoBody): In<NoPath, Query<ChangeHistogramQuery>, NoBody>| async move {
+                Ok(Json(service::change_histogram(&api.pool, &api.ctx, &q).await?))
             }),
         route(Method::GET, BY_ID, "getConfigurationItem")
             .tag(TAG)

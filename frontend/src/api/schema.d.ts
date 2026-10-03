@@ -407,6 +407,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/configuration-items/change-histogram": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Changes per hour or day to the CIs of an inventory query
+         * @description Requires `audit.view`. Takes the filters of `listConfigurationItems` and counts, per bucket, the audit log entries on the CIs that match them now: `created` (create), `statusChanged` (an update that changed the `status` attribute, with or without other fields) and `updated` (every other update, deletion and restore). Exports and other read events are not counted. Buckets are aligned to UTC hours or days and every bucket of the range is returned, empty ones included. The range is `from` (inclusive) to `to` (exclusive), at most 7 days with `bucket=hour` and 90 days with `bucket=day` (400 `range_too_large` on `from`; 400 `invalid_range` when `from` is not before `to`). Needs `audit.view`, like the audit log the counts come from; a caller whose profile limits the classes they may view counts only CIs of those classes, and only the entries `listAuditLog` would show them.
+         */
+        get: operations["getConfigurationItemChangeHistogram"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/configuration-items/{id}": {
         parameters: {
             query?: never;
@@ -3313,6 +3333,53 @@ export interface components {
              * @description The CI's optimistic-locking version (send it to PUT .../owners)
              */
             version: number;
+        };
+        ChangeHistogram: {
+            /**
+             * Format: date-time
+             * @description The range counted, as sent or defaulted: `from` inclusive, `to` exclusive
+             */
+            from: string;
+            /** Format: date-time */
+            to: string;
+            /**
+             * @description Width of a change histogram bucket.
+             * @enum {string}
+             */
+            bucket: "hour" | "day";
+            /**
+             * @description Every bucket of the range in order, empty ones included. The first starts at `from` rounded down to the
+             *     bucket width and may count only part of its hour or day; so may the last.
+             */
+            buckets: components["schemas"]["ChangeHistogramBucket"][];
+            /**
+             * Format: int64
+             * @description Sum of all counts over all buckets
+             */
+            total: number;
+        };
+        /** @description Changes to the CIs of one bucket. The three counts do not overlap. */
+        ChangeHistogramBucket: {
+            /**
+             * Format: date-time
+             * @description Start of the bucket (UTC)
+             */
+            start: string;
+            /**
+             * Format: int64
+             * @description CIs created
+             */
+            created: number;
+            /**
+             * Format: int64
+             * @description Other changes: updates that leave the status as it was, deletions and restores
+             */
+            updated: number;
+            /**
+             * Format: int64
+             * @description Updates that changed the CI's `status` attribute
+             */
+            statusChanged: number;
         };
         CiClass: {
             /** Format: uuid */
@@ -8462,6 +8529,108 @@ export interface operations {
             };
             /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getConfigurationItemChangeHistogram: {
+        parameters: {
+            query?: {
+                /** @description Start of the range (ISO 8601, inclusive). Default: 24 hours before `to` for hour buckets, 30 days before for day buckets. */
+                from?: string;
+                /** @description End of the range (ISO 8601, exclusive). Default: now. */
+                to?: string;
+                /** @description Bucket width, aligned to UTC hours or days. hour covers at most 7 days per request, day at most 90 days. */
+                bucket?: "hour" | "day";
+                /** @description Search label, ident and attribute values */
+                q?: string;
+                /** @description Filter by class (includes subclasses unless includeSubclasses=false) */
+                classId?: string;
+                includeSubclasses?: "true" | "false";
+                /** @description true: only CIs inside their validity period (validFrom <= now < validUntil); false: only those outside it; all: both */
+                active?: "true" | "false" | "all";
+                /** @description Lookup list value ids, comma-separated: CIs holding one of them in a lookup attribute. Values of different lists must all match (status A or B, and environment C). */
+                lookupValueId?: string;
+                /** @description Only CIs with a value of an IP attribute inside this CIDR, e.g. 10.20.0.0/16 */
+                ipWithin?: string;
+                /** @description Criticality value ids, comma-separated: CIs holding one of them */
+                criticalityValueId?: string;
+                /** @description Soft-deleted CIs: exclude (default), include, or only */
+                deleted?: "exclude" | "include" | "only";
+                /** @description true: only CIs with a layout of their own (another template or a custom layout, see /configuration-items/{id}/layout); false: only CIs that show their class's default template */
+                ownLayout?: "true" | "false";
+                /** @description Only CIs that show this layout template (`layoutTemplates[].key`) as their own layout, not as their class's default */
+                layoutTemplate?: string;
+                /** @description CIs by the kind of their type: asset, process (records such as change requests) or any. Without it, process records are left out unless their type is named in classId. */
+                kind?: "asset" | "process" | "any";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeHistogram"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };

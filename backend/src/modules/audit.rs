@@ -312,7 +312,7 @@ const STORED_VALUES: &str = "notMappedValues";
 /// subplan per query, not as a lookup per audit row. Ids inside the values are
 /// compared as text, in the form the API writes them (`uuid::text`), which
 /// spares a cast per row; anything else matches nothing and counts as hidden.
-fn push_visible(qb: &mut QueryBuilder<Postgres>, visible: &[Uuid]) {
+pub(crate) fn push_visible(qb: &mut QueryBuilder<Postgres>, visible: &[Uuid]) {
     let texts: Vec<String> = visible.iter().map(Uuid::to_string).collect();
     qb.push(
         "(entity_type NOT IN ('configuration_items', 'ci_relationships') OR (entity_type = 'configuration_items' \
