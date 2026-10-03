@@ -1,6 +1,6 @@
 import type { APIRequestContext, Browser, Page, Route } from "@playwright/test";
 import { readFile } from "node:fs/promises";
-import { apiGet, apiSend, at, checkA11y, expect, snap, test } from "./support";
+import { apiGet, apiSend, at, checkA11y, expect, snap, test, chooseTheme } from "./support";
 
 // Impact analysis (v0.3.0, the Impact tab of a CI): the e2e plan §6.3 and the axe checks §6.4 of the SHAA-883 spec.
 // The data is the spec's own, under a stamp: a root "db" that three apps depend on (one of them twice), a fourth app
@@ -135,12 +135,12 @@ test("2. the Impact tab lists the affected CIs, grouped by class, then by critic
   await groupHeaders(page).toEqual(["Critical (1)", "High (1)", "Not set (3)"]);
   await snap(page, "impact-list-by-criticality");
   // The criticality badges keep AA contrast in the dark theme too.
-  await page.getByLabel("Theme").selectOption("dark");
+  await chooseTheme(page, "dark");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await expect(page.locator("#impact-view-panel")).toHaveAttribute("aria-busy", "false");
   await checkA11y(page, testInfo, "impact-list-dark", { include: ".impact", strict: true });
   await snap(page, "impact-list-dark");
-  await page.getByLabel("Theme").selectOption("");
+  await chooseTheme(page, "");
   // A group collapses and opens from its header.
   const critical = page.getByRole("button", { name: "Critical (1)" });
   await critical.click();

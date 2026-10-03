@@ -1,5 +1,5 @@
 import { E2E_USER } from "./global-setup";
-import { at, expect, snap, test } from "./support";
+import { at, expect, snap, test, signOut } from "./support";
 
 test.describe("signed out", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
@@ -23,9 +23,9 @@ test.describe("signed out", () => {
     await page.getByRole("button", { name: "Sign in" }).click();
     await expect(page).toHaveURL(at("/cis", "?q=crm"));
     await expect(page.locator("#f-q")).toHaveValue("crm");
-    await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
+    await expect(page.locator(".user-menu button.who")).toBeVisible();
 
-    await page.getByRole("button", { name: "Sign out" }).click();
+    await signOut(page);
     await expect(page).toHaveURL(/\/login$/);
     await expect(page.getByText("Your session has ended")).toHaveCount(0);
     await page.goto("/");

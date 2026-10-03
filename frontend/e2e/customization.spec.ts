@@ -1,5 +1,5 @@
 import type { APIRequestContext, Page } from "@playwright/test";
-import { apiGet, ciIdByName, classIdByName, createCi, csrf, expect, fieldLabels, resetUiSettings as resetSettings, saveCi, saveLayout, snap, test } from "./support";
+import { apiGet, ciIdByName, classIdByName, createCi, csrf, expect, fieldLabels, resetUiSettings as resetSettings, saveCi, saveLayout, snap, test, chooseTheme } from "./support";
 
 // Administration › Customization and Export / import, against the demo seed (the Server class
 // and its attributes). The settings apply to every user, so the walk starts from and ends with
@@ -84,10 +84,10 @@ test("branding: name, colour, theme and logo apply app-wide and on the sign-in p
   expect(vars).toEqual({ theme: "dark", primary: PRIMARY });
 
   // A user's own theme choice wins over the default, and survives a reload.
-  await page.getByLabel("Theme").selectOption("light");
+  await chooseTheme(page, "light");
   await page.reload();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
-  await page.getByLabel("Theme").selectOption("");
+  await chooseTheme(page, "");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
 
   const anon = await browser.newContext({ storageState: { cookies: [], origins: [] } });

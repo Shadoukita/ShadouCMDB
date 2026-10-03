@@ -1,7 +1,7 @@
 import type { Locator, Page } from "@playwright/test";
 import { de } from "../src/i18n/de";
 import { en, type MessageKey } from "../src/i18n/en";
-import { checkA11y, expect, resetUiSettings, test } from "./support";
+import { checkA11y, expect, openUserMenu, resetUiSettings, test } from "./support";
 
 // The app shell, the dashboard and the shared components take every text from the message catalog
 // (SHAA-1460). With the test-only German locale forced, none of their English texts may show: a
@@ -43,7 +43,9 @@ test("the shell and the dashboard are German with the German catalog", async ({ 
   await expect(page.getByRole("navigation", { name: "Navigationspfad" })).toBeVisible();
   // Exact: the dashboard's own "+ Neues CI" button would otherwise match too.
   await expect(page.getByRole("banner").getByRole("link", { name: "Neues CI", exact: true })).toBeVisible();
+  await openUserMenu(page);
   await expect(page.getByRole("button", { name: "Abmelden", exact: true })).toBeVisible();
+  await expect(page.getByLabel("Dichte")).toBeVisible();
   await expect(page.getByLabel("Configuration Items durchsuchen")).toHaveAttribute("placeholder", /^CIs nach Bezeichnung/);
   await expectNoEnglish(page.locator("body"));
   await checkA11y(page, testInfo, "dashboard-de");

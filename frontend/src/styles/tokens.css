@@ -109,7 +109,8 @@
   --cell-px: 8px; /* table cell inline padding */
   --panel-p: 14px; /* panel body padding */
   --header-h: 48px;
-  --sidebar-w: 200px;
+  --sidebar-w: 232px; /* the labelled nav */
+  --rail-w: 56px; /* the nav collapsed to icons */
 
   --ls-overline: 0.04em;
 

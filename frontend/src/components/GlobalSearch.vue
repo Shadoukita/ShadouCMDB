@@ -4,6 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import { useSearch } from "../api/queries";
 import { t } from "../i18n";
 import { useDebounced } from "../lib/composables";
+import Icon from "./Icon.vue";
 
 /**
  * Header search. Type-ahead shows the top ranked hits from GET /search;
@@ -79,6 +80,7 @@ onBeforeUnmount(() => clearTimeout(closeTimer));
 <template>
   <form class="global-search combo" role="search" @submit.prevent="onSubmit">
     <label for="global-search" class="sr-only">{{ t("globalSearch.label") }}</label>
+    <Icon name="search" class="global-search-icon" />
     <input
       id="global-search"
       ref="input"
@@ -95,7 +97,8 @@ onBeforeUnmount(() => clearTimeout(closeTimer));
       @blur="onBlur"
       @keydown="onKeydown"
     />
-    <ul v-if="open && q" id="global-search-list" class="combo-list" role="listbox" style="width: 100%">
+    <kbd v-if="!text" class="global-search-kbd" aria-hidden="true">/</kbd>
+    <ul v-if="open && q" id="global-search-list" class="combo-list" role="listbox">
       <li v-if="isError" class="note">{{ t("globalSearch.failed") }}</li>
       <li v-else-if="hits.length === 0" class="note">{{ isFetching ? t("common.searching") : t("globalSearch.noMatch", { q }) }}</li>
       <li
@@ -107,16 +110,15 @@ onBeforeUnmount(() => clearTimeout(closeTimer));
         @mousedown.prevent="go(`/cis/${h.item.id}`)"
         @mouseenter="active = i"
       >
-        <strong dir="auto">{{ h.item.label }}</strong>
-        <span class="muted" dir="auto">{{ h.item.class.name }}</span>
-        <span v-if="h.matches[0]" class="muted">
+        <span class="hit-name" dir="auto">{{ h.item.label }}</span>
+        <span class="hit-class" dir="auto">{{ h.item.class.name }}</span>
+        <span v-if="h.matches[0]" class="hit-match">
           <bdi>{{ h.matches[0].label }}</bdi>: <span class="mono" dir="auto">{{ h.matches[0].value }}</span>
         </span>
       </li>
       <li
         v-if="data && data.page.total > hits.length"
-        class="note"
-        style="cursor: pointer"
+        class="note see-all"
         @mousedown.prevent="go(`/search?q=${encodeURIComponent(q)}`)"
       >
         {{ t("globalSearch.seeAll", { n: data.page.total }) }}
