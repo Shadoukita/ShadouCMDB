@@ -6,6 +6,7 @@ import { useDebounced } from "../lib/composables";
 /**
  * Type-ahead picker for a configuration item. Queries the API server-side
  * (optionally restricted to a class and its subclasses); never loads the inventory.
+ * The `selected` slot renders the chosen CI's name (a CI page makes it a link).
  */
 const props = withDefaults(
   defineProps<{
@@ -82,7 +83,7 @@ onBeforeUnmount(() => clearTimeout(closeTimer));
 
 <template>
   <div v-if="selected" class="checkbox-row">
-    <strong>{{ selected.name }}</strong>
+    <strong><slot name="selected" :selected="selected">{{ selected.name }}</slot></strong>
     <button type="button" class="btn btn-sm" :aria-label="`Clear ${selected.name}`" @click="emit('select', null)">Change</button>
   </div>
   <div v-else class="combo">

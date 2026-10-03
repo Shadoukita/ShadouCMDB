@@ -72,7 +72,7 @@ const orphanKeys = computed(() => {
         <div v-else-if="draft" class="panel-body">
           <div :class="gridClass(p.columns)">
             <template v-for="{ field: f, width } in p.fields" :key="f">
-              <CiFieldInput v-if="draft.editable(f)" :draft="draft" :f="f" :width="width" :columns="p.columns" />
+              <CiFieldInput v-if="draft.editable(f)" :draft="draft" :f="f" :width="width" :columns="p.columns" :ci="ci" :self="self" :trail="trail" />
               <div v-else :class="['field', 'field-ro', cellClass(width, p.columns)]" :data-field="f">
                 <span :id="roId(f)" class="label">{{ fieldLabel(f, defs) }}</span>
                 <div class="ro-value" role="group" :aria-labelledby="roId(f)">

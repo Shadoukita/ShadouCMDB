@@ -1,6 +1,9 @@
 <script setup lang="ts">
+import type { Ci } from "../../api/queries";
 import AttributeInput from "../../components/AttributeInput.vue";
+import CiLink from "../../components/CiLink.vue";
 import { nowFormValue, NOW_HINT } from "../../lib/attributeValues";
+import type { TrailStep } from "../../lib/trail";
 import { BUILTIN, cellClass } from "../../lib/uiSettings";
 import type { CiDraft } from "./ciDraft";
 import { FIELD_IDS } from "./ciDraft";
@@ -9,8 +12,15 @@ import FormField from "./FormField.vue";
 /**
  * One field of a CI draft (ciDraft.ts) as an input with its label, hint and error: a core field or a class
  * attribute. A field the draft may not change is shown disabled. `width`/`columns` place it on the layout grid.
+ *
+ * On a CI page (`ci`) a chosen reference is a link to that CI, unless it is the stored one the user may not view.
  */
-defineProps<{ draft: CiDraft; f: string; width?: number; columns?: number }>();
+const props = defineProps<{ draft: CiDraft; f: string; width?: number; columns?: number; ci?: Ci; self?: TrailStep; trail?: TrailStep[] }>();
+function linkable(key: string, id: string): boolean {
+  if (!props.ci) return false;
+  const stored = props.ci.attributeReferences[key];
+  return !(stored?.hidden && (props.ci.attributes as Record<string, unknown>)[key] === id);
+}
 </script>
 
 <template>
@@ -18,6 +28,7 @@ defineProps<{ draft: CiDraft; f: string; width?: number; columns?: number }>();
     v-if="BUILTIN.has(f)"
     :id="FIELD_IDS[f]"
     v-slot="p"
+    :data-field="f"
     :class="width ? cellClass(width, columns) : undefined"
     :label="BUILTIN.get(f)!.label"
     :error="draft.coreError(f)"
@@ -64,6 +75,7 @@ defineProps<{ draft: CiDraft; f: string; width?: number; columns?: number }>();
     v-else-if="draft.defFor(f)"
     :id="`attr-${draft.defFor(f)!.key}`"
     v-slot="p"
+    :data-field="f"
     :class="width ? cellClass(width, columns) : undefined"
     :label="draft.defFor(f)!.label"
     :required="draft.defFor(f)!.isRequired"
@@ -80,7 +92,12 @@ defineProps<{ draft: CiDraft; f: string; width?: number; columns?: number }>();
         :reference-name="draft.refNames[draft.defFor(f)!.key]"
         :lookup-parent="draft.lookupParent(draft.defFor(f)!)"
         @reference-name="(name) => (draft.refNames[draft.defFor(f)!.key] = name)"
-      />
+      >
+        <template v-if="ci" #reference="{ selected }">
+          <CiLink v-if="linkable(draft.defFor(f)!.key, selected.id)" :id="selected.id" :from="self" :trail="trail">{{ selected.name }}</CiLink>
+          <template v-else>{{ selected.name }}</template>
+        </template>
+      </AttributeInput>
     </fieldset>
   </FormField>
 </template>

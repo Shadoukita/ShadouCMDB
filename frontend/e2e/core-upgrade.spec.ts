@@ -1,6 +1,5 @@
 import { readFileSync } from "node:fs";
-import type { Page } from "@playwright/test";
-import { apiGet, apiSend, expect, snap, test } from "./support";
+import { apiGet, apiSend, expect, shownValue, snap, test } from "./support";
 
 // An instance upgraded in place from a release before migration 0016 (barebone CI core), seen
 // through the UI: every value the old fixed CI columns held (name, status, environment, owner,
@@ -72,12 +71,6 @@ function formerFields(ci: OldCi): [label: string, text: string][] {
   return fields.filter((f): f is [string, string] => f[1] != null);
 }
 
-const detailValue = (page: Page, label: string) =>
-  page
-    .locator(".layout-container dt")
-    .filter({ hasText: new RegExp(`^${label}$`) })
-    .locator("+ dd");
-
 test('every former fixed field shows on the detail page as a class field; no "Other" section', async ({ page }) => {
   for (const ci of seeded) {
     await page.goto(`/cis/${ci.id}`);
@@ -86,12 +79,13 @@ test('every former fixed field shows on the detail page as a class field; no "Ot
     const sections = page.locator(".layout-container details > summary h2");
     await expect(sections.filter({ hasText: /^General$/ })).toHaveCount(1);
     await expect(sections.filter({ hasText: /^Other$/ })).toHaveCount(0);
-    await expect(detailValue(page, "Ident")).toHaveText(/^CI-[0-9A-HJKMNP-TV-Z]{8}$/);
-    await expect(detailValue(page, "Valid until")).toHaveText("Open-ended");
-    await expect(detailValue(page, "Active")).toHaveText("Active");
+    // The page opens with the values in their inputs (SHAA-1644); an empty valid until is open-ended.
+    await expect.poll(() => shownValue(page, "Ident")).toMatch(/^CI-[0-9A-HJKMNP-TV-Z]{8}$/);
+    await expect.poll(() => shownValue(page, "Valid until")).toBe("");
+    await expect.poll(() => shownValue(page, "Active")).toBe("Active");
     for (const [label, text] of formerFields(ci)) {
       // Notes keep their line breaks; the page may lay them out on separate lines.
-      await expect(detailValue(page, label), `${ci.name}: ${label}`).toHaveText(text.replace(/\n/g, " ").trim());
+      await expect.poll(() => shownValue(page, label), { message: `${ci.name}: ${label}` }).toBe(text.replace(/\s+/g, " ").trim());
     }
   }
   await page.goto(`/cis/${server().id}`);
@@ -116,7 +110,7 @@ test("the CI is labelled by its former name in the inventory, search and referen
   await page.goto(`/cis/${app.id}`);
   await expect(page.locator("table").getByRole("link", { name: server().name, exact: true })).toBeVisible();
   await page.goto(`/cis/${server().id}`);
-  await expect(detailValue(page, "primary app")).toHaveText(app.name!);
+  await expect.poll(() => shownValue(page, "primary app")).toBe(app.name!);
 });
 
 test("the class's title attribute is the migrated Name field", async ({ page }) => {
