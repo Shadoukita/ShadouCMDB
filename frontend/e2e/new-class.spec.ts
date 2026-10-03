@@ -51,13 +51,13 @@ test("a new CI class works end to end without a frontend change", async ({ page,
   const created = await apiGet<{ ident: string; label: string }>(request, `/configuration-items/${page.url().split("/").pop()}`);
   expect(created.label).toBe(created.ident);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(created.ident);
-  const attrs = page.locator(".layout-panels");
-  await expect(attrs).toContainText("10.30.0.10");
-  await expect(attrs).toContainText("least_conn");
-  await expect(attrs).toContainText("5000");
-  await expect(attrs).toContainText("10.30.0.0/24");
-  await expect(attrs).toContainText("Yes");
+  // The CI page opens with the values in their inputs; the reference links to the CI it names.
+  await expect(page.locator("#attr-vip")).toHaveValue("10.30.0.10");
+  await expect(page.locator("#attr-algorithm")).toHaveValue("least_conn");
+  await expect(page.locator("#attr-max_connections")).toHaveValue("5000");
+  await expect(page.locator("#attr-vip_network")).toHaveValue("10.30.0.0/24");
+  await expect(page.locator("#attr-ssl_offload")).toHaveValue("true");
   await snap(page, "14-new-class-detail");
-  await attrs.getByRole("link", { name: "fra1-esx-01" }).click();
+  await page.locator(".layout-panels").getByRole("link", { name: "fra1-esx-01" }).click();
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("fra1-esx-01");
 });

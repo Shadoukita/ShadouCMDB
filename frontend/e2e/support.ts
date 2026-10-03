@@ -137,9 +137,40 @@ export async function createCi(
 
 /** Picks a CI in a CiPicker combobox by typing and clicking the option whose name matches exactly. */
 export async function pickCi(page: Page, inputSelector: string, search: string, name: string) {
-  await page.locator(inputSelector).fill(search);
-  const option = page.getByRole("option").filter({ has: page.getByText(name, { exact: true }) });
+  const input = page.locator(inputSelector);
+  await input.fill(search);
+  // The picker's own list (aria-controls): a CI page's dropdowns hold options of their own.
+  const list = page.locator(`#${await input.getAttribute("aria-controls")}`);
+  const option = list.getByRole("option").filter({ has: page.getByText(name, { exact: true }) });
   await option.first().click();
+}
+
+// A CI page's fields (SHAA-1644): inputs where the user may change them, values shown read-only otherwise.
+/** The labels of the fields in `scope`, in order (a required field's label ends in its asterisk). */
+export const fieldLabels = (scope: Locator) => scope.locator(".field > label, .field > .label");
+/** The value of a read-only field (`attributes.<key>` or a core field such as `active`). */
+export const roValue = (scope: Page | Locator, field: string) => scope.locator(`.field-ro[data-field='${field}'] .ro-value`);
+/**
+ * What a CI page shows for the field labelled `label`, normalized: a read-only value's text, an input's value,
+ * a select's chosen option or a reference picker's chosen CI ("" when not set).
+ */
+export async function shownValue(page: Page, label: string): Promise<string> {
+  const name = new RegExp(`^\\s*${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\*?\\s*$`);
+  const field = page.locator(".layout-container .field").filter({ has: page.locator("label, .label").filter({ hasText: name }) });
+  const text = await field.first().evaluate((el) => {
+    const ro = el.querySelector(".ro-value");
+    if (ro) return ro.textContent ?? "";
+    const select = el.querySelector("select");
+    if (select) return select.value ? (select.selectedOptions[0]?.text ?? "") : "";
+    const picked = el.querySelector(".checkbox-row strong");
+    if (picked) return picked.textContent ?? "";
+    return el.querySelector<HTMLInputElement | HTMLTextAreaElement>("input, textarea")?.value ?? "";
+  });
+  return text.replace(/\s+/g, " ").trim();
+}
+/** Saves the changes made on a CI page with the Save button of its unsaved-changes bar. */
+export async function saveCi(page: Page) {
+  await page.getByRole("region", { name: "Unsaved changes" }).getByRole("button", { name: "Save", exact: true }).click();
 }
 
 /**

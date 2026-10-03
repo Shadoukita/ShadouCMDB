@@ -1,5 +1,5 @@
 import type { Browser, Page } from "@playwright/test";
-import { apiGet, apiSend, expect, snap, test } from "./support";
+import { apiGet, apiSend, expect, fieldLabels, roValue, saveCi, snap, test } from "./support";
 
 // The barebone CI core every class shares: a General section with ident, valid from and valid
 // until, then the class's own attributes; validity decides whether a CI is active; date inputs
@@ -84,10 +84,10 @@ test("new CI: General first, valid from is now, double-click fills dates in", as
   expect(ci).toMatchObject({ label: code, validUntil: null, active: true });
   expect(ci.attributes.purchased).toBe((await localNow(page)).slice(0, 10));
   const general2 = page.locator(".layout-panels > details").first();
-  await expect(general2.locator("dt")).toHaveText(["Ident", "Valid from", "Valid until", "Active", "Criticality", "Code"]);
-  await expect(general2.locator("dt", { hasText: "Valid until" }).locator("+ dd")).toHaveText("Open-ended");
-  await expect(general2.locator("dt", { hasText: "Criticality" }).locator("+ dd")).toHaveText("Not set");
-  await expect(general2.locator("dt", { hasText: "Active" }).locator("+ dd")).toHaveText("Active");
+  await expect(fieldLabels(general2)).toHaveText(["Ident", /^Valid from/, "Valid until", "Active", "Criticality", /^Code/]);
+  await expect(general2.locator("#f-valid-until")).toHaveValue("");
+  await expect(general2.locator("#f-criticality")).toHaveValue("");
+  await expect(roValue(general2, "active")).toHaveText("Active");
   await expect(page.locator(".layout-panels > details > summary h2")).toHaveText(["General", "Lifecycle", "Record"]);
 });
 
@@ -119,24 +119,23 @@ test("validity: lists hide inactive CIs by default and say when an active one de
 
   await page.goto(`/cis/${scheduledId}`);
   await expect(page.locator(".page-header .badge.warn")).toHaveText(/Deactivates on/);
-  const active = page.locator(".layout-panels dt", { hasText: "Active" }).locator("+ dd");
+  const active = roValue(page, "active");
   await expect(active).toHaveText(/^Active\s*· deactivates on/);
 
-  // Valid until may not precede valid from: the API's error lands next to the field.
-  await page.getByRole("link", { name: "Edit", exact: true }).click();
+  // Valid until may not precede valid from: the API's error lands next to the field, on the CI page itself.
   await page.locator("#f-valid-until").fill("2020-01-01T00:00");
-  await page.getByRole("button", { name: "Save changes" }).click();
+  await saveCi(page);
   await expect(page.locator("#f-valid-until")).toHaveAttribute("aria-invalid", "true");
   await expect(page.locator("#f-valid-until-err")).toBeVisible();
   // A validity period in the past deactivates the CI at once.
   await page.locator("#f-valid-from").fill("2019-01-01T00:00");
-  await page.getByRole("button", { name: "Save changes" }).click();
+  await saveCi(page);
+  await expect(page.getByRole("region", { name: "Unsaved changes" })).toHaveCount(0);
   await expect(page).toHaveURL(new RegExp(`/cis/${scheduledId}$`));
   await expect(page.locator(".page-header .badge.off")).toHaveText("Inactive");
   // Emptying valid until makes the CI open-ended and active again.
-  await page.getByRole("link", { name: "Edit", exact: true }).click();
   await page.locator("#f-valid-until").fill("");
-  await page.getByRole("button", { name: "Save changes" }).click();
+  await saveCi(page);
   await expect(page.getByRole("status").filter({ hasText: "Saved" })).toBeVisible();
   await expect(page.locator(".page-header .badge.off")).toHaveCount(0);
   await expect(active).toHaveText("Active");
