@@ -2085,12 +2085,24 @@ pub async fn import(
     check_format(file)?;
     check_sections(ctx, file)?;
     let mut tx = pool.begin().await?;
-    let (result, schema_changes) = engine::collect_previews(run(&mut tx, ctx, file, mode)).await;
+    // Audit rows lock the audit chain head until commit, which would stall
+    // every sign-in for the whole import (GH#500): a dry run writes none, and
+    // an apply writes them all at the end. Boxed: the import future is too
+    // large to sit on a test thread's stack inside the audit scope.
+    let run = Box::pin(engine::collect_previews(run(&mut tx, ctx, file, mode)));
+    let ((result, schema_changes), audit) = match mode {
+        ImportMode::DryRun => (crud::discard_audit(run).await, None),
+        ImportMode::Apply => {
+            let (out, audit) = crud::hold_audit(run).await;
+            (out, Some(audit))
+        }
+    };
     let mut result = result?;
     result.schema_changes = schema_changes;
-    match mode {
-        ImportMode::DryRun => tx.rollback().await?,
-        ImportMode::Apply => {
+    match audit {
+        None => tx.rollback().await?,
+        Some(audit) => {
+            audit.write(&mut tx).await?;
             tx.commit().await?;
             result.applied = true;
         }
@@ -3418,5 +3430,83 @@ mod tests {
 
         src.drop().await;
         dst.drop().await;
+    }
+
+    /// GH#500: an import used to write its audit rows as it went, and every
+    /// audit row locks the chain head until commit, so a sign-in waited for
+    /// the whole import, dry run included. The import is stopped part-way (a
+    /// row lock on the second list) after it changed the first list; a
+    /// sign-in's audit row must still be written meanwhile.
+    #[tokio::test]
+    async fn an_import_does_not_hold_up_sign_ins() {
+        let Some(db) = scratch::database("an_import_does_not_hold_up_sign_ins").await else { return };
+        let pool = &db.pool;
+        let ctx = RequestContext::system("test", "test");
+        crate::seed::seed_system_rows(pool).await.unwrap();
+        let file = |second: &str| -> ConfigFile {
+            serde_json::from_value(serde_json::json!({
+                "format": FORMAT,
+                "formatVersion": FORMAT_VERSION,
+                "lookups": { "lists": [
+                    { "key": "first", "name": format!("First {second}"), "values": [{ "key": "a", "name": "A" }] },
+                    { "key": "second", "name": second }
+                ] }
+            }))
+            .unwrap()
+        };
+        import(pool, &ctx, &file("v1"), ImportMode::Apply).await.unwrap();
+
+        for (mode, name) in [(ImportMode::DryRun, "v2"), (ImportMode::Apply, "v3")] {
+            let mut blocker = pool.begin().await.unwrap();
+            let blocker_pid: i32 =
+                sqlx::query_scalar("SELECT pg_backend_pid()").fetch_one(&mut *blocker).await.unwrap();
+            sqlx::query("SELECT 1 FROM lookup_lists WHERE key = 'second' FOR UPDATE")
+                .execute(&mut *blocker)
+                .await
+                .unwrap();
+            let running = tokio::spawn({
+                let (pool, ctx, file) = (pool.clone(), ctx.clone(), file(name));
+                async move { import(&pool, &ctx, &file, mode).await }
+            });
+            // Wait until the import is stuck on the second list.
+            let mut waits = 0;
+            while !sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1 = ANY (pg_blocking_pids(pid)))",
+            )
+            .bind(blocker_pid)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+            {
+                waits += 1;
+                assert!(waits < 200, "{mode:?}: the import never reached the second list");
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+
+            let mut login = pool.begin().await.unwrap();
+            sqlx::query("SET LOCAL lock_timeout = '2s'").execute(&mut *login).await.unwrap();
+            crate::auth::events::login_failure(&mut login, &ctx, "someone", None)
+                .await
+                .unwrap_or_else(|e| panic!("{mode:?}: a sign-in waited for the import: {e}"));
+            login.commit().await.unwrap();
+
+            blocker.commit().await.unwrap();
+            let result = running.await.unwrap().unwrap();
+            assert_eq!(result.applied, mode == ImportMode::Apply);
+        }
+
+        // The apply's rows were written at the end, after the sign-in's, and
+        // the dry run's not at all.
+        let names: Vec<String> = sqlx::query_scalar(
+            "SELECT coalesce(new_value->>'name', action) FROM audit_log
+             WHERE entity_type = 'lookup_lists' OR action = 'login.failure' ORDER BY chain_seq",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        assert_eq!(names, ["First v1", "v1", "login.failure", "login.failure", "First v3", "v3"]);
+        let broken: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_log_verify()").fetch_one(pool).await.unwrap();
+        assert_eq!(broken, 0);
+        db.drop().await;
     }
 }
