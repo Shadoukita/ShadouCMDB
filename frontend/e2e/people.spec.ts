@@ -189,9 +189,13 @@ test("an account without an e-mail enters one before anything else, then goes wh
   const sent: string[] = [];
   await asAccountWithoutEmail(page, (email) => {
     sent.push(email);
-    if (sent.length > 1) return null;
-    const message = "Another account already uses this e-mail address";
-    return { status: 409, body: { error: { code: "CONFLICT", message, details: [{ in: "body", field: "email", message, code: "unique" }] } } };
+    if (sent.length > 2) return null;
+    // The API's wording; the page words each code itself.
+    const [message, code] =
+      sent.length === 1
+        ? ["Another account already uses this e-mail address", "unique"]
+        : ["A person in the CMDB already has the e-mail address jane@example.test. Ask an administrator to set this address on your account (Administration > Users); it is then linked to that person", "person_email_taken"];
+    return { status: 409, body: { error: { code: "CONFLICT", message, details: [{ in: "body", field: "email", message, code }] } } };
   });
 
   await page.goto("/cis?q=router");
@@ -215,10 +219,20 @@ test("an account without an e-mail enters one before anything else, then goes wh
   await form.getByRole("button", { name: "Save and continue" }).click();
   await expect(page.locator("#email-entry-err")).toHaveText("Another account already uses this e-mail address.");
 
+  // A Person CI already has it: the user cannot change that person, so they are told to ask an administrator,
+  // not to change that person's e-mail or to enter another address (a second Person for the same human).
+  await form.getByRole("textbox", { name: "E-mail address" }).fill("jane@example.test");
+  await form.getByRole("button", { name: "Save and continue" }).click();
+  await expect(page.locator("#email-entry-err")).toHaveText(
+    "Someone in the inventory already has this e-mail address. Ask an administrator to set it on your account (Administration › Users); your account is then linked to that person.",
+  );
+  await expect(form.getByRole("textbox", { name: "E-mail address" })).toBeFocused();
+  await snap(page, "people-06-email-entry-person-taken");
+
   await form.getByRole("textbox", { name: "E-mail address" }).fill(" legacy@example.test ");
   await form.getByRole("button", { name: "Save and continue" }).click();
   await expect(page).toHaveURL(at("/cis", "?q=router"));
-  expect(sent).toEqual(["taken@example.test", "legacy@example.test"]);
+  expect(sent).toEqual(["taken@example.test", "jane@example.test", "legacy@example.test"]);
   // Done: the step is not reachable any more.
   await page.goto("/enter-email");
   await expect(page).toHaveURL(at("/"));

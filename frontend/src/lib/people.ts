@@ -27,14 +27,25 @@ const EMAIL_CODES: Record<string, MessageKey> = {
 };
 
 /**
- * The message for an e-mail the API refused (409 with `details[].field = "email"`): another account uses it
- * (`unique`), or a Person CI that is not this account's has it (`person_email_taken`). Any other detail keeps
- * the API's own message.
+ * The user entering their own address (the forced e-mail step) cannot change another person's e-mail, so a Person
+ * that already has it is worded as what they can do: ask an administrator to set it on their account, which links
+ * the account to that Person (SHAA-1719).
  */
-export function emailErrorMessage(details: readonly ApiErrorDetail[]): string | undefined {
+const OWN_EMAIL_CODES: Record<string, MessageKey> = {
+  ...EMAIL_CODES,
+  person_email_taken: "people.entry.personTaken",
+};
+
+/**
+ * The message for an e-mail the API refused (409 with `details[].field = "email"`): another account uses it
+ * (`unique`), or a Person CI that is not this account's has it (`person_email_taken`). `own` words it for a user
+ * entering their own address rather than for an administrator. Any other detail keeps the API's own message.
+ */
+export function emailErrorMessage(details: readonly ApiErrorDetail[], own = false): string | undefined {
   const d = details.find((x) => x.field === "email");
   if (!d) return undefined;
-  return d.code && Object.hasOwn(EMAIL_CODES, d.code) ? t(EMAIL_CODES[d.code]) : d.message;
+  const codes = own ? OWN_EMAIL_CODES : EMAIL_CODES;
+  return d.code && Object.hasOwn(codes, d.code) ? t(codes[d.code]) : d.message;
 }
 
 /** A light check before the round trip; the API decides (it also enforces uniqueness and the 254 limit). */

@@ -744,6 +744,8 @@ export const en = {
   "people.entry.submit": "Save and continue",
   "people.entry.saving": "Saving…",
   "people.entry.failed": "The e-mail address was not saved",
+  "people.entry.personTaken":
+    "Someone in the inventory already has this e-mail address. Ask an administrator to set it on your account (Administration › Users); your account is then linked to that person.",
   "people.panel.title": "Sign-in account",
   "people.panel.loading": "Loading the sign-in account…",
   "people.panel.failed": "Could not load the sign-in account",

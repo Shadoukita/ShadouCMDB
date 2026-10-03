@@ -758,6 +758,8 @@ export const de: { [K in MessageKey]: string } = {
   "people.entry.submit": "Speichern und fortfahren",
   "people.entry.saving": "Wird gespeichert…",
   "people.entry.failed": "Die E-Mail-Adresse wurde nicht gespeichert",
+  "people.entry.personTaken":
+    "Eine Person im Inventar hat diese E-Mail-Adresse bereits. Bitten Sie einen Administrator, sie in Ihrem Konto einzutragen (Administration › Benutzer); Ihr Konto wird dann mit dieser Person verknüpft.",
   "people.panel.title": "Anmeldekonto",
   "people.panel.loading": "Anmeldekonto wird geladen…",
   "people.panel.failed": "Das Anmeldekonto konnte nicht geladen werden",
