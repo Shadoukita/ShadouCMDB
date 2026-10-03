@@ -47,9 +47,13 @@ jobs:
       # Reads the lockfiles against the npm advisory database; installs nothing.
       - name: npm audit (root and frontend workspace)
         run: npm audit --audit-level=high
+      # Same threshold, but advisories listed in tools/sbom/audit-allowlist.json pass with
+      # a warning until their expiry (GH#538). Build-time tooling only; never widen
+      # this to the step above.
       - name: npm audit (tools/sbom)
-        run: npm audit --audit-level=high
-        working-directory: tools/sbom
+        run: |
+          node --test tools/sbom/*.test.mjs
+          node tools/sbom/audit.mjs
       # The npm bundled with the runner's Node 22 failed with EMISSINGSIGNATUREKEY on
       # attestations signed with the registry's current key (SHAA-112), so this step uses a
       # pinned npm instead. Bump NPM_VERSION on purpose, not by tag.
