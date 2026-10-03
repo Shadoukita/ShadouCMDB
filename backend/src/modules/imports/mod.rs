@@ -174,13 +174,15 @@ pub fn routes() -> Vec<Route> {
             .summary("Change how the file is read (sheet, encoding, delimiter, header row)")
             .description(
                 "The analysis runs again and the mapping and any dry run are dropped. In `ready`, or after an \
-                 analysis that failed. `sheet` is for workbooks, `encoding` and `delimiter` for CSV files. Only the \
-                 job's owner: `403 not_owner` for an administrator.",
+                 analysis that failed for a reason other than `internal_error` (`409 invalid_state` otherwise: \
+                 delete the import and upload the file again). `sheet` is for workbooks, `encoding` and \
+                 `delimiter` for CSV files. `429 import_busy` while another import of the job's owner runs. Only \
+                 the job's owner: `403 not_owner` for an administrator.",
             )
             .requires(GlobalPermission::CisImport)
             .session_only()
             .status(StatusCode::ACCEPTED)
-            .errors(&[ErrorCode::NotFound, ErrorCode::Forbidden, ErrorCode::Conflict])
+            .errors(&[ErrorCode::NotFound, ErrorCode::Forbidden, ErrorCode::Conflict, ErrorCode::RateLimited])
             .handle(|api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<UpdateFileOptions>>| async move {
                 Ok(Json(jobs::update_file_options(&api.pool, &api.ctx, &api.imports, id, &b).await?))
             }),

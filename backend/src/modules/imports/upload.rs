@@ -206,7 +206,8 @@ fn storage_full() -> AppError {
 
 /// Takes the user's import lock for the transaction and refuses with
 /// `429 import_busy` while it is held or another of their jobs is running
-/// (T19). Used by the upload, the dry run and the commit.
+/// (T19). Used by the upload, a change of file options, the dry run and the
+/// commit.
 pub async fn lock_user(tx: &mut sqlx::PgConnection, user: Uuid) -> Result<(), AppError> {
     let busy = || limit("import_busy", "You already have an import running. Wait for it to finish or cancel it.");
     let locked: bool =

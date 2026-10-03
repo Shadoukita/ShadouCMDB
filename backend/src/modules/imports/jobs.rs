@@ -459,7 +459,10 @@ pub async fn delete(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<(),
 
 /// Changes how the file is read and analyses it again. The mapping and any
 /// dry run are dropped, because the columns may change. In `ready`, or after
-/// an analysis that failed (for example with the wrong sheet or encoding).
+/// an analysis that failed (for example with the wrong sheet or encoding), but
+/// not after `internal_error`: the worker gave up on that file, and queuing it
+/// with fresh attempts would re-arm the crash loop (GH#404). `429 import_busy`
+/// while another job of the owner runs (T19).
 pub async fn update_file_options(
     pool: &PgPool,
     ctx: &RequestContext,
@@ -474,6 +477,13 @@ pub async fn update_file_options(
     if job.status != JobStatus::Ready && !analysis_failed {
         return Err(invalid_state("The file options can be changed only after the file was analysed."));
     }
+    if analysis_failed && job.error().is_none_or(|e| e.code == "internal_error") {
+        return Err(invalid_state(
+            "This file could not be analysed because of an internal error. Delete the import and upload the file again.",
+        ));
+    }
+    let owner = job.created_by_id.ok_or_else(AppError::internal)?;
+    super::upload::lock_user(&mut tx, owner).await?;
     let mut errors = Vec::new();
     if job.format() == FileFormat::Xlsx && (input.encoding.is_some() || input.delimiter.is_some()) {
         errors.push(super::body_field("encoding", "Only CSV files have an encoding and a delimiter", "not_applicable"));
