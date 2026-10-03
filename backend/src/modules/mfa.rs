@@ -130,6 +130,20 @@ pub struct MfaReauthentication {
 }
 impl Check for MfaReauthentication {}
 
+/// The password, and a current second factor once MFA is set up, to confirm
+/// who is at the keyboard before a user-management write (GH#498).
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Reauthentication {
+    #[schema(schema_with = password_field_schema)]
+    current_password: Secret,
+    /// Required once two-factor authentication is set up
+    #[schema(schema_with = code_schema)]
+    #[serde(default)]
+    code: Option<String>,
+}
+impl Check for Reauthentication {}
+
 // ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
@@ -346,11 +360,11 @@ async fn reauthenticate(
     ctx: &RequestContext,
     mut tx: Transaction<'static, Postgres>,
     attempt: Attempt<'_>,
-    b: &MfaReauthentication,
+    code: &str,
     stage: &str,
 ) -> Result<Transaction<'static, Postgres>, AppError> {
     let me = me(ctx)?;
-    match verify_second_factor(&mut tx, &auth.keyring, me.user_id, &b.code).await? {
+    match verify_second_factor(&mut tx, &auth.keyring, me.user_id, code).await? {
         Verdict::Accepted(method) => {
             attempt.success();
             if matches!(method, LoginMethod::RecoveryCode) {
@@ -373,6 +387,40 @@ async fn reauthenticate(
     }
 }
 
+/// Confirms the session's owner again: the password, and a current code once
+/// MFA is set up. For [`crate::auth::REAUTHENTICATION_WINDOW`] the session may
+/// then make the writes marked `recent_reauthentication` (GH#498).
+async fn reauthenticate_session(
+    pool: &PgPool,
+    auth: &AuthState,
+    ctx: &RequestContext,
+    b: Reauthentication,
+) -> Result<(), AppError> {
+    let me = me(ctx)?;
+    let Some(session_id) = me.session_id() else { return Err(unauthenticated()) };
+    let attempt = confirm_current_password_attempt(pool, auth, me, &b.current_password).await?;
+    let mut tx = pool.begin().await?;
+    let enrolled = data::get_totp(&mut tx, me.user_id, true).await?.is_some_and(|t| t.confirmed);
+    let (mut tx, method) = if enrolled {
+        // A right password alone leaves the count as it is (GH#141).
+        let Some(code) = b.code.as_deref().filter(|c| !c.trim().is_empty()) else {
+            return Err(AppError::field(
+                "code",
+                "Enter the code from your authenticator app, or an unused recovery code",
+                "required",
+            ));
+        };
+        (reauthenticate(pool, auth, ctx, tx, attempt, code, "reauthenticate").await?, "second_factor")
+    } else {
+        attempt.success();
+        (tx, "password")
+    };
+    auth_data::mark_session_reauthenticated(&mut tx, session_id).await?;
+    events::reauthenticated(&mut tx, ctx, session_id, me.user_id, &me.username, method).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 /// Turns one's own MFA off (or cancels an unfinished set-up).
 async fn disable(
     pool: &PgPool,
@@ -385,7 +433,7 @@ async fn disable(
     let mut tx = pool.begin().await?;
     let Some(t) = data::get_totp(&mut tx, me.user_id, true).await? else { return Err(not_enabled()) };
     let mut tx = if t.confirmed {
-        reauthenticate(pool, auth, ctx, tx, attempt, &b, "disable").await?
+        reauthenticate(pool, auth, ctx, tx, attempt, &b.code, "disable").await?
     } else {
         attempt.success();
         tx
@@ -414,7 +462,7 @@ async fn regenerate(
     if !data::get_totp(&mut tx, me.user_id, true).await?.is_some_and(|t| t.confirmed) {
         return Err(not_enabled());
     }
-    let mut tx = reauthenticate(pool, auth, ctx, tx, attempt, &b, "recovery_codes").await?;
+    let mut tx = reauthenticate(pool, auth, ctx, tx, attempt, &b.code, "recovery_codes").await?;
     let codes = new_recovery_codes(&mut tx, me.user_id).await?;
     let extra = json!({ "recoveryCodes": codes.codes.len() });
     events::mfa(&mut tx, ctx, AuditAction::MfaRecoveryCodes, me.user_id, &me.username, extra).await?;
@@ -487,6 +535,18 @@ pub fn routes() -> Vec<Route> {
             .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<TotpConfirmation>>| async move {
                 Ok(Json(confirm(&api.pool, &api.auth, &api.ctx, b).await?))
             }),
+        route(Method::POST, "/api/v1/auth/reauthenticate", "reauthenticate")
+            .tag(TAG)
+            .summary("Confirm your password (and code) before changing accounts, profiles, API tokens or identity providers")
+            .description(format!(
+                "Needs the password, and a current code (authenticator or recovery code) once two-factor authentication is set up. For the next 10 minutes your session may make the changes that hand out or take over an account's rights (they answer 403 REAUTHENTICATION_REQUIRED otherwise): creating and changing users, resetting a user's password or MFA, changing permission profiles, creating API tokens, changing identity providers and importing a configuration. Signing in counts the same. Audited as `session.reauthenticate`. 400 (field `code`) for a missing or wrong code. {LOCK_NOTE}"
+            ))
+            .session_only()
+            .errors(&[ErrorCode::Conflict, ErrorCode::RateLimited, ErrorCode::IdentityProviderUnavailable])
+            .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<Reauthentication>>| async move {
+                reauthenticate_session(&api.pool, &api.auth, &api.ctx, b).await?;
+                Ok(NoContent)
+            }),
         route(Method::DELETE, "/api/v1/auth/mfa/totp", "disableTotp")
             .tag(TAG)
             .summary("Turn your two-factor authentication off (or cancel an unfinished set-up)")
@@ -518,7 +578,7 @@ pub fn routes() -> Vec<Route> {
                 "Deletes the user's authenticator and recovery codes (audited as `mfa.disable`, reason admin_reset) and ends every session of the user (`session.revoke`, reason mfa_reset). Does nothing if none is set up. If a profile they hold requires MFA, they set it up again after signing in with their password. A non-administrator can only reset users whose permissions they hold themselves (403). 409 for your own account: turn your own MFA off with `disableTotp` (DELETE /api/v1/auth/mfa/totp), which asks for your current password and a code.",
             )
             .requires(GlobalPermission::UsersManage)
-            .session_only()
+            .recent_reauthentication()
             .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])
             .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
                 reset(&api.pool, &api.ctx, id).await?;
@@ -918,6 +978,146 @@ pub(crate) mod tests {
         let (status, v, _) = call(&app, "GET", "/api/v1/auth/me", &other, None).await;
         assert_eq!(status, 200, "the other session stays: {v}");
         password_step(&app).await;
+        db.drop().await;
+    }
+
+    /// Makes every session of `username` look as if its owner last confirmed
+    /// their credentials 11 minutes ago (a session stolen after sign-in).
+    async fn stale(pool: &PgPool, username: &str) {
+        sqlx::query(
+            "UPDATE sessions SET credentials_confirmed_at = now() - interval '11 minutes'
+             WHERE user_id = (SELECT id FROM users WHERE username = $1)",
+        )
+        .bind(username)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn audit_rows(pool: &PgPool, action: &str) -> Vec<Value> {
+        sqlx::query_scalar("SELECT new_value FROM audit_log WHERE action = $1 ORDER BY id")
+            .bind(action)
+            .fetch_all(pool)
+            .await
+            .unwrap()
+    }
+
+    /// GH#498, the issue's repro: GH#413 refuses the reset of the caller's own
+    /// account, but a session that has not confirmed its owner's password
+    /// recently could create a second user manager (or take over an existing
+    /// one), sign in as it and reset the first. Every step that hands out or
+    /// takes over an account's rights now answers 403
+    /// REAUTHENTICATION_REQUIRED, changes nothing and is audited; the owner's
+    /// password (POST /auth/reauthenticate) opens them for 10 minutes.
+    #[tokio::test]
+    async fn a_stale_session_cannot_hand_out_user_management_rights() {
+        let Some(db) = scratch::database("a_stale_session_cannot_hand_out_user_management_rights").await else {
+            return;
+        };
+        let (app, pool) = (app(db.pool.clone()), &db.pool);
+        let (session, _) = setup(&app).await;
+        let administrators: Uuid =
+            sqlx::query_scalar("SELECT id FROM permission_profiles WHERE name = 'Administrator'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        // Right after signing in, the owner creates a colleague: allowed.
+        let body =
+            json!({ "username": "bob", "displayName": "Bob", "password": PASSWORD, "profileIds": [administrators] });
+        let (status, v, _) = call(&app, "POST", "/api/v1/admin/users", &session, Some(body)).await;
+        assert_eq!(status, 201, "{v}");
+        let bob = v["id"].as_str().unwrap().to_owned();
+        let bob_hash = || {
+            sqlx::query_scalar::<_, String>("SELECT password_hash FROM users WHERE username = 'bob'").fetch_one(pool)
+        };
+        let before = bob_hash().await.unwrap();
+
+        stale(pool, "owner").await;
+        let second = json!({ "username": "owner2", "displayName": "Owner 2", "password": PASSWORD,
+            "profileIds": [administrators] });
+        let refused = [
+            ("POST", "/api/v1/admin/users".to_owned(), Some(second.clone()), "createUser"),
+            ("PATCH", format!("/api/v1/admin/users/{bob}"), Some(json!({ "displayName": "B" })), "updateUser"),
+            (
+                "PUT",
+                format!("/api/v1/admin/users/{bob}/password"),
+                Some(json!({ "password": "a password the attacker chose" })),
+                "resetUserPassword",
+            ),
+            ("DELETE", format!("/api/v1/admin/users/{bob}/mfa"), None, "resetUserMfa"),
+            ("POST", "/api/v1/admin/api-tokens".to_owned(), Some(json!({})), "createApiToken"),
+            (
+                "POST",
+                "/api/v1/admin/profiles".to_owned(),
+                Some(json!({ "name": "Managers" })),
+                "createPermissionProfile",
+            ),
+        ];
+        for (method, path, body, _) in &refused {
+            let (status, v, _) = call(&app, method, path, &session, body.clone()).await;
+            assert_eq!((status, code(&v)), (403, "REAUTHENTICATION_REQUIRED"), "{method} {path}: {v}");
+            assert!(v["error"]["message"].as_str().unwrap().contains("/api/v1/auth/reauthenticate"), "{v}");
+        }
+        let users: i64 = sqlx::query_scalar("SELECT count(*) FROM users").fetch_one(pool).await.unwrap();
+        assert_eq!(users, 2, "no account was created");
+        assert_eq!(bob_hash().await.unwrap(), before, "bob's password is unchanged");
+        let rows = audit_rows(pool, "session.reauthentication_required").await;
+        let operations: Vec<&str> = rows.iter().map(|r| r["operationId"].as_str().unwrap()).collect();
+        assert_eq!(operations, refused.iter().map(|r| r.3).collect::<Vec<_>>());
+        assert!(rows.iter().all(|r| r["username"] == "owner"), "{rows:?}");
+        // Reading stays open.
+        let (status, v, _) = call(&app, "GET", "/api/v1/admin/users", &session, None).await;
+        assert_eq!(status, 200, "{v}");
+
+        // A wrong password confirms nothing; the owner's own one opens the writes.
+        let wrong = json!({ "currentPassword": "not the password" });
+        let (status, v, _) = call(&app, "POST", "/api/v1/auth/reauthenticate", &session, Some(wrong)).await;
+        assert_eq!((status, code(&v)), (400, "VALIDATION_ERROR"), "{v}");
+        let (status, v, _) = call(&app, "POST", "/api/v1/admin/users", &session, Some(second.clone())).await;
+        assert_eq!((status, code(&v)), (403, "REAUTHENTICATION_REQUIRED"), "{v}");
+        let right = json!({ "currentPassword": PASSWORD });
+        let (status, v, _) = call(&app, "POST", "/api/v1/auth/reauthenticate", &session, Some(right)).await;
+        assert_eq!(status, 204, "{v}");
+        let rows = audit_rows(pool, "session.reauthenticate").await;
+        assert_eq!((rows.len(), &rows[0]["method"]), (1, &json!("password")), "{rows:?}");
+        let (status, v, _) = call(&app, "POST", "/api/v1/admin/users", &session, Some(second)).await;
+        assert_eq!(status, 201, "{v}");
+        db.drop().await;
+    }
+
+    /// Once MFA is set up, re-authenticating needs a current code too: the
+    /// password alone (say, phished) does not open the writes (GH#498).
+    #[tokio::test]
+    async fn reauthentication_needs_the_second_factor_once_set_up() {
+        let Some(db) = scratch::database("reauthentication_needs_the_second_factor_once_set_up").await else {
+            return;
+        };
+        let (app, pool) = (app(db.pool.clone()), &db.pool);
+        let (session, _) = setup(&app).await;
+        let step = settled_step().await;
+        let (_, codes) = enrol(&app, pool, &session, step).await;
+        stale(pool, "owner").await;
+        let path = "/api/v1/auth/reauthenticate";
+
+        let body = json!({ "currentPassword": PASSWORD });
+        let (status, v, _) = call(&app, "POST", path, &session, Some(body)).await;
+        assert_eq!((status, code(&v)), (400, "VALIDATION_ERROR"), "{v}");
+        assert_eq!(v["error"]["details"][0]["field"], "code", "{v}");
+        let body = json!({ "currentPassword": PASSWORD, "code": "000000" });
+        let (status, v, _) = call(&app, "POST", path, &session, Some(body)).await;
+        assert_eq!((status, code(&v)), (400, "VALIDATION_ERROR"), "{v}");
+        assert!(audit_rows(pool, "session.reauthenticate").await.is_empty());
+        let body = json!({ "username": "x", "displayName": "X", "password": PASSWORD });
+        let (status, v, _) = call(&app, "POST", "/api/v1/admin/users", &session, Some(body.clone())).await;
+        assert_eq!((status, code(&v)), (403, "REAUTHENTICATION_REQUIRED"), "{v}");
+
+        let confirm = json!({ "currentPassword": PASSWORD, "code": codes[0] });
+        let (status, v, _) = call(&app, "POST", path, &session, Some(confirm)).await;
+        assert_eq!(status, 204, "{v}");
+        let rows = audit_rows(pool, "session.reauthenticate").await;
+        assert_eq!((rows.len(), &rows[0]["method"]), (1, &json!("second_factor")), "{rows:?}");
+        let (status, v, _) = call(&app, "POST", "/api/v1/admin/users", &session, Some(body)).await;
+        assert_eq!(status, 201, "{v}");
         db.drop().await;
     }
 

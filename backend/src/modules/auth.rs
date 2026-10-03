@@ -1316,6 +1316,7 @@ pub(crate) mod tests {
                 id: Uuid::nil(),
                 csrf_token: String::new(),
                 mfa_enrolment_required: false,
+                recently_confirmed: true,
             },
             permissions,
         };
@@ -1456,6 +1457,7 @@ pub(crate) mod tests {
                 id: Uuid::nil(),
                 csrf_token: String::new(),
                 mfa_enrolment_required: false,
+                recently_confirmed: true,
             },
             permissions,
         };

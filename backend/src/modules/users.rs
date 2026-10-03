@@ -600,7 +600,7 @@ pub fn routes() -> Vec<Route> {
             .description("403 when assigning a profile that grants permissions the caller does not hold.")
             .status(StatusCode::CREATED)
             .requires(manage)
-            .session_only()
+            .recent_reauthentication()
             .errors(&[ErrorCode::Conflict])
             .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<UserCreate>>| async move {
                 Ok(Json(create(&api.pool, &api.ctx, &b).await?))
@@ -612,7 +612,7 @@ pub fn routes() -> Vec<Route> {
                 "`isActive: false` disables the account and ends its sessions. `profileIds` replaces the profiles the user holds. For an account of an identity provider, the name, e-mail and profiles are set again from the provider at its next sign-in (change the group mappings instead); disabling it holds whatever the provider says. 409 LAST_ADMINISTRATOR when the change would leave no active user with the Administrator profile; 409 CONFLICT when disabling yourself.",
             )
             .requires(manage)
-            .session_only()
+            .recent_reauthentication()
             .errors(&[ErrorCode::NotFound, ErrorCode::Conflict, ErrorCode::LastAdministrator])
             .handle(|api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<UserUpdate>>| async move {
                 Ok(Json(update(&api.pool, &api.ctx, id, &b).await?))
@@ -632,7 +632,7 @@ pub fn routes() -> Vec<Route> {
             .summary("Set a new password for a user, end their sessions and revoke their API tokens")
             .description("Every API token of the user that still works is revoked (`revokedBy` is the caller), so a token minted with a stolen password does not outlive the reset. So is every working token the user created for another owner (`createdByUserId`), since the account may have been compromised. 409 for an account that signs in through an identity provider (it has no password here), and for your own account: change your own password with `changeOwnPassword` (PUT /api/v1/auth/password), which asks for your current password.")
             .requires(manage)
-            .session_only()
+            .recent_reauthentication()
             .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])
             .handle(|api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<PasswordReset>>| async move {
                 Ok(Json(reset_password(&api.pool, &api.ctx, id, &b.password).await?))

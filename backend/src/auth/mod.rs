@@ -35,6 +35,11 @@ use crate::http::error::AppError;
 use permissions::Permissions;
 use throttle::LoginThrottle;
 
+/// How long after its owner last confirmed their credentials (signed in, or
+/// `POST /api/v1/auth/reauthenticate`) a session may make the writes that hand
+/// out or take over an account's rights (GH#498).
+pub const REAUTHENTICATION_WINDOW: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
 /// A signed-in user, resolved from their session or API token for one request.
 #[derive(Debug, Clone)]
 pub struct Principal {
@@ -51,7 +56,9 @@ pub enum Credential {
     /// The session cookie; state-changing requests must echo `csrf_token`.
     /// While `mfa_enrolment_required`, only the routes marked
     /// `before_mfa_enrolment` answer (a profile requires MFA, none is set up).
-    Session { id: Uuid, csrf_token: String, mfa_enrolment_required: bool },
+    /// Unless `recently_confirmed`, the routes marked `recent_reauthentication`
+    /// answer 403 REAUTHENTICATION_REQUIRED (GH#498).
+    Session { id: Uuid, csrf_token: String, mfa_enrolment_required: bool, recently_confirmed: bool },
     /// `Authorization: Bearer`; not sent by browsers on their own, so no CSRF token.
     Token,
 }
@@ -66,6 +73,12 @@ impl Principal {
 
     pub fn mfa_enrolment_required(&self) -> bool {
         matches!(self.credential, Credential::Session { mfa_enrolment_required: true, .. })
+    }
+
+    /// A session whose owner confirmed their credentials (signed in, or
+    /// re-authenticated) within [`REAUTHENTICATION_WINDOW`]. Never a token.
+    pub fn recently_confirmed(&self) -> bool {
+        matches!(self.credential, Credential::Session { recently_confirmed: true, .. })
     }
 
     pub fn csrf_token(&self) -> Option<&str> {
@@ -184,6 +197,7 @@ pub async fn authenticate(
             id: s.session_id,
             csrf_token: s.csrf_token,
             mfa_enrolment_required: s.mfa_enrolment_required,
+            recently_confirmed: s.recently_confirmed,
         },
         permissions,
     }))

@@ -329,6 +329,41 @@ pub async fn token_refusals(
     write_for(conn, ctx, AuditAction::TokenUse, TOKEN_ENTITY, token.id, v).await
 }
 
+/// The session's owner confirmed their credentials again (GH#498).
+pub async fn reauthenticated(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    session_id: Uuid,
+    user_id: Uuid,
+    username: &str,
+    method: &str,
+) -> sqlx::Result<()> {
+    let v = details(ctx, fields(json!({ "userId": user_id, "username": username, "method": method })));
+    write(conn, ctx, AuditAction::SessionReauthenticate, session_id, v).await
+}
+
+/// A write that needs recently confirmed credentials was refused (GH#498).
+pub async fn reauthentication_required(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    session_id: Uuid,
+    user_id: Uuid,
+    username: &str,
+    used: &Use<'_>,
+) -> sqlx::Result<()> {
+    let v = details(
+        ctx,
+        fields(json!({
+            "userId": user_id,
+            "username": username,
+            "method": used.method.as_str(),
+            "path": bounded_path(used.path),
+            "operationId": used.operation_id,
+        })),
+    );
+    write(conn, ctx, AuditAction::SessionReauthenticationRequired, session_id, v).await
+}
+
 /// A two-factor event for this user (`mfa.*`): `extra` adds the event's own details.
 pub async fn mfa(
     conn: &mut PgConnection,
