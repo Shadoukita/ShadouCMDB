@@ -164,6 +164,19 @@ test("one CI's own layout: saved for this CI only, marked on its page, and reset
   await expect(ciTabs(page)).toContainText([TAB]);
   await expect(page.getByText("Only this CI: patched by hand.")).toHaveCount(0);
 
+  // Customization › Layouts counts it for Server (SHAA-1514), and the count lists exactly that CI.
+  await page.goto("/admin/customization/layouts?q=Server");
+  const serverRow = page.getByTestId("layout-classes").getByRole("row").filter({ has: page.getByRole("rowheader", { name: /^Server server/ }) });
+  const count = serverRow.getByTestId("own-layout-count");
+  await expect(count).toHaveText("1");
+  await count.getByRole("link").click();
+  await expect(page).toHaveURL(/\/cis\?.*ownLayout=true/);
+  await expect(page).toHaveURL(new RegExp(`classId=${serverId}.*includeSubclasses=false|includeSubclasses=false.*classId=${serverId}`));
+  await expect(page.getByTestId("filter-own-layout")).toContainText("Own layout");
+  await expect(page.locator(".pagination")).toContainText("1–1 of 1");
+  await expect(page.getByRole("link", { name: `e2e-own-${stamp}`, exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: `e2e-other-${stamp}`, exact: true })).toHaveCount(0);
+
   // Use template…: the CI shows another template (Standard), marked with its name.
   await page.goto(`/cis/${ci.id}`);
   editor = await openEditor(page, page.getByRole("button", { name: "Edit layout" }));

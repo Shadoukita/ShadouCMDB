@@ -1780,11 +1780,22 @@ async fn a_commit_stops_linking_to_a_class_whose_view_right_is_revoked() {
 // Error report (SHAA-799 part 4, §3.4, §5.1)
 // ---------------------------------------------------------------------------
 
-/// A GET whose body is not JSON: status, headers and body text.
+/// A GET whose body is not JSON: status, headers and body text. Sends the
+/// session's CSRF token, as the UI does on the audited reads (GH#503).
 async fn download(e: &Env, creds: &Creds, uri: &str) -> (u16, HeaderMap, String) {
+    download_with(e, creds, uri, &[]).await
+}
+
+async fn download_with(e: &Env, creds: &Creds, uri: &str, extra: &[(&str, &str)]) -> (u16, HeaderMap, String) {
     let mut req = Request::builder().uri(uri);
     if let Some(c) = &creds.cookie {
         req = req.header(header::COOKIE, c);
+    }
+    if let Some(c) = &creds.csrf {
+        req = req.header("x-csrf-token", c);
+    }
+    for (name, value) in extra {
+        req = req.header(*name, *value);
     }
     let res = e.app.clone().oneshot(req.body(HttpBody::empty()).unwrap()).await.unwrap();
     let status = res.status().as_u16();
@@ -1856,6 +1867,52 @@ async fn the_error_report_lists_each_problem_with_its_row_and_audits_other_reade
     let clean = validated(&e, &alice, "Hostname;Cores\nweb09;1\n").await;
     let (status, _, _) = download(&e, &alice, &format!("/api/v1/imports/{clean}/error-report")).await;
     assert_eq!(status, 404);
+    db.drop().await;
+}
+
+/// GH#503: an administrator's read of another user's job, its problems or its
+/// report is audited, so a session must send the CSRF token. A cross-site
+/// top-level navigation carries the SameSite=Lax cookie but no custom header:
+/// refused before any work, and nothing is recorded. The UI's fetch with the
+/// token still reads, and is audited.
+#[tokio::test(flavor = "multi_thread")]
+async fn audited_import_reads_need_the_csrf_token_from_a_session() {
+    let Some(db) = scratch::database("import_reads_csrf").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    server_class(&e).await;
+    let alice = user(&e, "alice", &["cis.import"]).await;
+    let id = validated(&e, &alice, "Hostname;Cores\nweb01;many\n").await;
+    let paths = [
+        format!("/api/v1/imports/{id}"),
+        format!("/api/v1/imports/{id}/issues"),
+        format!("/api/v1/imports/{id}/error-report"),
+    ];
+    let reads = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM audit_log WHERE action = 'import.report_read'")
+            .fetch_one(&e.pool)
+            .await
+            .unwrap()
+    };
+
+    let navigation = [("sec-fetch-site", "cross-site"), ("sec-fetch-mode", "navigate"), ("sec-fetch-dest", "document")];
+    let no_csrf = Creds { csrf: None, ..e.admin.clone() };
+    let wrong = Creds { csrf: Some("not-the-token".into()), ..e.admin.clone() };
+    for path in &paths {
+        for (creds, extra) in [(&no_csrf, &navigation[..]), (&no_csrf, &[]), (&wrong, &[])] {
+            let (status, _, body) = download_with(&e, creds, path, extra).await;
+            assert_eq!(status, 403, "{path}: {body}");
+            assert_eq!(code(&serde_json::from_str(&body).unwrap()), "CSRF_TOKEN_INVALID", "{path}");
+        }
+    }
+    assert_eq!(reads().await, 0, "a refused read is not recorded");
+
+    // The UI: same-origin fetch with the token.
+    let same_origin = [("sec-fetch-site", "same-origin"), ("sec-fetch-mode", "cors")];
+    for path in &paths {
+        let (status, _, body) = download_with(&e, &e.admin, path, &same_origin).await;
+        assert_eq!(status, 200, "{path}: {body}");
+    }
+    assert_eq!(reads().await, 3);
     db.drop().await;
 }
 

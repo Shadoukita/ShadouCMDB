@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useAllLookupListValues, useAreas } from "../api/datamodel";
+import { useUiSettings } from "../api/uiSettings";
 import { useCiClasses, useCriticalityValues } from "../api/queries";
 import { groupByArea } from "../lib/areas";
 import { viewableClasses } from "../lib/permissions";
@@ -34,6 +35,11 @@ const lookupFilterNames = computed(() =>
     .filter(Boolean)
     .map((id) => lookupValues.data.value?.find((v) => v.id === id)?.name ?? (lookupValues.isLoading.value ? "…" : "Unknown value")),
 );
+// Layout filters (a link from Customization › Layouts): CIs with a layout of their own, or that show one template as theirs.
+const ownLayout = computed(() => s.value.get("ownLayout"));
+const layoutTemplate = computed(() => s.value.get("layoutTemplate"));
+const settings = useUiSettings(() => !!layoutTemplate.value);
+const layoutTemplateName = computed(() => settings.data.value?.settings.layoutTemplates.find((x) => x.key === layoutTemplate.value)?.name ?? layoutTemplate.value);
 const value = (e: Event) => (e.target as HTMLSelectElement).value || undefined;
 
 // Criticality (a core field of every CI): one value, or a set from a link (criticalityValueId=a,b).
@@ -67,6 +73,20 @@ const criticalityMany = computed(() => criticalityValue.value.includes(","));
     <span class="checkbox-row">
       <span class="mono">{{ s.get("ipWithin") }}</span>
       <button type="button" class="btn btn-sm" aria-label="Remove the IP network filter" @click="s.update({ ipWithin: undefined })">×</button>
+    </span>
+  </div>
+  <div v-if="ownLayout === 'true' || ownLayout === 'false'" class="field" data-testid="filter-own-layout">
+    <span class="label">Layout</span>
+    <span class="checkbox-row">
+      {{ ownLayout === "true" ? "Own layout" : "Class default" }}
+      <button type="button" class="btn btn-sm" aria-label="Remove the layout filter" @click="s.update({ ownLayout: undefined })">×</button>
+    </span>
+  </div>
+  <div v-if="layoutTemplate" class="field" data-testid="filter-layout-template">
+    <span class="label">Own layout template</span>
+    <span class="checkbox-row">
+      {{ layoutTemplateName }}
+      <button type="button" class="btn btn-sm" aria-label="Remove the layout template filter" @click="s.update({ layoutTemplate: undefined })">×</button>
     </span>
   </div>
   <div v-if="criticality.data.value?.length || criticalityValue" class="field">

@@ -796,7 +796,7 @@ export interface paths {
         };
         /**
          * An import job, for polling
-         * @description Requires `cis.import`. The caller's job, or any job for an administrator; `404` otherwise, the same as for a job that does not exist. An administrator's read of another user's job is audited as `import.report_read` (once per 15 minutes). Poll every 1 s for the first 10 s, then every 2 s, then every 5 s after a minute. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `cis.import`. The caller's job, or any job for an administrator; `404` otherwise, the same as for a job that does not exist. An administrator's read of another user's job is audited as `import.report_read` (once per 15 minutes), so a signed-in session must send X-CSRF-Token as on a write. Poll every 1 s for the first 10 s, then every 2 s, then every 5 s after a minute. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         get: operations["getImport"];
         put?: never;
@@ -900,7 +900,7 @@ export interface paths {
         };
         /**
          * The problems the dry run and the commit found, by row
-         * @description Requires `cis.import`. In row order. `value` is the cell, cut to 200 characters. At most 10,000 problems are stored per job; `summary.issuesTotal` counts them all. Empty once the file was deleted (24 h after the last activity). Also while bulk import is off. An administrator's read of another user's job is audited as `import.report_read` (once per 15 minutes). Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `cis.import`. In row order. `value` is the cell, cut to 200 characters. At most 10,000 problems are stored per job; `summary.issuesTotal` counts them all. Empty once the file was deleted (24 h after the last activity). Also while bulk import is off. An administrator's read of another user's job is audited as `import.report_read` (once per 15 minutes), so a signed-in session must send X-CSRF-Token as on a write. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         get: operations["listImportIssues"];
         put?: never;
@@ -920,7 +920,7 @@ export interface paths {
         };
         /**
          * The problems as a CSV to fix and upload again
-         * @description Requires `cis.import`. Columns `Row`, `Severity`, `Column`, `Problem`, `Code`, then every original column of the row under its original header; one line per problem, in row order. UTF-8 with a byte order mark, CRLF, the file's delimiter (`,` for workbooks). Every field is quoted, and a field a spreadsheet could read as a formula (starting with `=` `+` `-` `@`, a tab or a line break) or starting with `'` gets a leading `'`; a file uploaded again is recognised as a report by its first five headers and the `'` is taken off. At most the 10,000 stored problems. `404` when the job has no problems or its file expired. A download by anyone other than the job's owner is audited as `import.report_read`. `429` when the caller already downloads 2 reports, `503` when the server sends 8; a client that reads nothing for 30 s, or takes more than 15 minutes, is cut off. Also while bulk import is off, so the report can be kept before the job is deleted. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `cis.import`. Columns `Row`, `Severity`, `Column`, `Problem`, `Code`, then every original column of the row under its original header; one line per problem, in row order. UTF-8 with a byte order mark, CRLF, the file's delimiter (`,` for workbooks). Every field is quoted, and a field a spreadsheet could read as a formula (starting with `=` `+` `-` `@`, a tab or a line break) or starting with `'` gets a leading `'`; a file uploaded again is recognised as a report by its first five headers and the `'` is taken off. At most the 10,000 stored problems. `404` when the job has no problems or its file expired. A download by anyone other than the job's owner is audited as `import.report_read`, so a signed-in session must send X-CSRF-Token as on a write. `429` when the caller already downloads 2 reports, `503` when the server sends 8; a client that reads nothing for 30 s, or takes more than 15 minutes, is cut off. Also while bulk import is off, so the report can be kept before the job is deleted. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         get: operations["downloadImportErrorReport"];
         put?: never;
@@ -2208,7 +2208,7 @@ export interface paths {
         };
         /**
          * Which layout template each class uses, and who uses each template
-         * @description Requires `customization.manage`. Per template: the classes that use it as their default and the number of live CIs that show it instead of their class's default (null when some of those CIs are in classes you may not view). Per class: its default template. Templates are edited in the settings document (`layoutTemplates`, PUT /api/v1/ui-settings); one that a class or a live CI uses cannot be removed (409 CONFLICT).
+         * @description Requires `customization.manage`. Per template: the classes that use it as their default, the number of live CIs that show it instead of their class's default (null when some of those CIs are in classes you may not view) and one of those CIs you may view (`sampleCiId`). Per class: its default template and the number of its live CIs with a layout of their own (`ownLayoutCount`, null when you may not view the class). The CIs themselves: GET /api/v1/configuration-items with `ownLayout` or `layoutTemplate`. Templates are edited in the settings document (`layoutTemplates`, PUT /api/v1/ui-settings); one that a class or a live CI uses cannot be removed (409 CONFLICT).
          */
         get: operations["getLayoutTemplateUsage"];
         put?: never;
@@ -3215,6 +3215,13 @@ export interface components {
             templateKey: string;
             /** @description Whether the class has a layout entry (false: it uses Standard because it has none) */
             explicit: boolean;
+            /**
+             * Format: int64
+             * @description Live CIs of the class itself (not its subclasses) with a layout of their own, another template or a
+             *     custom one; null when you may not view the class. The list of them:
+             *     GET /api/v1/configuration-items?classId=<id>&includeSubclasses=false&ownLayout=true
+             */
+            ownLayoutCount: number | null;
         };
         /** @description A whole configuration: data model, lookups, permission profiles, UI settings, saved import mappings and shared saved views (no users, passwords, CIs or personal views) */
         ConfigFile: {
@@ -4406,6 +4413,12 @@ export interface components {
              *     may not view
              */
             overrideCount: number | null;
+            /**
+             * Format: uuid
+             * @description A live CI you may view that shows it as its own layout (the first by label), to open the layout
+             *     editor on when no class uses the template; null when there is none
+             */
+            sampleCiId: string | null;
         };
         /** @description Which template each class uses, and who uses each template */
         LayoutTemplateUsages: {
@@ -7698,6 +7711,10 @@ export interface operations {
                 criticalityValueId?: string;
                 /** @description Soft-deleted CIs: exclude (default), include, or only */
                 deleted?: "exclude" | "include" | "only";
+                /** @description true: only CIs with a layout of their own (another template or a custom layout, see /configuration-items/{id}/layout); false: only CIs that show their class's default template */
+                ownLayout?: "true" | "false";
+                /** @description Only CIs that show this layout template (`layoutTemplates[].key`) as their own layout, not as their class's default */
+                layoutTemplate?: string;
             };
             header?: never;
             path?: never;

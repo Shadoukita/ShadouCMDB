@@ -2,7 +2,7 @@
 import { useQueryClient } from "@tanstack/vue-query";
 import { computed, nextTick, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { fetchCiList, useCiClasses } from "../../../api/queries";
+import { fetchCi, fetchCiList, useCiClasses } from "../../../api/queries";
 import { useLayoutTemplateUsage, type UiLayoutTemplate, type UiSettingsDocument } from "../../../api/uiSettings";
 import ConfirmDialog from "../../../components/ConfirmDialog.vue";
 import EmptyState from "../../../components/EmptyState.vue";
@@ -19,6 +19,7 @@ import {
   classTemplateKey,
   deletable,
   freeTemplateName,
+  ownLayoutLink,
   setClassTemplate,
   STANDARD_TEMPLATE,
   type TemplateUsers,
@@ -33,8 +34,9 @@ import TemplateDialog from "./TemplateDialog.vue";
  *
  * - Classes: every class with its default template (an inline select, part of
  *   this page's draft, saved with it), searchable, filterable by template and
- *   sortable, with the filter in the URL. "Edit CI…" opens the class's panel to
- *   edit its default template on one of its CIs (ClassCiEditor).
+ *   sortable, with the filter in the URL; the number of its CIs with a layout of
+ *   their own links to them in the inventory. "Edit CI…" opens the class's panel
+ *   to edit its default template on one of its CIs (ClassCiEditor).
  * - Templates: who uses each (classes from the draft, CIs from the API) and
  *   Edit (the layout editor on a CI that shows it, else on a CI of a class that
  *   uses it, else on the most recently updated CI), Rename, Duplicate and Delete
@@ -68,7 +70,9 @@ watch(
   },
 );
 const uses = computed(() => lq.get("uses"));
-const rows = computed(() => classRows(allClasses.value, props.doc, { q: lq.get("q"), uses: uses.value, sort: lq.sort.value }));
+/** CIs with a layout of their own, per class key (undefined while counting). */
+const owned = computed(() => (usage.data.value ? new Map(usage.data.value.classes.map((c) => [c.classKey, c.ownLayoutCount])) : undefined));
+const rows = computed(() => classRows(allClasses.value, props.doc, { q: lq.get("q"), uses: uses.value, sort: lq.sort.value, owned: owned.value }));
 const page = computed(() => rows.value.slice(lq.offset.value, lq.offset.value + lq.limit.value));
 const filtered = computed(() => !!lq.get("q") || !!uses.value);
 function clearFilters() {
@@ -78,6 +82,7 @@ function clearFilters() {
 const CLASS_COLUMNS = [
   { key: "class", label: () => t("customization.layouts.colClass"), sort: "class" },
   { key: "template", label: () => t("customization.layouts.colTemplate"), sort: "template" },
+  { key: "owned", label: () => t("customization.layouts.colOwnLayout"), sort: "owned" },
   { key: "actions", label: () => t("customization.layouts.colActions"), sort: "" },
 ] as const;
 
@@ -158,13 +163,23 @@ function remove() {
   if (key) props.doc.layoutTemplates = props.doc.layoutTemplates.filter((x) => x.key !== key);
 }
 
-/** Opens the layout editor on the template: on a CI of a class that uses it, else on the most recently updated CI, else on a create form. */
+/**
+ * Opens the layout editor on the template: on a CI that shows it as its own layout
+ * (`sampleCiId`), else on a CI of a class that uses it, else on the most recently
+ * updated CI, else on a create form.
+ */
 const opening = ref<string | null>(null);
 const openError = ref<unknown>(null);
 async function edit(key: string) {
   opening.value = key;
   openError.value = null;
   try {
+    const sample = usage.data.value?.templates.find((x) => x.key === key)?.sampleCiId;
+    if (sample) {
+      const ci = await fetchCi(qc, sample);
+      const cls = classById.value.get(ci.classId);
+      if (cls) return void openLayoutEditor(router, { path: `/cis/${ci.id}` }, cls.key, key);
+    }
     const using = users(key).classKeys.map((k) => classByKey.value.get(k)).filter((c) => !!c);
     for (const c of using.slice(0, 5)) {
       const ci = (await fetchCiList(qc, { classId: c.id, limit: 1, sort: "-updatedAt" })).data[0];
@@ -218,7 +233,7 @@ async function edit(key: string) {
               <caption class="sr-only">{{ t("customization.layouts.classesCaption") }}</caption>
               <thead>
                 <tr>
-                  <th v-for="c in CLASS_COLUMNS" :key="c.key" scope="col" :aria-sort="c.sort ? lq.ariaSort(c.sort) : undefined">
+                  <th v-for="c in CLASS_COLUMNS" :key="c.key" scope="col" :class="{ num: c.key === 'owned' }" :aria-sort="c.sort ? lq.ariaSort(c.sort) : undefined">
                     <button v-if="c.sort" type="button" class="sort" @click="lq.toggleSort(c.sort)">{{ c.label() }} {{ lq.sortIndicator(c.sort) }}</button>
                     <template v-else>{{ c.label() }}</template>
                   </th>
@@ -235,6 +250,14 @@ async function edit(key: string) {
                     <select :id="`layout-default-${r.key}`" :value="r.templateKey" @change="setDefault(r.key, ($event.target as HTMLSelectElement).value)">
                       <option v-for="tp in doc.layoutTemplates" :key="tp.key" :value="tp.key">{{ tp.name }}</option>
                     </select>
+                  </td>
+                  <td class="num" data-testid="own-layout-count">
+                    <template v-if="r.ownLayoutCount === undefined">…</template>
+                    <span v-else-if="r.ownLayoutCount === null" :title="t('customization.layouts.ownLayoutHidden')">?</span>
+                    <template v-else-if="r.ownLayoutCount === 0">0</template>
+                    <RouterLink v-else :to="ownLayoutLink(r.id)" :aria-label="t('customization.layouts.ownLayoutLink', { n: r.ownLayoutCount, class: r.name })">
+                      {{ r.ownLayoutCount.toLocaleString() }}
+                    </RouterLink>
                   </td>
                   <td>
                     <button type="button" class="btn btn-sm" :aria-label="t('customization.layouts.editOnCiFor', { class: r.name })" @click="openClass(r.key)">

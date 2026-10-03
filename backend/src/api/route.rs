@@ -914,7 +914,8 @@ impl RouteBuilder {
                         imports: state.imports,
                         business_services: state.business_services,
                     };
-                    let res = match f(api, input).await {
+                    let csrf_free_read = (!csrf).then(|| operation_id.clone());
+                    let res = match crate::data::crud::run_handler(csrf_free_read, f(api, input)).await {
                         Ok(out) => out.respond(status),
                         // A refused sign-in answers no earlier than its floor (GH#216). The
                         // handler is done, so no database connection is held; the permit is
