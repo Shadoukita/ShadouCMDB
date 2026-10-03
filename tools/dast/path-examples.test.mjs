@@ -13,6 +13,8 @@ test("resourceOf: the path before the parameter, with aliases", () => {
   assert.equal(resourceOf("/api/v1/admin/users/{id}/password", "id"), "admin/users");
   assert.equal(resourceOf("/api/v1/auth/oidc/{id}/start", "id"), "admin/identity-providers");
   assert.equal(resourceOf("/api/v1/ui-settings/versions/{version}", "version"), "ui-settings/versions");
+  assert.equal(resourceOf("/api/v1/admin/workflow-definitions/{id}/versions/{no}/retire", "no"), "admin/workflow-definitions/versions");
+  assert.equal(resourceOf("/api/v1/admin/workflow-definitions/{id}/versions/{no}", "id"), "admin/workflow-definitions");
 });
 
 test("withExamples: sets path-level and operation-level parameters, enums, and reports the rest", () => {

@@ -695,6 +695,7 @@ async function main() {
   await permissions({ serverClass, appClass, dbClass, server, app, database, r1, inService, adminMe });
   await customization({ serverClass, server, adminMe });
   await savedViews({ serverClass });
+  await workflows({ infra, adminMe });
   await realTables({ inService, infra, adminMe });
 
   // --- Deletes and history ------------------------------------------------------
@@ -876,6 +877,82 @@ async function main() {
     process.exit(1);
   }
   console.log('ALL CHECKS PASSED');
+}
+
+/** Workflow definitions at design time (SHAA-1423): every operation, the lint, the stale-write conflicts and the IN_USE guard. */
+async function workflows(x: Json) {
+  const { infra, adminMe } = x;
+  const put = (url: string, body: unknown, expect = 200) => call('PUT', url, body, expect);
+  const builtin = adminMe.user.profiles.find((p: Json) => p.isBuiltin);
+
+  console.log('\n# Workflow definitions');
+  const cls = (await post('/api/v1/ci-classes', { key: `smoke_wf_${RUN}`, name: 'Smoke workflow type', areaId: infra })).json;
+  const phases = (await post('/api/v1/lookup-lists', { key: `smoke_wf_phase_${RUN}`, name: 'Smoke phase' })).json;
+  for (const key of ['planned', 'approved', 'live', 'limbo']) await post('/api/v1/lookup-list-values', { listId: phases.id, key, name: key });
+  const phase = (await post('/api/v1/attribute-definitions', { classId: cls.id, key: 'phase', label: 'Phase', dataType: 'lookup', lookupListId: phases.id })).json;
+  await post('/api/v1/attribute-definitions', { classId: cls.id, key: 'ticket', label: 'Change ticket', dataType: 'text' });
+  const base = '/api/v1/admin/workflow-definitions';
+  const def = (await post(base, { key: `smoke_wf_${RUN}`, name: 'Smoke lifecycle', classId: cls.id, stateAttributeId: phase.id })).json;
+  check(def.isActive === false && def.draftVersionNo === 1 && def.currentVersionNo === null, 'a new definition is inactive with an empty draft');
+  await post(base, { key: `smoke_wf_${RUN}`, name: 'Duplicate', classId: cls.id }, 409);
+  await post(base, { key: 'Bad Key', name: 'x', classId: cls.id }, 400);
+  check((await get(`${base}?q=smoke_wf_${RUN}&sort=name`)).json.data.some((d: Json) => d.id === def.id), 'the definition is listed');
+  await get(`${base}/${def.id}`);
+  await get(`${base}/00000000-0000-4000-8000-000000000000`, 404);
+  const renamed = (await patch(`${base}/${def.id}`, { version: def.version, description: 'Smoke' })).json;
+  await patch(`${base}/${def.id}`, { version: def.version, name: 'stale' }, 409);
+
+  const state = (key: string, category: string, extra: Json = {}) => ({ key, name: key, category, stateValue: key, ...extra });
+  const graph = {
+    initialState: 'planned',
+    states: [state('planned', 'open'), state('approved', 'active'), state('live', 'done', { terminal: true }), state('limbo', 'active')],
+    transitions: [
+      { key: 'approve', name: 'Approve', from: 'planned', to: 'approved', requiresComment: true, conditions: { all: [{ field: 'ticket', op: 'isSet' }] } },
+      { key: 'go_live', name: 'Go live', from: 'approved', to: 'live' },
+    ],
+    layout: { planned: { x: 0, y: 0 }, approved: { x: 200, y: 0 }, live: { x: 400, y: 0 } },
+  };
+  const unknown = await put(`${base}/${def.id}/draft`, { ...graph, states: [state('planned', 'open', { stateValue: 'nope' })], transitions: [] }, 400);
+  check(fields(unknown).includes('states[0].stateValue'), 'an unknown state value is refused per field');
+  const draft = (await put(`${base}/${def.id}/draft`, graph)).json;
+  await put(`${base}/${def.id}/draft`, { ...graph, expectedChecksum: '0'.repeat(64) }, 409);
+  await get(`${base}/${def.id}/draft`);
+  const lint = (await post(`${base}/${def.id}/draft/validate`, undefined, 200)).json;
+  check(!lint.valid && lint.problems.some((p: Json) => p.code === 'unreachable_state'), 'the lint finds the unreachable state');
+  const refused = await post(`${base}/${def.id}/draft/publish`, { expectedDraftChecksum: draft.checksum }, 400);
+  check(fields(refused).includes('states[3]'), 'publish is refused with the lint problems');
+
+  const fixed = (await put(`${base}/${def.id}/draft`, { ...graph, states: graph.states.slice(0, 3), expectedChecksum: draft.checksum })).json;
+  const grants = (await put(`${base}/${def.id}/grants`, { version: renamed.version, grants: [{ transitionKey: 'approve', profiles: [builtin.name] }] })).json;
+  check(grants.grants[0]?.profiles[0]?.id === builtin.id, 'a transition is granted to a profile by name');
+  await put(`${base}/${def.id}/grants`, { version: renamed.version, grants: [] }, 409);
+  await get(`${base}/${def.id}/grants`);
+  check((await post(`${base}/${def.id}/draft/validate`, undefined, 200)).json.valid === true, 'the fixed draft is valid');
+  await post(`${base}/${def.id}/draft/publish`, { expectedDraftChecksum: '0'.repeat(64) }, 409);
+  const published = (await post(`${base}/${def.id}/draft/publish`, { expectedDraftChecksum: fixed.checksum, changeNote: 'Smoke' })).json;
+  check(published.status === 'published' && published.isCurrent, 'the draft is published as the current version');
+  await get(`${base}/${def.id}/versions/1`);
+  await get(`${base}/${def.id}/versions/9`, 404);
+  const archive = await del(`/api/v1/attribute-definitions/${phase.id}`, 409);
+  check(archive.json?.error?.code === 'IN_USE', 'a field a published workflow depends on cannot be archived');
+
+  // A second draft, discarded; then the published version is retired.
+  await put(`${base}/${def.id}/draft`, graph);
+  await del(`${base}/${def.id}/draft`);
+  await get(`${base}/${def.id}/draft`, 404);
+  const retired = (await post(`${base}/${def.id}/versions/1/retire`, undefined, 200)).json;
+  check(retired.status === 'retired', 'the version is retired');
+  await post(`${base}/${def.id}/versions/1/retire`, undefined, 409);
+  check((await get(`${base}/${def.id}/versions?limit=10`)).json.data.length === 1, 'the versions are listed');
+
+  const password = `wf-${RUN}-password`;
+  const nobody = (await post('/api/v1/admin/users', { username: `smoke-wf-${RUN}`, displayName: 'No workflow rights', email: `wf-${RUN}@example.com`, password })).json;
+  await as(await login(nobody.username, password), async () => {
+    await get(base, 403);
+    await post(`${base}/${def.id}/draft/validate`, undefined, 403);
+  });
+  await del(`${base}/${def.id}`); // never had an instance
+  await get(`${base}/${def.id}`, 404);
 }
 
 /** Saved views (SHAA-578): every operation, resolution into list parameters, defaults and the shared-copy audit. */

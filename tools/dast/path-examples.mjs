@@ -6,7 +6,8 @@
 // request was refused 400 while the path was parsed, and no `/{id}` handler was ever attacked. This
 // script signs in to the running server as the scan's administrator, reads one id per resource from
 // its list endpoint (demo data from `seed --demo`), creates the objects the scan may damage (a user,
-// a profile, a group, an identity provider, an API token, an import job, a saved mapping, a saved view), and writes the spec with those ids
+// a profile, a group, an identity provider, an API token, an import job, a saved mapping, a saved view,
+// a workflow definition), and writes the spec with those ids
 // as examples.
 //
 //   DAST_USERNAME=... DAST_PASSWORD=... node tools/dast/path-examples.mjs <openapi.json> <out.json> [<examples.json>]
@@ -44,7 +45,7 @@ export const LISTED = [
  * Objects created for the scan. The scan changes, disables and deletes what it is given, so it gets
  * objects of its own: never its own account (a password change would end its session) or token.
  */
-export const CREATED = ["admin/profiles", "admin/groups", "admin/users", "admin/identity-providers", "admin/api-tokens", "imports", "import-mappings", "saved-views"];
+export const CREATED = ["admin/profiles", "admin/groups", "admin/users", "admin/identity-providers", "admin/api-tokens", "imports", "import-mappings", "saved-views", "admin/workflow-definitions"];
 
 /**
  * Resources that may have no row yet; any well-formed value still reaches the handler (404). The
@@ -52,13 +53,15 @@ export const CREATED = ["admin/profiles", "admin/groups", "admin/users", "admin/
  * install, so they cannot be given a row.
  */
 export const LEGACY = ["statuses", "environments", "locations", "owners"];
-export const OPTIONAL = ["schema-changes", ...LEGACY, "ui-settings/versions", "admin/templates", "ui-settings/class-layouts"];
+export const OPTIONAL = ["schema-changes", ...LEGACY, "ui-settings/versions", "admin/templates", "ui-settings/class-layouts", "admin/workflow-definitions/versions"];
 
 /** Paths whose parameter names an object of another resource. */
 export const ALIASES = {
   "auth/oidc": "admin/identity-providers",
   // DELETE /business-services/{id}/members/{ciId}: a CI.
   "business-services/{id}/members": "configuration-items",
+  // GET /admin/workflow-definitions/{id}/versions/{no}: a version number, not an id.
+  "admin/workflow-definitions/{id}/versions": "admin/workflow-definitions/versions",
 };
 
 /** The resource a path parameter names: the path between /api/v1/ and the parameter. */
@@ -189,6 +192,12 @@ async function collect(request) {
   examples["saved-views"] = (
     await request("POST", "saved-views", { context: "inventory", name, visibility: "personal", definition: { classKeys: ["server"] } })
   ).id;
+  // An inactive definition with only its draft (version 1): the scan may edit, publish and delete it.
+  const serverClass = (await request("GET", "ci-classes?limit=200")).data.find((c) => c.key === "server");
+  examples["admin/workflow-definitions"] = (
+    await request("POST", "admin/workflow-definitions", { key: "dast_scan_target", name, classId: serverClass.id })
+  ).id;
+  examples["admin/workflow-definitions/versions"] = 1;
   return examples;
 }
 
