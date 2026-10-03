@@ -497,7 +497,7 @@ mod tests {
             username: "admin".into(),
             display_name: "Admin".into(),
             email: "admin@example.test".into(),
-            password: crate::modules::mfa::tests::PASSWORD.to_owned().into(),
+            password: uuid::Uuid::new_v4().to_string().into(),
             is_active: Some(true),
             profile_ids: vec![admin],
         };

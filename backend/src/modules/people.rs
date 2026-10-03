@@ -247,7 +247,7 @@ pub fn routes() -> Vec<Route> {
         route(Method::GET, "/api/v1/configuration-items/{id}/sign-in-account", "getSignInAccount")
             .tag("Configuration items")
             .summary("The sign-in account a Person is linked to")
-            .description("For a CI of the built-in Person type: the user account linked to it (`account`, null when none is). While an account is linked, the Person's Email follows the account's e-mail and is read-only on the CI (409 CONFLICT, `managed_by_user`), and the Person cannot be deleted or change its type (409 CONFLICT, `person_linked`). Any CI the caller may view can be asked; other types have no account. `userId` is only shown to callers holding users.manage.")
+            .description("For a CI of the built-in Person type: the user account linked to it (`account`, null when none is). While an account is linked, the Person's Email follows the account's e-mail and is read-only on the CI (409 CONFLICT, `managed_by_user`), and the Person cannot be deleted or change its type (409 CONFLICT, `person_linked`). Any CI the caller may view can be asked; other types have no account. `userId` is only shown to callers who may manage user accounts.")
             .errors(&[ErrorCode::NotFound])
             .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
                 Ok(Json(sign_in_account(&api.pool, &api.ctx, id).await?))
@@ -479,12 +479,11 @@ mod tests {
         let (status, _, erin_session) = login(&app, "erin").await;
         assert_eq!(status, 200);
 
-        // An account created before e-mails were required.
-        let hash = crate::auth::password::hash(PASSWORD).await.unwrap();
+        // An account created before e-mails were required, with erin's password.
         let legacy: Uuid = sqlx::query_scalar(
-            "INSERT INTO users (username, display_name, password_hash) VALUES ('legacy', 'Legacy User', $1) RETURNING id",
+            "INSERT INTO users (username, display_name, password_hash)
+             SELECT 'legacy', 'Legacy User', password_hash FROM users WHERE username = 'erin' RETURNING id",
         )
-        .bind(&hash)
         .fetch_one(pool)
         .await
         .unwrap();

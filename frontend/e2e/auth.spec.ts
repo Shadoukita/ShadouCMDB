@@ -82,9 +82,11 @@ test("first-run setup is shown while the API says no user exists, and signs the 
   await expect(page.locator("#setup-setupToken")).toHaveAttribute("aria-invalid", "true");
   await expect(page.locator("#setup-username")).toHaveAttribute("aria-invalid", "true");
   await expect(page.locator("#setup-username-err")).toHaveText("Required");
+  await expect(page.locator("#setup-email-err")).toHaveText("Required");
   await page.locator("#setup-setupToken").fill("  token-from-the-log  ");
   await page.locator("#setup-username").fill("first-admin");
   await page.locator("#setup-displayName").fill("First Admin");
+  await page.locator("#setup-email").fill("first-admin@example.test");
   await page.locator("#setup-password").fill("a-long-enough-password");
   await page.locator("#setup-confirm").fill("a-different-password!");
   await page.getByRole("button", { name: "Create administrator and sign in" }).click();
@@ -97,7 +99,7 @@ test("first-run setup is shown while the API says no user exists, and signs the 
   expect(sent).toEqual({
     username: "first-admin",
     displayName: "First Admin",
-    email: null,
+    email: "first-admin@example.test",
     password: "a-long-enough-password",
     setupToken: "token-from-the-log",
   });

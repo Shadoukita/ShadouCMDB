@@ -76,7 +76,7 @@ const statusRows = computed<CountRow[]>(() =>
     </div>
 
     <LoadingState v-if="total.isLoading.value" />
-    <section v-if="total.data.value === 0 && noClasses" class="panel callout">
+    <section v-if="noClasses" class="panel callout">
       <DataModelEmpty />
     </section>
     <section v-else-if="total.data.value === 0 && classes.data.value" class="panel">
@@ -87,7 +87,7 @@ const statusRows = computed<CountRow[]>(() =>
         </template>
       </EmptyState>
     </section>
-    <template v-if="total.data.value !== undefined && total.data.value > 0 && widgets">
+    <template v-if="!noClasses && total.data.value !== undefined && total.data.value > 0 && widgets">
       <DashboardWidgets v-if="widgets.length > 0" :widgets="widgets" />
       <EmptyState v-else :title="t('dashboard.noWidgets.title')">
         {{ t("dashboard.noWidgets.body") }}
@@ -97,7 +97,7 @@ const statusRows = computed<CountRow[]>(() =>
       </EmptyState>
     </template>
     <LoadingState v-else-if="settings.query.isLoading.value" />
-    <template v-else-if="total.data.value !== undefined && total.data.value > 0">
+    <template v-else-if="!noClasses && total.data.value !== undefined && total.data.value > 0">
       <div class="kpis">
         <div class="kpi">
           <div class="value">{{ formatNumber(total.data.value) }}</div>
