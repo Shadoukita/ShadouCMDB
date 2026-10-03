@@ -120,6 +120,6 @@ function set(i: number, patch: Partial<MappingRow>) {
 .mappings .error {
   display: block;
   font-size: var(--fs-sm);
-  color: var(--c-danger);
+  color: var(--c-danger-text);
 }
 </style>

@@ -16,7 +16,7 @@ const b = computed(() => props.doc.branding);
 const branding = useBrandingStore();
 
 const COLORS = [
-  { key: "primaryColor", label: "Primary colour", hint: "Buttons, links and focus rings", fallback: "#1f5fbf" },
+  { key: "primaryColor", label: "Primary colour", hint: "Buttons, links and focus rings", fallback: "#2457d6" },
   { key: "accentColor", label: "Accent colour", hint: "The marker of the current menu entry", fallback: "#4c8dff" },
 ] as const;
 const colorText = ref<Record<string, string>>({ primaryColor: b.value.primaryColor ?? "", accentColor: b.value.accentColor ?? "" });
@@ -241,8 +241,8 @@ function readBase64(file: File): Promise<string> {
   display: flex;
   align-items: center;
   gap: var(--sp-3);
-  color: #fff;
-  font-weight: 700;
+  color: var(--c-sidebar-text-strong);
+  font-weight: var(--fw-semibold);
   padding: 0 var(--sp-4) var(--sp-3);
 }
 .brand-preview-item {
@@ -251,7 +251,7 @@ function readBase64(file: File): Promise<string> {
 }
 .brand-preview-item.active {
   background: var(--c-sidebar-active);
-  color: #fff;
+  color: var(--c-sidebar-text-strong);
   box-shadow: inset 3px 0 0 var(--c-accent);
 }
 .brand-preview-main {

@@ -287,7 +287,7 @@ const canLower = computed(() => props.layer.index > 1);
   margin: 0;
   height: 100%;
   overflow: auto;
-  box-shadow: 0 1px 4px rgb(0 0 0 / 12%);
+  box-shadow: var(--shadow-xs);
 }
 .le-win.stacked > :deep(.panel) {
   height: auto;
@@ -305,7 +305,7 @@ const canLower = computed(() => props.layer.index > 1);
   outline-offset: 1px;
 }
 .le-win.moving > :deep(.panel) {
-  box-shadow: 0 6px 18px rgb(0 0 0 / 22%);
+  box-shadow: var(--shadow-md);
 }
 .win-grip {
   position: absolute;
@@ -314,7 +314,7 @@ const canLower = computed(() => props.layer.index > 1);
   z-index: 3;
   padding: 0 var(--sp-2);
   line-height: 16px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   letter-spacing: -1px;
   border: 1px solid var(--c-border-strong);
   border-radius: 8px;
@@ -407,7 +407,7 @@ const canLower = computed(() => props.layer.index > 1);
   padding: var(--sp-1) var(--sp-3);
   border-radius: var(--radius);
   background: var(--c-primary);
-  color: #fff;
+  color: var(--c-primary-text);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -423,7 +423,7 @@ const canLower = computed(() => props.layer.index > 1);
   border: 1px solid var(--c-border-strong);
   border-radius: var(--radius);
   background: var(--c-surface);
-  box-shadow: 0 6px 18px rgb(0 0 0 / 22%);
+  box-shadow: var(--shadow-md);
 }
 .win-menu [role="menuitem"] {
   display: flex;

@@ -76,6 +76,6 @@ async function replace() {
   color: var(--c-text-muted);
 }
 .secret-state.removed {
-  color: var(--c-danger);
+  color: var(--c-danger-text);
 }
 </style>

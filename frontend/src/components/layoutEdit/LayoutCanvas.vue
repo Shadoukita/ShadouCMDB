@@ -991,12 +991,12 @@ function onHiddenDrop(e: DragEvent) {
   border-style: dashed;
 }
 .le-section.invalid {
-  border-color: var(--c-danger);
+  border-color: var(--c-danger-text);
 }
 .le-errors {
   margin: 0;
   padding: var(--sp-2) var(--sp-3) var(--sp-2) var(--sp-6);
-  color: var(--c-danger);
+  color: var(--c-danger-text);
   background: var(--c-danger-bg);
   font-size: var(--fs-sm);
 }
@@ -1029,7 +1029,7 @@ function onHiddenDrop(e: DragEvent) {
   resize: vertical;
 }
 .le-note-error {
-  color: var(--c-danger);
+  color: var(--c-danger-text);
 }
 .le-panel-hint {
   margin: 0;

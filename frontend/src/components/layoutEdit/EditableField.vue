@@ -191,7 +191,7 @@ function onResizeStart(e: PointerEvent) {
   outline-offset: 1px;
 }
 .req {
-  color: var(--c-danger);
+  color: var(--c-danger-text);
   margin-left: 2px;
 }
 /* The toolbar floats above the field's top edge while the field is hovered or holds the keyboard focus. */
@@ -207,7 +207,7 @@ function onResizeStart(e: PointerEvent) {
   border: 1px solid var(--c-primary);
   border-radius: var(--radius);
   background: var(--c-surface);
-  box-shadow: 0 2px 6px rgb(0 0 0 / 12%);
+  box-shadow: var(--shadow-md);
   opacity: 0;
   pointer-events: none;
   white-space: nowrap;
