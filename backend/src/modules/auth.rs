@@ -2465,6 +2465,15 @@ pub(crate) mod tests {
         let e = login(pool, &auth, &headers, &from("198.51.100.7"), login_body("erin", &wrong)).await.err().unwrap();
         assert_eq!((e.code, e.hold_until), (ErrorCode::IdentityProviderUnavailable, None), "a directory account");
         assert!(start.elapsed() < floor, "skipped, not asked");
+
+        // After the window, sign-ins sent at once: one asks the directory again
+        // and waits for the timeout, the others are still skipped.
+        crate::modules::sso::expire_skip(ldap);
+        let burst = ["owner", "nobody-3", "nobody-4", "nobody-5", "nobody-6", "nobody-7"];
+        let answers = futures_util::future::join_all(burst.map(&answer_time)).await;
+        let late: Vec<_> = burst.iter().zip(&answers).filter(|(_, (_, took))| *took > floor + slack).collect();
+        assert!(answers.iter().all(|(code, _)| *code == ErrorCode::Unauthenticated), "{answers:?}");
+        assert!(late.len() <= 1, "at most the one trial is late: {late:?}");
         db.drop().await;
     }
 

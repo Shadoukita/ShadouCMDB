@@ -383,35 +383,72 @@ fn directory_identity(user: ldap::DirectoryUser) -> ExternalIdentity {
 /// How long the password form skips a directory whose lookup timed out (GH#570).
 const TIMED_OUT_SKIP: Duration = Duration::from_secs(30);
 
-/// Directories (id and URL) whose last password-form lookup timed out, and
-/// until when the form skips them. While a directory drops packets, every
-/// unknown name would otherwise wait for the LDAP timeout (10 s) and a local
-/// account's wrong password only for `SIGN_IN_FAILURE_FLOOR_MS`, which tells
-/// the local account names apart; now only the first lookup per window waits.
-/// Per process: each replica learns of the outage on its own. A new URL starts
-/// afresh; a successful connection test clears the provider ([`directory_reachable`]).
-static TIMED_OUT: LazyLock<Mutex<HashMap<(Uuid, String), Instant>>> = LazyLock::new(Default::default);
+/// How long the one lookup that asks the directory again after [`TIMED_OUT_SKIP`]
+/// keeps the others skipped: longer than the LDAP connect timeout (10 s), so a
+/// trial that is still waiting for it holds; if the trial's request went away
+/// (client gone), the next lookup after this takes over.
+const TRIAL_LEASE: Duration = Duration::from_secs(15);
 
-fn timed_out_directories() -> std::sync::MutexGuard<'static, HashMap<(Uuid, String), Instant>> {
+/// A directory whose last password-form lookup timed out.
+#[derive(Debug, Clone, Copy)]
+struct TimedOut {
+    /// Skipped by every lookup until then.
+    until: Instant,
+    /// After `until`: one lookup asks the directory again, and the others stay
+    /// skipped while it does, until this lease ends.
+    trial: Option<Instant>,
+}
+
+/// Directories (id and URL) whose last password-form lookup timed out. While a
+/// directory drops packets, every unknown name would otherwise wait for the
+/// LDAP timeout (10 s) and a local account's wrong password only for
+/// `SIGN_IN_FAILURE_FLOOR_MS`, which tells the local account names apart; now
+/// at most one lookup per window waits, even for sign-ins sent at once.
+/// Per process: each replica learns of the outage on its own. A new URL starts
+/// afresh; a lookup that does not time out or a successful connection test
+/// clears the provider ([`directory_reachable`]).
+static TIMED_OUT: LazyLock<Mutex<HashMap<(Uuid, String), TimedOut>>> = LazyLock::new(Default::default);
+
+fn timed_out_directories() -> std::sync::MutexGuard<'static, HashMap<(Uuid, String), TimedOut>> {
     TIMED_OUT.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Whether the password form skips the directory: it timed out within [`TIMED_OUT_SKIP`].
-fn skipped(provider: Uuid, url: &str) -> bool {
-    let now = Instant::now();
-    let mut map = timed_out_directories();
-    map.retain(|_, until| *until > now);
-    map.contains_key(&(provider, url.to_owned()))
+/// Whether a lookup at `now` skips the directory. When the skip has run out
+/// and no trial holds a lease, this lookup becomes the trial.
+fn skip_at(state: Option<&mut TimedOut>, now: Instant) -> bool {
+    let Some(state) = state else { return false };
+    if now < state.until || state.trial.is_some_and(|lease| now < lease) {
+        return true;
+    }
+    state.trial = Some(now + TRIAL_LEASE);
+    false
 }
 
-/// Records how the directory's lookup ended: skipped for a while after a timeout.
+/// Whether the password form skips the directory (see [`skip_at`]).
+fn skipped(provider: Uuid, url: &str) -> bool {
+    skip_at(timed_out_directories().get_mut(&(provider, url.to_owned())), Instant::now())
+}
+
+/// Records how the directory's lookup ended: skipped for a while after a
+/// timeout, asked again by every lookup otherwise.
 fn note_lookup(provider: Uuid, url: &str, timed_out: bool) {
     let key = (provider, url.to_owned());
     let mut map = timed_out_directories();
     if timed_out {
-        map.insert(key, Instant::now() + TIMED_OUT_SKIP);
+        map.insert(key, TimedOut { until: Instant::now() + TIMED_OUT_SKIP, trial: None });
     } else {
         map.remove(&key);
+    }
+}
+
+/// Test hook: the skip of every directory of `provider` has run out.
+#[cfg(test)]
+pub(crate) fn expire_skip(provider: Uuid) {
+    let now = Instant::now();
+    for ((id, _), state) in timed_out_directories().iter_mut() {
+        if *id == provider {
+            *state = TimedOut { until: now, trial: None };
+        }
     }
 }
 
@@ -452,7 +489,7 @@ pub async fn directory_sign_in(
             continue;
         };
         if skipped(provider.id, &settings.url) {
-            tracing::warn!(provider = %provider.name, "LDAP directory skipped: it timed out within the last {} s", TIMED_OUT_SKIP.as_secs());
+            tracing::warn!(provider = %provider.name, "LDAP directory skipped: a lookup timed out, asked again {} s later", TIMED_OUT_SKIP.as_secs());
             unavailable = true;
             continue;
         }
@@ -953,6 +990,24 @@ mod tests {
         assert!(verified(json!(true)) && verified(json!("true")) && verified(json!("TRUE")));
         assert!(!verified(json!(false)) && !verified(json!("false")) && !verified(json!(1)) && !verified(Value::Null));
         assert!(!email_verified(&Map::new()), "absent: not verified");
+    }
+
+    /// GH#570: after the skip, one lookup asks the directory again while the
+    /// others stay skipped; a trial that went away is taken over after its lease.
+    #[test]
+    fn one_trial_lookup_after_a_timeout() {
+        let t0 = Instant::now();
+        assert!(!skip_at(None, t0), "never timed out: asked");
+        let mut state = TimedOut { until: t0 + TIMED_OUT_SKIP, trial: None };
+        assert!(skip_at(Some(&mut state), t0), "within the window");
+        assert!(skip_at(Some(&mut state), t0 + TIMED_OUT_SKIP - Duration::from_millis(1)));
+        let after = t0 + TIMED_OUT_SKIP;
+        assert!(!skip_at(Some(&mut state), after), "the first after the window is the trial");
+        for later in [after, after + Duration::from_secs(1), after + TRIAL_LEASE - Duration::from_millis(1)] {
+            assert!(skip_at(Some(&mut state), later), "others skip while the trial runs");
+        }
+        assert!(!skip_at(Some(&mut state), after + TRIAL_LEASE), "lease over: the next one takes over");
+        assert!(skip_at(Some(&mut state), after + TRIAL_LEASE), "and holds it in turn");
     }
 
     // -----------------------------------------------------------------------
