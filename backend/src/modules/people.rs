@@ -632,7 +632,7 @@ mod tests {
         let (admin, _) = setup(&app).await;
         let class = person_class(pool).await;
 
-        let hash = crate::auth::password::hash(PASSWORD).await.unwrap();
+        let hash = crate::auth::password::hash(&PASSWORD).await.unwrap();
         let legacy: Uuid = sqlx::query_scalar(
             "INSERT INTO users (username, display_name, password_hash) VALUES ('legacy', 'Legacy User', $1) RETURNING id",
         )
