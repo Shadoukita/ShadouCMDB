@@ -99,6 +99,17 @@ impl Net {
             IpAddr::V6(v6) => IpAddr::V6((u128::from(v6) & !0u128 << 64).into()),
         }))
     }
+
+    /// The wider network this one lies in: the IPv4 /16 or IPv6 /48. One
+    /// client often holds many /24s or /64s (an IPv6 /56 holds 256), so a limit
+    /// per network alone does not bound it (GH#504). A key of its own, never
+    /// to be compared with a `Net::of`.
+    pub fn wide(self) -> Net {
+        Net(self.0.map(|ip| match ip {
+            IpAddr::V4(v4) => IpAddr::V4((u32::from(v4) & 0xffff_0000).into()),
+            IpAddr::V6(v6) => IpAddr::V6((u128::from(v6) & !0u128 << 80).into()),
+        }))
+    }
 }
 
 impl fmt::Debug for Net {
