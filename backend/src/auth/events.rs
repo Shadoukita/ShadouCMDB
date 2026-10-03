@@ -14,7 +14,8 @@
 //! who can read it. That name may be a password typed into the wrong field
 //! (GH#415): it is kept here, where reading needs the audit permission and the
 //! retention period removes it, because brute-force forensics need it. The
-//! server log names only existing accounts. Answers refused while a username
+//! server log names only existing accounts, and so does the audit export
+//! (GH#509, see [`crate::audit_export`]). Answers refused while a username
 //! is locked (429) are not recorded: they cost no password check, and
 //! recording them would let an anonymous client grow the table at will. The
 //! lock itself is.
