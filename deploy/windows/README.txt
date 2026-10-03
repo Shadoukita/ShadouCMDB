@@ -173,6 +173,13 @@ authenticator secrets; nobody has to set up two-factor sign-in again. Going
 back to the previous release afterwards needs a restore of a backup taken
 before the upgrade.
 
+Upgrading from a release where e-mail addresses were optional: from then on
+API tokens of an account without an e-mail are refused (403 EMAIL_REQUIRED)
+until it has one. Before the upgrade, give every service account that scripts
+use (backup, monitoring, import) a unique e-mail under Administration > Users,
+or right after migrate the same way. migrate prints the accounts without an
+e-mail that own working tokens; their tokens work again once they have one.
+
 Upgrading an install whose service runs as NT AUTHORITY\LocalService (installed
 before the service had its own account): LocalService is shared by many Windows
 services, and the old install steps let it change the env file. Switch the
