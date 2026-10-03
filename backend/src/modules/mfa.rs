@@ -597,7 +597,7 @@ pub(crate) mod tests {
     use crate::db::scratch;
     use crate::modules::api_tokens::tests::{Creds, app, call, code};
 
-    pub(crate) const PASSWORD: &str = "correct horse battery";
+    const PASSWORD: &str = "correct horse battery";
 
     /// The `name=value` pairs of the response's Set-Cookie headers.
     fn set_cookies(headers: &HeaderMap) -> Vec<String> {
