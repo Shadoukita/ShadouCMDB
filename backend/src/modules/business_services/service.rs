@@ -550,7 +550,7 @@ pub async fn export(
     q: MemberQuery,
 ) -> Result<(String, String), AppError> {
     let mut tx = pool.begin().await?;
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ").execute(&mut *tx).await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY").execute(&mut *tx).await?;
     let roles = roles(&mut tx).await?;
     require(ctx, roles, ClassOp::View)?;
     let visible = ctx.class_scope(ClassOp::View);
@@ -559,6 +559,10 @@ pub async fn export(
     let (rows, total) =
         data::list_members(&mut tx, roles, id, visible.as_deref(), &filters, sort, q.sort.desc, cfg.max_members, 0)
             .await?;
+    // GH#514: the snapshot is read-only; the audit row goes in its own
+    // transaction below, so an audited write committed meanwhile cannot make
+    // the chain-head update a serialization failure.
+    tx.commit().await?;
 
     let one_line = |s: &str| s.replace(['\r', '\n'], " ");
     let mut described = Vec::new();
@@ -614,6 +618,7 @@ pub async fn export(
             "visibility": visibility(&visible),
         })),
     };
+    let mut tx = pool.begin().await?;
     crud::write_audit(&mut tx, ctx, vec![entry]).await?;
     tx.commit().await?;
     let name =
