@@ -34,6 +34,7 @@ import LayoutPanels from "./detail/LayoutPanels.vue";
 import PartOfServicesPanel from "./detail/PartOfServicesPanel.vue";
 import RelationshipGraphPanel from "./detail/RelationshipGraphPanel.vue";
 import RelationshipsPanel from "./detail/RelationshipsPanel.vue";
+import SignInAccountPanel from "./detail/SignInAccountPanel.vue";
 
 /**
  * The class layout's tabs (`layout:<key>`; a single one is "overview"), then the relationship map, the
@@ -276,6 +277,7 @@ const crumbs = computed<Crumb[]>(() => {
           :trail="trail"
           :orphans="layoutIndex === 0"
         />
+        <SignInAccountPanel v-if="layoutIndex === 0" :ci="c" />
         <PartOfServicesPanel v-if="layoutIndex === 0" :ci="c" :self="self" :trail="trail" />
         <template v-if="layoutIndex === 0 && !placed.has('relations')">
           <div style="height: var(--sp-4)" />

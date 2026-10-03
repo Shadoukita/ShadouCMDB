@@ -5,6 +5,7 @@ import { useLookupLists, useOwnAttributes, usePatch, useRemove, useReorder, type
 import { usePurge } from "../../../api/schemaChanges";
 import { useCiClasses, useClassAttributes, type CiClass } from "../../../api/queries";
 import ErrorAlert from "../../../components/ErrorAlert.vue";
+import { t } from "../../../i18n";
 import LoadingState from "../../../components/LoadingState.vue";
 import LookupValueName from "../../../components/LookupValueName.vue";
 import SchemaChangeDialog from "../../../components/SchemaChangeDialog.vue";
@@ -228,6 +229,7 @@ function defaultText(d: AttributeDefinition): string {
             <td>
               <button type="button" class="btn-link" :title="`Edit ${d.label}`" @click="openEdit(d)">{{ d.label }}</button>
               <span v-if="!d.isActive" class="badge off" title="Kept on CIs that have a value; not on forms">archived</span>
+              <span v-if="d.systemRole" class="badge" :title="t('people.datamodel.systemTitle')" data-testid="system-attribute">{{ t("people.datamodel.system") }}</span>
               <div v-if="d.helpText" class="muted cell-note">{{ d.helpText }}</div>
             </td>
             <td class="mono">{{ d.key }}</td>
@@ -245,7 +247,17 @@ function defaultText(d: AttributeDefinition): string {
               <button type="button" class="btn btn-sm" :disabled="reorder.isPending.value || flat.indexOf(d) === flat.length - 1" :aria-label="`Move ${d.label} down`" @click="step(d, 1)">↓</button>
             </td>
             <td class="row-actions">
-              <button v-if="d.isActive" type="button" class="btn btn-sm" :aria-label="`Archive ${d.label}`" @click="setActive(d, false)">Archive</button>
+              <button
+                v-if="d.isActive"
+                type="button"
+                class="btn btn-sm"
+                :disabled="!!d.systemRole"
+                :title="d.systemRole ? t('people.datamodel.systemTitle') : undefined"
+                :aria-label="`Archive ${d.label}`"
+                @click="setActive(d, false)"
+              >
+                Archive
+              </button>
               <template v-else>
                 <button type="button" class="btn btn-sm" :aria-label="`Restore ${d.label}`" @click="setActive(d, true)">Restore</button>
                 <button type="button" class="btn btn-sm btn-quiet-danger" :aria-label="`Purge ${d.label}`" @click="purgeField(d)">Purge…</button>

@@ -32,6 +32,7 @@ import GroupEditPage from "./pages/admin/GroupEditPage.vue";
 import GroupsPage from "./pages/admin/GroupsPage.vue";
 import { ADMIN_SECTIONS, visibleSections } from "./pages/admin/sections";
 import AccountPage from "./pages/account/AccountPage.vue";
+import EmailEntryPage from "./pages/account/EmailEntryPage.vue";
 import TwoFactorSetupPage from "./pages/account/TwoFactorSetupPage.vue";
 import LoginPage from "./pages/auth/LoginPage.vue";
 import SetupPage from "./pages/auth/SetupPage.vue";
@@ -58,6 +59,10 @@ declare module "vue-router" {
 
 /** Where a user goes while a profile they hold requires two-factor authentication they have not set up. */
 export const TWO_FACTOR_SETUP = "/two-factor-setup";
+/** Where a user goes while their account has no e-mail (created before e-mails were required). */
+export const EMAIL_ENTRY = "/enter-email";
+/** Stops on the way in after sign-in: they keep the user's destination in ?redirect. */
+const SIGN_IN_STEPS = [TWO_FACTOR_SETUP, EMAIL_ENTRY];
 
 const section = (key: string) => ADMIN_SECTIONS.find((s) => s.key === key)!.permissions;
 
@@ -88,6 +93,7 @@ export const router = createRouter({
     { path: "/imports/:id", component: ImportWizardPage },
     { path: "/account", component: AccountPage },
     { path: TWO_FACTOR_SETUP, component: TwoFactorSetupPage, meta: { bare: true } },
+    { path: EMAIL_ENTRY, component: EmailEntryPage, meta: { bare: true } },
     {
       path: "/admin",
       component: AdminLayout,
@@ -138,12 +144,12 @@ trackNavigations(router);
 
 
 /**
- * The sign-in query that brings the user back to `route`. The two-factor set-up is only a stop on the
+ * The sign-in query that brings the user back to `route`. The two-factor set-up (and the e-mail step) is only a stop on the
  * way (after sign-in the guard sends a user without the requirement to /account), so its own
  * destination is kept instead.
  */
 export function loginQuery(route: RouteLocationNormalized): { redirect?: string } {
-  const back = route.path === TWO_FACTOR_SETUP ? safeRedirect(route.query.redirect) : route.fullPath;
+  const back = SIGN_IN_STEPS.includes(route.path) ? safeRedirect(route.query.redirect) : route.fullPath;
   return back === "/" ? {} : { redirect: back };
 }
 
@@ -159,6 +165,12 @@ router.beforeEach(async (to) => {
     return { path: "/login", query: loginQuery(to) };
   }
   if (to.meta.public) return safeRedirect(to.query.redirect);
+  // Until the account has an e-mail, the API refuses everything else (403 EMAIL_REQUIRED), the two-factor set-up too.
+  if (session.emailRequired && to.path !== EMAIL_ENTRY) {
+    const back = SIGN_IN_STEPS.includes(to.path) ? safeRedirect(to.query.redirect) : to.fullPath;
+    return { path: EMAIL_ENTRY, query: back === "/" ? {} : { redirect: back } };
+  }
+  if (!session.emailRequired && to.path === EMAIL_ENTRY) return safeRedirect(to.query.redirect);
   // Until the required two-factor set-up is done, the API refuses everything else (403 MFA_ENROLMENT_REQUIRED).
   if (session.enrolmentRequired && to.path !== TWO_FACTOR_SETUP) {
     return { path: TWO_FACTOR_SETUP, query: to.fullPath === "/" ? {} : { redirect: to.fullPath } };

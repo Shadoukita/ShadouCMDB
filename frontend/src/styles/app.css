@@ -2630,8 +2630,15 @@ dialog.member-picker td .badge {
   font-size: var(--fs-sm);
   color: var(--c-danger-text);
 }
-.part-of-services {
+.part-of-services,
+.sign-in-account {
   margin-top: var(--sp-4);
+}
+.sign-in-account p {
+  margin: 0;
+}
+.sign-in-account p.hint {
+  margin-top: var(--sp-2);
 }
 .part-of-services > .hint {
   margin: 0;
