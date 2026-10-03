@@ -370,6 +370,27 @@ pub async fn refuse_planted_code(conn: &mut sqlx::PgConnection) -> anyhow::Resul
     );
 }
 
+/// GH#545: a database error inside a migration (a `RAISE EXCEPTION` stop such as
+/// 0044's duplicate e-mails, or a failing statement) is reported once, with the
+/// migration's name. sqlx repeats the message at every level of its error chain,
+/// each with the line of the PostgreSQL source file that raised it, which means
+/// nothing to an operator; DETAIL and HINT are kept.
+fn migration_error(e: sqlx::migrate::MigrateError) -> anyhow::Error {
+    let sqlx::migrate::MigrateError::ExecuteMigration(sqlx::Error::Database(db), version) = &e else {
+        return anyhow::Error::new(e).context("migration failed");
+    };
+    let name = MIGRATOR.iter().find(|m| m.version == *version).map_or_else(|| version.to_string(), label);
+    let mut msg = format!("migration {name} stopped: {}", db.message());
+    if let Some(pg) = db.try_downcast_ref::<sqlx::postgres::PgDatabaseError>() {
+        for (key, value) in [("DETAIL", pg.detail()), ("HINT", pg.hint())] {
+            if let Some(value) = value {
+                msg.push_str(&format!("\n{key}: {value}"));
+            }
+        }
+    }
+    anyhow::Error::msg(msg)
+}
+
 async fn migrate_with(pool: &PgPool, cfg: &DatabaseConfig, adopt_drizzle: bool) -> anyhow::Result<()> {
     let (db, version): (String, String) =
         sqlx::query_as("SELECT current_database(), current_setting('server_version')").fetch_one(pool).await?;
@@ -416,7 +437,7 @@ async fn migrate_with(pool: &PgPool, cfg: &DatabaseConfig, adopt_drizzle: bool) 
     // bookkeeping row, under an advisory lock; re-running is a no-op.
     MIGRATOR.run(pool).await.map_err(|e| {
         let denied = e.to_string().contains("permission denied");
-        let err = anyhow::Error::new(e).context("migration failed");
+        let err = migration_error(e);
         if denied {
             // The usual cause on a three-role install: migrating with the API's DATABASE_URL.
             err.context("this database user may not change the schema; set MIGRATION_DATABASE_URL to the schema owner role (shadoucmdb_owner in sql/bootstrap/)")
@@ -711,6 +732,27 @@ mod tests {
         super::migrate_with(&db.pool, &cfg, false).await.expect("first migrate");
         super::migrate_with(&db.pool, &cfg, false).await.expect("second migrate");
         assert_eq!(super::applied_count(&db.pool).await.unwrap(), super::expected_count());
+        db.drop().await;
+    }
+
+    /// GH#545: a migration's `RAISE EXCEPTION` stop prints its message once,
+    /// without sqlx's chain and the `at line N` of the PostgreSQL source.
+    #[tokio::test]
+    async fn a_migration_stop_reports_the_database_message_once() {
+        let Some(db) = super::scratch::empty("a_migration_stop_reports_once").await else { return };
+        let err = sqlx::query(
+            "DO $$ BEGIN RAISE EXCEPTION 'users: e-mail addresses must be unique: %', 'alice@acme.test'
+               USING ERRCODE = 'unique_violation', HINT = 'Give each account its own address.'; END $$",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap_err();
+        let e = super::migration_error(sqlx::migrate::MigrateError::ExecuteMigration(err, 44));
+        assert_eq!(
+            format!("{e:#}"),
+            "migration 0044_users_person stopped: users: e-mail addresses must be unique: alice@acme.test\n\
+             HINT: Give each account its own address."
+        );
         db.drop().await;
     }
 
