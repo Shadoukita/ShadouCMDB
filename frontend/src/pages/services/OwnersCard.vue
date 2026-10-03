@@ -5,6 +5,7 @@ import { useReplaceOwners, type OwnerRole, type Principal, type PrincipalRef, ty
 import ErrorAlert from "../../components/ErrorAlert.vue";
 import PrincipalCombobox from "../../components/PrincipalCombobox.vue";
 import { t } from "../../i18n";
+import Icon from "../../components/Icon.vue";
 
 /**
  * The Owners card of a business service (spec §5.3, §5.4): the technical and business owners by display
@@ -206,7 +207,7 @@ async function reload() {
                     :title="t('services.owners.moveUp', { name: o.displayName })"
                     @click="moveOwner(r, i, -1)"
                   >
-                    <span aria-hidden="true">↑</span>
+                    <Icon name="arrow-up" />
                   </button>
                   <button
                     :id="`owner-${r}-${i}-down`"
@@ -217,7 +218,7 @@ async function reload() {
                     :title="t('services.owners.moveDown', { name: o.displayName })"
                     @click="moveOwner(r, i, 1)"
                   >
-                    <span aria-hidden="true">↓</span>
+                    <Icon name="arrow-down" />
                   </button>
                   <button
                     :id="`owner-${r}-${i}-remove`"
@@ -227,7 +228,7 @@ async function reload() {
                     :title="t('services.owners.remove', { name: o.displayName, role: roleWord(r) })"
                     @click="remove(r, i)"
                   >
-                    <span aria-hidden="true">×</span>
+                    <Icon name="x" />
                   </button>
                 </span>
                 <span v-if="!o.active" class="token-note">{{ t("services.owners.disabledWarning", { name: o.displayName }) }}</span>

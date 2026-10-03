@@ -13,6 +13,7 @@ import { useListQuery } from "../../lib/listQuery";
 import { parseSignInStatus, SIGN_IN_STATUSES, signInStatusLabel } from "../../lib/people";
 import { t } from "../../i18n";
 import { useFlashStore } from "../../stores/flash";
+import SortIcon from "../../components/SortIcon.vue";
 
 /** Administration › Users. Search, filters, sort and page live in the URL; the API filters and pages. */
 useDocumentTitle("Users");
@@ -134,7 +135,7 @@ function clearFilters() {
             <tr>
               <th v-for="c in COLUMNS" :key="c.key" scope="col" :aria-sort="c.sort ? lq.ariaSort(c.sort) : undefined">
                 <button v-if="c.sort" type="button" class="sort" @click="lq.toggleSort(c.sort)">
-                  {{ c.label }} {{ lq.sortIndicator(c.sort) }}
+                  {{ c.label }} <SortIcon :dir="lq.ariaSort(c.sort)" />
                 </button>
                 <template v-else>{{ c.label }}</template>
               </th>

@@ -5,6 +5,8 @@ import CiStateBadge from "../../components/CiStateBadge.vue";
 import CriticalityBadge from "../../components/CriticalityBadge.vue";
 import { edgeLabel, groupItems, pathTo, type ImpactAnalysis, type ImpactGroup, type ImpactItem } from "../../lib/impact";
 import type { TrailStep } from "../../lib/trail";
+import Icon from "../../components/Icon.vue";
+import SortIcon from "../../components/SortIcon.vue";
 
 /**
  * The impact analysis as a dense table (§1.4): grouped, with a collapsible header per group,
@@ -52,7 +54,6 @@ const COLUMNS = computed(() => [
 ]);
 const field = computed(() => props.sort.replace(/^-/, ""));
 const ariaSort = (key: string) => (field.value !== key ? "none" : props.sort.startsWith("-") ? "descending" : "ascending");
-const indicator = (key: string) => (field.value !== key ? "" : props.sort.startsWith("-") ? "▼" : "▲");
 const toggleSort = (key: string) => emit("sort", props.sort === key ? `-${key}` : key);
 
 const directionLabel = (i: ImpactItem) => (i.directions.length > 1 ? "Both" : i.directions[0] === "downstream" ? "Downstream" : "Upstream");
@@ -66,7 +67,7 @@ const pathOf = (i: ImpactItem) => pathTo(i, root.value, byId.value);
       <thead>
         <tr>
           <th v-for="c in COLUMNS" :key="c.key" scope="col" :aria-sort="ariaSort(c.key)">
-            <button type="button" class="sort" @click="toggleSort(c.key)">{{ c.label }} {{ indicator(c.key) }}</button>
+            <button type="button" class="sort" @click="toggleSort(c.key)">{{ c.label }} <SortIcon :dir="ariaSort(c.key)" /></button>
           </th>
           <th scope="col"><span class="sr-only">Path</span></th>
         </tr>
@@ -75,7 +76,7 @@ const pathOf = (i: ImpactItem) => pathTo(i, root.value, byId.value);
         <tr v-if="group !== 'none'" class="group-row">
           <th :colspan="columnCount" scope="rowgroup">
             <button type="button" class="group-toggle" :aria-expanded="!collapsed.has(g.key)" @click="toggleGroup(g.key)">
-              <span aria-hidden="true">{{ collapsed.has(g.key) ? "▸" : "▾" }}</span>{{ " " }}<bdi>{{ g.label }}</bdi> <span class="muted">({{ g.items.length.toLocaleString() }})</span>
+              <Icon :name="collapsed.has(g.key) ? 'chevron-right' : 'chevron-down'" />{{ " " }}<bdi>{{ g.label }}</bdi> <span class="muted">({{ g.items.length.toLocaleString() }})</span>
             </button>
           </th>
         </tr>

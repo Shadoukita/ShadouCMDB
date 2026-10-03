@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, ref, useId } from "vue";
 import { RouterLink, type RouteLocationRaw } from "vue-router";
+import Icon from "./Icon.vue";
 
 export interface RowMenuItem {
   label: string;
@@ -82,7 +83,7 @@ function run(item: RowMenuItem) {
     <button
       ref="button"
       type="button"
-      class="btn btn-sm"
+      class="btn btn-sm btn-icon"
       aria-haspopup="menu"
       :aria-expanded="open"
       :aria-controls="open ? menuId : undefined"
@@ -90,7 +91,7 @@ function run(item: RowMenuItem) {
       @click="open ? hide(false) : show()"
       @keydown="onButtonKey"
     >
-      <span aria-hidden="true">⋯</span>
+      <Icon name="ellipsis" />
     </button>
     <Teleport to="body">
       <ul v-if="open" :id="menuId" ref="menu" class="row-menu-list" role="menu" :aria-label="label" :style="place" @keydown="onMenuKey">

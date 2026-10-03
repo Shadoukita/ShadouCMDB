@@ -11,6 +11,7 @@ import { reauthentication } from "./lib/reauthentication";
 import { EMAIL_ENTRY, loginQuery, router, TWO_FACTOR_SETUP } from "./router";
 import { useBrandingStore } from "./stores/branding";
 import { useSessionStore } from "./stores/session";
+import "./icons/lucide-css.css";
 import "./styles/app.css";
 
 const app = createApp(App).use(createPinia()).use(router).use(VueQueryPlugin, { queryClient });

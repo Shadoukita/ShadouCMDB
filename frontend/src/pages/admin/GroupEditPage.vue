@@ -30,6 +30,7 @@ import { useFlashStore } from "../../stores/flash";
 import FormErrorBanner from "../form/FormErrorBanner.vue";
 import FormField from "../form/FormField.vue";
 import UserPicker from "./UserPicker.vue";
+import SortIcon from "../../components/SortIcon.vue";
 
 /**
  * Administration › Groups › new / one group: name and description, the members (a replace of the
@@ -345,7 +346,7 @@ const notFound = computed(() => {
             <thead>
               <tr>
                 <th v-for="c in MEMBER_COLUMNS" :key="c.key" scope="col" :aria-sort="c.sort ? lq.ariaSort(c.sort) : undefined">
-                  <button v-if="c.sort" type="button" class="sort" @click="lq.toggleSort(c.sort)">{{ c.label }} {{ lq.sortIndicator(c.sort) }}</button>
+                  <button v-if="c.sort" type="button" class="sort" @click="lq.toggleSort(c.sort)">{{ c.label }} <SortIcon :dir="lq.ariaSort(c.sort)" /></button>
                   <template v-else>{{ c.label }}</template>
                 </th>
                 <th scope="col"><span class="sr-only">{{ t("groups.members.remove") }}</span></th>

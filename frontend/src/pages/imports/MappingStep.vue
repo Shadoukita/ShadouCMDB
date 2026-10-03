@@ -41,6 +41,7 @@ import {
   type TargetOption,
 } from "../../lib/importMapping";
 import { useSessionStore } from "../../stores/session";
+import Icon from "../../components/Icon.vue";
 
 /**
  * Step 2: map the file's columns to a class. Everything a column can map to comes from the class's attribute
@@ -622,7 +623,7 @@ const editable = computed(() => props.job.status === "ready" || props.job.status
                 </td>
                 <td data-label="Status">
                   <span :class="rowProblems.has(i) ? 'status-error' : undefined">
-                    <span aria-hidden="true">{{ rowProblems.has(i) ? "! " : form.columns[i]!.target === "ignore" ? "○ " : "✓ " }}</span>{{ status(i) }}
+                    <Icon :name="rowProblems.has(i) ? 'circle-alert' : form.columns[i]!.target === 'ignore' ? 'circle' : 'check'" /> {{ status(i) }}
                   </span>
                 </td>
               </tr>

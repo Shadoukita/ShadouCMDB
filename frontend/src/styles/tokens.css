@@ -168,8 +168,6 @@
   --c-sidebar-text-muted: #9aa3b2; /* 7.2:1, 6.0:1 on the active row: section labels, counts */
   --c-sidebar-text-strong: #ffffff;
   --c-sidebar-link: var(--cyan-300);
-  /* Class icons are drawn in colours meant for light backgrounds: on the rail they sit on this chip. */
-  --c-sidebar-chip: #eef1f5;
 
   /* ---------- Badges ---------- */
   --badge-neutral-bg: var(--gray-100);

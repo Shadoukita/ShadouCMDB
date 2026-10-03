@@ -8,6 +8,7 @@ import { viewableClasses } from "../lib/permissions";
 import { flattenTree } from "../lib/tree";
 import type { useInventoryQueryState } from "../lib/useInventoryQueryState";
 import { useSessionStore } from "../stores/session";
+import Icon from "./Icon.vue";
 
 /**
  * The class, lookup value, validity and deleted filters of the inventory and of
@@ -65,28 +66,28 @@ const criticalityMany = computed(() => criticalityValue.value.includes(","));
     <span class="label">Lookup values</span>
     <span class="checkbox-row">
       {{ lookupFilterNames.join(", ") }}
-      <button type="button" class="btn btn-sm" aria-label="Remove the lookup value filter" @click="s.update({ lookupValueId: undefined })">×</button>
+      <button type="button" class="btn btn-sm btn-icon" aria-label="Remove the lookup value filter" @click="s.update({ lookupValueId: undefined })"><Icon name="x" /></button>
     </span>
   </div>
   <div v-if="s.get('ipWithin')" class="field">
     <span class="label">IP within</span>
     <span class="checkbox-row">
       <span class="mono">{{ s.get("ipWithin") }}</span>
-      <button type="button" class="btn btn-sm" aria-label="Remove the IP network filter" @click="s.update({ ipWithin: undefined })">×</button>
+      <button type="button" class="btn btn-sm btn-icon" aria-label="Remove the IP network filter" @click="s.update({ ipWithin: undefined })"><Icon name="x" /></button>
     </span>
   </div>
   <div v-if="ownLayout === 'true' || ownLayout === 'false'" class="field" data-testid="filter-own-layout">
     <span class="label">Layout</span>
     <span class="checkbox-row">
       {{ ownLayout === "true" ? "Own layout" : "Class default" }}
-      <button type="button" class="btn btn-sm" aria-label="Remove the layout filter" @click="s.update({ ownLayout: undefined })">×</button>
+      <button type="button" class="btn btn-sm btn-icon" aria-label="Remove the layout filter" @click="s.update({ ownLayout: undefined })"><Icon name="x" /></button>
     </span>
   </div>
   <div v-if="layoutTemplate" class="field" data-testid="filter-layout-template">
     <span class="label">Own layout template</span>
     <span class="checkbox-row">
       {{ layoutTemplateName }}
-      <button type="button" class="btn btn-sm" aria-label="Remove the layout template filter" @click="s.update({ layoutTemplate: undefined })">×</button>
+      <button type="button" class="btn btn-sm btn-icon" aria-label="Remove the layout template filter" @click="s.update({ layoutTemplate: undefined })"><Icon name="x" /></button>
     </span>
   </div>
   <div v-if="criticality.data.value?.length || criticalityValue" class="field">

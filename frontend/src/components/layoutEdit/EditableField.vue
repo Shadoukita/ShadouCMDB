@@ -2,6 +2,7 @@
 import { computed, ref } from "vue";
 import { startGridResize } from "../../lib/gridResize";
 import { cellClass } from "../../lib/uiSettings";
+import Icon from "../Icon.vue";
 
 /**
  * One field of the real page in layout edit mode: the page's own rendering of
@@ -98,17 +99,17 @@ function onResizeStart(e: PointerEvent) {
     @dragend="emit('dragend')"
   >
     <div class="le-field-head">
-      <button :id="`le-field-${field}`" type="button" class="le-grip" :aria-label="describe" aria-describedby="le-keys" title="Drag to move" @keydown="onKey">⠿</button>
+      <button :id="`le-field-${field}`" type="button" class="le-grip" :aria-label="describe" aria-describedby="le-keys" title="Drag to move" @keydown="onKey"><Icon name="grip-vertical" /></button>
       <span v-if="showLabel" class="le-field-label">{{ label }}<span v-if="required" class="req" aria-hidden="true">*</span></span>
       <span v-if="core" class="badge">core</span>
       <span v-if="readOnly" class="badge">read-only</span>
     </div>
     <div class="le-toolbar" role="toolbar" :aria-label="`${label}: layout`">
       <template v-if="!auto">
-        <button type="button" class="btn btn-sm" :aria-label="`Move ${label} earlier`" title="Move earlier" @click="emit('move', -1)">↑</button>
-        <button type="button" class="btn btn-sm" :aria-label="`Move ${label} later`" title="Move later" @click="emit('move', 1)">↓</button>
-        <button type="button" class="btn btn-sm" :aria-label="`Make ${label} narrower`" title="Narrower" :disabled="width <= 1" @click="emit('resize', width - 1)">⇤</button>
-        <button type="button" class="btn btn-sm" :aria-label="`Make ${label} wider`" title="Wider" :disabled="width >= columns" @click="emit('resize', width + 1)">⇥</button>
+        <button type="button" class="btn btn-sm btn-icon" :aria-label="`Move ${label} earlier`" title="Move earlier" @click="emit('move', -1)"><Icon name="arrow-up" /></button>
+        <button type="button" class="btn btn-sm btn-icon" :aria-label="`Move ${label} later`" title="Move later" @click="emit('move', 1)"><Icon name="arrow-down" /></button>
+        <button type="button" class="btn btn-sm btn-icon" :aria-label="`Make ${label} narrower`" title="Narrower" :disabled="width <= 1" @click="emit('resize', width - 1)"><Icon name="chevron-left" /></button>
+        <button type="button" class="btn btn-sm" :aria-label="`Make ${label} wider`" title="Wider" :disabled="width >= columns" @click="emit('resize', width + 1)"><Icon name="chevron-right" /></button>
       </template>
       <select :aria-label="`Move ${label} to section`" :value="section ?? ''" @change="emit('place', ($event.target as HTMLSelectElement).value)">
         <option v-if="auto" value="" disabled>Place in…</option>

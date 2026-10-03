@@ -25,6 +25,8 @@ import {
 } from "../../lib/serviceList";
 import { useSessionStore } from "../../stores/session";
 import ServiceError from "./ServiceError.vue";
+import Icon from "../../components/Icon.vue";
+import SortIcon from "../../components/SortIcon.vue";
 
 /**
  * The business service list (spec §5.2): filters, sort and page in the URL (lib/serviceList), so a view
@@ -116,7 +118,6 @@ function toggleSort(field: string) {
   update({ sort: state.value.sort === field ? `-${field}` : field });
 }
 const ariaSort = (field: string) => (state.value.sort === field ? "ascending" : state.value.sort === `-${field}` ? "descending" : "none");
-const indicator = (field: string) => (state.value.sort === field ? "▲" : state.value.sort === `-${field}` ? "▼" : "");
 const COLUMNS: [string, MessageKey][] = [
   ["name", "services.col.name"],
   ["ident", "services.col.ident"],
@@ -180,7 +181,7 @@ const pastEnd = computed(() => !!list.data.value && total.value > 0 && rows.valu
           <span class="label">{{ t("services.filter.owner") }}</span>
           <span class="filter-token">
             <bdi>{{ ownerName }}</bdi>
-            <button type="button" class="btn btn-sm" :aria-label="t('services.filter.owner.clear', { name: ownerName })" @click="update({ owner: '' })">×</button>
+            <button type="button" class="btn btn-sm btn-icon" :aria-label="t('services.filter.owner.clear', { name: ownerName })" @click="update({ owner: '' })"><Icon name="x" /></button>
           </span>
         </div>
         <PrincipalCombobox v-else :label="t('services.filter.owner')" @select="pickOwner" />
@@ -250,7 +251,7 @@ const pastEnd = computed(() => !!list.data.value && total.value > 0 && rows.valu
                 :class="{ num: numeric.has(key) }"
                 :aria-sort="SORTABLE[key] ? ariaSort(SORTABLE[key]) : undefined"
               >
-                <button v-if="SORTABLE[key]" type="button" class="sort" @click="toggleSort(SORTABLE[key])">{{ t(label) }} {{ indicator(SORTABLE[key]) }}</button>
+                <button v-if="SORTABLE[key]" type="button" class="sort" @click="toggleSort(SORTABLE[key])">{{ t(label) }} <SortIcon :dir="ariaSort(SORTABLE[key])" /></button>
                 <template v-else>{{ t(label) }}</template>
               </th>
             </tr>

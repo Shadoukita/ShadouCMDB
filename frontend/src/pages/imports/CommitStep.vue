@@ -9,6 +9,7 @@ import ErrorAlert from "../../components/ErrorAlert.vue";
 import { FINAL, RUNNING } from "../../lib/imports";
 import { useSessionStore } from "../../stores/session";
 import ImportProgress from "./ImportProgress.vue";
+import Icon from "../../components/Icon.vue";
 
 /**
  * Step 4: the import itself. While it runs: progress and Stop import (after the current batch of at most 500
@@ -108,7 +109,7 @@ async function download() {
 
       <template v-if="result">
         <p class="import-result" :class="{ 'import-count-error': hasReport }">
-          <span aria-hidden="true">{{ hasReport ? "! " : "✓ " }}</span><strong>{{ result }}</strong>
+          <Icon :name="hasReport ? 'circle-alert' : 'circle-check'" /> <strong>{{ result }}</strong>
         </p>
         <p v-if="counts && counts.failed > 0" class="muted">
           Failed rows changed on the server after the check (for example, a referenced CI was deleted). The error report

@@ -14,6 +14,7 @@ import { useListQuery } from "../../lib/listQuery";
 import { useSessionStore } from "../../stores/session";
 import AuditActor from "./AuditActor.vue";
 import { clientTitle, str } from "./auditClient";
+import SortIcon from "../../components/SortIcon.vue";
 
 /** Administration › Audit log: every change, who made it, newest first. Filters live in the URL. */
 useDocumentTitle("Audit log");
@@ -255,7 +256,7 @@ const actionTone = (action: string) =>
           <thead>
             <tr>
               <th scope="col" :aria-sort="lq.ariaSort('occurredAt')">
-                <button type="button" class="sort" @click="lq.toggleSort('occurredAt')">When {{ lq.sortIndicator("occurredAt") }}</button>
+                <button type="button" class="sort" @click="lq.toggleSort('occurredAt')">When <SortIcon :dir="lq.ariaSort('occurredAt')" /></button>
               </th>
               <th scope="col">Actor</th>
               <th scope="col">Action</th>

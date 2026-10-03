@@ -15,6 +15,7 @@ import { formatDate, formatDateTime } from "../../../lib/format";
 import { moveItem, useDragReorder } from "../../../lib/reorder";
 import { useSchemaChangeFlow } from "../../../lib/schemaChange";
 import AttributeDialog from "./AttributeDialog.vue";
+import Icon from "../../../components/Icon.vue";
 
 /**
  * The attributes defined on one class, by form section, in form order. Drag a
@@ -225,7 +226,7 @@ function defaultText(d: AttributeDefinition): string {
             </td>
           </tr>
           <tr v-for="d in items" :key="d.id" v-bind="dnd.row(d.id)" :class="{ disabled: !d.isActive }">
-            <td class="drag-handle" aria-hidden="true" title="Drag to reorder">⠿</td>
+            <td class="drag-handle" aria-hidden="true" title="Drag to reorder"><Icon name="grip-vertical" /></td>
             <td>
               <button type="button" class="btn-link" :title="`Edit ${d.label}`" @click="openEdit(d)">{{ d.label }}</button>
               <span v-if="!d.isActive" class="badge off" title="Kept on CIs that have a value; not on forms">archived</span>
@@ -243,8 +244,8 @@ function defaultText(d: AttributeDefinition): string {
               <template v-else>{{ defaultText(d) }}</template>
             </td>
             <td class="order-buttons">
-              <button type="button" class="btn btn-sm" :disabled="reorder.isPending.value || flat.indexOf(d) === 0" :aria-label="`Move ${d.label} up`" @click="step(d, -1)">↑</button>
-              <button type="button" class="btn btn-sm" :disabled="reorder.isPending.value || flat.indexOf(d) === flat.length - 1" :aria-label="`Move ${d.label} down`" @click="step(d, 1)">↓</button>
+              <button type="button" class="btn btn-sm btn-icon" :disabled="reorder.isPending.value || flat.indexOf(d) === 0" :aria-label="`Move ${d.label} up`" @click="step(d, -1)"><Icon name="arrow-up" /></button>
+              <button type="button" class="btn btn-sm btn-icon" :disabled="reorder.isPending.value || flat.indexOf(d) === flat.length - 1" :aria-label="`Move ${d.label} down`" @click="step(d, 1)"><Icon name="arrow-down" /></button>
             </td>
             <td class="row-actions">
               <button

@@ -11,6 +11,7 @@ import { t } from "../../i18n";
 import { useDebounced } from "../../lib/composables";
 import { pickerErrors, type PickerError } from "../../lib/serviceMembers";
 import { useSessionStore } from "../../stores/session";
+import Icon from "../../components/Icon.vue";
 
 /**
  * "Add members" (spec SHAA-927 §5.5): a modal over the server-side CI search, paged at 50. After each page loads,
@@ -248,7 +249,7 @@ const to = computed(() => Math.min(offset.value + PAGE, total.value));
                   <bdi>{{ p.label }}</bdi> <span class="muted">· <bdi>{{ p.className }}</bdi></span>
                   <span v-if="errors.get(p.id)" class="error">{{ errors.get(p.id)!.message }}</span>
                 </span>
-                <button type="button" class="btn btn-sm" :aria-label="t('services.picker.unselect', { name: p.label })" @click="unpick(p.id)">×</button>
+                <button type="button" class="btn btn-sm btn-icon" :aria-label="t('services.picker.unselect', { name: p.label })" @click="unpick(p.id)"><Icon name="x" /></button>
               </li>
             </ul>
           </section>
