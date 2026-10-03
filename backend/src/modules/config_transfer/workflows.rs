@@ -1,0 +1,410 @@
+//! The `workflows` section (format version 8, design SHAA-1411 §7).
+//!
+//! Export writes each workflow's current published version, by key: drafts,
+//! retired versions, instances and their events are data, never part of a
+//! file (Q8). Import never changes a published version. The file's graph is
+//! resolved against this install and checksummed as a draft would be: an
+//! equal checksum leaves the workflow's versions alone, a different one
+//! publishes a new version (running instances keep theirs), a new key creates
+//! the workflow and publishes v1. Settings and grants are replaced. Every
+//! write goes through the definitions API's own functions, so it is checked,
+//! linted and audited exactly like a manual change, inside the import's
+//! single transaction: a graph the publish lint refuses fails the import.
+
+use std::collections::{HashMap, HashSet};
+
+use serde_json::{Value, json};
+use sqlx::PgConnection;
+use uuid::Uuid;
+
+use super::format::{ConfigFile, WorkflowGrantSpec, WorkflowGraphSpec, WorkflowSpec};
+use super::{ChangeAction, FieldChange, ImportWarning, Importer, at, diff, not_in_file, problem};
+use crate::http::error::{AppError, ErrorCode, FieldError};
+use crate::modules::classes::ClassSystemRole;
+use crate::modules::workflows::graph::{self, Fields, LintContext, VERSION_COLUMNS, VersionRow};
+use crate::modules::workflows::schemas::{
+    WorkflowDefinition, WorkflowDefinitionCreate, WorkflowDefinitionUpdate, WorkflowDraftReplace, WorkflowGrant,
+    WorkflowProblemSeverity,
+};
+use crate::modules::workflows::service;
+use crate::schema::model::Model;
+
+/// The change note of a version an import publishes.
+pub const IMPORT_NOTE: &str = "Imported from configuration file";
+
+const SECTION: &str = "workflows";
+
+#[derive(sqlx::FromRow)]
+struct Row {
+    id: Uuid,
+    key: String,
+    name: String,
+    description: Option<String>,
+    class_key: String,
+    class_system_role: Option<ClassSystemRole>,
+    include_subclasses: bool,
+    state_attribute_key: Option<String>,
+    auto_start: bool,
+    is_active: bool,
+    current_version_id: Uuid,
+}
+
+/// Every workflow with a current published version, ordered by key.
+pub(super) async fn snapshot(conn: &mut PgConnection) -> Result<Vec<WorkflowSpec>, AppError> {
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT d.id, d.key, d.name, d.description, c.key AS class_key, c.system_role AS class_system_role,
+                d.include_subclasses, a.key AS state_attribute_key, d.auto_start, d.is_active, d.current_version_id
+         FROM cmdb.workflow_definitions d JOIN cmdb.ci_classes c ON c.id = d.class_id
+         LEFT JOIN cmdb.ci_attribute_definitions a ON a.id = d.state_attribute_id
+         WHERE d.current_version_id IS NOT NULL ORDER BY lower(d.key)",
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+    let model = Model::load(conn).await?;
+    let mut out = Vec::with_capacity(rows.len());
+    for r in rows {
+        let version = current_version(conn, r.current_version_id).await?;
+        let layout = version.layout.as_ref().map(|l| l.0.clone());
+        let stored = graph::load(conn, version).await?;
+        let (initial_state, states, transitions) = stored.graph(&model);
+        let grants = specs(service::grant_rows(conn, r.id).await?);
+        out.push(WorkflowSpec {
+            key: r.key,
+            name: r.name,
+            description: r.description,
+            class: r.class_key,
+            class_system_role: r.class_system_role,
+            include_subclasses: r.include_subclasses,
+            state_attribute: r.state_attribute_key,
+            auto_start: r.auto_start,
+            is_active: r.is_active,
+            graph: WorkflowGraphSpec { initial_state, states, transitions, layout },
+            grants,
+        });
+    }
+    Ok(out)
+}
+
+fn specs(grants: Vec<WorkflowGrant>) -> Vec<WorkflowGrantSpec> {
+    grants
+        .into_iter()
+        .map(|g| WorkflowGrantSpec {
+            transition: g.transition_key,
+            profiles: g.profiles.into_iter().map(|p| p.name).collect(),
+        })
+        .collect()
+}
+
+async fn current_version(conn: &mut PgConnection, id: Uuid) -> Result<VersionRow, AppError> {
+    Ok(sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT {VERSION_COLUMNS} FROM cmdb.workflow_versions WHERE id = $1"
+    )))
+    .bind(id)
+    .fetch_one(conn)
+    .await?)
+}
+
+/// What can be checked before anything is written: duplicate keys, and types
+/// and profiles that exist neither in the file nor here.
+pub(super) fn validate(
+    list: &[WorkflowSpec],
+    classes: &HashSet<String>,
+    profiles: &HashSet<String>,
+    e: &mut Vec<FieldError>,
+) {
+    let mut seen = HashSet::new();
+    for (i, w) in list.iter().enumerate() {
+        let p = format!("workflows.{i}");
+        if !seen.insert(w.key.to_lowercase()) {
+            problem(e, format!("{p}.key"), "duplicate", format!("\"{}\" appears more than once", w.key));
+        }
+        if !classes.contains(&w.class) {
+            problem(e, format!("{p}.class"), "not_found", format!("Class \"{}\" does not exist", w.class));
+        }
+        let mut transitions = HashSet::new();
+        for (j, g) in w.grants.iter().enumerate() {
+            if !transitions.insert(g.transition.as_str()) {
+                problem(e, format!("{p}.grants.{j}.transition"), "duplicate", "One entry per transition");
+            }
+            let mut names = HashSet::new();
+            for (k, name) in g.profiles.iter().enumerate() {
+                let path = format!("{p}.grants.{j}.profiles.{k}");
+                if !profiles.contains(&name.to_lowercase()) {
+                    problem(e, path, "not_found", format!("No permission profile \"{name}\""));
+                } else if !names.insert(name.to_lowercase()) {
+                    problem(e, path, "duplicate", "Listed more than once");
+                }
+            }
+        }
+    }
+}
+
+/// The settings a file sets on a workflow, for the diff (graph and grants are reported on their own).
+fn settings(w: &WorkflowSpec) -> Value {
+    json!({
+        "name": w.name,
+        "description": w.description,
+        "includeSubclasses": w.include_subclasses,
+        "stateAttribute": w.state_attribute,
+        "autoStart": w.auto_start,
+        "isActive": w.is_active,
+    })
+}
+
+/// `{transition: [profile names, lower case, sorted]}`, to compare grants.
+fn grant_set(grants: &[WorkflowGrantSpec]) -> Value {
+    let mut map: HashMap<&str, Vec<String>> = HashMap::new();
+    for g in grants.iter().filter(|g| !g.profiles.is_empty()) {
+        map.entry(&g.transition).or_default().extend(g.profiles.iter().map(|p| p.to_lowercase()));
+    }
+    let mut keys: Vec<&&str> = map.keys().collect();
+    keys.sort();
+    Value::Object(
+        keys.into_iter()
+            .map(|k| {
+                let mut names = map[*k].clone();
+                names.sort();
+                names.dedup();
+                ((*k).to_owned(), json!(names))
+            })
+            .collect(),
+    )
+}
+
+fn invalid(path: &str, field: &str, message: String, code: &str) -> AppError {
+    at(path, AppError::field(field, message, code))
+}
+
+impl Importer<'_> {
+    /// Stores `draft` as the definition's draft (its empty v1, or a new
+    /// version), lints it with the file's grants and publishes it.
+    async fn publish_graph(
+        &mut self,
+        d: &WorkflowDefinition,
+        fields: &Fields,
+        draft: &WorkflowDraftReplace,
+        granted: &HashSet<String>,
+        path: &str,
+        warnings: &mut Vec<ImportWarning>,
+    ) -> Result<i32, AppError> {
+        let gpath = format!("{path}.graph");
+        let version_id = match service::draft_row(self.conn, d.id, true).await? {
+            Some(v) => v.id,
+            None => {
+                let next: i32 = sqlx::query_scalar(
+                    "SELECT coalesce(max(version_no), 0) + 1 FROM cmdb.workflow_versions WHERE definition_id = $1",
+                )
+                .bind(d.id)
+                .fetch_one(&mut *self.conn)
+                .await?;
+                service::new_draft(self.conn, d.id, next).await?
+            }
+        };
+        graph::store_draft(self.conn, version_id, fields, d.state_attribute_id, draft)
+            .await
+            .map_err(|e| at(&gpath, e))?;
+        let row = service::draft_row(self.conn, d.id, false).await?.ok_or_else(AppError::internal)?;
+        let stored = graph::load(self.conn, row).await?;
+        let problems = graph::lint(&stored, &LintContext { fields, state_attribute: d.state_attribute_id, granted });
+        let sum = stored.checksum(&fields.model);
+        for p in problems.iter().filter(|p| p.severity == WorkflowProblemSeverity::Warning) {
+            warnings.push(ImportWarning { path: format!("{gpath}.{}", p.path), message: p.message.clone() });
+        }
+        let published =
+            service::publish_in(self.conn, self.ctx, d, &stored, fields, &problems, &sum, Some(IMPORT_NOTE))
+                .await
+                .map_err(|e| at(&gpath, e))?;
+        Ok(published.version_no)
+    }
+
+    pub(super) async fn workflows(
+        &mut self,
+        list: &[WorkflowSpec],
+        current: &[WorkflowSpec],
+        warnings: &mut Vec<ImportWarning>,
+    ) -> Result<(), AppError> {
+        let here: Vec<String> =
+            sqlx::query_scalar("SELECT lower(key) FROM cmdb.workflow_definitions").fetch_all(&mut *self.conn).await?;
+        let keys: HashSet<String> = list.iter().map(|w| w.key.to_lowercase()).collect();
+        self.section(SECTION, not_in_file(here.iter(), &keys));
+        let old: HashMap<String, &WorkflowSpec> = current.iter().map(|w| (w.key.to_lowercase(), w)).collect();
+        let profiles: HashMap<String, Uuid> =
+            sqlx::query_as::<_, (Uuid, String)>("SELECT id, name FROM cmdb.permission_profiles")
+                .fetch_all(&mut *self.conn)
+                .await?
+                .into_iter()
+                .map(|(id, name)| (name.to_lowercase(), id))
+                .collect();
+
+        for (i, w) in list.iter().enumerate() {
+            let path = format!("{SECTION}.{i}");
+            let class_id = self.ids.classes[&w.class];
+            let fields = Fields::load(self.conn, class_id).await?;
+            let state_attribute = match &w.state_attribute {
+                None => None,
+                Some(k) => Some(
+                    fields
+                        .by_key(k)
+                        .ok_or_else(|| {
+                            invalid(
+                                &path,
+                                "stateAttribute",
+                                format!("Class \"{}\" has no field \"{k}\" (own or inherited)", w.class),
+                                "not_found",
+                            )
+                        })?
+                        .id,
+                ),
+            };
+            let mut rows: Vec<(String, Uuid)> = Vec::new();
+            for g in &w.grants {
+                for name in &g.profiles {
+                    // Checked in validate: every name is a profile here once the profiles are imported.
+                    let profile = profiles.get(&name.to_lowercase()).copied().ok_or_else(AppError::internal)?;
+                    if !rows.contains(&(g.transition.clone(), profile)) {
+                        rows.push((g.transition.clone(), profile));
+                    }
+                }
+            }
+            let granted: HashSet<String> = rows.iter().map(|(k, _)| k.clone()).collect();
+            let draft = w.graph.to_draft();
+            let incoming =
+                graph::draft_checksum(&fields, state_attribute, &draft).map_err(|e| at(&format!("{path}.graph"), e))?;
+
+            let existing: Option<Uuid> =
+                sqlx::query_scalar("SELECT id FROM cmdb.workflow_definitions WHERE lower(key) = lower($1)")
+                    .bind(&w.key)
+                    .fetch_optional(&mut *self.conn)
+                    .await?;
+            let Some(id) = existing else {
+                let create = WorkflowDefinitionCreate {
+                    key: w.key.clone(),
+                    name: w.name.clone(),
+                    description: w.description.clone(),
+                    class_id,
+                    include_subclasses: Some(w.include_subclasses),
+                    state_attribute_id: state_attribute,
+                    auto_start: Some(w.auto_start),
+                    is_active: Some(w.is_active),
+                };
+                let d = service::create_in(self.conn, self.ctx, &create).await.map_err(|e| at(&path, e))?;
+                self.publish_graph(&d, &fields, &draft, &granted, &path, warnings).await?;
+                let d = service::load(self.conn, d.id, true).await?;
+                service::set_grants_in(self.conn, self.ctx, &d, &rows).await.map_err(|e| at(&path, e))?;
+                self.record(SECTION, w.key.clone(), Some(ChangeAction::Create), Vec::new());
+                continue;
+            };
+
+            let d = service::load(self.conn, id, true).await?;
+            if d.class_id != class_id {
+                return Err(invalid(
+                    &path,
+                    "class",
+                    format!(
+                        "Workflow \"{}\" runs on type \"{}\" here; a workflow never moves to another type",
+                        d.key, d.class_key
+                    ),
+                    "immutable",
+                ));
+            }
+            let before = old.get(&w.key.to_lowercase()).copied();
+            let mut changes = Vec::new();
+
+            // Settings, as PATCH would change them.
+            let update = WorkflowDefinitionUpdate {
+                version: d.version,
+                name: (d.name != w.name).then(|| w.name.clone()),
+                description: (d.description != w.description).then(|| w.description.clone()),
+                include_subclasses: (d.include_subclasses != w.include_subclasses).then_some(w.include_subclasses),
+                state_attribute_id: (d.state_attribute_id != state_attribute).then_some(state_attribute),
+                auto_start: (d.auto_start != w.auto_start).then_some(w.auto_start),
+                is_active: (d.is_active != w.is_active).then_some(w.is_active),
+            };
+            let d = if update.columns().0.is_empty() {
+                d
+            } else {
+                let was = before.map(settings).unwrap_or_else(|| {
+                    json!({ "name": d.name, "description": d.description, "includeSubclasses": d.include_subclasses,
+                            "stateAttribute": d.state_attribute_key, "autoStart": d.auto_start,
+                            "isActive": d.is_active })
+                });
+                changes.extend(diff(&was, &settings(w)));
+                service::update_in(self.conn, self.ctx, id, &update).await.map_err(|e| at(&path, e))?.1
+            };
+
+            // The graph: a new version only when it differs from the current one.
+            let now = match d.current_version_no {
+                None => None,
+                Some(no) => {
+                    let version_id: Uuid =
+                        sqlx::query_scalar("SELECT current_version_id FROM cmdb.workflow_definitions WHERE id = $1")
+                            .bind(id)
+                            .fetch_one(&mut *self.conn)
+                            .await?;
+                    let row = current_version(self.conn, version_id).await?;
+                    let stored = graph::load(self.conn, row).await?;
+                    Some((no, stored.checksum(&fields.model)))
+                }
+            };
+            if now.as_ref().map(|(_, sum)| sum) != Some(&incoming) {
+                if let Some(v) = service::draft_row(self.conn, id, false).await? {
+                    return Err(at(
+                        &format!("{path}.graph"),
+                        AppError::new(
+                            ErrorCode::Conflict,
+                            format!(
+                                "Workflow \"{}\" has an unpublished draft (version {}) here, and the file changes its \
+                                 graph. Publish or delete the draft, then import again",
+                                d.key, v.version_no
+                            ),
+                        ),
+                    ));
+                }
+                let no = self.publish_graph(&d, &fields, &draft, &granted, &path, warnings).await?;
+                let from = now.map_or(Value::Null, |(no, sum)| json!({ "versionNo": no, "checksum": sum }));
+                changes.push(FieldChange {
+                    field: "graph".into(),
+                    from,
+                    to: json!({ "versionNo": no, "checksum": incoming }),
+                });
+            }
+
+            // Grants are replaced.
+            let was = grant_set(&specs(service::grant_rows(self.conn, id).await?));
+            let wanted = grant_set(&w.grants);
+            if was != wanted {
+                let d = service::load(self.conn, id, true).await?;
+                service::set_grants_in(self.conn, self.ctx, &d, &rows).await.map_err(|e| at(&path, e))?;
+                changes.push(FieldChange { field: "grants".into(), from: was, to: wanted });
+            }
+
+            let action = (!changes.is_empty()).then_some(ChangeAction::Update);
+            self.record(SECTION, w.key.clone(), action, changes);
+        }
+        Ok(())
+    }
+}
+
+/// The workflows of `file` that name a built-in class by role apply to this
+/// install's class of that role (see `system_roles`).
+pub(super) fn match_classes(
+    file: &mut ConfigFile,
+    class_of_role: &HashMap<ClassSystemRole, &str>,
+    renamed: &HashMap<String, String>,
+    role_of_class: &HashMap<&str, ClassSystemRole>,
+) {
+    for w in file.workflows.iter_mut().flatten() {
+        match w.class_system_role.and_then(|r| class_of_role.get(&r)) {
+            Some(here) => w.class = (*here).to_owned(),
+            None => {
+                if let Some(k) = renamed.get(&w.class) {
+                    w.class = k.clone();
+                }
+            }
+        }
+        w.class_system_role = role_of_class.get(w.class.as_str()).copied();
+    }
+}

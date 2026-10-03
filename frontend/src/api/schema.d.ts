@@ -3456,7 +3456,7 @@ export interface components {
              */
             ownLayoutCount: number | null;
         };
-        /** @description A whole configuration: data model, lookups, permission profiles, UI settings, saved import mappings and shared saved views (no users, passwords, CIs or personal views) */
+        /** @description A whole configuration: data model, lookups, permission profiles, UI settings, saved import mappings, shared saved views and workflows (no users, passwords, CIs, personal views or workflow instances) */
         ConfigFile: {
             /**
              * @description Always "shadoucmdb.config"
@@ -3465,7 +3465,7 @@ export interface components {
             format: "shadoucmdb.config";
             /**
              * Format: int32
-             * @description File format version; this server writes version 7 and reads 1 to 7
+             * @description File format version; this server writes version 8 and reads 1 to 8
              */
             formatVersion: number;
             exportedAt?: string | null;
@@ -3502,6 +3502,37 @@ export interface components {
                 name: string;
                 description?: string | null;
                 definition: components["schemas"]["SavedViewDefinition"];
+            }[];
+            workflows?: {
+                /** @description Stable machine key, lower_snake_case */
+                key: string;
+                name: string;
+                description?: string | null;
+                /** @description Stable machine key, lower_snake_case */
+                class: string;
+                /**
+                 * @description Set when `class` is a built-in class: an import applies the workflow to this install's class of that role,
+                 *     whatever `class` says
+                 */
+                classSystemRole?: ("business_service" | "person") | null;
+                includeSubclasses?: boolean;
+                stateAttribute?: string | null;
+                autoStart?: boolean;
+                /** @description Default false, as on create */
+                isActive?: boolean;
+                /** @description A workflow's graph, as the draft body of the definitions API (keys only) */
+                graph: {
+                    initialState?: string | null;
+                    states: components["schemas"]["WorkflowState"][];
+                    transitions?: components["schemas"]["WorkflowTransition"][];
+                    /** @description Designer node positions, free-form (at most 60 KiB) */
+                    layout?: Record<string, never>;
+                };
+                grants?: {
+                    /** @description Stable machine key, lower_snake_case */
+                    transition: string;
+                    profiles: string[];
+                }[];
             }[];
         };
         ConfigurationItem: {
@@ -25255,7 +25286,7 @@ export interface operations {
                     format: "shadoucmdb.config";
                     /**
                      * Format: int32
-                     * @description File format version; this server writes version 7 and reads 1 to 7
+                     * @description File format version; this server writes version 8 and reads 1 to 8
                      */
                     formatVersion: number;
                     exportedAt?: string | null;
@@ -25292,6 +25323,37 @@ export interface operations {
                         name: string;
                         description?: string | null;
                         definition: components["schemas"]["SavedViewDefinition"];
+                    }[];
+                    workflows?: {
+                        /** @description Stable machine key, lower_snake_case */
+                        key: string;
+                        name: string;
+                        description?: string | null;
+                        /** @description Stable machine key, lower_snake_case */
+                        class: string;
+                        /**
+                         * @description Set when `class` is a built-in class: an import applies the workflow to this install's class of that role,
+                         *     whatever `class` says
+                         */
+                        classSystemRole?: ("business_service" | "person") | null;
+                        includeSubclasses?: boolean;
+                        stateAttribute?: string | null;
+                        autoStart?: boolean;
+                        /** @description Default false, as on create */
+                        isActive?: boolean;
+                        /** @description A workflow's graph, as the draft body of the definitions API (keys only) */
+                        graph: {
+                            initialState?: string | null;
+                            states: components["schemas"]["WorkflowState"][];
+                            transitions?: components["schemas"]["WorkflowTransition"][];
+                            /** @description Designer node positions, free-form (at most 60 KiB) */
+                            layout?: Record<string, never>;
+                        };
+                        grants?: {
+                            /** @description Stable machine key, lower_snake_case */
+                            transition: string;
+                            profiles: string[];
+                        }[];
                     }[];
                 };
             };
