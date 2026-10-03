@@ -39,7 +39,7 @@ pub struct Field {
     pub sort_order: i32,
     pub lookup_list_id: Option<Uuid>,
     /// `person_name` or `person_email` for the key fields of the built-in
-    /// Person type (migration 0043); the Person's email is unique ignoring case.
+    /// Person type (migration 0044); the Person's email is unique ignoring case.
     pub system_role: Option<String>,
 }
 

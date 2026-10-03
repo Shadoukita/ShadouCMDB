@@ -1,4 +1,4 @@
-//! Migration 0043 (users and Person CIs, SHAA-1505/SHAA-1508) on a populated
+//! Migration 0044 (users and Person CIs, SHAA-1505/SHAA-1508) on a populated
 //! v0.4 database: the Person type is created next to a customer's own
 //! "person" type, `migrate` builds its table and links every account with an
 //! e-mail (audited), accounts without one are left for their next sign-in,
@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::db::{MIGRATOR, reconcile_and_link, scratch};
 
-/// A v0.4 install (migration 0042) with a type keyed "person" in an area keyed
+/// A v0.4 install (migration 0043) with a type keyed "person" in an area keyed
 /// "people", and accounts with and without e-mails.
 const V04: &str = "
 INSERT INTO areas (id, key, name) VALUES ('00000000-0000-4000-8000-0000000000a1', 'people', 'Staff');
@@ -36,12 +36,12 @@ where
 
 #[tokio::test]
 async fn upgrade_links_every_account_with_an_email_to_a_person() {
-    let Some(db) = scratch::empty("upgrade_0043_links_accounts").await else { return };
+    let Some(db) = scratch::empty("upgrade_0044_links_accounts").await else { return };
     let pool = &db.pool;
-    MIGRATOR.run_to(42, pool).await.expect("migrations up to 0042");
+    MIGRATOR.run_to(43, pool).await.expect("migrations up to 0043");
     pool.execute(V04).await.expect("v0.4 data");
 
-    MIGRATOR.run(pool).await.expect("migration 0043");
+    MIGRATOR.run(pool).await.expect("migration 0044");
     // The customer's "person" type and "people" area keep their keys; the built-in ones step aside.
     let (key, area, name): (String, String, String) = sqlx::query_as(
         "SELECT c.key, a.key, c.name FROM ci_classes c JOIN areas a ON a.id = c.area_id WHERE c.system_role = 'person'",
@@ -114,9 +114,9 @@ async fn upgrade_links_every_account_with_an_email_to_a_person() {
 
 #[tokio::test]
 async fn shared_emails_stop_the_upgrade_with_the_list() {
-    let Some(db) = scratch::empty("upgrade_0043_shared_emails").await else { return };
+    let Some(db) = scratch::empty("upgrade_0044_shared_emails").await else { return };
     let pool = &db.pool;
-    MIGRATOR.run_to(42, pool).await.expect("migrations up to 0042");
+    MIGRATOR.run_to(43, pool).await.expect("migrations up to 0043");
     pool.execute(
         "INSERT INTO users (username, display_name, email, password_hash) VALUES
            ('ops', 'Ops', 'ops@example.test', '$argon2id$x'),
@@ -133,9 +133,9 @@ async fn shared_emails_stop_the_upgrade_with_the_list() {
     assert!(!err.contains("dana"), "{err}");
     assert!(err.contains("Nothing was changed"), "{err}");
 
-    // Nothing changed: 0043 is not recorded and none of its objects exist.
+    // Nothing changed: 0044 is not recorded and none of its objects exist.
     let applied: i64 = scalar(pool, "SELECT max(version) FROM _sqlx_migrations WHERE success").await;
-    assert_eq!(applied, 42);
+    assert_eq!(applied, 43);
     let index: Option<String> = scalar(pool, "SELECT to_regclass('cmdb.users_email_uq')::text").await;
     assert_eq!(index, None);
     let column: bool = scalar(
@@ -148,7 +148,7 @@ async fn shared_emails_stop_the_upgrade_with_the_list() {
     // Once each account has its own address, the upgrade goes through.
     pool.execute("UPDATE users SET email = 'ops2@example.test' WHERE username = 'Ops2'").await.unwrap();
     pool.execute("UPDATE users SET email = 'monitor@example.test' WHERE username = 'monitor'").await.unwrap();
-    MIGRATOR.run(pool).await.expect("migration 0043");
+    MIGRATOR.run(pool).await.expect("migration 0044");
     let (_, linked) = reconcile_and_link(pool).await.unwrap();
     assert_eq!(linked, 5);
 

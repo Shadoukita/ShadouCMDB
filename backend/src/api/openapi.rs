@@ -186,6 +186,12 @@ fn error_status(code: ErrorCode) -> (u16, &'static str) {
              token's owner must use two-factor authentication and this session did not sign in with a second factor \
              (code MFA_REQUIRED_FOR_TOKEN)",
         ),
+        ErrorCode::ReauthenticationRequired => (
+            403,
+            "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first \
+             (code MFA_ENROLMENT_REQUIRED), or the session's owner has not confirmed their credentials in the last 10 \
+             minutes (code REAUTHENTICATION_REQUIRED; POST /api/v1/auth/reauthenticate, then send the request again)",
+        ),
         ErrorCode::NotFound => (404, "Not found (code NOT_FOUND)"),
         ErrorCode::Gone => (410, "The operation was removed (code GONE); the message names its replacement"),
         ErrorCode::Conflict | ErrorCode::InUse | ErrorCode::VersionConflict | ErrorCode::LastAdministrator => (
@@ -336,6 +342,10 @@ pub fn document(routes: &[Route]) -> OpenApi {
         }
 
         let mut codes = Vec::new();
+        // First, so its description (which names every 403 code) is the one kept.
+        if r.reauthentication {
+            codes.push(ErrorCode::ReauthenticationRequired);
+        }
         if !r.path_params.is_empty() || !r.query_params.is_empty() || r.body.is_some() {
             codes.push(ErrorCode::ValidationError);
         }
@@ -384,6 +394,12 @@ pub fn document(routes: &[Route]) -> OpenApi {
         };
         if r.session_only {
             let note = "Needs a signed-in session: API tokens get 403 FORBIDDEN.";
+            description = Some(description.map_or_else(|| note.to_owned(), |d| format!("{d} {note}")));
+        }
+        if r.reauthentication {
+            let note = "The session's owner must have signed in or confirmed their credentials \
+                        (`reauthenticate`, POST /api/v1/auth/reauthenticate) in the last 10 minutes: 403 \
+                        REAUTHENTICATION_REQUIRED otherwise, audited as `session.reauthentication_required`.";
             description = Some(description.map_or_else(|| note.to_owned(), |d| format!("{d} {note}")));
         }
         let mut op = OperationBuilder::new()

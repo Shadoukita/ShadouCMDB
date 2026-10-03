@@ -36,7 +36,7 @@ const ADMIN_PASSWORD = process.env.UPGRADE_PASSWORD ?? 'upgrade-admin-password';
 const SETUP_TOKEN = process.env.SETUP_TOKEN;
 const VIEWER = 'upgrade-viewer';
 const VIEWER_PASSWORD = process.env.UPGRADE_VIEWER_PASSWORD ?? 'upgrade-viewer-password';
-// Every account has an e-mail since migration 0043; v0.1.0-rc.1 already accepts one (optional then).
+// Every account has an e-mail since migration 0044; v0.1.0-rc.1 already accepts one (optional then).
 const ADMIN_EMAIL = 'upgrade-admin@example.test';
 const VIEWER_EMAIL = 'upgrade-viewer@example.test';
 
@@ -310,8 +310,8 @@ async function readObjects(ids: Json): Promise<Record<string, Json>> {
 }
 
 /**
- * What the lists show: active CIs (deleted ones drop out) and relationships. Without the Person CIs migration 0043
- * (number 44) creates for the accounts when the old database had none: those are checked in `people`.
+ * What the lists show: active CIs (deleted ones drop out) and relationships. Without the Person CIs migration 0044
+ * (number 45) creates for the accounts when the old database had none: those are checked in `people`.
  */
 async function readInventory() {
   const people = new Set(
@@ -353,7 +353,7 @@ const CHANGED_ON_PURPOSE: Array<{ url: RegExp; diff: RegExp; before: number; why
   },
   {
     url: /^\/api\/v1\/admin\/users\/[^/]+$/, diff: /^\$\.updatedAt: /, before: 44,
-    why: '0043 links every account with an e-mail to its Person CI (an audited update of the account, checked in `people`)',
+    why: '0044 links every account with an e-mail to its Person CI (an audited update of the account, checked in `people`)',
   },
 ];
 
@@ -429,11 +429,11 @@ function compare(label: string, url: string, before: Json, after: Json) {
 
 let sourceMigrations = 0;
 
-/** Migration 0043 (number 44) linked every account to a Person CI and made e-mails required (SHAA-1505). */
+/** Migration 0044 (number 45) linked every account to a Person CI and made e-mails required (SHAA-1505). */
 const PEOPLE = 44;
 
 /**
- * Accounts and Person CIs (migration 0043): both seeded accounts have their e-mail and are linked to a Person whose
+ * Accounts and Person CIs (migration 0044): both seeded accounts have their e-mail and are linked to a Person whose
  * Email is that address, so they sign in without being asked for an e-mail.
  */
 async function people(ids: Json) {
@@ -595,7 +595,7 @@ async function check() {
   // 6. Saved views (migration 0039): customisers gained views.share, and the restricted user can use saved views.
   await savedViews(ids);
 
-  // 7. Accounts and Person CIs (migration 0043).
+  // 7. Accounts and Person CIs (migration 0044).
   await people(ids);
 
   if (failures.length) {

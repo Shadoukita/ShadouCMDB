@@ -1002,6 +1002,7 @@ async function permissions(x: Json) {
     await get('/api/v1/admin/profiles', 403);
     await call('POST', '/api/v1/statuses', { key: `nope_${RUN}`, name: 'Nope' }, 403, { 'x-csrf-token': '' }).then((r) =>
       check(r.json.error?.code === 'CSRF_TOKEN_INVALID', 'a write without the CSRF token is rejected before anything else'));
+    await post('/api/v1/auth/reauthenticate', { currentPassword: password }, 204); // no MFA: the password alone (GH#498)
     await put('/api/v1/auth/password', { currentPassword: 'wrong password!', newPassword: `${password}-2` }, 400);
     await put('/api/v1/auth/password', { currentPassword: password, newPassword: `${password}-2` }, 204);
     await get('/api/v1/auth/me'); // this session survives the change
@@ -1411,6 +1412,9 @@ async function mfa(builtin: Json, createHash: typeof import('node:crypto').creat
   await as(challenge, () => post('/api/v1/auth/login/mfa', { code: codes[0]! }, 401)); // the challenge is used up
   const newCodes: string[] = await as(signedIn, async () => {
     await get('/api/v1/auth/me');
+    // With MFA set up, confirming the session takes a second factor too (GH#498).
+    await post('/api/v1/auth/reauthenticate', { currentPassword: password }, 400);
+    await post('/api/v1/auth/reauthenticate', { currentPassword: password, code: codes[2]! }, 204);
     await post('/api/v1/auth/mfa/recovery-codes', { currentPassword: password, code: '000000' }, 400);
     const fresh = (await post('/api/v1/auth/mfa/recovery-codes', { currentPassword: password, code: codes[0]!.toUpperCase() }, 200)).json.codes;
     await post('/api/v1/auth/mfa/recovery-codes', { currentPassword: password, code: codes[1]! }, 400); // the old codes are gone
@@ -1441,7 +1445,7 @@ async function mfa(builtin: Json, createHash: typeof import('node:crypto').creat
 
   const trail: Json[] = (await get(`/api/v1/audit-log?entityType=users&entityId=${user.id}&sort=occurredAt&limit=100`)).json.data;
   const actions = trail.filter((e) => e.action.startsWith('mfa.')).map((e) => e.action).join(',');
-  check(actions === 'mfa.failure,mfa.enrol,mfa.failure,mfa.failure,mfa.recovery_code_used,mfa.recovery_codes,mfa.failure,mfa.recovery_code_used,mfa.disable',
+  check(actions === 'mfa.failure,mfa.enrol,mfa.failure,mfa.recovery_code_used,mfa.failure,mfa.recovery_code_used,mfa.recovery_codes,mfa.failure,mfa.recovery_code_used,mfa.disable',
     `enrolment, failures, recovery codes and the reset are audited (${actions})`);
   const secrets = [secret, ...codes, ...newCodes].flatMap((s) => [s, s.replaceAll('-', '')]);
   check(trail.every((e) => secrets.every((s) => !JSON.stringify(e).includes(s) && !JSON.stringify(e).includes(createHash('sha256').update(s).digest('hex')))),

@@ -650,6 +650,9 @@ pub struct Route {
     pub before_mfa_enrolment: bool,
     /// Answers a session whose account must enter an e-mail before anything else.
     pub before_email_entry: bool,
+    /// Needs a session whose owner confirmed their credentials recently
+    /// ([`RouteBuilder::recent_reauthentication`]).
+    pub reauthentication: bool,
     /// A session request needs the X-CSRF-Token header: every method but GET
     /// and HEAD, and the reads marked [`RouteBuilder::csrf_on_read`].
     pub csrf: bool,
@@ -681,6 +684,7 @@ pub struct RouteBuilder {
     session_only: bool,
     before_mfa_enrolment: bool,
     before_email_entry: bool,
+    reauthentication: bool,
     csrf_on_read: bool,
     errors: Vec<ErrorCode>,
     also_returns: Vec<(StatusCode, String)>,
@@ -703,6 +707,7 @@ pub fn route(method: Method, path: impl Into<String>, operation_id: impl Into<St
         session_only: false,
         before_mfa_enrolment: false,
         before_email_entry: false,
+        reauthentication: false,
         csrf_on_read: false,
         errors: Vec::new(),
         also_returns: Vec::new(),
@@ -763,6 +768,19 @@ impl RouteBuilder {
     /// credential (a token, an account, a password or a sign-in path).
     pub fn session_only(mut self) -> Self {
         self.session_only = true;
+        self
+    }
+    /// Session only, and the session's owner must have confirmed their
+    /// credentials within [`auth::REAUTHENTICATION_WINDOW`]: at sign-in, or
+    /// through POST /api/v1/auth/reauthenticate (403 REAUTHENTICATION_REQUIRED
+    /// otherwise, audited as `session.reauthentication_required`). For the
+    /// writes that hand out or take over an account's rights (accounts,
+    /// passwords, MFA, profiles, API tokens, identity providers): a stolen
+    /// session cannot turn into a lasting credential without the owner's
+    /// password, not even through a second account it creates (GH#498).
+    pub fn recent_reauthentication(mut self) -> Self {
+        self.session_only = true;
+        self.reauthentication = true;
         self
     }
     /// Reachable by a session whose user holds a profile requiring MFA and has
@@ -840,6 +858,7 @@ impl RouteBuilder {
         let session_only = self.session_only;
         let before_mfa_enrolment = self.before_mfa_enrolment;
         let before_email_entry = self.before_email_entry;
+        let reauthentication = self.reauthentication;
         let csrf = self.csrf_on_read || !(self.method == Method::GET || self.method == Method::HEAD);
         let body_limit = self.body_limit.unwrap_or(match access {
             Access::Public => PUBLIC_BODY_LIMIT,
@@ -873,7 +892,8 @@ impl RouteBuilder {
                     };
                     let net = client.net;
                     let used = auth::token::Use { method: &method, path: uri.path(), operation_id: &operation_id };
-                    let rule = Rule { access, session_only, before_mfa_enrolment, before_email_entry, csrf };
+                    let rule =
+                        Rule { access, session_only, before_mfa_enrolment, before_email_entry, reauthentication, csrf };
                     // Authorise before reading the body: an anonymous caller must not make
                     // the server buffer up to body_limit bytes only to be answered 401.
                     let ctx = authorise(&state, &headers, rule, client, used).await?;
@@ -947,6 +967,7 @@ impl RouteBuilder {
             session_only,
             before_mfa_enrolment,
             before_email_entry,
+            reauthentication,
             csrf,
             errors: self.errors,
             also_returns: self.also_returns,
@@ -968,6 +989,7 @@ struct Rule {
     session_only: bool,
     before_mfa_enrolment: bool,
     before_email_entry: bool,
+    reauthentication: bool,
     /// A session request must carry the CSRF token.
     csrf: bool,
 }
@@ -978,7 +1000,9 @@ struct Rule {
 /// the session's token, 403 FORBIDDEN without
 /// the required permission (or for a token on a session-only route), 403
 /// MFA_ENROLMENT_REQUIRED for a session that must set up MFA first, 403
-/// EMAIL_REQUIRED for a session whose account must enter an e-mail first.
+/// EMAIL_REQUIRED for a session whose account must enter an e-mail first, 403
+/// REAUTHENTICATION_REQUIRED for a session that has not recently confirmed
+/// its owner's credentials on a route that needs it.
 ///
 /// An `Authorization: Bearer` header selects token authentication and the
 /// cookies are then ignored: a bad token is 401, never a fall-back to the
@@ -1029,7 +1053,43 @@ async fn authorise(
     {
         return Err(forbidden(format!("This requires the {} permission", p.as_str())));
     }
-    Ok(RequestContext::user(Arc::new(principal), request_id).with_client(client))
+    let ctx = RequestContext::user(Arc::new(principal), request_id).with_client(client);
+    if rule.reauthentication {
+        reauthentication_gate(&state.pool, &ctx, &used).await?;
+    }
+    Ok(ctx)
+}
+
+/// 403 REAUTHENTICATION_REQUIRED, audited, unless the session's owner
+/// confirmed their credentials recently (see
+/// [`RouteBuilder::recent_reauthentication`]).
+async fn reauthentication_gate(
+    pool: &PgPool,
+    ctx: &RequestContext,
+    used: &auth::token::Use<'_>,
+) -> Result<(), AppError> {
+    let Some(me) = ctx.principal() else { return Err(unauthenticated()) };
+    if me.recently_confirmed() {
+        return Ok(());
+    }
+    if let Some(session_id) = me.session_id() {
+        let mut tx = pool.begin().await?;
+        auth::events::reauthentication_required(&mut tx, ctx, session_id, me.user_id, &me.username, used).await?;
+        tx.commit().await?;
+    }
+    tracing::warn!(user = %me.username, operation = used.operation_id, "refused: credentials not confirmed recently");
+    Err(reauthentication_required())
+}
+
+pub fn reauthentication_required() -> AppError {
+    AppError::new(
+        ErrorCode::ReauthenticationRequired,
+        format!(
+            "Confirm your password first: this change needs a session that signed in or confirmed its password in \
+             the last {} minutes (POST /api/v1/auth/reauthenticate). Accounts of an OIDC provider sign in again.",
+            auth::REAUTHENTICATION_WINDOW.as_secs() / 60
+        ),
+    )
 }
 
 /// Largest request body a route accepts unless it sets [`RouteBuilder::body_limit`].

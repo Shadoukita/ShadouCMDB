@@ -543,7 +543,7 @@ pub fn routes() -> Vec<Route> {
             )
             .status(StatusCode::CREATED)
             .requires(manage)
-            .session_only()
+            .recent_reauthentication()
             .errors(&[ErrorCode::MfaRequiredForToken])
             .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<ApiTokenCreate>>| async move {
                 Ok(Json(create(&api.pool, &api.ctx, &b).await?))

@@ -1,5 +1,5 @@
 //! SQL for the link between sign-in accounts and Person CIs (SHAA-1505,
-//! migration 0043).
+//! migration 0044).
 
 use sqlx::{AssertSqlSafe, PgConnection};
 use uuid::Uuid;
@@ -15,7 +15,7 @@ pub struct PersonType {
     pub table: TableName,
 }
 
-/// The Person type in `model`; None before migration 0043.
+/// The Person type in `model`; None before migration 0044.
 pub async fn person_type(conn: &mut PgConnection, model: &Model) -> sqlx::Result<Option<PersonType>> {
     let class_id: Option<Uuid> = sqlx::query_scalar("SELECT id FROM cmdb.ci_classes WHERE system_role = 'person'")
         .fetch_optional(&mut *conn)
@@ -95,7 +95,7 @@ pub async fn set_link(conn: &mut PgConnection, user_id: Uuid, person: Option<Uui
 }
 
 /// Accounts with an e-mail that no Person is linked to yet (after the upgrade
-/// to 0043), oldest first.
+/// to 0044), oldest first.
 pub async fn unlinked_accounts(conn: &mut PgConnection) -> sqlx::Result<Vec<Uuid>> {
     sqlx::query_scalar(
         "SELECT id FROM cmdb.users WHERE email IS NOT NULL AND person_ci_id IS NULL ORDER BY created_at, id",

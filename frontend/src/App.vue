@@ -6,6 +6,7 @@ import ErrorAlert from "./components/ErrorAlert.vue";
 import GlobalSearch from "./components/GlobalSearch.vue";
 import LoadingState from "./components/LoadingState.vue";
 import MainNav from "./components/MainNav.vue";
+import ReauthenticateDialog from "./components/ReauthenticateDialog.vue";
 import UserMenu from "./components/UserMenu.vue";
 import { t } from "./i18n";
 import { useMediaQuery } from "./lib/composables";
@@ -74,6 +75,7 @@ function retry() {
     <main id="main" class="shell-main">
       <RouterView />
     </main>
+    <ReauthenticateDialog />
   </div>
   <LoadingState v-else :label="t('shell.starting')" />
 </template>

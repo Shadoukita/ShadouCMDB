@@ -318,7 +318,7 @@ fn index_name(f: &Field) -> String {
     format!("ix_{}", f.hex())
 }
 
-/// The unique index of the Person's Email (lower(email), migration 0043).
+/// The unique index of the Person's Email (lower(email), migration 0044).
 pub fn unique_index_name(f: &Field) -> String {
     format!("uq_{}", f.hex())
 }
@@ -639,7 +639,7 @@ impl Planner<'_> {
 
         // The Person's Email is unique ignoring case (SHAA-1505 decision 2):
         // the database holds the line for every write path. Built before any
-        // Person exists (the type is new in 0043), so nothing can violate it then;
+        // Person exists (the type is new in 0044), so nothing can violate it then;
         // a later build finds duplicates and is refused with the index's error.
         if f.is_unique_email() && !self.catalog.has_index(schema, &unique_index_name(f)) {
             let i = plan.ddl(format!(

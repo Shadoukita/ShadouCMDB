@@ -1,4 +1,4 @@
-//! Sign-in accounts and their Person CIs (SHAA-1505, migration 0043).
+//! Sign-in accounts and their Person CIs (SHAA-1505, migration 0044).
 //!
 //! Every user with an e-mail is linked to exactly one CI of the built-in
 //! Person type (`users.person_ci_id`), and the account's e-mail is the source
@@ -174,7 +174,7 @@ pub async fn email_usable(conn: &mut PgConnection, user_id: Option<Uuid>, email:
 }
 
 /// Links every account with an e-mail that has no Person yet (the upgrade to
-/// 0043; `shadoucmdb migrate` runs it after the reconcile that builds the
+/// 0044; `shadoucmdb migrate` runs it after the reconcile that builds the
 /// Person table, so it is a no-op once done). Each link is an `update` row on
 /// the account. Returns how many were linked.
 pub async fn link_all(conn: &mut PgConnection, ctx: &RequestContext) -> Result<usize, AppError> {

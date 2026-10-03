@@ -136,6 +136,7 @@ mod tests {
                 csrf_token: String::new(),
                 mfa_enrolment_required: false,
                 email_required: false,
+                recently_confirmed: true,
             },
             permissions,
         };

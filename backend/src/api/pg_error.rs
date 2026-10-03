@@ -178,7 +178,7 @@ pub fn map(err: &sqlx::Error, field_prefix: Option<&str>) -> Option<AppError> {
                 code: "unique".into(),
             }]));
         }
-        // A Person linked to a sign-in account (migration 0043): items refuses
+        // A Person linked to a sign-in account (migration 0044): items refuses
         // first with the same code; this is the backstop.
         Some("configuration_items_person_linked") => {
             return Some(AppError::new(ErrorCode::Conflict, humanise(pg.message())).with_details(vec![FieldError {
@@ -188,7 +188,7 @@ pub fn map(err: &sqlx::Error, field_prefix: Option<&str>) -> Option<AppError> {
                 code: "person_linked".into(),
             }]));
         }
-        // The Person's Name and Email fields (migration 0043).
+        // The Person's Name and Email fields (migration 0044).
         Some("ci_attribute_definitions_system_protected") => {
             let message = humanise(pg.message());
             return Some(AppError::new(ErrorCode::InUse, message.clone()).with_details(vec![FieldError {

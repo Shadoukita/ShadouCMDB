@@ -30,7 +30,7 @@ pub struct EffectiveAttributeRow {
     pub default_value: Option<Json<Value>>,
     pub sort_order: i32,
     pub is_active: bool,
-    /// The Person's Name or Email (migration 0043).
+    /// The Person's Name or Email (migration 0044).
     pub system_role: Option<AttributeSystemRole>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,

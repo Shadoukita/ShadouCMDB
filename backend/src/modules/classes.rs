@@ -794,7 +794,7 @@ pub async fn purge_class_in(
 #[sqlx(type_name = "text", rename_all = "snake_case")]
 pub enum ClassSystemRole {
     BusinessService,
-    /// The people sign-in accounts are linked to (migration 0043, SHAA-1505).
+    /// The people sign-in accounts are linked to (migration 0044, SHAA-1505).
     Person,
 }
 
@@ -809,7 +809,7 @@ impl ClassSystemRole {
 }
 
 /// What a built-in field is for (`ci_attribute_definitions.system_role`,
-/// migration 0043): the Person's Name and Email. Such a field cannot be
+/// migration 0044): the Person's Name and Email. Such a field cannot be
 /// archived, purged, made optional or change type; the Email is unique across
 /// Person CIs, ignoring case.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema, sqlx::Type)]
@@ -2775,7 +2775,7 @@ mod tests {
         relationships::create(pool, &ctx, &body::<RelationshipCreate>(edge)).await.unwrap();
 
         let restricted = datamodel_manager(&[servers.id]);
-        // Viewing every class includes the built-in business service and Person types (0033, 0043).
+        // Viewing every class includes the built-in business service and Person types (0033, 0044).
         let mut viewer_classes: Vec<Uuid> =
             sqlx::query_scalar("SELECT id FROM ci_classes WHERE system_role IS NOT NULL")
                 .fetch_all(pool)

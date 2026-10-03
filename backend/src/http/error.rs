@@ -54,6 +54,9 @@ pub enum ErrorCode {
     /// The token's owner must use two-factor authentication, and the session creating it did not sign in with a
     /// second factor (403)
     MfaRequiredForToken,
+    /// The change hands out or takes over an account's rights, and the session's owner has not confirmed their
+    /// credentials in the last 10 minutes: POST /api/v1/auth/reauthenticate, then send it again (403)
+    ReauthenticationRequired,
     /// The LDAP directory (or OIDC provider) could not be reached; local accounts still sign in (503)
     IdentityProviderUnavailable,
     UnsupportedMediaType,
@@ -77,7 +80,8 @@ impl ErrorCode {
             | ErrorCode::CsrfTokenInvalid
             | ErrorCode::MfaEnrolmentRequired
             | ErrorCode::EmailRequired
-            | ErrorCode::MfaRequiredForToken => StatusCode::FORBIDDEN,
+            | ErrorCode::MfaRequiredForToken
+            | ErrorCode::ReauthenticationRequired => StatusCode::FORBIDDEN,
             ErrorCode::NotFound => StatusCode::NOT_FOUND,
             ErrorCode::Gone => StatusCode::GONE,
             ErrorCode::Conflict | ErrorCode::InUse | ErrorCode::VersionConflict | ErrorCode::LastAdministrator => {

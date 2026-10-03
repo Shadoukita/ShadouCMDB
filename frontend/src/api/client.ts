@@ -58,6 +58,16 @@ export function onMfaEnrolmentRequired(handler: () => void) {
   enrolmentRequiredHandler = handler;
 }
 
+let reauthenticationRequiredHandler: (() => void) | undefined;
+
+/**
+ * Called when a request answers 403 REAUTHENTICATION_REQUIRED: a change to accounts, profiles, API tokens or
+ * identity providers needs the password confirmed in the last 10 minutes (GH#498).
+ */
+export function onReauthenticationRequired(handler: () => void) {
+  reauthenticationRequiredHandler = handler;
+}
+
 /** GETs the API treats like writes (audited CSV exports, audited import job reads): they need the CSRF token too, so a link on another site cannot run them. */
 const CSRF_READS = /\/api\/v1\/((configuration-items\/[^/]+\/impact|business-services\/[^/]+\/members|admin\/config)\/export|imports\/[0-9a-f-]{36}(\/issues|\/error-report)?)$/;
 
@@ -81,6 +91,7 @@ api.use({
     if (response.status === 403 && requestEpoch.get(request) === sessionEpoch) {
       const body = (await response.clone().json().catch(() => null)) as Envelope | null;
       if (body?.error?.code === "MFA_ENROLMENT_REQUIRED") enrolmentRequiredHandler?.();
+      if (body?.error?.code === "REAUTHENTICATION_REQUIRED") reauthenticationRequiredHandler?.();
     }
     return response;
   },

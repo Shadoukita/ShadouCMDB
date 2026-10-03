@@ -2167,7 +2167,7 @@ pub fn routes() -> Vec<Route> {
                  either way a warning names the section.",
             )
             .requires(GlobalPermission::ConfigExportImport)
-            .session_only()
+            .recent_reauthentication()
             .body_limit(IMPORT_BODY_LIMIT)
             .errors(&[ErrorCode::Conflict, ErrorCode::InUse, ErrorCode::PayloadTooLarge])
             .handle(
@@ -2212,6 +2212,7 @@ mod tests {
                 csrf_token: String::new(),
                 mfa_enrolment_required: false,
                 email_required: false,
+                recently_confirmed: true,
             },
             permissions,
         };

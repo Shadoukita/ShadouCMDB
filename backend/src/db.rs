@@ -463,7 +463,7 @@ async fn migrate_with(pool: &PgPool, cfg: &DatabaseConfig, adopt_drizzle: bool) 
 
 /// What `migrate` does after the migrations: area schemas, type tables and
 /// reporting views follow the data model (anything missing after migration
-/// 0009, a new reporting role, the Person type of 0043), then every account
+/// 0009, a new reporting role, the Person type of 0044), then every account
 /// with an e-mail gets its Person (SHAA-1505), in the same transaction as the
 /// reconcile that built its table: all or nothing. Returns the schema change
 /// and how many accounts were linked.
@@ -864,4 +864,4 @@ mod upgrade_0041;
 #[cfg(test)]
 mod upgrade_0042;
 #[cfg(test)]
-mod upgrade_0043;
+mod upgrade_0044;

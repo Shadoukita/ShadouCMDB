@@ -82,7 +82,7 @@ async fn fingerprint(pool: &PgPool) -> Vec<(String, Option<String>)> {
         ("configuration_items", "SELECT md5(string_agg(t::text, '|' ORDER BY t.id)) FROM configuration_items t"),
         ("service table", "SELECT md5(string_agg(t::text, '|' ORDER BY t.id)) FROM infrastruktur.service t"),
         ("application table", "SELECT md5(string_agg(t::text, '|' ORDER BY t.id)) FROM infrastruktur.application t"),
-        // Without what 0043 adds: the Person type, its fields and their system_role column.
+        // Without what 0044 adds: the Person type, its fields and their system_role column.
         (
             "attributes",
             "SELECT md5(string_agg((to_jsonb(t) - 'system_role')::text, '|' ORDER BY t.id)) FROM ci_attribute_definitions t
@@ -139,7 +139,7 @@ async fn upgrade_adopts_the_template_service_class_and_changes_no_data() {
     let (class, key, area) = system_class(pool).await;
     assert_eq!((class.to_string().as_str(), key.as_str(), area.as_str()), (SERVICE, "service", "infrastruktur"));
     assert_eq!(fingerprint(pool).await, before, "adoption changes no data");
-    // Only the Person type's area (0043) is new.
+    // Only the Person type's area (0044) is new.
     let areas_after: i64 =
         sqlx::query_scalar("SELECT count(*) FROM areas WHERE key NOT LIKE 'people%'").fetch_one(pool).await.unwrap();
     assert_eq!(areas_after, areas_before, "no new area");
