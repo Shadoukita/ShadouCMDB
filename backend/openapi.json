@@ -27888,7 +27888,7 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "description": "A whole configuration: data model, lookups, permission profiles, UI settings, saved import mappings and shared saved views (no users, passwords, CIs or personal views)",
+                "description": "A whole configuration: data model, lookups, permission profiles, UI settings, saved import mappings, shared saved views and workflows (no users, passwords, CIs, personal views or workflow instances)",
                 "required": [
                   "format",
                   "formatVersion"
@@ -27904,8 +27904,8 @@
                   "formatVersion": {
                     "type": "integer",
                     "format": "int32",
-                    "description": "File format version; this server writes version 7 and reads 1 to 7",
-                    "maximum": 7,
+                    "description": "File format version; this server writes version 8 and reads 1 to 8",
+                    "maximum": 8,
                     "minimum": 1
                   },
                   "exportedAt": {
@@ -28127,6 +28127,159 @@
                         },
                         "definition": {
                           "$ref": "#/components/schemas/SavedViewDefinition"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "maxItems": 500
+                  },
+                  "workflows": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "description": "A workflow, matched by key (case-insensitive), with its current published graph. Drafts, retired versions,\nrunning instances and their history are never part of a file.",
+                      "required": [
+                        "key",
+                        "name",
+                        "class",
+                        "graph"
+                      ],
+                      "properties": {
+                        "key": {
+                          "type": "string",
+                          "description": "Stable machine key, lower_snake_case",
+                          "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                        },
+                        "name": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        },
+                        "description": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "maxLength": 4000
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "x-multiline": true
+                        },
+                        "class": {
+                          "type": "string",
+                          "description": "Stable machine key, lower_snake_case",
+                          "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                        },
+                        "classSystemRole": {
+                          "oneOf": [
+                            {
+                              "type": "string",
+                              "description": "What a built-in CI class is for (`ci_classes.system_role`, migration 0033).\nThe class with a role cannot be deleted, archived or subclassed, and its\nrole never changes; its key may differ between installs (`service` when\nthe starter class was adopted, `business_service` otherwise).",
+                              "enum": [
+                                "business_service",
+                                "person"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "Set when `class` is a built-in class: an import applies the workflow to this install's class of that role,\nwhatever `class` says"
+                        },
+                        "includeSubclasses": {
+                          "type": "boolean"
+                        },
+                        "stateAttribute": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "description": "Stable machine key, lower_snake_case",
+                              "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "autoStart": {
+                          "type": "boolean"
+                        },
+                        "isActive": {
+                          "type": "boolean",
+                          "description": "Default false, as on create"
+                        },
+                        "graph": {
+                          "type": "object",
+                          "description": "A workflow's graph, as the draft body of the definitions API (keys only)",
+                          "required": [
+                            "states"
+                          ],
+                          "properties": {
+                            "initialState": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "description": "Stable machine key, lower_snake_case",
+                                  "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "states": {
+                              "type": "array",
+                              "items": {
+                                "$ref": "#/components/schemas/WorkflowState"
+                              },
+                              "maxItems": 100
+                            },
+                            "transitions": {
+                              "type": "array",
+                              "items": {
+                                "$ref": "#/components/schemas/WorkflowTransition"
+                              },
+                              "maxItems": 300
+                            },
+                            "layout": {
+                              "type": "object",
+                              "description": "Designer node positions, free-form (at most 60 KiB)"
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        "grants": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "description": "The profiles (by name) that may run one transition",
+                            "required": [
+                              "transition",
+                              "profiles"
+                            ],
+                            "properties": {
+                              "transition": {
+                                "type": "string",
+                                "description": "Stable machine key, lower_snake_case",
+                                "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                              },
+                              "profiles": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "maxLength": 200,
+                                  "minLength": 1,
+                                  "pattern": "\\S"
+                                },
+                                "maxItems": 100
+                              }
+                            },
+                            "additionalProperties": false
+                          },
+                          "maxItems": 300
                         }
                       },
                       "additionalProperties": false
@@ -31657,7 +31810,7 @@
       },
       "ConfigFile": {
         "type": "object",
-        "description": "A whole configuration: data model, lookups, permission profiles, UI settings, saved import mappings and shared saved views (no users, passwords, CIs or personal views)",
+        "description": "A whole configuration: data model, lookups, permission profiles, UI settings, saved import mappings, shared saved views and workflows (no users, passwords, CIs, personal views or workflow instances)",
         "required": [
           "format",
           "formatVersion"
@@ -31673,8 +31826,8 @@
           "formatVersion": {
             "type": "integer",
             "format": "int32",
-            "description": "File format version; this server writes version 7 and reads 1 to 7",
-            "maximum": 7,
+            "description": "File format version; this server writes version 8 and reads 1 to 8",
+            "maximum": 8,
             "minimum": 1
           },
           "exportedAt": {
@@ -31896,6 +32049,159 @@
                 },
                 "definition": {
                   "$ref": "#/components/schemas/SavedViewDefinition"
+                }
+              },
+              "additionalProperties": false
+            },
+            "maxItems": 500
+          },
+          "workflows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A workflow, matched by key (case-insensitive), with its current published graph. Drafts, retired versions,\nrunning instances and their history are never part of a file.",
+              "required": [
+                "key",
+                "name",
+                "class",
+                "graph"
+              ],
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "description": "Stable machine key, lower_snake_case",
+                  "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                },
+                "name": {
+                  "type": "string",
+                  "maxLength": 100,
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "description": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 4000
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "x-multiline": true
+                },
+                "class": {
+                  "type": "string",
+                  "description": "Stable machine key, lower_snake_case",
+                  "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                },
+                "classSystemRole": {
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "description": "What a built-in CI class is for (`ci_classes.system_role`, migration 0033).\nThe class with a role cannot be deleted, archived or subclassed, and its\nrole never changes; its key may differ between installs (`service` when\nthe starter class was adopted, `business_service` otherwise).",
+                      "enum": [
+                        "business_service",
+                        "person"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Set when `class` is a built-in class: an import applies the workflow to this install's class of that role,\nwhatever `class` says"
+                },
+                "includeSubclasses": {
+                  "type": "boolean"
+                },
+                "stateAttribute": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "description": "Stable machine key, lower_snake_case",
+                      "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "autoStart": {
+                  "type": "boolean"
+                },
+                "isActive": {
+                  "type": "boolean",
+                  "description": "Default false, as on create"
+                },
+                "graph": {
+                  "type": "object",
+                  "description": "A workflow's graph, as the draft body of the definitions API (keys only)",
+                  "required": [
+                    "states"
+                  ],
+                  "properties": {
+                    "initialState": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "description": "Stable machine key, lower_snake_case",
+                          "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "states": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/WorkflowState"
+                      },
+                      "maxItems": 100
+                    },
+                    "transitions": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/WorkflowTransition"
+                      },
+                      "maxItems": 300
+                    },
+                    "layout": {
+                      "type": "object",
+                      "description": "Designer node positions, free-form (at most 60 KiB)"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "grants": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "description": "The profiles (by name) that may run one transition",
+                    "required": [
+                      "transition",
+                      "profiles"
+                    ],
+                    "properties": {
+                      "transition": {
+                        "type": "string",
+                        "description": "Stable machine key, lower_snake_case",
+                        "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                      },
+                      "profiles": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "maxLength": 200,
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        },
+                        "maxItems": 100
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "maxItems": 300
                 }
               },
               "additionalProperties": false

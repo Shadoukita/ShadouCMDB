@@ -314,7 +314,7 @@ impl WorkflowStateCategory {
 }
 
 /// A state of a workflow version
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkflowState {
     /// Unique in the version
@@ -343,7 +343,7 @@ fn nullable_key_schema() -> Schema {
 }
 
 /// A field a transition shows, and whether it must be filled in
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkflowTransitionField {
     /// The key of a field of the workflow's type (its own or inherited)
@@ -359,7 +359,7 @@ fn yes() -> bool {
 }
 
 /// A transition of a workflow version: a directed edge between two states
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkflowTransition {
     /// Unique in the version; grants refer to it

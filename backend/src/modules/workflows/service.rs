@@ -41,7 +41,7 @@ fn actor(ctx: &RequestContext) -> (Option<Uuid>, String) {
     (id, name)
 }
 
-async fn load(conn: &mut PgConnection, id: Uuid, for_update: bool) -> Result<WorkflowDefinition, AppError> {
+pub(crate) async fn load(conn: &mut PgConnection, id: Uuid, for_update: bool) -> Result<WorkflowDefinition, AppError> {
     let lock = if for_update { " FOR UPDATE OF d" } else { "" };
     sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT {COLUMNS} FROM {FROM} WHERE d.id = $1{lock}")))
         .bind(id)
@@ -87,7 +87,7 @@ async fn version_row(
     .await?)
 }
 
-async fn draft_row(
+pub(crate) async fn draft_row(
     conn: &mut PgConnection,
     definition: Uuid,
     for_update: bool,
@@ -104,7 +104,7 @@ fn covered(model: &Model, d: &WorkflowDefinition) -> Vec<Uuid> {
     if d.include_subclasses { model.subtree(d.class_id) } else { vec![d.class_id] }
 }
 
-async fn grant_rows(conn: &mut PgConnection, definition: Uuid) -> Result<Vec<WorkflowGrant>, AppError> {
+pub(crate) async fn grant_rows(conn: &mut PgConnection, definition: Uuid) -> Result<Vec<WorkflowGrant>, AppError> {
     let rows: Vec<(String, Uuid, String)> = sqlx::query_as(
         "SELECT g.transition_key, p.id, p.name FROM cmdb.workflow_transition_grants g
          JOIN cmdb.permission_profiles p ON p.id = g.profile_id
@@ -121,7 +121,7 @@ async fn grant_rows(conn: &mut PgConnection, definition: Uuid) -> Result<Vec<Wor
 }
 
 /// `{transitionKey: [profile names]}` for the audit log.
-fn grants_by_name(grants: &[WorkflowGrant]) -> Value {
+pub(crate) fn grants_by_name(grants: &[WorkflowGrant]) -> Value {
     Value::Object(
         grants
             .iter()
@@ -279,7 +279,7 @@ pub async fn get(pool: &PgPool, id: Uuid) -> Result<WorkflowDefinitionDetail, Ap
 }
 
 /// Stores an empty draft as version `no` and returns its id.
-async fn new_draft(conn: &mut PgConnection, definition: Uuid, no: i32) -> Result<Uuid, AppError> {
+pub(crate) async fn new_draft(conn: &mut PgConnection, definition: Uuid, no: i32) -> Result<Uuid, AppError> {
     let empty = graph::checksum(&None, &[], &[]);
     Ok(sqlx::query_scalar(
         "INSERT INTO cmdb.workflow_versions (definition_id, version_no, status, checksum)
@@ -298,6 +298,19 @@ pub async fn create(
     b: &WorkflowDefinitionCreate,
 ) -> Result<WorkflowDefinitionDetail, AppError> {
     let mut tx = pool.begin().await?;
+    let d = create_in(&mut tx, ctx, b).await?;
+    let warnings = activation_warnings(&mut tx, ctx, &d).await?;
+    let out = detail(&mut tx, d, warnings).await?;
+    tx.commit().await?;
+    Ok(out)
+}
+
+/// Creates the definition with an empty draft v1, audited, inside the caller's transaction.
+pub(crate) async fn create_in(
+    tx: &mut PgConnection,
+    ctx: &RequestContext,
+    b: &WorkflowDefinitionCreate,
+) -> Result<WorkflowDefinition, AppError> {
     let class: Option<Uuid> = sqlx::query_scalar("SELECT id FROM cmdb.ci_classes WHERE id = $1")
         .bind(b.class_id)
         .fetch_optional(&mut *tx)
@@ -321,10 +334,10 @@ pub async fn create(
     }
     let is_active = b.is_active.unwrap_or(false);
     if let Some(attribute) = b.state_attribute_id {
-        let fields = Fields::load(&mut tx, b.class_id).await?;
+        let fields = Fields::load(&mut *tx, b.class_id).await?;
         check_state_attribute(&fields, attribute)?;
         if is_active {
-            check_state_driver(&mut tx, None, attribute).await?;
+            check_state_driver(&mut *tx, None, attribute).await?;
         }
     }
     let (user_id, user_name) = actor(ctx);
@@ -346,20 +359,17 @@ pub async fn create(
     .bind(&user_name)
     .fetch_one(&mut *tx)
     .await?;
-    new_draft(&mut tx, id, 1).await?;
-    let d = load(&mut tx, id, false).await?;
+    new_draft(&mut *tx, id, 1).await?;
+    let d = load(&mut *tx, id, false).await?;
     let entry = AuditEntry {
         action: AuditAction::Create,
         entity_type: TABLE,
         entity_id: id,
         old_value: None,
-        new_value: Some(audit_value(&mut tx, &d).await?),
+        new_value: Some(audit_value(&mut *tx, &d).await?),
     };
-    crud::write_audit(&mut tx, ctx, vec![entry]).await?;
-    let warnings = activation_warnings(&mut tx, ctx, &d).await?;
-    let out = detail(&mut tx, d, warnings).await?;
-    tx.commit().await?;
-    Ok(out)
+    crud::write_audit(&mut *tx, ctx, vec![entry]).await?;
+    Ok(d)
 }
 
 pub async fn update(
@@ -369,7 +379,24 @@ pub async fn update(
     b: &WorkflowDefinitionUpdate,
 ) -> Result<WorkflowDefinitionDetail, AppError> {
     let mut tx = pool.begin().await?;
-    let before = load(&mut tx, id, true).await?;
+    let (before, after) = update_in(&mut tx, ctx, id, b).await?;
+    let newly_driving = after.is_active
+        && after.state_attribute_id.is_some()
+        && (!before.is_active || after.state_attribute_id != before.state_attribute_id);
+    let warnings = if newly_driving { activation_warnings(&mut tx, ctx, &after).await? } else { Vec::new() };
+    let out = detail(&mut tx, after, warnings).await?;
+    tx.commit().await?;
+    Ok(out)
+}
+
+/// Changes the settings, audited, inside the caller's transaction; returns the definition before and after.
+pub(crate) async fn update_in(
+    tx: &mut PgConnection,
+    ctx: &RequestContext,
+    id: Uuid,
+    b: &WorkflowDefinitionUpdate,
+) -> Result<(WorkflowDefinition, WorkflowDefinition), AppError> {
+    let before = load(&mut *tx, id, true).await?;
     check_version(b.version, before.version)?;
     let attribute = b.state_attribute_id.unwrap_or(before.state_attribute_id);
     if attribute != before.state_attribute_id {
@@ -393,7 +420,7 @@ pub async fn update(
             }]));
         }
         if let Some(a) = attribute {
-            check_state_attribute(&Fields::load(&mut tx, before.class_id).await?, a)?;
+            check_state_attribute(&Fields::load(&mut *tx, before.class_id).await?, a)?;
         }
     }
     let active = b.is_active.unwrap_or(before.is_active);
@@ -401,30 +428,24 @@ pub async fn update(
         && active
         && (!before.is_active || attribute != before.state_attribute_id)
     {
-        check_state_driver(&mut tx, Some(id), a).await?;
+        check_state_driver(&mut *tx, Some(id), a).await?;
     }
     let (user_id, user_name) = actor(ctx);
     let mut columns = b.columns();
     columns.0.push(("version", Val::Int(Some(before.version + 1))));
     columns.0.push(("updated_by_id", Val::Uuid(user_id)));
     columns.0.push(("updated_by_name", Val::Text(Some(user_name))));
-    let _: (Uuid,) = crud::update_row(&mut tx, "cmdb.workflow_definitions", "id", id, columns).await?;
-    let after = load(&mut tx, id, false).await?;
+    let _: (Uuid,) = crud::update_row(&mut *tx, "cmdb.workflow_definitions", "id", id, columns).await?;
+    let after = load(&mut *tx, id, false).await?;
     let entry = AuditEntry {
         action: AuditAction::Update,
         entity_type: TABLE,
         entity_id: id,
-        old_value: Some(audit_value(&mut tx, &before).await?),
-        new_value: Some(audit_value(&mut tx, &after).await?),
+        old_value: Some(audit_value(&mut *tx, &before).await?),
+        new_value: Some(audit_value(&mut *tx, &after).await?),
     };
-    crud::write_audit(&mut tx, ctx, vec![entry]).await?;
-    let newly_driving = after.is_active
-        && after.state_attribute_id.is_some()
-        && (!before.is_active || after.state_attribute_id != before.state_attribute_id);
-    let warnings = if newly_driving { activation_warnings(&mut tx, ctx, &after).await? } else { Vec::new() };
-    let out = detail(&mut tx, after, warnings).await?;
-    tx.commit().await?;
-    Ok(out)
+    crud::write_audit(&mut *tx, ctx, vec![entry]).await?;
+    Ok((before, after))
 }
 
 pub async fn remove(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<(), AppError> {
@@ -665,6 +686,25 @@ pub async fn publish(
             saved.as_deref().unwrap_or("none"),
         ));
     }
+    let published = publish_in(&mut tx, ctx, &d, &stored, &fields, &problems, &sum, b.change_note.as_deref()).await?;
+    tx.commit().await?;
+    Ok(published)
+}
+
+/// Publishes the draft `stored` of `d` unless the lint found errors (400 with
+/// one detail per problem), audited, inside the caller's transaction.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn publish_in(
+    tx: &mut PgConnection,
+    ctx: &RequestContext,
+    d: &WorkflowDefinition,
+    stored: &Stored,
+    fields: &Fields,
+    problems: &[WorkflowProblem],
+    sum: &str,
+    change_note: Option<&str>,
+) -> Result<WorkflowVersion, AppError> {
+    let id = d.id;
     let errors: Vec<FieldError> = problems
         .iter()
         .filter(|p| p.severity == WorkflowProblemSeverity::Error)
@@ -707,8 +747,8 @@ pub async fn publish(
     .bind(version_id)
     .bind(user_id)
     .bind(&user_name)
-    .bind(&b.change_note)
-    .bind(hex::decode(&sum).unwrap_or_default())
+    .bind(change_note)
+    .bind(hex::decode(sum).unwrap_or_default())
     .execute(&mut *tx)
     .await?;
     sqlx::query(
@@ -723,7 +763,7 @@ pub async fn publish(
     .execute(&mut *tx)
     .await?;
     let row = version_row(
-        &mut tx,
+        &mut *tx,
         id,
         "id = (SELECT current_version_id FROM cmdb.workflow_definitions WHERE id = $1) AND $2::int IS NULL",
         None,
@@ -731,7 +771,7 @@ pub async fn publish(
     )
     .await?
     .ok_or_else(AppError::internal)?;
-    let published = graph::load(&mut tx, row).await?.render(&fields.model, true);
+    let published = graph::load(&mut *tx, row).await?.render(&fields.model, true);
     let entry = AuditEntry {
         action: AuditAction::WorkflowPublish,
         entity_type: TABLE,
@@ -749,8 +789,7 @@ pub async fn publish(
             },
         })),
     };
-    crud::write_audit(&mut tx, ctx, vec![entry]).await?;
-    tx.commit().await?;
+    crud::write_audit(&mut *tx, ctx, vec![entry]).await?;
     Ok(published)
 }
 
@@ -881,7 +920,22 @@ pub async fn replace_grants(
     if !errors.is_empty() {
         return Err(AppError::validation(errors));
     }
-    let old = grant_rows(&mut tx, id).await?;
+    let (version, grants) = set_grants_in(&mut tx, ctx, &before, &rows).await?;
+    tx.commit().await?;
+    Ok(WorkflowGrants { version, grants })
+}
+
+/// Replaces the grants of `before` with `rows` (transition key, profile id),
+/// audited when they change, inside the caller's transaction. Returns the
+/// definition's row version and the grants now.
+pub(crate) async fn set_grants_in(
+    tx: &mut PgConnection,
+    ctx: &RequestContext,
+    before: &WorkflowDefinition,
+    rows: &[(String, Uuid)],
+) -> Result<(i32, Vec<WorkflowGrant>), AppError> {
+    let id = before.id;
+    let old = grant_rows(&mut *tx, id).await?;
     sqlx::query("DELETE FROM cmdb.workflow_transition_grants WHERE definition_id = $1")
         .bind(id)
         .execute(&mut *tx)
@@ -897,11 +951,10 @@ pub async fn replace_grants(
     .bind(&ids)
     .execute(&mut *tx)
     .await?;
-    let new = grant_rows(&mut tx, id).await?;
+    let new = grant_rows(&mut *tx, id).await?;
     let (old_v, new_v) = (grants_by_name(&old), grants_by_name(&new));
     if old_v == new_v {
-        tx.commit().await?;
-        return Ok(WorkflowGrants { version: before.version, grants: new });
+        return Ok((before.version, new));
     }
     let (user_id, user_name) = actor(ctx);
     sqlx::query(
@@ -920,7 +973,6 @@ pub async fn replace_grants(
         old_value: Some(json!({ "version": before.version, "grants": old_v })),
         new_value: Some(json!({ "version": before.version + 1, "grants": new_v })),
     };
-    crud::write_audit(&mut tx, ctx, vec![entry]).await?;
-    tx.commit().await?;
-    Ok(WorkflowGrants { version: before.version + 1, grants: new })
+    crud::write_audit(&mut *tx, ctx, vec![entry]).await?;
+    Ok((before.version + 1, new))
 }
