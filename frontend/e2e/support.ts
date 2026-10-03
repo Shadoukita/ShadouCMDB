@@ -137,8 +137,11 @@ export async function createCi(
 
 /** Picks a CI in a CiPicker combobox by typing and clicking the option whose name matches exactly. */
 export async function pickCi(page: Page, inputSelector: string, search: string, name: string) {
-  await page.locator(inputSelector).fill(search);
-  const option = page.getByRole("option").filter({ has: page.getByText(name, { exact: true }) });
+  const input = page.locator(inputSelector);
+  await input.fill(search);
+  // The picker's own list (aria-controls): a CI page's dropdowns hold options of their own.
+  const list = page.locator(`#${await input.getAttribute("aria-controls")}`);
+  const option = list.getByRole("option").filter({ has: page.getByText(name, { exact: true }) });
   await option.first().click();
 }
 

@@ -549,6 +549,8 @@ export const de: { [K in MessageKey]: string } = {
   "formError.notSavedSentence": "Ihre Änderungen wurden nicht gespeichert.",
   "formError.reapply": "{link} und übernehmen Sie Ihre Änderungen erneut.",
   "formError.openCurrent": "Öffnen Sie die aktuelle Version",
+  "formError.loadCurrent": "Aktuelle Version laden",
+  "formError.loadCurrentDiscards": "(verwirft Ihre Änderungen)",
   "formError.fixFields": "Nicht gespeichert – korrigieren Sie die markierten Felder.",
   "formError.notSaved": "Nicht gespeichert",
   "time.justNow": "gerade eben",

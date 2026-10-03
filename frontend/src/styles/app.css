@@ -2789,3 +2789,25 @@ dialog.manage-views td.row-actions {
     width: auto;
   }
 }
+
+/* ---------- CI page form (SHAA-1644) ----------
+ * A CI's fields open as inputs; a field the user may not change shows its value where the input would be. */
+.ro-value {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1) var(--sp-2);
+  min-height: var(--control-h);
+  padding: var(--sp-1) var(--sp-3);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius);
+  background: var(--c-surface-alt);
+  overflow-wrap: anywhere;
+}
+.ci-save-bar {
+  position: sticky;
+  top: auto;
+  bottom: 0;
+  margin: var(--sp-4) 0 0;
+  box-shadow: 0 -2px 8px rgb(0 0 0 / 8%);
+}

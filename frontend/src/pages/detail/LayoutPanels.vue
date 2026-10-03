@@ -3,6 +3,8 @@ import { computed } from "vue";
 import type { Ci, EffectiveAttribute } from "../../api/queries";
 import type { TrailStep } from "../../lib/trail";
 import { attributeKey, cellClass, fieldLabel, freeAreaStyle, gridClass, sectionClass, sectionStyle, windowClass, windowStyle, type ResolvedSection } from "../../lib/uiSettings";
+import type { CiDraft } from "../form/ciDraft";
+import CiFieldInput from "../form/CiFieldInput.vue";
 import AttributeValue from "./AttributeValue.vue";
 import BlockContent from "./BlockContent.vue";
 import CoreFieldValue from "./CoreFieldValue.vue";
@@ -18,6 +20,10 @@ import CoreFieldValue from "./CoreFieldValue.vue";
  * tab (`orphans`), so nothing stored is hidden; values of archived fields
  * (`archived`) are listed there too, apart and labelled. The sections the layout
  * does not place follow below the windows at the full width.
+ *
+ * With a `draft` (ciDraft.ts) the fields are the CI's form (SHAA-1644): each field it may change is an
+ * input bound to the draft; the others (the class, the timestamps, a read-only or managed field, or every
+ * field of a CI the user may not edit) show their value in the same place, read-only.
  */
 const props = defineProps<{
   ci: Ci;
@@ -28,10 +34,14 @@ const props = defineProps<{
   orphans?: boolean;
   /** Archived definitions this CI still holds a value for. */
   archived?: EffectiveAttribute[];
+  /** The CI's values being edited; without it the fields are shown read-only as a list. */
+  draft?: CiDraft;
 }>();
 const values = computed(() => props.ci.attributes as Record<string, unknown>);
 const refs = computed(() => props.ci.attributeReferences);
 const defFor = (field: string) => props.defs.find((d) => d.key === attributeKey(field));
+const roId = (field: string) => `ro-${field.replace(/[^\w-]/g, "-")}`;
+const roHint = (field: string) => props.draft?.readOnlyHint(field);
 /** The windows, then everything the layout does not place. */
 const groups = computed(() => {
   const windows = props.sections.filter((p) => p.frame);
@@ -59,6 +69,25 @@ const orphanKeys = computed(() => {
       >
         <summary class="panel-header"><h2>{{ p.label }}</h2></summary>
         <BlockContent v-if="p.kind !== 'fields'" :kind="p.kind" :text="p.text" :ci="ci" :self="self" :trail="trail" />
+        <div v-else-if="draft" class="panel-body">
+          <div :class="gridClass(p.columns)">
+            <template v-for="{ field: f, width } in p.fields" :key="f">
+              <CiFieldInput v-if="draft.editable(f)" :draft="draft" :f="f" :width="width" :columns="p.columns" />
+              <div v-else :class="['field', 'field-ro', cellClass(width, p.columns)]" :data-field="f">
+                <span :id="roId(f)" class="label">{{ fieldLabel(f, defs) }}</span>
+                <div class="ro-value" role="group" :aria-labelledby="roId(f)">
+                  <AttributeValue v-if="defFor(f)" :def="defFor(f)!" :value="values[defFor(f)!.key]" :ref-info="refs[defFor(f)!.key]" :self="self" :trail="trail" />
+                  <CoreFieldValue v-else :ci="ci" :field="f" />
+                </div>
+                <span v-if="roHint(f)" class="hint" dir="auto">{{ roHint(f) }}</span>
+              </div>
+            </template>
+            <div v-if="p.key === '_record'" :class="['field', 'field-ro', cellClass(1, p.columns)]" data-field="id">
+              <span id="ro-id" class="label">ID</span>
+              <div class="ro-value mono" role="group" aria-labelledby="ro-id">{{ ci.id }}</div>
+            </div>
+          </div>
+        </div>
         <div v-else class="panel-body">
           <dl :class="gridClass(p.columns)">
             <div v-for="{ field: f, width } in p.fields" :key="f" :class="['prop', cellClass(width, p.columns)]">
