@@ -21,7 +21,7 @@ const ids: Record<string, string> = {};
 let classId = "";
 
 const user = async (request: APIRequestContext, username: string, displayName: string, profileIds: string[] = []) =>
-  (await apiSend<{ id: string }>(request, "POST", "/admin/users", { username, displayName, password: PASSWORD, profileIds })).id;
+  (await apiSend<{ id: string }>(request, "POST", "/admin/users", { username, email: `${username}@example.test`, displayName, password: PASSWORD, profileIds })).id;
 
 async function signInUi(browser: Browser, username: string): Promise<Page> {
   const context = await browser.newContext({ storageState: { cookies: [], origins: [] } });

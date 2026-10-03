@@ -768,7 +768,7 @@ async fn check_linked_person(
     if !changes_class && new_email.is_none() && !plan.clear.contains(&email.id) {
         return Ok(());
     }
-    let Some(account) = crate::data::people::account_of(conn, id).await? else { return Ok(()) };
+    let Some(account) = crate::data::people::linked_user(conn, id).await? else { return Ok(()) };
     if changes_class {
         return Err(AppError::field(
             "classId",

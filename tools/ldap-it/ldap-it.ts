@@ -194,7 +194,7 @@ function authenticator(secret: string): () => Promise<string> {
 
 async function main(): Promise<void> {
   section('Setup: administrator, profile, directory with one mapped group');
-  const setup = await call(null, 'POST', '/api/v1/setup', { username: ADMIN, displayName: 'LDAP IT admin', password: ADMIN_PASSWORD, setupToken: SETUP_TOKEN });
+  const setup = await call(null, 'POST', '/api/v1/setup', { username: ADMIN, email: `${ADMIN}@example.com`, displayName: 'LDAP IT admin', password: ADMIN_PASSWORD, setupToken: SETUP_TOKEN });
   if (setup.status !== 201) throw new Error(`first-run setup: ${setup.status} ${JSON.stringify(setup.json)} (use an empty, migrated database)`);
   const admin = identity(setup);
   const profile = await ok(admin, 'POST', '/api/v1/admin/profiles', {

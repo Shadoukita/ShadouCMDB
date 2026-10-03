@@ -212,7 +212,7 @@ test("share a copy; a reader without views.share copies it to their views", asyn
     globalPermissions: [],
     classPermissions: [{ classId: serverId, view: true, create: false, edit: false, delete: false }],
   });
-  await apiSend(request, "POST", "/admin/users", { username: READER, displayName: `E2E Reader ${stamp}`, password: READER_PASSWORD, profileIds: [profile.id] });
+  await apiSend(request, "POST", "/admin/users", { username: READER, email: `${READER}@example.test`, displayName: `E2E Reader ${stamp}`, password: READER_PASSWORD, profileIds: [profile.id] });
   const reader = await signInUi(browser, READER, READER_PASSWORD);
   await reader.goto("/cis");
   await openMenu(reader);

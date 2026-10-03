@@ -106,7 +106,7 @@ pub async fn unlinked_accounts(conn: &mut PgConnection) -> sqlx::Result<Vec<Uuid
 
 /// The account linked to a CI.
 #[derive(Debug, Clone, sqlx::FromRow)]
-pub struct LinkedAccount {
+pub struct LinkedUser {
     pub id: Uuid,
     pub username: String,
     pub display_name: String,
@@ -114,7 +114,7 @@ pub struct LinkedAccount {
     pub is_active: bool,
 }
 
-pub async fn account_of(conn: &mut PgConnection, ci_id: Uuid) -> sqlx::Result<Option<LinkedAccount>> {
+pub async fn linked_user(conn: &mut PgConnection, ci_id: Uuid) -> sqlx::Result<Option<LinkedUser>> {
     sqlx::query_as("SELECT id, username, display_name, email, is_active FROM cmdb.users WHERE person_ci_id = $1")
         .bind(ci_id)
         .fetch_optional(conn)

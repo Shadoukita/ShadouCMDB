@@ -233,7 +233,7 @@ pub async fn sign_in_account(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> R
         Caller::User(p) => p.permissions.has(GlobalPermission::UsersManage),
         Caller::Anonymous => false,
     };
-    let account = data::account_of(&mut conn, id).await?.map(|a| SignInAccount {
+    let account = data::linked_user(&mut conn, id).await?.map(|a| SignInAccount {
         user_id: admin.then_some(a.id),
         username: a.username,
         display_name: a.display_name,
@@ -265,9 +265,7 @@ mod tests {
     use super::*;
     use crate::db::scratch;
     use crate::modules::api_tokens::tests::{Creds, app, call, code};
-    use crate::modules::mfa::tests::setup;
-
-    const PASSWORD: &str = "another long passphrase";
+    use crate::modules::mfa::tests::{PASSWORD, setup};
 
     fn session(me: &Value, headers: &HeaderMap) -> Creds {
         let cookie = headers

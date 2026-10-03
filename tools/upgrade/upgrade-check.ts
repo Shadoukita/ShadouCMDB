@@ -36,6 +36,9 @@ const ADMIN_PASSWORD = process.env.UPGRADE_PASSWORD ?? 'upgrade-admin-password';
 const SETUP_TOKEN = process.env.SETUP_TOKEN;
 const VIEWER = 'upgrade-viewer';
 const VIEWER_PASSWORD = process.env.UPGRADE_VIEWER_PASSWORD ?? 'upgrade-viewer-password';
+// Every account has an e-mail since migration 0043; v0.1.0-rc.1 already accepts one (optional then).
+const ADMIN_EMAIL = 'upgrade-admin@example.test';
+const VIEWER_EMAIL = 'upgrade-viewer@example.test';
 
 type Json = any; // eslint-disable-line @typescript-eslint/no-explicit-any
 
@@ -129,7 +132,7 @@ async function viewerView(ids: Json): Promise<ViewerView> {
 async function seed() {
   const setup = await call('GET', '/api/v1/setup');
   if (!setup.json?.setupRequired) throw new Error('first-run setup is already done: seed needs an empty database');
-  me = identity(await call('POST', '/api/v1/setup', { username: ADMIN, displayName: 'Upgrade Admin', password: ADMIN_PASSWORD, ...(SETUP_TOKEN ? { setupToken: SETUP_TOKEN } : {}) }));
+  me = identity(await call('POST', '/api/v1/setup', { username: ADMIN, displayName: 'Upgrade Admin', email: ADMIN_EMAIL, password: ADMIN_PASSWORD, ...(SETUP_TOKEN ? { setupToken: SETUP_TOKEN } : {}) }));
 
   // Newer releases group types in areas. Create one when the release has them.
   const hasAreas = (await call('GET', '/api/v1/areas')).status === 200;
@@ -239,7 +242,7 @@ async function seed() {
       ...(serviceClass ? [{ classId: serviceClass.id, view: true, create: false, edit: false, delete: false }] : []),
     ],
   });
-  const viewer = await ok('POST', '/api/v1/admin/users', { username: VIEWER, displayName: 'Upgrade Viewer', password: VIEWER_PASSWORD, profileIds: [profile.id] });
+  const viewer = await ok('POST', '/api/v1/admin/users', { username: VIEWER, displayName: 'Upgrade Viewer', email: VIEWER_EMAIL, password: VIEWER_PASSWORD, profileIds: [profile.id] });
   // Migration 0039 grants views.share to every profile holding customization.manage (SHAA-578 D4).
   const customisers = await ok('POST', '/api/v1/admin/profiles', {
     name: 'Upgrade customisers', description: 'Branding and layouts (upgrade check)', globalPermissions: ['customization.manage'],
@@ -306,10 +309,18 @@ async function readObjects(ids: Json): Promise<Record<string, Json>> {
   return out;
 }
 
-/** What the lists show: active CIs (deleted ones drop out) and relationships. */
+/**
+ * What the lists show: active CIs (deleted ones drop out) and relationships. Without the Person CIs migration 0043
+ * (number 44) creates for the accounts when the old database had none: those are checked in `people`.
+ */
 async function readInventory() {
+  const people = new Set(
+    sourceMigrations > 0 && sourceMigrations < PEOPLE
+      ? (await all('/api/v1/ci-classes')).filter((c) => c.systemRole === 'person').map((c) => c.id)
+      : [],
+  );
   return {
-    cis: (await all('/api/v1/configuration-items')).map((c) => c.id).sort(),
+    cis: (await all('/api/v1/configuration-items')).filter((c) => !people.has(c.classId)).map((c) => c.id).sort(),
     relationships: (await all('/api/v1/relationships')).map((r) => r.id).sort(),
   };
 }
@@ -339,6 +350,10 @@ const CHANGED_ON_PURPOSE: Array<{ url: RegExp; diff: RegExp; before: number; why
   {
     url: /^\/api\/v1\/ci-classes\/[^/]+\/attributes$/, diff: /^\$\.data(: \d+ entries -> \d+|\[id=[^\]]+\]: missing)$/, before: 37,
     why: '0036 archives the Application field "criticality"; the attribute list leaves archived fields out (includeInactive shows it)',
+  },
+  {
+    url: /^\/api\/v1\/admin\/users\/[^/]+$/, diff: /^\$\.updatedAt: /, before: 44,
+    why: '0043 links every account with an e-mail to its Person CI (an audited update of the account, checked in `people`)',
   },
 ];
 
@@ -413,6 +428,33 @@ function compare(label: string, url: string, before: Json, after: Json) {
 }
 
 let sourceMigrations = 0;
+
+/** Migration 0043 (number 44) linked every account to a Person CI and made e-mails required (SHAA-1505). */
+const PEOPLE = 44;
+
+/**
+ * Accounts and Person CIs (migration 0043): both seeded accounts have their e-mail and are linked to a Person whose
+ * Email is that address, so they sign in without being asked for an e-mail.
+ */
+async function people(ids: Json) {
+  me = await login(ADMIN, ADMIN_PASSWORD);
+  const found: string[] = [];
+  const users = (await all('/api/v1/admin/users')).filter((u) => u.username === ADMIN || u.id === ids.viewer);
+  for (const u of users) {
+    if (u.signInStatus !== 'ready' || !u.person?.id) {
+      found.push(`${u.username}: signInStatus ${u.signInStatus}, person ${JSON.stringify(u.person)}; expected ready and linked`);
+      continue;
+    }
+    const person = await call('GET', `/api/v1/configuration-items/${u.person.id}`);
+    const email = person.json?.attributes?.email;
+    if (person.status !== 200 || typeof email !== 'string' || email.toLowerCase() !== String(u.email).toLowerCase()) {
+      found.push(`${u.username}: Person ${u.person.id} answers ${person.status} with e-mail ${JSON.stringify(email)}, expected ${u.email}`);
+    }
+  }
+  if (users.length !== 2) found.push(`found ${users.length} of the 2 seeded accounts`);
+  for (const f of found) failures.push(`people: ${f}`);
+  console.error(`${found.length ? 'FAIL' : 'ok  '} people: ${users.length} accounts linked to their Person CIs`);
+}
 
 /**
  * The business service class after migration 0033 (spec SHAA-927 §6.2).
@@ -552,6 +594,9 @@ async function check() {
 
   // 6. Saved views (migration 0039): customisers gained views.share, and the restricted user can use saved views.
   await savedViews(ids);
+
+  // 7. Accounts and Person CIs (migration 0043).
+  await people(ids);
 
   if (failures.length) {
     console.error(`\n${failures.length} difference(s) after the upgrade:\n  ${failures.join('\n  ')}`);

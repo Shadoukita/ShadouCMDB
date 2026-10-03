@@ -85,7 +85,7 @@ test.beforeAll(async ({ request }) => {
     globalPermissions: [],
     classPermissions: [host, app].map((classId) => ({ classId, view: true, create: false, edit: false, delete: false })),
   });
-  await apiSend(request, "POST", "/admin/users", { username: RESTRICTED, displayName: RESTRICTED, password: PASSWORD, profileIds: [profile.id] });
+  await apiSend(request, "POST", "/admin/users", { username: RESTRICTED, email: `${RESTRICTED}@example.test`, displayName: RESTRICTED, password: PASSWORD, profileIds: [profile.id] });
 });
 
 test.afterAll(async ({ request }) => {

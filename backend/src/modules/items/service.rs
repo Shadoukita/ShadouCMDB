@@ -494,7 +494,7 @@ pub async fn remove(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<(),
     }
     // A Person linked to a sign-in account stays (SHAA-1505 decision 7); the
     // trigger configuration_items_keep_person is the backstop.
-    if let Some(account) = crate::data::people::account_of(&mut tx, id).await? {
+    if let Some(account) = crate::data::people::linked_user(&mut tx, id).await? {
         return Err(AppError::new(
             ErrorCode::Conflict,
             format!(

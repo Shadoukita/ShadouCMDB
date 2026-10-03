@@ -269,12 +269,12 @@ async function main() {
   const setupStatus = (await get('/api/v1/setup')).json;
   if (setupStatus.setupRequired) {
     if (!SETUP_TOKEN) throw new Error('This API has no users yet: set SETUP_TOKEN to its first-run setup token (the SETUP_TOKEN it runs with, or the token in its log).');
-    await post('/api/v1/setup', { username: ADMIN_USERNAME, displayName: 'Smoke admin', password: 'too short', setupToken: SETUP_TOKEN }, 400);
+    await post('/api/v1/setup', { username: ADMIN_USERNAME, email: `${ADMIN_USERNAME}@example.com`, displayName: 'Smoke admin', password: 'too short', setupToken: SETUP_TOKEN }, 400);
     // GitHub #192: a wrong setup token cannot claim the install.
-    const guessed = await call('POST', '/api/v1/setup', { username: ADMIN_USERNAME, displayName: 'Smoke admin', password: ADMIN_PASSWORD, setupToken: `${SETUP_TOKEN}x` }, undefined, {}, { accept: [403] });
+    const guessed = await call('POST', '/api/v1/setup', { username: ADMIN_USERNAME, email: `${ADMIN_USERNAME}@example.com`, displayName: 'Smoke admin', password: ADMIN_PASSWORD, setupToken: `${SETUP_TOKEN}x` }, undefined, {}, { accept: [403] });
     check(guessed.json.error?.code === 'FORBIDDEN' && (await get('/api/v1/setup')).json.setupRequired === true, 'setup with a wrong setup token: 403, no user created');
     // Two at once: the advisory lock lets exactly one of them create the administrator.
-    const body = { username: ADMIN_USERNAME, displayName: 'Smoke admin', password: ADMIN_PASSWORD, setupToken: SETUP_TOKEN };
+    const body = { username: ADMIN_USERNAME, displayName: 'Smoke admin', email: `${ADMIN_USERNAME}@example.com`, password: ADMIN_PASSWORD, setupToken: SETUP_TOKEN };
     const both = await Promise.all([0, 1].map(() => call('POST', '/api/v1/setup', body, undefined, {}, { accept: [201, 409] })));
     check(both.map((r) => r.status).sort().join() === '201,409', 'two concurrent setups: exactly one 201 and one 409');
     const res = both.find((r) => r.status === 201) ?? both[0]!;
@@ -286,7 +286,7 @@ async function main() {
     me = await login(ADMIN_USERNAME, ADMIN_PASSWORD);
   }
   const admin = me;
-  await post('/api/v1/setup', { username: `late-${RUN}`, displayName: 'Too late', password: 'correct horse battery', setupToken: SETUP_TOKEN || 'any' }, 409);
+  await post('/api/v1/setup', { username: `late-${RUN}`, email: `late-${RUN}@example.com`, displayName: 'Too late', password: 'correct horse battery', setupToken: SETUP_TOKEN || 'any' }, 409);
   const adminMe = (await get('/api/v1/auth/me')).json;
   check(adminMe.user.username === ADMIN_USERNAME && adminMe.csrfToken === admin.csrf, '/auth/me returns the user and the CSRF token');
 
@@ -953,13 +953,18 @@ async function permissions(x: Json) {
   const password = `reader-${RUN}-password`;
   const reader = (await post('/api/v1/admin/users', { username: `smoke-reader-${RUN}`, displayName: 'Smoke reader', email: `reader-${RUN}@example.com`, password, profileIds: [readers.id] })).json;
   check(reader.profiles.length === 1 && !reader.isAdministrator && !('passwordHash' in reader), 'user has the profile and no password hash in the API');
-  await post('/api/v1/admin/users', { username: `SMOKE-READER-${RUN}`, displayName: 'dup', password }, 409);
+  await post('/api/v1/admin/users', { username: `SMOKE-READER-${RUN}`, displayName: 'dup', email: `dup-${RUN}@example.com`, password }, 409);
   await post('/api/v1/admin/users', { username: 'has space', displayName: 'x', password: 'short' }, 400);
-  await post('/api/v1/admin/users', { username: `x-${RUN}`, displayName: 'x', password, profileIds: ['00000000-0000-4000-8000-000000000000'] }, 400);
+  await post('/api/v1/admin/users', { username: `x-${RUN}`, displayName: 'x', email: `x-${RUN}@example.com`, password, profileIds: ['00000000-0000-4000-8000-000000000000'] }, 400);
   await get(`/api/v1/admin/users?q=smoke-reader-${RUN}&isActive=true&profileId=${readers.id}&sort=-createdAt`);
   await get(`/api/v1/admin/users/${reader.id}`);
   await get('/api/v1/admin/users/00000000-0000-4000-8000-000000000000', 404);
-  const nobody = (await post('/api/v1/admin/users', { username: `smoke-nobody-${RUN}`, displayName: 'No permissions', password })).json;
+  const nobody = (await post('/api/v1/admin/users', { username: `smoke-nobody-${RUN}`, displayName: 'No permissions', email: `nobody-${RUN}@example.com`, password })).json;
+  // Every account is linked to a Person CI with its e-mail (SHAA-1505), and the Person names its account.
+  check(!!reader.person?.id && reader.signInStatus === 'ready', 'a new account is linked to its Person CI');
+  const signIn = (await get(`/api/v1/configuration-items/${reader.person.id}/sign-in-account`)).json;
+  check(signIn.account?.username === reader.username && signIn.account?.userId === reader.id, "the Person names its sign-in account");
+  await post('/api/v1/admin/users', { username: `x-${RUN}`, displayName: 'x', email: `READER-${RUN}@example.com`, password }, 409); // e-mails are unique regardless of case
 
   console.log('\n# Class permissions (reader: view servers only)');
   const asReader = await login(reader.username.toUpperCase(), password); // usernames are case-insensitive
@@ -970,6 +975,8 @@ async function permissions(x: Json) {
     check(list.data.length > 0 && list.data.every((c: Json) => c.classId === serverClass), 'inventory only lists classes the user may view');
     await get(`/api/v1/configuration-items/${server.id}`);
     await get(`/api/v1/configuration-items/${app.id}`, 404); // a hidden class's CI does not exist for the caller
+    await get(`/api/v1/configuration-items/${reader.person.id}/sign-in-account`, 404); // the Person class is hidden too
+    await put('/api/v1/auth/email', { email: `other-${RUN}@example.com` }, 409); // set once; an administrator changes it
     await post('/api/v1/configuration-items', newServer('nope'), 403);
     await patch(`/api/v1/configuration-items/${server.id}`, { attributes: { notes: 'nope' } }, 403);
     await del(`/api/v1/configuration-items/${server.id}`, 403);
@@ -1006,7 +1013,7 @@ async function permissions(x: Json) {
     name: `smoke-app-editors-${RUN}`,
     classPermissions: [{ classId: appClass, view: true, create: true, edit: true, delete: false }],
   })).json;
-  const appEditor = (await post('/api/v1/admin/users', { username: `smoke-app-editor-${RUN}`, displayName: 'App editor', password, profileIds: [appEditors.id] })).json;
+  const appEditor = (await post('/api/v1/admin/users', { username: `smoke-app-editor-${RUN}`, displayName: 'App editor', email: `app-editor-${RUN}@example.com`, password, profileIds: [appEditors.id] })).json;
   const otherDb = (await post('/api/v1/configuration-items', { classId: dbClass, attributes: { name: `smoke-db-hidden-${RUN}`, status: inService, engine: 'postgresql' } })).json;
   const hiddenRef = (ci: Json) => {
     const r = ci.attributeReferences?.primary_database;
@@ -1069,12 +1076,12 @@ async function permissions(x: Json) {
   const userManagers = (await post('/api/v1/admin/profiles', { name: `smoke-user-managers-${RUN}`, globalPermissions: ['users.manage'] })).json;
   await patch(`/api/v1/admin/users/${nobody.id}`, { profileIds: [userManagers.id] });
   await as(asNobody, async () => {
-    await post('/api/v1/admin/users', { username: `smoke-escalate-${RUN}`, displayName: 'x', password, profileIds: [builtin.id] }, 403);
-    await post('/api/v1/admin/users', { username: `smoke-escalate-${RUN}`, displayName: 'x', password, profileIds: [readers.id] }, 403);
+    await post('/api/v1/admin/users', { username: `smoke-escalate-${RUN}`, email: `smoke-escalate-${RUN}@example.com`, displayName: 'x', password, profileIds: [builtin.id] }, 403);
+    await post('/api/v1/admin/users', { username: `smoke-escalate-${RUN}`, email: `smoke-escalate-${RUN}@example.com`, displayName: 'x', password, profileIds: [readers.id] }, 403);
     await patch(`/api/v1/admin/users/${adminMe.user.id}`, { displayName: 'pwned' }, 403);
     await put(`/api/v1/admin/users/${adminMe.user.id}/password`, { password: 'correct horse battery' }, 403);
     await patch(`/api/v1/admin/users/${reader.id}`, { profileIds: [] }, 403); // reader can view servers, the manager cannot
-    const plain = (await post('/api/v1/admin/users', { username: `smoke-plain-${RUN}`, displayName: 'Plain', password })).json;
+    const plain = (await post('/api/v1/admin/users', { username: `smoke-plain-${RUN}`, email: `smoke-plain-${RUN}@example.com`, displayName: 'Plain', password })).json;
     await del(`/api/v1/admin/users/${plain.id}`, 200);
     await del(`/api/v1/admin/users/${nobody.id}`, 409); // not yourself
     // Identity providers decide who gets which profile: Administrator only, even with users.manage.
@@ -1090,7 +1097,7 @@ async function permissions(x: Json) {
     const last = await patch(`/api/v1/admin/users/${adminMe.user.id}`, { profileIds: [] }, 409);
     check(last.json.error?.code === 'LAST_ADMINISTRATOR', 'the last active Administrator cannot lose the profile');
   }
-  const second = (await post('/api/v1/admin/users', { username: `smoke-admin2-${RUN}`, displayName: 'Second admin', password, profileIds: [builtin.id] })).json;
+  const second = (await post('/api/v1/admin/users', { username: `smoke-admin2-${RUN}`, email: `smoke-admin2-${RUN}@example.com`, displayName: 'Second admin', password, profileIds: [builtin.id] })).json;
   await patch(`/api/v1/admin/users/${second.id}`, { profileIds: [editors.id] }); // fine: another administrator remains
   await del(`/api/v1/admin/users/${second.id}`, 200);
 
@@ -1119,7 +1126,9 @@ async function permissions(x: Json) {
   check(disabled.isActive === false, 'user disabled');
   await as(readerSession, () => get('/api/v1/auth/me', 401)); // disabling ends their sessions
   await loginFails(reader.username, `${password}-2`);
-  await patch(`/api/v1/admin/users/${reader.id}`, { isActive: true, displayName: 'Smoke reader (back)', email: null });
+  // Every account keeps an e-mail (SHAA-1505): it can be changed, not removed.
+  await patch(`/api/v1/admin/users/${reader.id}`, { email: null }, 400);
+  await patch(`/api/v1/admin/users/${reader.id}`, { isActive: true, displayName: 'Smoke reader (back)' });
   const reset = (await put(`/api/v1/admin/users/${reader.id}/password`, { password: `${password}-3` })).json;
   check(reset.passwordChangedAt > reader.passwordChangedAt, 'password reset recorded');
   await put(`/api/v1/admin/users/${reader.id}/password`, { password: 'short' }, 400);
@@ -1365,7 +1374,7 @@ async function mfa(builtin: Json, createHash: typeof import('node:crypto').creat
   console.log('\n# Two-factor authentication');
   const nowStep = () => Math.floor(Date.now() / 30_000);
   const password = `mfa-${RUN}-password`;
-  const user = (await post('/api/v1/admin/users', { username: `smoke-mfa-${RUN}`, displayName: 'Smoke MFA', password })).json;
+  const user = (await post('/api/v1/admin/users', { username: `smoke-mfa-${RUN}`, email: `smoke-mfa-${RUN}@example.com`, displayName: 'Smoke MFA', password })).json;
   check(user.mfaEnabled === false, 'a new user has no MFA');
   const session = await login(user.username, password);
   const { secret, codes, lastStep } = await as(session, async () => {
@@ -1811,7 +1820,7 @@ async function customization(x: Json) {
   console.log('\n# Export/import permission');
   const password = `importer-${RUN}-password`;
   const importers = (await post('/api/v1/admin/profiles', { name: `smoke-importers-${RUN}`, globalPermissions: ['config.export_import'] })).json;
-  const importer = (await post('/api/v1/admin/users', { username: `smoke-importer-${RUN}`, displayName: 'Importer', password, profileIds: [importers.id] })).json;
+  const importer = (await post('/api/v1/admin/users', { username: `smoke-importer-${RUN}`, email: `smoke-importer-${RUN}@example.com`, displayName: 'Importer', password, profileIds: [importers.id] })).json;
   await as(await login(importer.username, password), async () => {
     await get('/api/v1/admin/config/export');
     const esc = await post('/api/v1/admin/config/import?mode=apply', { format: 'shadoucmdb.config', formatVersion: 1, permissionProfiles: [{ name: `smoke-escalate-${RUN}`, globalPermissions: ['users.manage'] }] }, 403);
