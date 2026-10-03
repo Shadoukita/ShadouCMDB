@@ -211,26 +211,90 @@ pub async fn email_usable(conn: &mut PgConnection, user_id: Option<Uuid>, email:
     })
 }
 
+/// What [`link_all`] did: how many accounts it linked, and the accounts it
+/// could not link, each with the reason ("alice (email: ...)").
+#[derive(Debug, Default)]
+pub struct LinkReport {
+    pub linked: usize,
+    pub refused: Vec<String>,
+}
+
 /// Links every account with an e-mail that has no Person yet (the upgrade to
 /// 0044; `shadoucmdb migrate` runs it after the reconcile that builds the
 /// Person table, so it is a no-op once done). Each link is an `update` row on
-/// the account. Returns how many were linked.
-pub async fn link_all(conn: &mut PgConnection, ctx: &RequestContext) -> Result<usize, AppError> {
-    let ids = data::unlinked_accounts(conn).await?;
-    for id in &ids {
-        let before = users::load(conn, *id).await?;
-        link_user(conn, ctx, *id).await?;
-        let after = users::load(conn, *id).await?;
-        let entry = AuditEntry {
-            action: AuditAction::Update,
-            entity_type: "users",
-            entity_id: *id,
-            old_value: Some(crud::json(&before)),
-            new_value: Some(crud::json(&after)),
-        };
-        crud::write_audit(conn, ctx, vec![entry]).await?;
+/// the account.
+///
+/// Each account is linked in its own savepoint (GH#543): an account the Person
+/// type refuses is reported and stays unlinked (it cannot sign in until an
+/// administrator corrects it), and the others are linked anyway, so one bad
+/// address does not lock every account out.
+pub async fn link_all(conn: &mut PgConnection, ctx: &RequestContext) -> Result<LinkReport, AppError> {
+    let mut report = LinkReport::default();
+    for (id, username) in data::unlinked_accounts(conn).await? {
+        let mut sp = sqlx::Connection::begin(&mut *conn).await?;
+        match link_audited(&mut sp, ctx, id).await {
+            Ok(()) => {
+                sp.commit().await?;
+                report.linked += 1;
+            }
+            Err(e) => {
+                sp.rollback().await?;
+                tracing::warn!(user = %username, error = %e.message, "account not linked to a person");
+                report.refused.push(format!("{username} ({})", refusal(&e)));
+            }
+        }
     }
-    Ok(ids.len())
+    Ok(report)
+}
+
+async fn link_audited(conn: &mut PgConnection, ctx: &RequestContext, id: Uuid) -> Result<(), AppError> {
+    let before = users::load(conn, id).await?;
+    link_user(conn, ctx, id).await?;
+    let after = users::load(conn, id).await?;
+    let entry = AuditEntry {
+        action: AuditAction::Update,
+        entity_type: "users",
+        entity_id: id,
+        old_value: Some(crud::json(&before)),
+        new_value: Some(crud::json(&after)),
+    };
+    crud::write_audit(conn, ctx, vec![entry]).await?;
+    Ok(())
+}
+
+/// "email: ...; displayName: ..." from the field details, or the message.
+fn refusal(e: &AppError) -> String {
+    match e.details.as_deref() {
+        Some(details) if !details.is_empty() => {
+            details.iter().map(|d| format!("{}: {}", d.field, d.message)).collect::<Vec<_>>().join("; ")
+        }
+        _ => e.message.clone(),
+    }
+}
+
+/// The limits of the Person's Name and Email fields as migration 0044 creates
+/// them. Accounts of earlier releases could exceed them (e-mails up to 320
+/// characters).
+pub const PERSON_NAME_MAX: usize = 200;
+pub const PERSON_EMAIL_MAX: usize = 254;
+
+/// Why the Person type of 0044 would refuse an account's e-mail or display
+/// name, if it would; checked by `shadoucmdb migrate` before it applies 0044
+/// (GH#543). The address counts in its stored form (NFKC) as well.
+pub fn person_refuses(email: &str, display_name: &str) -> Option<String> {
+    let mut why = Vec::new();
+    let length = email.chars().count().max(normalize_email(email).chars().count());
+    if length > PERSON_EMAIL_MAX {
+        why.push(format!("e-mail has {length} characters, at most {PERSON_EMAIL_MAX}"));
+    }
+    let length = display_name.chars().count();
+    if length > PERSON_NAME_MAX {
+        why.push(format!("display name has {length} characters, at most {PERSON_NAME_MAX}"));
+    }
+    if display_name.trim().is_empty() {
+        why.push("display name is blank".into());
+    }
+    (!why.is_empty()).then(|| why.join("; "))
 }
 
 // ---------------------------------------------------------------------------

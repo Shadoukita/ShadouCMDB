@@ -97,9 +97,9 @@ pub async fn set_link(conn: &mut PgConnection, user_id: Uuid, person: Option<Uui
 
 /// Accounts with an e-mail that no Person is linked to yet (after the upgrade
 /// to 0044), oldest first.
-pub async fn unlinked_accounts(conn: &mut PgConnection) -> sqlx::Result<Vec<Uuid>> {
-    sqlx::query_scalar(
-        "SELECT id FROM cmdb.users WHERE email IS NOT NULL AND person_ci_id IS NULL ORDER BY created_at, id",
+pub async fn unlinked_accounts(conn: &mut PgConnection) -> sqlx::Result<Vec<(Uuid, String)>> {
+    sqlx::query_as(
+        "SELECT id, username FROM cmdb.users WHERE email IS NOT NULL AND person_ci_id IS NULL ORDER BY created_at, id",
     )
     .fetch_all(conn)
     .await
