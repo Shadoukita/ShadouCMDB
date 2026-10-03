@@ -54,6 +54,24 @@ export async function snap(page: Page, name: string) {
   await page.screenshot({ path: join(dir, `${name}.png`), fullPage: true });
 }
 
+/** Opens the header's user menu (My account, theme, density, sign-out) unless it is already open. Any locale. */
+export async function openUserMenu(page: Page) {
+  const who = page.locator(".user-menu button.who");
+  if ((await who.getAttribute("aria-expanded")) !== "true") await who.click();
+}
+
+/** Signs out from the user menu. */
+export async function signOut(page: Page) {
+  await openUserMenu(page);
+  await page.getByRole("button", { name: "Sign out" }).click();
+}
+
+/** Picks this browser's theme in the user menu ("" is the administrator's default). */
+export async function chooseTheme(page: Page, theme: "" | "light" | "dark" | "system") {
+  await openUserMenu(page);
+  await page.getByLabel("Theme").selectOption(theme);
+}
+
 /**
  * A modal dialog is centred in the viewport, reads left to right and wraps its text inside the box:
  * no line is cut off. A dialog opened from a table row used to inherit the cell's nowrap/ellipsis

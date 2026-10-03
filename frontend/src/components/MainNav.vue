@@ -17,6 +17,10 @@ import { useSessionStore } from "../stores/session";
 import ClassBadge from "./ClassBadge.vue";
 import Icon from "./Icon.vue";
 import NavLink from "./NavLink.vue";
+import type { IconName } from "../icons/lucide";
+
+/** Collapsed to the 56 px icon rail (desktop only): pages show as icons with a tooltip, classes are hidden. */
+defineProps<{ collapsed?: boolean }>();
 
 /**
  * The main menu. Its order, names, sections and hidden entries come from
@@ -67,6 +71,15 @@ function toggle(key: string) {
   else next.add(key);
   folded.value = next;
 }
+/** Each built-in page's rail icon. */
+const PAGE_ICONS: Record<UiPage, IconName> = {
+  dashboard: "layout-dashboard",
+  inventory: "list",
+  search: "search",
+  audit_log: "scroll-text",
+  administration: "settings",
+};
+
 const items = computed(() => groups.value.flatMap((g) => g.items));
 const auditShown = computed(() => items.value.some((i) => i.page === "audit_log"));
 
@@ -96,44 +109,65 @@ function active(item: NavLinkItem): (r: RouteLocationNormalizedLoaded) => boolea
 
 <template>
   <template v-for="g in groups" :key="g.id">
-    <h2 v-if="g.area" class="nav-area">
-      <button
-        type="button"
-        :aria-expanded="!folded.has(g.area.key)"
-        :aria-controls="`nav-${g.id}`"
-        :title="t(folded.has(g.area.key) ? 'nav.area.show' : 'nav.area.hide', { area: g.area.name })"
-        @click="toggle(g.area.key)"
-      >
-        <Icon class="nav-fold" :size="14" :name="folded.has(g.area.key) ? 'chevron-right' : 'chevron-down'" />
-        <ClassBadge :icon="g.area.icon" :color="g.area.color" plain :name="g.heading ?? ''" />
-      </button>
-    </h2>
-    <h2 v-else-if="g.heading">{{ g.heading }}</h2>
-    <div v-if="g.area" v-show="!folded.has(g.area.key)" :id="`nav-${g.id}`" class="nav-area-items">
-      <NavLink v-for="item in g.items" :key="item.id" :to="item.to" :active="active(item)">
-        <ClassBadge v-if="item.cls" :icon="item.cls.icon" :color="item.cls.color" plain :name="item.label" />
-        <span v-if="item.cls" class="muted">{{ countFor(item) ?? "" }}</span>
-      </NavLink>
-    </div>
+    <template v-if="!collapsed">
+      <h2 v-if="g.area" class="nav-area">
+        <button
+          type="button"
+          :aria-expanded="!folded.has(g.area.key)"
+          :aria-controls="`nav-${g.id}`"
+          :title="t(folded.has(g.area.key) ? 'nav.area.show' : 'nav.area.hide', { area: g.area.name })"
+          @click="toggle(g.area.key)"
+        >
+          <Icon class="nav-fold" :size="14" :name="folded.has(g.area.key) ? 'chevron-right' : 'chevron-down'" />
+          <ClassBadge :icon="g.area.icon" :color="g.area.color" plain :name="g.heading ?? ''" />
+        </button>
+      </h2>
+      <h2 v-else-if="g.heading">{{ g.heading }}</h2>
+      <div v-if="g.area" v-show="!folded.has(g.area.key)" :id="`nav-${g.id}`" class="nav-area-items">
+        <NavLink v-for="item in g.items" :key="item.id" :to="item.to" :active="active(item)">
+          <ClassBadge v-if="item.cls" :icon="item.cls.icon" :color="item.cls.color" plain :name="item.label" />
+          <span v-if="item.cls" class="nav-count">{{ countFor(item) ?? "" }}</span>
+        </NavLink>
+      </div>
+    </template>
     <template v-for="item in g.area ? [] : g.items" :key="item.id">
-      <NavLink :to="item.to" :active="active(item)">
-        <ClassBadge v-if="item.cls" :icon="item.cls.icon" :color="item.cls.color" plain :name="item.label" />
-        <template v-else>{{ item.label }}</template>
-        <span v-if="item.cls" class="muted">{{ countFor(item) ?? "" }}</span>
-      </NavLink>
-      <!-- Bulk import sits under Inventory, only while it is switched on and the user holds cis.import. -->
-      <NavLink v-if="item.page === 'inventory' && importAccess.available.value" to="/imports" :active="(r) => r.path.startsWith('/imports')">
-        {{ t("nav.bulkImport") }}
-      </NavLink>
-      <NavLink v-if="item.page === 'inventory' && showServices" to="/services" :active="(r) => r.path.startsWith('/services')">
-        {{ t("services.nav") }}
+      <template v-if="item.page">
+        <NavLink :to="item.to" :active="active(item)" :title="collapsed ? item.label : undefined">
+          <Icon :name="PAGE_ICONS[item.page]" :size="collapsed ? 20 : 16" />
+          <span class="nav-label">{{ item.label }}</span>
+        </NavLink>
+        <!-- Bulk import sits under Inventory, only while it is switched on and the user holds cis.import. -->
+        <NavLink
+          v-if="item.page === 'inventory' && importAccess.available.value"
+          to="/imports"
+          :active="(r) => r.path.startsWith('/imports')"
+          :title="collapsed ? t('nav.bulkImport') : undefined"
+        >
+          <Icon name="upload" :size="collapsed ? 20 : 16" />
+          <span class="nav-label">{{ t("nav.bulkImport") }}</span>
+        </NavLink>
+        <NavLink
+          v-if="item.page === 'inventory' && showServices"
+          to="/services"
+          :active="(r) => r.path.startsWith('/services')"
+          :title="collapsed ? t('services.nav') : undefined"
+        >
+          <Icon name="layers" :size="collapsed ? 20 : 16" />
+          <span class="nav-label">{{ t("services.nav") }}</span>
+        </NavLink>
+      </template>
+      <NavLink v-else-if="item.cls && !collapsed" :to="item.to" :active="active(item)">
+        <ClassBadge :icon="item.cls.icon" :color="item.cls.color" plain :name="item.label" />
+        <span class="nav-count">{{ countFor(item) ?? "" }}</span>
       </NavLink>
     </template>
   </template>
-  <p v-if="classes.isError.value" class="nav-note">{{ t("nav.classesUnavailable") }}</p>
-  <!-- The built-in classes (Business service) do not count: until a class of its own exists, the data model is empty. -->
-  <p v-else-if="classes.data.value && dataModelEmpty(classes.data.value)" class="nav-note">
-    {{ t("nav.noClasses") }}
-    <RouterLink v-if="session.can('datamodel.manage')" to="/admin/templates">{{ t("nav.setUpDataModel") }}</RouterLink>
-  </p>
+  <template v-if="!collapsed">
+    <p v-if="classes.isError.value" class="nav-note">{{ t("nav.classesUnavailable") }}</p>
+    <!-- The built-in classes (Business service) do not count: until a class of its own exists, the data model is empty. -->
+    <p v-else-if="classes.data.value && dataModelEmpty(classes.data.value)" class="nav-note">
+      {{ t("nav.noClasses") }}
+      <RouterLink v-if="session.can('datamodel.manage')" to="/admin/templates">{{ t("nav.setUpDataModel") }}</RouterLink>
+    </p>
+  </template>
 </template>

@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { snap, expect, test } from "./support";
+import { snap, expect, openUserMenu, test } from "./support";
 
 // GH#182: the header and sidebar must fit narrow windows (a laptop split screen, a 768 px tablet)
 // for an administrator, who sees every header control.
@@ -46,9 +46,9 @@ test("768 px: header fits, sidebar is a drawer, theme and sign-out sit in the us
   await expect(page).toHaveURL(/\/cis\?classId=/);
   await expect(nav).toBeHidden();
 
-  // User menu: the theme select and "Sign out" open from the user's name; the profile badge is gone.
+  // User menu: the theme select, the profile badge and "Sign out" open from the user's initials.
   const header = page.locator(".shell-header");
-  await expect(header.getByText("Administrator", { exact: true })).toHaveCount(0);
+  await expect(header.getByText("Administrator", { exact: true })).toBeHidden();
   await expect(page.getByLabel("Theme")).toBeHidden();
   const who = page.getByRole("button", { name: /^Signed in as/ });
   await who.click();
@@ -75,14 +75,45 @@ test("900 px: sidebar stays, header still fits", async ({ page }) => {
   await expectHeaderFits(page);
 });
 
-test("desktop: user name, badge, theme and sign-out stay in the header", async ({ page }) => {
+test("desktop: the user menu holds the badge, theme, density and sign-out; the nav collapses to a rail", async ({ page }) => {
   await page.goto("/cis");
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  await expectHeaderFits(page);
   const header = page.locator(".shell-header");
+  const who = page.getByRole("button", { name: /^Signed in as \S/ });
+  await expect(who.locator(".who-name")).toBeVisible();
+  await expect(page.getByLabel("Theme")).toBeHidden();
+  await who.click();
   await expect(header.getByText("Administrator", { exact: true })).toBeVisible();
   await expect(page.getByLabel("Theme")).toBeVisible();
   await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
-  await expect(page.getByRole("button", { name: /^Signed in as/ })).toHaveCount(0);
+  await snap(page, "responsive-desktop-user-menu");
+
+  // Density: comfortable is remembered in this browser; standard is the stylesheet default.
+  await page.getByLabel("Density").selectOption("comfortable");
+  await expect(page.locator("html")).toHaveAttribute("data-density", "comfortable");
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-density", "comfortable");
+  await openUserMenu(page);
+  await page.getByLabel("Density").selectOption("standard");
+  await expect(page.locator("html")).not.toHaveAttribute("data-density", /./);
+  await page.keyboard.press("Escape");
+  await expect(page.getByLabel("Theme")).toBeHidden();
+
+  // The nav collapses to an icon rail: pages keep their names (tooltip and accessible name), classes hide.
+  const nav = page.getByRole("navigation", { name: "Main" });
+  await expect(nav.getByRole("link", { name: /^Server \d+$/ })).toBeVisible();
+  await nav.getByRole("button", { name: "Collapse sidebar" }).click();
+  await expect(nav.getByRole("link", { name: /^Server/ })).toHaveCount(0);
+  const inventory = nav.getByRole("link", { name: "All configuration items", exact: true });
+  await expect(inventory).toBeVisible();
+  await expect(inventory).toHaveAttribute("title", "All configuration items");
+  expect((await nav.boundingBox())!.width).toBeLessThanOrEqual(56);
+  await snap(page, "responsive-desktop-rail");
+  await page.reload();
+  await expect(nav.getByRole("button", { name: "Expand sidebar" })).toHaveAttribute("aria-expanded", "false");
+  await nav.getByRole("button", { name: "Expand sidebar" }).click();
+  await expect(nav.getByRole("link", { name: /^Server \d+$/ })).toBeVisible();
   await expectHeaderFits(page);
 });
 

@@ -2,24 +2,24 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import { t } from "../i18n";
-import { useMediaQuery } from "../lib/composables";
 import { useBrandingStore } from "../stores/branding";
+import { DENSITIES, useDensityStore, type Density } from "../stores/density";
 import { useSessionStore } from "../stores/session";
 import ErrorAlert from "./ErrorAlert.vue";
 import Icon from "./Icon.vue";
 
 /**
- * The acting user, theme and "Sign out" in the header. Below 960 px they fold into a
- * menu behind the user's name so the search field and "New CI" keep their room.
+ * The acting user in the header: initials and name on a button that opens a panel with My account, the
+ * theme and density choices and "Sign out" (design document §2.7, audit S5). Below 960 px the name folds
+ * away and only the initials show; the name stays the button's accessible name.
  */
 const session = useSessionStore();
 const router = useRouter();
 const route = useRoute();
-const compact = useMediaQuery("(max-width: 960px)");
 const open = ref(false);
 const root = ref<HTMLElement>();
 const toggle = ref<HTMLButtonElement>();
-watch([() => route.fullPath, compact], () => (open.value = false));
+watch(() => route.fullPath, () => (open.value = false));
 function onDocClick(e: MouseEvent) {
   if (open.value && !root.value?.contains(e.target as Node)) open.value = false;
 }
@@ -33,9 +33,7 @@ function onKeydown(e: KeyboardEvent) {
 onMounted(() => document.addEventListener("click", onDocClick));
 onBeforeUnmount(() => document.removeEventListener("click", onDocClick));
 const branding = useBrandingStore();
-/** An option's text: "Theme: light" in the header's select, just "light" in the folded menu under its "Theme" label. */
-const themeOption = (name: string) => (compact.value ? name : t("userMenu.theme.option", { name }));
-/** Shown instead of the name on phone-width screens (GH#363); the name stays the button's accessible name. */
+const density = useDensityStore();
 const initials = computed(() => {
   const name = session.user?.displayName?.trim() || session.user?.username || "";
   const words = name.split(/\s+/).filter(Boolean);
@@ -63,9 +61,8 @@ async function signOut() {
 </script>
 
 <template>
-  <div v-if="session.user" ref="root" class="user-menu" :class="{ compact }" @keydown="onKeydown">
+  <div v-if="session.user" ref="root" class="user-menu" @keydown="onKeydown">
     <button
-      v-if="compact"
       ref="toggle"
       type="button"
       class="who"
@@ -76,34 +73,45 @@ async function signOut() {
       @click="open = !open"
     >
       <span class="sr-only">{{ t("userMenu.signedInAs") }}</span>
-      <span class="who-name">{{ session.user.displayName }}</span>
       <span class="who-initials" aria-hidden="true">{{ initials }}</span>
-      <Icon name="chevron-down" />
+      <span class="who-name">{{ session.user.displayName }}</span>
+      <Icon name="chevron-down" class="who-chevron" />
     </button>
-    <div v-show="!compact || open" id="user-menu-panel" class="user-menu-panel">
-      <span v-if="compact" class="menu-label menu-who">{{ t("userMenu.signedInAsName", { name: session.user.displayName }) }}</span>
-      <RouterLink class="who" to="/account" :title="t('userMenu.accountTitle', { name: session.user.username })">
-        <template v-if="compact">{{ t("account.title") }}</template>
-        <template v-else>
-          <span class="sr-only">{{ t("userMenu.signedInAs") }}</span>
-          <span class="who-name">{{ session.user.displayName }}</span>
-          <span v-if="session.user.isAdministrator" class="badge">{{ t("userMenu.administrator") }}</span>
-        </template>
+    <div v-show="open" id="user-menu-panel" class="user-menu-panel">
+      <div class="menu-who">
+        <span class="menu-who-name">{{ t("userMenu.signedInAsName", { name: session.user.displayName }) }}</span>
+        <span class="menu-who-username mono">{{ session.user.username }}</span>
+        <span v-if="session.user.isAdministrator" class="badge">{{ t("userMenu.administrator") }}</span>
+      </div>
+      <RouterLink class="menu-link" to="/account" :title="t('userMenu.accountTitle', { name: session.user.username })">
+        <Icon name="user" />{{ t("account.title") }}
       </RouterLink>
-      <label :class="compact ? 'menu-label' : 'sr-only'" for="user-theme">{{ t("userMenu.theme") }}</label>
-      <select
-        id="user-theme"
-        class="theme-select"
-        :title="t('userMenu.theme')"
-        :value="branding.userTheme ?? ''"
-        @change="branding.setUserTheme((($event.target as HTMLSelectElement).value || null) as 'light' | 'dark' | 'system' | null)"
-      >
-        <option value="">{{ themeOption(t("userMenu.theme.default", { theme: t(`userMenu.theme.name.${branding.effective.defaultTheme}`) })) }}</option>
-        <option value="light">{{ themeOption(t("userMenu.theme.light")) }}</option>
-        <option value="dark">{{ themeOption(t("userMenu.theme.dark")) }}</option>
-        <option value="system">{{ themeOption(t("userMenu.theme.system")) }}</option>
-      </select>
-      <button type="button" class="btn" :disabled="busy" @click="signOut">{{ busy ? t("userMenu.signingOut") : t("userMenu.signOut") }}</button>
+      <div class="menu-field">
+        <label for="user-theme">{{ t("userMenu.theme") }}</label>
+        <select
+          id="user-theme"
+          :value="branding.userTheme ?? ''"
+          @change="branding.setUserTheme((($event.target as HTMLSelectElement).value || null) as 'light' | 'dark' | 'system' | null)"
+        >
+          <option value="">{{ t("userMenu.theme.default", { theme: t(`userMenu.theme.name.${branding.effective.defaultTheme}`) }) }}</option>
+          <option value="light">{{ t("userMenu.theme.light") }}</option>
+          <option value="dark">{{ t("userMenu.theme.dark") }}</option>
+          <option value="system">{{ t("userMenu.theme.system") }}</option>
+        </select>
+      </div>
+      <div class="menu-field">
+        <label for="user-density">{{ t("userMenu.density") }}</label>
+        <select
+          id="user-density"
+          :value="density.density"
+          @change="density.setDensity(($event.target as HTMLSelectElement).value as Density)"
+        >
+          <option v-for="d in DENSITIES" :key="d" :value="d">{{ t(`userMenu.density.${d}`) }}</option>
+        </select>
+      </div>
+      <button type="button" class="btn menu-sign-out" :disabled="busy" @click="signOut">
+        <Icon name="log-out" />{{ busy ? t("userMenu.signingOut") : t("userMenu.signOut") }}
+      </button>
     </div>
     <div v-if="error" class="user-menu-error"><ErrorAlert :error="error" :title="t('userMenu.signOutFailed')" /></div>
   </div>

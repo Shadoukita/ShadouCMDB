@@ -1,5 +1,5 @@
 import { SETUP_TOKEN } from "./global-setup";
-import { expect, snap, test } from "./support";
+import { expect, snap, test, signOut } from "./support";
 
 // The real first-run setup, with nothing mocked, against a second API whose database has been migrated
 // but has no user yet (E2E_FRESH_BASE_URL; CI starts one). The shared instance the other specs use
@@ -51,7 +51,7 @@ test("first-run setup creates the administrator once, signs them in, and then cl
   await snap(page, "40-first-run-filled");
   await page.getByRole("button", { name: "Create administrator and sign in" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
-  await expect(page.getByRole("banner").getByText(ADMIN.displayName)).toBeVisible();
+  await expect(page.getByRole("banner").getByText(ADMIN.displayName, { exact: true })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Administration", exact: true })).toBeVisible();
 
   // The new session is a real one, holding the built-in Administrator profile.
@@ -69,7 +69,7 @@ test("first-run setup creates the administrator once, signs them in, and then cl
   expect((await again.json()).error.code).toBe("CONFLICT");
 
   // Sign out, then back in with the credentials chosen during setup.
-  await page.getByRole("button", { name: "Sign out" }).click();
+  await signOut(page);
   await expect(page).toHaveURL(/\/login$/);
   await page.goto("/setup");
   await expect(page).not.toHaveURL(/\/setup$/);

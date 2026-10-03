@@ -1,6 +1,6 @@
 import type { Browser, Page } from "@playwright/test";
 import { createHmac } from "node:crypto";
-import { apiGet, apiSend, at, expect, snap, test } from "./support";
+import { apiGet, apiSend, at, expect, openUserMenu, snap, test, signOut } from "./support";
 
 // Two-factor authentication, in order: an operator sets up an authenticator (QR code, recovery codes), signs in
 // with a code and with a recovery code, replaces the codes and turns it off; then an administrator makes it
@@ -86,8 +86,8 @@ async function signInWithPassword(page: Page, username: string) {
   await page.getByRole("button", { name: "Sign in" }).click();
 }
 
-async function signOut(page: Page) {
-  await page.getByRole("button", { name: "Sign out" }).click();
+async function signOutToLogin(page: Page) {
+  await signOut(page);
   await expect(page).toHaveURL(at("/login"));
 }
 
@@ -147,7 +147,10 @@ test.describe("an operator's own two-factor authentication", () => {
     test.slow(); // three argon2id checks: sign-in, a wrong password, the set-up
     await signInWithPassword(page, USERNAME);
     await expect(page).toHaveURL(at("/"), ARGON2);
-    await page.getByRole("link", { name: /MFA operator/ }).click();
+    // My account sits in the user menu, which names the signed-in user.
+    await openUserMenu(page);
+    await expect(page.locator(".user-menu-panel").getByText(/^Signed in as MFA operator/)).toBeVisible();
+    await page.getByRole("link", { name: "My account" }).click();
     await expect(page).toHaveURL(at("/account"));
     const panel = page.getByRole("region", { name: "Two-factor authentication" });
     await expect(panel.getByText("Off", { exact: true })).toBeVisible();
@@ -165,7 +168,7 @@ test.describe("an operator's own two-factor authentication", () => {
   });
 
   test("sign-in asks for a code after the password; a wrong code is refused", async () => {
-    await signOut(page);
+    await signOutToLogin(page);
     await signInWithPassword(page, USERNAME);
     await expect(page.getByRole("heading", { name: "Two-factor authentication" })).toBeVisible(ARGON2);
     await expect(page.getByLabel("Authentication code")).toBeFocused();
@@ -181,7 +184,7 @@ test.describe("an operator's own two-factor authentication", () => {
   });
 
   test("a recovery code signs in once in place of a code", async () => {
-    await signOut(page);
+    await signOutToLogin(page);
     await signInWithPassword(page, USERNAME);
     const lost = page.getByRole("button", { name: "Lost your device? Use a recovery code" });
     await expect(lost).toBeVisible(ARGON2);
@@ -213,7 +216,7 @@ test.describe("an operator's own two-factor authentication", () => {
     await expect(page.getByRole("status").filter({ hasText: "Sign-in asks for your password only." })).toBeVisible(ARGON2);
     await expect(panel.getByText("Off", { exact: true })).toBeVisible();
 
-    await signOut(page);
+    await signOutToLogin(page);
     await signInWithPassword(page, USERNAME);
     await expect(page).toHaveURL(at("/"), ARGON2);
   });
