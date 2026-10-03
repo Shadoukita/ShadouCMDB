@@ -1589,8 +1589,10 @@ impl Resource for AttributeDefinitions {
     const SEARCH_COLUMNS: &'static [&'static str] = &["key", "label", "description", "group_name"];
     const UPDATE_DESCRIPTION: &'static str = "`dataType` changes the column type: every stored value is converted in a dry run first, and the change is refused (422 SCHEMA_CHANGE_REFUSED, naming values that fail) if any would not convert (`type_change_failed`) or would lose information (`type_change_lossy`: datetime to date keeps the UTC day, so it is refused while any value has a time of day other than midnight UTC). Only between text, number, integer, boolean, enum, date, datetime, ip and cidr; `enumValues` is cleared when leaving enum. `isRequired: true` makes the column NOT NULL and is refused while an asset (deleted ones included) has no value. Removing enum values still stored is refused. `parentAttributeId` (lookup fields on a list with a parent list) names the field bound to the parent list, on this class or an ancestor; CI writes then only accept a value that belongs to the CI's value of that field. Preview any change with `POST /api/v1/schema-changes/preview`.";
     const ARCHIVE_ON_DELETE: bool = true;
-    const WRITE_ERRORS: &'static [ErrorCode] = &[ErrorCode::InvalidName, ErrorCode::SchemaChangeRefused];
-    const DELETE_DESCRIPTION: &'static str = "Archives the field (`isActive=false`): its column and stored values stay readable, no new values are accepted, and forms hide it. `PATCH {\"isActive\": true}` restores it. To drop the column and its values, purge the field (`POST /api/v1/attribute-definitions/{id}/purge`).";
+    // IN_USE: archiving or retyping a field a workflow depends on (SHAA-1423).
+    const WRITE_ERRORS: &'static [ErrorCode] =
+        &[ErrorCode::InvalidName, ErrorCode::SchemaChangeRefused, ErrorCode::InUse];
+    const DELETE_DESCRIPTION: &'static str = "Archives the field (`isActive=false`): its column and stored values stay readable, no new values are accepted, and forms hide it. `PATCH {\"isActive\": true}` restores it. To drop the column and its values, purge the field (`POST /api/v1/attribute-definitions/{id}/purge`). A field a workflow depends on (its state field, or a field a published version uses) is not archived: 409 IN_USE names the workflows.";
     // DELETE archives, which nothing blocks; `blocking` marks what refuses the
     // purge (the checks in `purge_attribute_in`). The values go with the purge.
     const USAGE: &'static [Usage] = &[

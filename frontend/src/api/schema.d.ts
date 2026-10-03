@@ -1310,7 +1310,7 @@ export interface paths {
         post?: never;
         /**
          * Delete a attribute definition
-         * @description Requires `datamodel.manage`. Archives the field (`isActive=false`): its column and stored values stay readable, no new values are accepted, and forms hide it. `PATCH {"isActive": true}` restores it. To drop the column and its values, purge the field (`POST /api/v1/attribute-definitions/{id}/purge`).
+         * @description Requires `datamodel.manage`. Archives the field (`isActive=false`): its column and stored values stay readable, no new values are accepted, and forms hide it. `PATCH {"isActive": true}` restores it. To drop the column and its values, purge the field (`POST /api/v1/attribute-definitions/{id}/purge`). A field a workflow depends on (its state field, or a field a published version uses) is not archived: 409 IN_USE names the workflows.
          */
         delete: operations["deleteAttributeDefinition"];
         options?: never;
@@ -14689,6 +14689,15 @@ export interface operations {
             };
             /** @description Request not completed in time (code REQUEST_TIMEOUT) */
             408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
