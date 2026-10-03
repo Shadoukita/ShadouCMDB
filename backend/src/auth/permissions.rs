@@ -38,10 +38,13 @@ pub enum GlobalPermission {
     /// Create, edit and delete views shared with all users
     #[serde(rename = "views.share")]
     ViewsShare,
+    /// Design, publish and retire workflows, edit who may run their transitions, and migrate or force instances
+    #[serde(rename = "workflows.manage")]
+    WorkflowsManage,
 }
 
 impl GlobalPermission {
-    pub const ALL: [GlobalPermission; 8] = [
+    pub const ALL: [GlobalPermission; 9] = [
         GlobalPermission::UsersManage,
         GlobalPermission::ProfilesManage,
         GlobalPermission::DatamodelManage,
@@ -50,6 +53,7 @@ impl GlobalPermission {
         GlobalPermission::AuditView,
         GlobalPermission::CisImport,
         GlobalPermission::ViewsShare,
+        GlobalPermission::WorkflowsManage,
     ];
 
     /// The value stored in permission_profile_global_permissions.permission.
@@ -63,6 +67,7 @@ impl GlobalPermission {
             GlobalPermission::AuditView => "audit.view",
             GlobalPermission::CisImport => "cis.import",
             GlobalPermission::ViewsShare => "views.share",
+            GlobalPermission::WorkflowsManage => "workflows.manage",
         }
     }
 

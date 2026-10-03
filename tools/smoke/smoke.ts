@@ -945,7 +945,9 @@ async function permissions(x: Json) {
   check(editors.classPermissions[0]?.view === true, 'write rights imply view');
   await patch(`/api/v1/admin/profiles/${editors.id}`, { description: null, globalPermissions: [] });
   const copy = (await post(`/api/v1/admin/profiles/${builtin.id}/clone`, { name: `smoke-admin-copy-${RUN}` })).json;
-  check(!copy.isBuiltin && copy.globalPermissions.length === 8 && copy.classPermissions[0]?.classId === null, 'cloning Administrator gives an editable profile with every permission');
+  // Every global right the contract defines, so a new right does not need an edit here.
+  const allRights: string[] = schemas.PermissionProfile.properties.globalPermissions.items.enum;
+  check(!copy.isBuiltin && [...copy.globalPermissions].sort().join() === [...allRights].sort().join() && copy.classPermissions[0]?.classId === null, 'cloning Administrator gives an editable profile with every permission');
   await post(`/api/v1/admin/profiles/${readers.id}/clone`, { name: `smoke-readers-${RUN}` }, 409);
   await get(`/api/v1/admin/profiles?q=smoke-&limit=5`);
 

@@ -37,8 +37,9 @@ const rows = computed<Row[]>(() => {
   }
   const keys = props.widget.classKeys ?? [];
   // Only classes the user may view: the API leaves the others out of every count, which would read as 0.
+  // Without chosen classes, the inventory's: process types (change requests and the like) are left out.
   const visible = (classes.data.value ?? []).filter(
-    (c) => !c.isAbstract && session.canOnClass(c.id, "view") && (keys.length ? keys.includes(c.key) : true),
+    (c) => !c.isAbstract && session.canOnClass(c.id, "view") && (keys.length ? keys.includes(c.key) : c.kind === "asset"),
   );
   return visible.map((c) => ({
     id: c.id,

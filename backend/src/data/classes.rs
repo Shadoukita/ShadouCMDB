@@ -107,6 +107,27 @@ pub async fn class_has_items(conn: &mut PgConnection, class_id: Uuid) -> sqlx::R
     .is_some())
 }
 
+/// Ids of the process types (`ci_classes.kind = 'process'`); none on an install without workflows.
+pub async fn process_class_ids(conn: &mut PgConnection) -> sqlx::Result<Vec<Uuid>> {
+    sqlx::query_scalar("SELECT id FROM cmdb.ci_classes WHERE kind = 'process' ORDER BY id").fetch_all(conn).await
+}
+
+/// The caller's view scope (`None`: every class) narrowed to asset types, for
+/// the reads that never show process records: the relationship graph, impact
+/// analysis and business service membership. While no process type exists it
+/// is the view scope itself, so those queries are exactly what they were.
+pub async fn asset_scope(conn: &mut PgConnection, visible: Option<&[Uuid]>) -> sqlx::Result<Option<Vec<Uuid>>> {
+    let process = process_class_ids(&mut *conn).await?;
+    if process.is_empty() {
+        return Ok(visible.map(<[Uuid]>::to_vec));
+    }
+    let classes: Vec<Uuid> = match visible {
+        Some(v) => v.to_vec(),
+        None => sqlx::query_scalar("SELECT id FROM cmdb.ci_classes ORDER BY id").fetch_all(conn).await?,
+    };
+    Ok(Some(classes.into_iter().filter(|c| !process.contains(c)).collect()))
+}
+
 /// Class ids plus every descendant class, so filtering by "hardware" finds servers too.
 pub async fn with_descendant_classes(conn: &mut PgConnection, class_ids: &[Uuid]) -> sqlx::Result<Vec<Uuid>> {
     let rows = sqlx::query_scalar!(

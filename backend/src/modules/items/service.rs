@@ -12,8 +12,8 @@ use ipnetwork::IpNetwork;
 use super::plan::{self, DbResolver, Needs, is_visible};
 use super::schemas::{
     ActiveQuery, AttributeReference, ConfigurationItem, ConfigurationItemSummary, CreateItemBody, CriticalityRef,
-    Graph, GraphDirection, GraphEdge, GraphEdgeType, GraphNode, GraphQuery, ItemFilterQuery, ListItemsQuery, SearchHit,
-    SearchMatch, SearchQuery, SearchResults, UpdateItemBody,
+    Graph, GraphDirection, GraphEdge, GraphEdgeType, GraphNode, GraphQuery, ItemFilterQuery, KindQuery, ListItemsQuery,
+    SearchHit, SearchMatch, SearchQuery, SearchResults, UpdateItemBody,
 };
 use crate::api::context::{Caller, RequestContext};
 use crate::api::route::InvalidBody;
@@ -161,10 +161,27 @@ async fn check_changed_attributes(
 // ---------------------------------------------------------------------------
 
 async fn filters(conn: &mut PgConnection, model: &Model, q: &impl ItemFilterQuery) -> Result<ItemFilters, AppError> {
-    let class_ids = match q.class_id() {
+    let mut class_ids = match q.class_id() {
         Some(ids) if q.include_subclasses() => Some(class_data::with_descendant_classes(conn, &ids.0).await?),
         Some(ids) => Some(ids.0.clone()),
         None => None,
+    };
+    // Process records stay out of the inventory unless asked for by kind or by naming their type.
+    let process = class_data::process_class_ids(conn).await?;
+    let excluded_class_ids = match q.kind() {
+        Some(KindQuery::Any) => None,
+        Some(KindQuery::Asset) => Some(process),
+        Some(KindQuery::Process) => {
+            class_ids = Some(match class_ids {
+                Some(ids) => ids.into_iter().filter(|c| process.contains(c)).collect(),
+                None => process,
+            });
+            None
+        }
+        None => {
+            let named: &[Uuid] = q.class_id().map(|l| l.0.as_slice()).unwrap_or_default();
+            Some(process.into_iter().filter(|c| !named.contains(c)).collect())
+        }
     };
     // Values grouped by list: any value of a list, and every list.
     let mut lookups: Vec<(Vec<Uuid>, data::LookupColumns)> = Vec::new();
@@ -198,6 +215,7 @@ async fn filters(conn: &mut PgConnection, model: &Model, q: &impl ItemFilterQuer
         visible_class_ids: None,
         own_layout: None,
         layout_template: None,
+        excluded_class_ids,
         // Also where ipWithin looks.
         search_tables: data::search_tables(model),
     })
@@ -687,7 +705,8 @@ pub async fn graph(pool: &PgPool, ctx: &RequestContext, root_id: Uuid, q: &Graph
         return Err(AppError::missing("Configuration item", root_id));
     };
     ctx.require_class_visible(root.class_id, "Configuration item", root_id)?;
-    let visible = ctx.class_scope(ClassOp::View);
+    // Process records are not part of the graph.
+    let visible = class_data::asset_scope(&mut conn, ctx.class_scope(ClassOp::View).as_deref()).await?;
     let visible = visible.as_deref();
     let direction = match q.direction {
         GraphDirection::Both => Direction::Both,

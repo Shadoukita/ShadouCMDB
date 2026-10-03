@@ -51,6 +51,7 @@ const ENTITY_LABELS: Record<EntityType, string> = {
   saved_views: "Shared view",
   config: "Configuration file",
   ci_layout_overrides: "CI layout",
+  workflow_definitions: "Workflow",
 };
 const ENTITY_TYPES = (Object.keys(ENTITY_LABELS) as EntityType[]).map((value) => ({ value, label: ENTITY_LABELS[value] }));
 const ACTION_SET: Record<Action, true> = {
@@ -76,6 +77,12 @@ const ACTION_SET: Record<Action, true> = {
   export: true,
   "import.commit": true,
   "import.report_read": true,
+  "workflow.publish": true,
+  "workflow.start": true,
+  "workflow.cancel": true,
+  "workflow.transition": true,
+  "workflow.migrate": true,
+  "workflow.force": true,
 };
 const ACTIONS = Object.keys(ACTION_SET) as Action[];
 const entityLabel = (t: string) => ENTITY_TYPES.find((e) => e.value === t)?.label ?? t;

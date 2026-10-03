@@ -81,6 +81,8 @@ pub struct CiClass {
     /// renamed and given fields, but not deleted, archived, purged, made abstract, given a parent or subtypes
     #[schema(required = true, inline)]
     pub system_role: Option<ClassSystemRole>,
+    #[schema(inline)]
+    pub kind: ClassKind,
     #[serde(serialize_with = "ts::serialize")]
     pub created_at: DateTime<Utc>,
     #[serde(serialize_with = "ts::serialize")]
@@ -109,6 +111,25 @@ fn title_attribute_schema() -> Schema {
         );
     }
     s
+}
+
+fn kind_schema(description: &str) -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .enum_values(Some(["asset", "process"]))
+        .description(Some(description))
+        .into()
+}
+
+fn create_kind_schema() -> Schema {
+    kind_schema(
+        "asset (inventory CIs) or process (records such as change requests, kept out of the inventory). Leave out to \
+         take the parent's kind (asset for a root type); a type has its parent's kind.",
+    )
+}
+
+fn update_kind_schema() -> Schema {
+    kind_schema("Only for a type that has never held a CI (deleted ones included) and has no subtypes")
 }
 
 pub(crate) fn icon_schema() -> Schema {
@@ -151,6 +172,9 @@ pub struct CiClassCreate {
     #[schema(schema_with = title_attribute_schema)]
     #[serde(default)]
     title_attribute_id: Option<Uuid>,
+    #[schema(schema_with = create_kind_schema)]
+    #[serde(default)]
+    kind: Option<ClassKind>,
 }
 
 impl CiClassCreate {
@@ -187,6 +211,8 @@ pub struct CiClassUpdate {
     #[schema(schema_with = title_attribute_schema)]
     #[serde(default, deserialize_with = "schemas::patch")]
     title_attribute_id: Option<Option<Uuid>>,
+    #[schema(schema_with = update_kind_schema)]
+    kind: Option<ClassKind>,
 }
 
 impl Writable for CiClassCreate {
@@ -202,7 +228,8 @@ impl Writable for CiClassCreate {
             .opt("color", self.color.clone().map(Some))
             .opt("sort_order", self.sort_order)
             .opt("is_active", self.is_active)
-            .opt("title_attribute_id", self.title_attribute_id.map(Some));
+            .opt("title_attribute_id", self.title_attribute_id.map(Some))
+            .opt("kind", self.kind.map(|k| k.as_str().to_owned()));
         c
     }
 }
@@ -219,7 +246,8 @@ impl Writable for CiClassUpdate {
             .opt("color", self.color.clone())
             .opt("sort_order", self.sort_order)
             .opt("is_active", self.is_active)
-            .opt("title_attribute_id", self.title_attribute_id);
+            .opt("title_attribute_id", self.title_attribute_id)
+            .opt("kind", self.kind.map(|k| k.as_str().to_owned()));
         c
     }
 }
@@ -261,6 +289,9 @@ pub struct CiClassList {
     descendant_of: Option<Uuid>,
     #[param(schema_with = schemas::uuid_list_schema)]
     area_id: Option<UuidList>,
+    /// Only asset types or only process types
+    #[param(inline)]
+    kind: Option<ClassKind>,
 }
 paged!(CiClassList);
 
@@ -285,6 +316,9 @@ impl ListQuery for CiClassList {
         if let Some(id) = self.descendant_of {
             w.and().push("ci_class_is_a(id, ").push_bind(id).push(")");
         }
+        if let Some(kind) = self.kind {
+            w.and().push("kind = ").push_bind(kind.as_str());
+        }
         if let Some(ids) = &self.area_id {
             w.and().push("area_id = ANY(").push_bind(ids.0.clone()).push(")");
         }
@@ -308,7 +342,7 @@ impl Resource for CiClasses {
         (SELECT a.key FROM cmdb.areas a WHERE a.id = ci_classes.area_id) || '.' || key AS table_name,
         (SELECT a.key FROM cmdb.areas a WHERE a.id = ci_classes.area_id) || '.v_' || key AS view_name,
         description, parent_id, is_abstract, icon, color, sort_order, is_active, title_attribute_id, system_role,
-        created_at, updated_at";
+        kind, created_at, updated_at";
     const SEARCH_COLUMNS: &'static [&'static str] = &["key", "name", "description"];
     const ARCHIVE_ON_DELETE: bool = true;
     const WRITE_ERRORS: &'static [ErrorCode] = &[ErrorCode::InvalidName, ErrorCode::SchemaChangeRefused];
@@ -390,6 +424,7 @@ impl Resource for CiClasses {
                 ("is_active", Val::Bool(Some(false))) => "archived",
                 ("is_abstract", Val::Bool(Some(true))) => "made abstract",
                 ("parent_id", Val::Uuid(Some(_))) => "given a parent type",
+                ("kind", Val::Text(Some(k))) if k != ClassKind::Asset.as_str() => "made a process type",
                 _ => continue,
             };
             return Err(system_class_refused(&row.key, role, what));
@@ -424,6 +459,16 @@ impl Resource for CiClasses {
                     "Built-in types (business service, Person) cannot have subtypes",
                     "system_class",
                 ));
+            }
+            // A subtype has its parent's kind.
+            if let Some(parent) = parent
+                && !columns.0.iter().any(|(c, _)| *c == "kind")
+            {
+                let kind: Option<String> = sqlx::query_scalar("SELECT kind FROM cmdb.ci_classes WHERE id = $1")
+                    .bind(parent)
+                    .fetch_optional(&mut *conn)
+                    .await?;
+                columns.opt("kind", kind);
             }
             // A subtype is labelled like its parent unless told otherwise.
             if let Some(parent) = parent
@@ -485,6 +530,9 @@ impl Resource for CiClasses {
                         "class_has_items",
                     ));
                 }
+                if row.kind != previous.kind {
+                    check_kind_change(conn, ctx, row).await?;
+                }
                 if row.parent_id != previous.parent_id {
                     move_to_new_parent(conn, ctx, row, previous).await?;
                     check_parent_fields_in_lineage(conn, row.id).await?;
@@ -494,6 +542,9 @@ impl Resource for CiClasses {
                     let model = Model::load(conn).await?;
                     items_data::refresh_labels(conn, &model, &model.subtree(row.id), None).await?;
                 }
+            }
+            if previous.is_none_or(|p| p.kind != row.kind || p.parent_id != row.parent_id) {
+                check_parent_kind(conn, row, previous.is_some_and(|p| p.parent_id != row.parent_id)).await?;
             }
             let verb = match previous {
                 None => "Create",
@@ -505,6 +556,60 @@ impl Resource for CiClasses {
             engine::apply(conn, ctx, &summary, Scope::Classes(vec![row.id]), Purge::default()).await?;
             Ok(())
         })
+    }
+}
+
+/// A type's kind changes only while it has never held a CI and has no
+/// subtypes: process records and assets are never mixed in one table.
+async fn check_kind_change(conn: &mut PgConnection, ctx: &RequestContext, row: &CiClass) -> Result<(), AppError> {
+    let subtypes: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM cmdb.ci_classes WHERE parent_id = $1)")
+        .bind(row.id)
+        .fetch_one(&mut *conn)
+        .await?;
+    if subtypes {
+        return Err(AppError::field(
+            "kind",
+            "The type has subtypes, which share its kind; change the kind before adding subtypes",
+            "class_has_subtypes",
+        ));
+    }
+    // Success or refusal tells whether the type holds CIs (GH#267).
+    if !engine::may_view_all(conn, ctx, &[row.id]).await? {
+        return Err(engine::view_required(
+            "kind",
+            "Changing the kind of a type is checked against the CIs it holds; that needs the view right on the type. \
+             Nothing was changed."
+                .into(),
+        ));
+    }
+    let held: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM cmdb.configuration_items WHERE class_id = $1)")
+        .bind(row.id)
+        .fetch_one(&mut *conn)
+        .await?;
+    if held {
+        return Err(AppError::field(
+            "kind",
+            "The type holds or has held CIs (deleted ones included); its kind cannot change",
+            "class_has_items",
+        ));
+    }
+    Ok(())
+}
+
+/// A type has its parent's kind.
+async fn check_parent_kind(conn: &mut PgConnection, row: &CiClass, moved: bool) -> Result<(), AppError> {
+    let Some(parent) = row.parent_id else { return Ok(()) };
+    let parent_kind: Option<ClassKind> = sqlx::query_scalar("SELECT kind FROM cmdb.ci_classes WHERE id = $1")
+        .bind(parent)
+        .fetch_optional(&mut *conn)
+        .await?;
+    match parent_kind {
+        Some(k) if k != row.kind => Err(AppError::field(
+            if moved { "parentId" } else { "kind" },
+            format!("A {} type cannot be a subtype of a {} type", row.kind.as_str(), k.as_str()),
+            "kind_mismatch",
+        )),
+        _ => Ok(()),
     }
 }
 
@@ -829,6 +934,28 @@ fn system_attribute_refused(key: &str, what: &str) -> AppError {
         message,
         code: "system_attribute".into(),
     }])
+}
+
+/// What a type's CIs are (`ci_classes.kind`, migration 0046). Asset CIs make
+/// up the inventory. Process records (change requests, access reviews) live in
+/// type tables like assets but stay out of the inventory list and global search
+/// (unless asked for), the relationship graph, impact analysis, business
+/// service membership and the dashboard counters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema, sqlx::Type)]
+#[serde(rename_all = "snake_case")]
+#[sqlx(type_name = "text", rename_all = "snake_case")]
+pub enum ClassKind {
+    Asset,
+    Process,
+}
+
+impl ClassKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ClassKind::Asset => "asset",
+            ClassKind::Process => "process",
+        }
+    }
 }
 
 /// What a built-in relationship type is for (`relationship_types.system_role`,

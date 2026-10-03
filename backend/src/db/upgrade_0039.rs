@@ -1,15 +1,13 @@
 //! Migration 0039 (saved views, SHAA-616) against an install with profiles of
 //! every kind: exactly the profiles holding `customization.manage` gain
 //! `views.share`, no other grant changes, the permission constraint accepts
-//! exactly `GlobalPermission::ALL` (T8), and the new tables enforce their rules.
-
-use std::collections::BTreeSet;
+//! `views.share` (T8 checks the full list in the test of the latest migration
+//! that changes it: `upgrade_0046`), and the new tables enforce their rules.
 
 use sqlx::{Executor, PgPool};
 use uuid::Uuid;
 
 use super::upgrade_0029::{constraint_def, literals};
-use crate::auth::permissions::GlobalPermission;
 use crate::db::{MIGRATOR, scratch};
 
 const BEFORE: &str = "
@@ -28,35 +26,6 @@ INSERT INTO permission_profile_global_permissions (profile_id, permission) VALUE
   ('00000000-0000-4000-8000-0000000000f2', 'customization.manage'),
   ('00000000-0000-4000-8000-0000000000f3', 'audit.view');
 ";
-
-/// T8: the database accepts exactly the rights the server knows. Kept in the
-/// test of the latest migration that changes the list.
-pub(crate) async fn assert_permissions_match(pool: &PgPool) {
-    let known: BTreeSet<String> = GlobalPermission::ALL.iter().map(|p| p.as_str().to_owned()).collect();
-    let def =
-        constraint_def(pool, "permission_profile_global_permissions", "permission_profile_global_permissions_valid")
-            .await;
-    assert_eq!(literals(&def), known, "{def}");
-    let scratch: Uuid = sqlx::query_scalar("INSERT INTO permission_profiles (name) VALUES ('T8 scratch') RETURNING id")
-        .fetch_one(pool)
-        .await
-        .unwrap();
-    for p in GlobalPermission::ALL {
-        sqlx::query("INSERT INTO permission_profile_global_permissions (profile_id, permission) VALUES ($1, $2)")
-            .bind(scratch)
-            .bind(p.as_str())
-            .execute(pool)
-            .await
-            .unwrap_or_else(|e| panic!("{}: {e}", p.as_str()));
-    }
-    let bogus =
-        sqlx::query("INSERT INTO permission_profile_global_permissions (profile_id, permission) VALUES ($1, 'x.y')")
-            .bind(scratch)
-            .execute(pool)
-            .await;
-    assert!(bogus.is_err());
-    sqlx::query("DELETE FROM permission_profiles WHERE id = $1").bind(scratch).execute(pool).await.unwrap();
-}
 
 async fn rights(pool: &PgPool) -> Vec<(String, String)> {
     sqlx::query_as(
@@ -88,7 +57,10 @@ async fn customisers_gain_views_share_and_nobody_else_does() {
         "exactly the profiles with customization.manage gain views.share"
     );
     assert!(before.iter().all(|r| after.contains(r)), "every existing grant is kept");
-    assert_permissions_match(pool).await;
+    let def =
+        constraint_def(pool, "permission_profile_global_permissions", "permission_profile_global_permissions_valid")
+            .await;
+    assert!(literals(&def).contains("views.share"), "{def}");
 
     // The tables start empty and enforce their rules.
     let views: i64 = sqlx::query_scalar("SELECT count(*) FROM saved_views").fetch_one(pool).await.unwrap();
@@ -135,7 +107,7 @@ async fn customisers_gain_views_share_and_nobody_else_does() {
     assert_eq!(left, (1, 0));
 
     // Running the migrations again is a no-op.
-    MIGRATOR.run(pool).await.expect("re-run");
+    MIGRATOR.run_to(39, pool).await.expect("re-run");
     assert_eq!(rights(pool).await.len(), after.len());
     db.drop().await;
 }

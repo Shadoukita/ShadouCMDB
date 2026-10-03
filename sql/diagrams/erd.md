@@ -15,7 +15,8 @@ Generated from [`../migrations/0001_core_schema.sql`](../migrations/0001_core_sc
 [`../migrations/0021_stateless_oidc_start.sql`](../migrations/0021_stateless_oidc_start.sql) and
 [`../migrations/0029_bulk_import.sql`](../migrations/0029_bulk_import.sql) and
 [`../migrations/0039_saved_views.sql`](../migrations/0039_saved_views.sql) and
-[`../migrations/0042_layout_templates.sql`](../migrations/0042_layout_templates.sql)
+[`../migrations/0042_layout_templates.sql`](../migrations/0042_layout_templates.sql) and
+[`../migrations/0046_workflows.sql`](../migrations/0046_workflows.sql)
 (`sessions.ip_address` from [`../migrations/0006_auth_audit.sql`](../migrations/0006_auth_audit.sql) and
 `sessions.credentials_confirmed_at` from [`../migrations/0043_session_reauthentication.sql`](../migrations/0043_session_reauthentication.sql); the columns
 added by [`0022`](../migrations/0022_api_token_creator.sql) to [`0026`](../migrations/0026_identity_provider_secret_encryption.sql)
@@ -86,6 +87,26 @@ erDiagram
     users |o--o{ saved_views : "created_by_id, updated_by_id (SET NULL)"
     users ||--o{ saved_view_defaults : "user_id (CASCADE)"
     saved_views ||--o{ saved_view_defaults : "view_id (CASCADE)"
+    ci_classes ||--o{ workflow_definitions : "class_id (RESTRICT)"
+    ci_attribute_definitions |o--o{ workflow_definitions : "state_attribute_id (RESTRICT)"
+    workflow_definitions ||--o{ workflow_versions : "definition_id (CASCADE)"
+    workflow_versions |o--o| workflow_definitions : "current_version_id, id (composite)"
+    workflow_versions ||--o{ workflow_states : "version_id (CASCADE)"
+    workflow_states |o--o| workflow_versions : "id, initial_state_id (composite)"
+    workflow_versions ||--o{ workflow_transitions : "version_id (CASCADE)"
+    workflow_states ||--o{ workflow_transitions : "version_id, from_state_id / to_state_id (composite)"
+    lookup_list_values |o--o{ workflow_states : "state_value_id (RESTRICT)"
+    workflow_transitions ||--o{ workflow_transition_fields : "transition_id (CASCADE)"
+    ci_attribute_definitions ||--o{ workflow_transition_fields : "attribute_id (RESTRICT)"
+    workflow_versions ||--o{ workflow_version_attribute_refs : "version_id (CASCADE)"
+    ci_attribute_definitions ||--o{ workflow_version_attribute_refs : "attribute_id (RESTRICT)"
+    workflow_definitions ||--o{ workflow_transition_grants : "definition_id (CASCADE)"
+    permission_profiles ||--o{ workflow_transition_grants : "profile_id (CASCADE)"
+    workflow_definitions ||--o{ workflow_instances : "definition_id (RESTRICT)"
+    workflow_versions ||--o{ workflow_instances : "version_id, definition_id (composite)"
+    workflow_states ||--o{ workflow_instances : "version_id, current_state_id (composite)"
+    configuration_items ||--o{ workflow_instances : "ci_id (RESTRICT)"
+    workflow_instances ||--o{ workflow_instance_events : "instance_id (RESTRICT)"
 
     areas {
         uuid id PK
@@ -110,6 +131,7 @@ erDiagram
         integer sort_order
         boolean is_active
         uuid title_attribute_id FK "labels the CIs; SET NULL on purge"
+        text kind "asset | process (kept out of the inventory)"
     }
     ci_attribute_definitions {
         uuid id PK
@@ -440,6 +462,79 @@ erDiagram
         bytea data
         text sha256 "ETag"
     }
+    workflow_definitions {
+        uuid id PK
+        text key UK "export identity, immutable"
+        text name
+        uuid class_id FK "immutable"
+        boolean include_subclasses
+        uuid state_attribute_id FK "unique among active definitions"
+        boolean auto_start
+        boolean is_active
+        uuid current_version_id FK "newest published version"
+        integer version
+    }
+    workflow_versions {
+        uuid id PK
+        uuid definition_id FK
+        integer version_no UK "per definition"
+        text status "draft | published | retired; one draft per definition"
+        uuid initial_state_id FK
+        jsonb layout "designer positions"
+        bytea checksum "sha256 of the canonical graph"
+    }
+    workflow_states {
+        uuid id PK
+        uuid version_id FK
+        text key UK "per version"
+        text category "open | active | done | cancelled"
+        boolean is_terminal
+        uuid state_value_id FK "value of the state attribute"
+    }
+    workflow_transitions {
+        uuid id PK
+        uuid version_id FK
+        text key UK "per version"
+        uuid from_state_id FK
+        uuid to_state_id FK
+        boolean requires_comment
+        jsonb conditions
+    }
+    workflow_transition_fields {
+        uuid transition_id PK,FK
+        uuid attribute_id PK,FK
+        boolean is_required
+    }
+    workflow_version_attribute_refs {
+        uuid version_id PK,FK
+        uuid attribute_id PK,FK
+    }
+    workflow_transition_grants {
+        uuid definition_id PK,FK
+        text transition_key PK "or _cancel"
+        uuid profile_id PK,FK
+    }
+    workflow_instances {
+        uuid id PK
+        uuid definition_id FK
+        uuid version_id FK "pinned"
+        uuid ci_id FK
+        uuid current_state_id FK
+        text status "active | completed | cancelled; one active per definition and CI"
+        integer version
+    }
+    workflow_instance_events {
+        bigint id PK
+        uuid instance_id FK
+        text kind "start | transition | cancel | migrate | force"
+        text transition_key
+        text from_state_key
+        text to_state_key
+        integer to_version_no
+        text actor_type
+        jsonb field_changes
+        text request_id "joins audit_log"
+    }
 ```
 
 `schema_changes` is append-only like `audit_log` and, like it, has no foreign keys: it records what
@@ -453,3 +548,12 @@ is also hash-chained: a trigger sets `chain_seq`, `prev_hash` (the previous row'
 and the one row of `audit_log_chain_head` holds the last sequence number and hash, so inserts are serialised
 on it. Since 0040 the head is written once per transaction, at commit, by a deferred trigger, and only
 those triggers write it; the API role may read it (0038), so `shadoucmdb backup` can copy it. `server_keys` has no relationships: it holds the keys the server generates for itself.
+
+Workflows (0046): a version's graph (`workflow_states`, `workflow_transitions`,
+`workflow_transition_fields`, `workflow_version_attribute_refs`) can change only while the version is
+a `draft`; a trigger refuses any other change to a published or retired version except retiring it,
+and refuses deleting one except with its whole definition. The composite foreign keys keep a
+transition's endpoints, a version's initial state and an instance's current state inside their own
+version. `workflow_instance_events` is append-only like `audit_log` (UPDATE, DELETE and TRUNCATE are
+rejected by a trigger, and the API role holds only SELECT and INSERT), and audit retention never
+touches it.
