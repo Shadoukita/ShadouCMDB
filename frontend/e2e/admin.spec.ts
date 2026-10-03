@@ -115,6 +115,7 @@ test("create a user holding the profile", async ({ page }) => {
   await page.goto("/admin/users/new");
   await page.locator("#user-username").fill("has spaces");
   await page.locator("#user-displayName").fill("x");
+  await page.locator("#user-email").fill(`spaces-${USERNAME}@example.test`);
   await page.locator("#user-password").fill(PASSWORD);
   await page.locator("#user-confirm").fill(PASSWORD);
   await page.getByRole("button", { name: "Create user" }).click();
