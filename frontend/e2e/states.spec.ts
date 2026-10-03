@@ -18,7 +18,7 @@ test("an empty inventory tells the operator how to create the first CI", async (
   await expect(page.getByRole("heading", { name: /the inventory is empty/ })).toBeVisible();
   await page.goto("/cis");
   await expect(page.getByRole("heading", { name: "The inventory is empty" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "+ Create your first configuration item" })).toHaveAttribute("href", "/cis/new");
+  await expect(page.getByRole("link", { name: "Create your first configuration item" })).toHaveAttribute("href", "/cis/new");
   await snap(page, "15-empty-inventory");
 });
 

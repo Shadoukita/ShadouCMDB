@@ -316,11 +316,14 @@ test("9. entry points: the relationship map, the inventory row, the search resul
   await expect(page.getByRole("tab", { name: "Impact" })).toHaveAttribute("aria-selected", "true");
 
   await page.goto(`/cis?q=${N("db")}`);
-  await page.getByRole("row").filter({ hasText: N("db") }).getByRole("link", { name: "Impact", exact: true }).click();
+  // The row menu holds Impact analysis (no longer a button on every row).
+  await page.getByRole("row").filter({ hasText: N("db") }).getByRole("button", { name: `Actions for ${N("db")}` }).click();
+  await page.getByRole("menuitem", { name: "Impact analysis" }).click();
   await expect(page).toHaveURL(at(`/cis/${ids.db}/impact`));
 
   await page.goto(`/search?q=${N("app-c")}`);
-  await page.getByRole("row").filter({ hasText: N("app-c") }).getByRole("link", { name: "Impact", exact: true }).click();
+  await page.getByRole("row").filter({ hasText: N("app-c") }).getByRole("button", { name: `Actions for ${N("app-c")}` }).click();
+  await page.getByRole("menuitem", { name: "Impact analysis" }).click();
   await expect(page).toHaveURL(at(`/cis/${ids["app-c"]}/impact`));
 
   await page.goto(`/cis/${ids.lonely}`);

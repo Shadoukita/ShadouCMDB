@@ -110,3 +110,18 @@ table.data.loading tbody td {
   height: var(--control-h-sm);
   font-size: var(--fs-sm);
 }
+
+/* ---------- Loading: skeleton rows at the table's rhythm, never a spinner on its own (audit I9, F2) ---------- */
+.skeleton-table {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.skeleton-table.padded {
+  padding: var(--space-3) var(--panel-p);
+}
+.skeleton-row {
+  height: calc(var(--row-h) - var(--space-2));
+  border-radius: var(--radius-sm);
+  background: var(--c-surface-alt);
+}

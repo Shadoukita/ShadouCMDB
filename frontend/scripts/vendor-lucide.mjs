@@ -40,6 +40,7 @@ const ICONS = [
   "circle-check",
   "circle-x",
   "cloud",
+  "columns-3",
   "container",
   "database",
   "ellipsis",

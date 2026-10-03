@@ -11,6 +11,7 @@
 @import "./components/dialogs.css";
 @import "./components/alerts.css";
 @import "./components/shell.css";
+@import "./components/explorer.css";
 
 /*
  * Page and shell rules. The primitives (SHAA-1670 design document, §2.7) live in base.css and
@@ -151,93 +152,6 @@ dl.lg-grid dd {
 /* A layout tab holding a field with an error. */
 .tabs .tab-errors {
   margin-left: var(--sp-1);
-}
-
-/* ---------- Toolbar / filters / pagination ---------- */
-.toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-3);
-  align-items: flex-end;
-  padding: var(--sp-3) var(--sp-4);
-  border-bottom: 1px solid var(--c-border);
-}
-/* Controls about the list itself (columns, later saved views) sit at the end of the toolbar. */
-.toolbar-end {
-  margin-left: auto;
-}
-.toolbar .field input {
-  width: 150px;
-}
-/* The text-input width is not for checkboxes: a 150 px box centres the tick far from its label (GH#479). */
-.toolbar .field input[type="checkbox"],
-.toolbar .field input[type="radio"] {
-  width: 16px;
-}
-/* A filter select is as wide as its longest option, so its value is never clipped. */
-.toolbar .field select {
-  width: auto;
-  min-width: 150px;
-  max-width: 320px;
-}
-.toolbar .field.search input {
-  width: 220px;
-}
-/* The Columns popover of the inventory toolbar (non-modal: it closes on Esc, Done, or a click or Tab outside). */
-.columns-menu {
-  position: relative;
-}
-/* A popover of a control at the end of the toolbar opens leftwards, inside the page. */
-.toolbar-end .popover {
-  left: auto;
-  right: 0;
-}
-.columns-shown {
-  list-style: none;
-  margin: 0 0 var(--sp-3);
-  padding: 0;
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius);
-}
-.columns-shown li {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--sp-3);
-  padding: 2px var(--sp-3);
-  min-height: var(--row-h);
-}
-.columns-shown li + li {
-  border-top: 1px solid var(--c-divider);
-}
-fieldset.columns-more {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-2);
-  margin: 0 0 var(--sp-3);
-  padding: var(--sp-2) var(--sp-3) var(--sp-3);
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius);
-}
-fieldset.columns-more legend {
-  padding: 0 var(--sp-2);
-  font-size: var(--fs-sm);
-  color: var(--c-text-muted);
-}
-/* Narrow screens and high zoom: the popover is a sheet across the toolbar. */
-@media (max-width: 480px) {
-  .toolbar {
-    position: relative;
-  }
-  .columns-menu {
-    position: static;
-  }
-  .popover,
-  .toolbar-end .popover {
-    left: var(--sp-3);
-    right: var(--sp-3);
-    width: auto;
-  }
 }
 
 /* ---------- Detail view ---------- */
@@ -1309,16 +1223,6 @@ ol.impact-path li + li::before {
   margin: var(--sp-3) 0 var(--sp-2);
   font-size: var(--fs-md);
 }
-.skeleton-table {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.skeleton-row {
-  height: 18px;
-  border-radius: var(--radius);
-  background: var(--c-surface-alt);
-}
 
 /* ---------- Business services ---------- */
 /* A filter that picks several values: a summary that looks like a select, opening a checkbox list. */
@@ -1616,87 +1520,6 @@ dialog.member-picker td .badge {
 .impact-services-caveat {
   font-weight: normal;
   font-size: var(--fs-sm);
-}
-
-/* ---------- Saved views: the View menu at the start of the list toolbar ---------- */
-.view-menu {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.view-menu > .label {
-  font-size: var(--fs-sm);
-  color: var(--c-text-muted);
-}
-.view-menu-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--sp-2);
-}
-.view-menu-button {
-  display: inline-flex;
-  align-items: center;
-  max-width: min(280px, 100%);
-}
-.view-menu-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.view-modified {
-  font-size: var(--fs-sm);
-  font-weight: 600;
-  color: var(--c-text);
-}
-.view-menu-popup {
-  width: 320px;
-  padding: var(--sp-2) 0;
-}
-.view-menu-popup .field {
-  padding: 0 var(--sp-3) var(--sp-2);
-}
-.view-menu-popup .field input {
-  width: 100%;
-}
-.view-menu-status {
-  margin: 0 var(--sp-3) var(--sp-2);
-}
-.view-menu-popup ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-/* Banners and errors of the View menu take a row of their own under the toolbar's controls. */
-.view-menu-banner {
-  flex-basis: 100%;
-  order: 99;
-  margin-bottom: 0;
-}
-.view-menu-banner > .alert {
-  margin-bottom: 0;
-}
-dialog.form-dialog.manage-views {
-  width: min(1100px, 96vw);
-}
-dialog.manage-views .table-wrap {
-  overflow-x: auto;
-}
-dialog.manage-views td.row-actions {
-  white-space: nowrap;
-}
-.manage-views-heading {
-  margin: 0 0 var(--sp-2);
-  font-size: var(--fs-md);
-}
-@media (max-width: 480px) {
-  .view-menu {
-    position: static;
-  }
-  .view-menu-popup {
-    width: auto;
-  }
 }
 
 /* ---------- Administration › Workflows: the designer (SHAA-1426) ---------- */

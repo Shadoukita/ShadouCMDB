@@ -256,7 +256,7 @@ test("list views: adding a column to a view without columns keeps the default co
   await save(page, "e2e add column to default view");
 
   await page.goto(`/cis?classId=${serverId}`);
-  await expect(page.locator("table.data thead th")).toHaveText([...defaults, "Hostname"].map((h) => new RegExp(`^${h}`)));
+  await expect(page.locator("table.data thead th:not(.row-actions)")).toHaveText([...defaults, "Hostname"].map((h) => new RegExp(`^${h}`)));
   // The label column still opens the CI.
   await expect(page.locator("table.data tbody tr a").first()).toBeVisible();
 });

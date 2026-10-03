@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { moveItem } from "../lib/reorder";
+import { t } from "../i18n";
 import Icon from "./Icon.vue";
 
 /**
@@ -106,46 +107,46 @@ function reset() {
       :aria-expanded="open"
       @click="open ? close(false) : show()"
     >
-      Columns<span v-if="customized" class="badge spaced">Custom</span> <Icon name="chevron-down" />
+      <Icon name="columns-3" />{{ t("columns.button") }}<span v-if="customized" class="badge">{{ t("columns.custom") }}</span><Icon name="chevron-down" />
     </button>
     <div v-if="open" id="columns-popover" ref="panel" class="popover columns-popover" role="dialog" aria-labelledby="columns-popover-title">
-      <h2 id="columns-popover-title" class="popover-title">Columns</h2>
-      <ol class="columns-shown" aria-label="Shown columns">
+      <h2 id="columns-popover-title" class="popover-title">{{ t("columns.button") }}</h2>
+      <ol class="columns-shown" :aria-label="t('columns.shown')">
         <li v-for="(c, i) in columns" :key="c">
           <label class="checkbox-row" :for="id(c)">
             <input :id="id(c)" type="checkbox" checked :disabled="c === 'label'" @change="toggle(c)" />
             {{ labelOf(c) }}
-            <span v-if="c === 'label'" class="muted">(always shown)</span>
+            <span v-if="c === 'label'" class="muted">{{ t("columns.alwaysShown") }}</span>
           </label>
           <span class="row-actions">
-            <button :id="`${id(c)}-up`" type="button" class="btn btn-sm btn-icon" :disabled="i === 0" :aria-label="`Move ${labelOf(c)} up`" @click="move(i, i - 1, 'up')"><Icon name="arrow-up" /></button>
+            <button :id="`${id(c)}-up`" type="button" class="btn btn-sm btn-icon" :disabled="i === 0" :aria-label="t('columns.moveUp', { name: labelOf(c) })" @click="move(i, i - 1, 'up')"><Icon name="arrow-up" /></button>
             <button
               :id="`${id(c)}-down`"
               type="button"
               class="btn btn-sm btn-icon"
               :disabled="i === columns.length - 1"
-              :aria-label="`Move ${labelOf(c)} down`"
+              :aria-label="t('columns.moveDown', { name: labelOf(c) })"
               @click="move(i, i + 1, 'down')"
             ><Icon name="arrow-down" /></button>
           </span>
         </li>
       </ol>
       <fieldset v-if="moreFields.length > 0" class="columns-more">
-        <legend>More fields</legend>
+        <legend>{{ t("columns.moreFields") }}</legend>
         <label v-for="f in moreFields" :key="f.key" class="checkbox-row" :for="id(f.key)">
           <input :id="id(f.key)" type="checkbox" @change="toggle(f.key)" /> {{ f.label }}
         </label>
       </fieldset>
       <fieldset v-if="className && moreAttributes.length > 0" class="columns-more">
-        <legend>Attributes of {{ className }}</legend>
+        <legend>{{ t("columns.attributesOf", { name: className }) }}</legend>
         <label v-for="a in moreAttributes" :key="a.key" class="checkbox-row" :for="id(a.key)">
           <input :id="id(a.key)" type="checkbox" @change="toggle(a.key)" /> {{ a.label }}
         </label>
       </fieldset>
-      <p v-else-if="!className" class="muted">Filter by one class to add its attributes as columns.</p>
+      <p v-else-if="!className" class="muted">{{ t("columns.oneClassHint") }}</p>
       <div class="popover-actions">
-        <button type="button" class="btn btn-sm" :disabled="!customized" @click="reset">Reset to default columns</button>
-        <button type="button" class="btn btn-sm btn-primary" @click="close(true)">Done</button>
+        <button type="button" class="btn btn-sm" :disabled="!customized" @click="reset">{{ t("columns.reset") }}</button>
+        <button type="button" class="btn btn-sm btn-primary" @click="close(true)">{{ t("columns.done") }}</button>
       </div>
     </div>
   </div>
