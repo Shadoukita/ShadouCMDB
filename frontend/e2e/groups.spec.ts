@@ -1,5 +1,5 @@
 import type { APIRequestContext } from "@playwright/test";
-import { apiGet, apiSend, checkA11y, csrf, expect, test } from "./support";
+import { apiGet, apiSend, checkA11y, csrf, expect, test, toast } from "./support";
 
 // Administration › Groups (SHAA-927 §4.9, §5.8): list, create, edit with version, members, delete.
 test.describe.configure({ mode: "serial" });
@@ -59,7 +59,7 @@ test("create a group; a duplicate name is refused next to the field", async ({ p
   await page.getByLabel("Name").fill(GROUP);
   await page.getByLabel("Description").fill("Runs the PostgreSQL clusters");
   await page.getByRole("button", { name: "Create group" }).click();
-  await expect(page.getByRole("status").first()).toContainText(`Created group ${GROUP}.`);
+  await expect(toast(page, `Created group ${GROUP}.`)).toBeVisible();
   groupId = page.url().split("/").pop()!;
   const g = await apiGet<Group>(request, `/admin/groups/${groupId}`);
   expect(g).toMatchObject({ name: GROUP, description: "Runs the PostgreSQL clusters", memberCount: 0, ownedServiceCount: 0 });
@@ -165,7 +165,7 @@ test("the delete dialog names the owned business services, or says the count is 
   await expect(dialog.getByTestId("group-delete-services")).toHaveText("It is not owner of any business service.");
   await dialog.getByRole("button", { name: "Delete group" }).click();
   await expect(page).toHaveURL(/\/admin\/groups$/);
-  await expect(page.getByRole("status")).toContainText(`Deleted group ${RENAMED}.`);
+  await expect(toast(page, `Deleted group ${RENAMED}.`)).toBeVisible();
   expect((await page.request.get(`/api/v1/admin/groups/${groupId}`)).status()).toBe(404);
 });
 
@@ -177,7 +177,7 @@ test("deleting a user says how many business services lost them as owner", async
   await expect(dialog.getByTestId("user-delete-services")).toContainText("If they are owner of business services, they are removed as owner");
   await dialog.getByRole("button", { name: "Delete user" }).click();
   await expect(page).toHaveURL(/\/admin\/users$/);
-  await expect(page.getByTestId("users-flash")).toHaveText(
+  await expect(toast(page, `Deleted user e2e-grp-del-${stamp}.`)).toHaveText(
     `Deleted user e2e-grp-del-${stamp}. They were not owner of any business service.`,
   );
   // Clean up the members created above.

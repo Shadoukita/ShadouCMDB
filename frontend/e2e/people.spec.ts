@@ -1,5 +1,5 @@
 import type { Page as BrowserPage } from "@playwright/test";
-import { apiGet, apiSend, at, checkA11y, expect, snap, test } from "./support";
+import { apiGet, apiSend, at, checkA11y, expect, snap, test, toast } from "./support";
 
 // Users ↔ Person CIs (SHAA-1505, UI in SHAA-1509): every sign-in account is linked 1 : 1 to a Person CI through its
 // e-mail. An administrator creates a user (required e-mail, conflicts worded next to the field), follows the link to
@@ -65,7 +65,7 @@ test("an administrator creates a user: the e-mail is required, unique, and links
 
   await page.locator("#user-email").fill(EMAIL);
   await page.getByRole("button", { name: "Create user" }).click();
-  await expect(page.getByRole("status").first()).toContainText(`Created user ${USERNAME}.`);
+  await expect(toast(page, `Created user ${USERNAME}.`)).toBeVisible();
   userId = page.url().split("/").pop()!;
 
   // The Person was created for it (Name = display name) and the user page links to it.

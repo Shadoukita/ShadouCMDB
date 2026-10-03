@@ -34,7 +34,6 @@ const remove = useRemove("ci-classes");
 const areas = useAreas();
 const flow = useSchemaChangeFlow();
 const flash = useFlashStore();
-const notice = ref<string | null>(flash.forCi("classes") ?? null);
 const failure = ref<unknown>(null);
 const areaFilter = computed(() => lq.get("areaId") ?? "");
 const areaById = computed(() => new Map((areas.data.value ?? []).map((a) => [a.id, a])));
@@ -64,7 +63,7 @@ function commit(dragId: string, targetId: string) {
   const target = byId.value.get(targetId);
   if (!drag || !target) return;
   if ((drag.parentId ?? null) !== (target.parentId ?? null)) {
-    notice.value = `${drag.name} can only move among classes with the same parent. To move it under another parent, edit the class.`;
+    flash.error(`${drag.name} can only move among classes with the same parent. To move it under another parent, edit the class.`);
     return;
   }
   const sibs = siblings(drag);
@@ -73,11 +72,12 @@ function commit(dragId: string, targetId: string) {
   // Depth-first order with the new sibling order; sortOrder is renumbered along it, so flat menus match the tree.
   const order = flattenTree(all.value, (a, b) => (rank.has(a.id) && rank.has(b.id) ? rank.get(a.id)! - rank.get(b.id)! : bySortOrder(a, b)));
   pendingOrder.value = order.map((n) => n.item.id);
-  notice.value = null;
   reorder.mutate(
     order.map((n) => ({ id: n.item.id, sortOrder: n.item.sortOrder })),
     {
-      onSuccess: (n) => (notice.value = n > 0 ? `Moved ${drag.name}. Menus and pickers use the new order.` : null),
+      onSuccess: (n) => {
+        if (n > 0) flash.success(`Moved ${drag.name}. Menus and pickers use the new order.`);
+      },
       onSettled: () => (pendingOrder.value = null),
     },
   );
@@ -99,7 +99,6 @@ const dnd = useDragReorder(commit, () => !reorder.isPending.value);
 const parentName = (c: CiClass) => (c.parentId ? byId.value.get(c.parentId)?.name : undefined);
 
 async function setActive(c: CiClass, isActive: boolean) {
-  notice.value = null;
   failure.value = null;
   const outcome = isActive
     ? await flow.run({
@@ -117,9 +116,11 @@ async function setActive(c: CiClass, isActive: boolean) {
         alwaysShow: true,
       });
   if (outcome.status === "applied")
-    notice.value = isActive
-      ? `Restored ${c.name}: new CIs of this class can be created again.`
-      : `Archived ${c.name}: its CIs are kept, but no new ones can be created.`;
+    flash.success(
+      isActive
+        ? `Restored ${c.name}: new CIs of this class can be created again.`
+        : `Archived ${c.name}: its CIs are kept, but no new ones can be created.`,
+    );
   else if (outcome.status === "refused") failure.value = outcome.error;
 }
 </script>
@@ -137,7 +138,6 @@ async function setActive(c: CiClass, isActive: boolean) {
     </div>
   </div>
 
-  <div v-if="notice" class="alert alert-success" role="status">{{ notice }}</div>
   <ErrorAlert v-if="reorder.isError.value" :error="reorder.error.value" title="The new order was not saved completely" />
   <ErrorAlert v-if="failure" :error="failure" title="Not saved" />
 

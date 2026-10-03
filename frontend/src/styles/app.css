@@ -10,6 +10,7 @@
 @import "./components/menus.css";
 @import "./components/dialogs.css";
 @import "./components/alerts.css";
+@import "./components/toasts.css";
 @import "./components/shell.css";
 
 /*

@@ -59,7 +59,6 @@ const ci = useCi(id);
 const tab = ref<Tab>("");
 const flash = useFlashStore();
 const session = useSessionStore();
-const flashText = computed(() => flash.forCi(id.value));
 useDocumentTitle(() => ci.data.value?.label);
 // Walking to another CI reuses this component; start each record on its first tab (or Impact, on its URL).
 watch(id, () => (tab.value = ""));
@@ -214,7 +213,7 @@ async function onSave() {
     const saved = await draft.save();
     if (!saved) return;
     draft.reset(saved);
-    flash.show(saved.id, `Saved ${saved.label}.`);
+    flash.success(`Saved ${saved.label}.`);
   } catch (err) {
     draft.error = err;
     // Show the first tab with a rejected field, so the message next to it is in view.
@@ -291,7 +290,6 @@ const crumbs = computed<Crumb[]>(() => {
         <DeleteCiButton v-if="session.canOnClass(c.classId, 'delete')" :ci="c" />
       </div>
     </div>
-    <div v-if="flashText && !draft.dirty" class="alert alert-success" role="status">{{ flashText }}</div>
     <FormErrorBanner v-if="draft.error != null && draft.dirty && !editor.active" :error="draft.error" :unplaced="draft.unplaced" :on-reload="loadCurrent" />
     <div v-if="c.deletedAt" class="alert alert-warn">
       This CI was deleted on {{ formatDateTime(c.deletedAt) }}. It is kept read-only for history; its relationships were

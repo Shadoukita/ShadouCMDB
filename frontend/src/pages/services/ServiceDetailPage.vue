@@ -13,7 +13,6 @@ import { useAppSettings } from "../../lib/appSettings";
 import { useDocumentTitle } from "../../lib/composables";
 import type { TrailStep } from "../../lib/trail";
 import { builtInLayout, DETAIL_CORE, DETAIL_RECORD, layoutFor, resolveLayout, withoutKinds } from "../../lib/uiSettings";
-import { useFlashStore } from "../../stores/flash";
 import { useSessionStore } from "../../stores/session";
 import HistoryPanel from "../detail/HistoryPanel.vue";
 import ImpactPanel from "../detail/ImpactPanel.vue";
@@ -35,7 +34,6 @@ type Tab = "overview" | "members" | "impact" | "graph" | "history";
 const route = useRoute();
 const router = useRouter();
 const session = useSessionStore();
-const flash = useFlashStore();
 const id = computed(() => String(route.params.id ?? ""));
 const onImpactRoute = computed(() => /\/impact\/?$/.test(route.path));
 const svc = useService(id);
@@ -43,7 +41,6 @@ const ci = useCi(id);
 const s = computed(() => svc.data.value);
 const c = computed(() => ci.data.value);
 useDocumentTitle(() => s.value?.name ?? t("services.title"));
-const flashText = computed(() => flash.forCi(id.value));
 
 /** The first failure decides the page: the service view's (403/404 for the class or record) before the CI's. */
 const error = computed(() => svc.error.value ?? ci.error.value);
@@ -152,7 +149,6 @@ watch(
         <DeleteServiceButton v-if="canDelete" :service="s" />
       </div>
     </div>
-    <div v-if="flashText" class="alert alert-success" role="status">{{ flashText }}</div>
 
     <div class="tabs" role="tablist" :aria-label="t('services.tabsLabel')">
       <button

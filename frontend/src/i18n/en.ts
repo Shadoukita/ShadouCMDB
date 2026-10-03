@@ -468,6 +468,8 @@ export const en = {
   "shell.nav.collapse": "Collapse sidebar",
   "shell.nav.expand": "Expand sidebar",
   "shell.breadcrumb": "Breadcrumb",
+  "toast.region": "Notifications ({key})",
+  "toast.dismiss": "Dismiss notification",
   "nav.page.dashboard": "Dashboard",
   "nav.page.inventory": "All configuration items",
   "nav.page.search": "Search",

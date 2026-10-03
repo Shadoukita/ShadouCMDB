@@ -482,6 +482,8 @@ export const de: { [K in MessageKey]: string } = {
   "shell.nav.collapse": "Seitenleiste einklappen",
   "shell.nav.expand": "Seitenleiste ausklappen",
   "shell.breadcrumb": "Navigationspfad",
+  "toast.region": "Benachrichtigungen ({key})",
+  "toast.dismiss": "Benachrichtigung schließen",
   "nav.page.dashboard": "Dashboard",
   "nav.page.inventory": "Alle Configuration Items",
   "nav.page.search": "Suche",

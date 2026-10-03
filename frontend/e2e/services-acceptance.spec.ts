@@ -1,6 +1,6 @@
 import type { APIRequestContext, Browser, Page } from "@playwright/test";
 import { readFile } from "node:fs/promises";
-import { apiGet, apiSend, checkA11y, classIdByName, csrf, expect, lookupValueId, test } from "./support";
+import { apiGet, apiSend, checkA11y, classIdByName, csrf, expect, lookupValueId, test, toast } from "./support";
 
 // Business services U5 (SHAA-936): the acceptance walk of spec SHAA-927 §7.4 and the §7.5 axe sweep.
 // Every axe scan here is strict (zero violations of any impact, WCAG 2.1 A/AA).
@@ -343,7 +343,7 @@ test("11: groups admin: create a group, add a member, delete it while it owns se
   await page.goto("/admin/groups/new");
   await page.getByLabel("Name").fill(GROUP11);
   await page.getByRole("button", { name: "Create group" }).click();
-  await expect(page.getByRole("status").first()).toContainText(`Created group ${GROUP11}.`);
+  await expect(toast(page, `Created group ${GROUP11}.`)).toBeVisible();
   ids.group11 = page.url().split("/").pop()!;
 
   const add = page.getByRole("combobox", { name: "Add a member" });

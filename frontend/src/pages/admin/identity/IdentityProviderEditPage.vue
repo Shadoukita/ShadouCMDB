@@ -43,7 +43,6 @@ const provider = useIdentityProvider(id);
 const create = useCreateIdentityProvider();
 const update = useUpdateIdentityProvider();
 const pending = computed(() => create.isPending.value || update.isPending.value);
-const flashText = computed(() => (id.value ? flash.forCi(id.value) : undefined));
 useDocumentTitle(() => (isNew.value ? "New identity provider" : provider.data.value?.name));
 
 interface Form {
@@ -324,7 +323,7 @@ async function submit() {
       const b = body(f);
       const created = await create.mutateAsync({ ...b, kind: f.kind, name: b.name! } as IdentityProviderCreateBody);
       if (created) {
-        flash.show(created.id, `Created ${created.name}. Run the connection test to check the settings.`);
+        flash.success(`Created ${created.name}. Run the connection test to check the settings.`);
         await router.push(`/admin/identity-providers/${created.id}`);
       }
       return;
@@ -400,7 +399,6 @@ const notFound = computed(() => {
         </template>
       </div>
     </div>
-    <div v-if="flashText" class="alert alert-success" role="status">{{ flashText }}</div>
 
     <div class="grid-2">
       <form class="stack" aria-label="Identity provider settings" novalidate @submit.prevent="submit">

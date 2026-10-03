@@ -30,7 +30,6 @@ const user = useUser(id);
 const create = useCreateUser();
 const update = useUpdateUser();
 const pending = computed(() => create.isPending.value || update.isPending.value);
-const flashText = computed(() => (id.value ? flash.forCi(id.value) : undefined));
 useDocumentTitle(() => (isNew.value ? "New user" : user.data.value?.username));
 
 interface Form {
@@ -113,7 +112,7 @@ async function submit() {
         isActive: f.isActive,
         profileIds: f.profileIds,
       });
-      flash.show(created.id, `Created user ${created.username}.`);
+      flash.success(`Created user ${created.username}.`);
       await router.push(`/admin/users/${created.id}`);
       return;
     }
@@ -188,7 +187,6 @@ const notFound = computed(() => {
         </RouterLink>
       </div>
     </div>
-    <div v-if="flashText" class="alert alert-success" role="status">{{ flashText }}</div>
 
     <div class="grid-2">
       <form class="panel" aria-labelledby="user-form-title" novalidate @submit.prevent="submit">

@@ -73,6 +73,12 @@ export async function chooseTheme(page: Page, theme: "" | "light" | "dark" | "sy
 }
 
 /**
+ * A toast in the shell's stack (components/ToastHost.vue) whose text contains `text`: the
+ * confirmation a page reports after Create, Save or Delete, even when it navigates away first.
+ */
+export const toast = (page: Page, text: string | RegExp) => page.getByTestId("toast").filter({ hasText: text });
+
+/**
  * A modal dialog is centred in the viewport, reads left to right and wraps its text inside the box:
  * no line is cut off. A dialog opened from a table row used to inherit the cell's nowrap/ellipsis
  * and sit at the left edge (GH#279).

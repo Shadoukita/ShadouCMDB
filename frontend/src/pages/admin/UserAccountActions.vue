@@ -71,7 +71,7 @@ function confirmDelete() {
     onSuccess: (res) => {
       const n = res?.affectedServices;
       const services = typeof n === "number" ? t("users.deleted.services", { n }) : t("users.deleted.servicesWithheld");
-      flash.show("users", `${t("users.deleted", { name: username })} ${services}`);
+      flash.success(`${t("users.deleted", { name: username })} ${services}`);
       router.replace("/admin/users");
     },
   });

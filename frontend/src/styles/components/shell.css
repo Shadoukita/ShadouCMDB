@@ -18,6 +18,10 @@
   overflow: auto;
   padding: var(--space-4) var(--space-4) var(--space-6);
 }
+/* Focus lands on <main> only as a fallback (a dismissed toast held it); the page itself is not a control. */
+.shell-main:focus {
+  outline: none;
+}
 
 /* ---------- Brand cell (top of the nav) ---------- */
 .shell-brand {

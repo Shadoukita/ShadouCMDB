@@ -1,0 +1,78 @@
+/*
+ * Toasts (design document §2.7, audit F1): components/ToastHost.vue, fed by stores/flash.ts.
+ * A bottom-right stack of 360 px cards above dialogs. Like an alert, each toast has the tone's icon
+ * and a 3 px left accent, so the tone never rests on colour alone. The stack itself lets clicks
+ * through; only the cards take the pointer.
+ *   .toast-success   a change was saved; closes after 6 s
+ *   .toast-danger    something failed; stays until dismissed
+ */
+.toast-host {
+  position: fixed;
+  right: var(--space-4);
+  bottom: var(--space-4);
+  z-index: var(--z-toast);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 360px;
+  max-width: calc(100vw - 2 * var(--space-4));
+  pointer-events: none;
+}
+.toast-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.toast {
+  --toast-accent: var(--c-success);
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-1) var(--space-2) var(--space-3);
+  border: 1px solid var(--c-border-strong);
+  border-left: 3px solid var(--toast-accent);
+  border-radius: var(--radius-lg);
+  background: var(--c-surface);
+  box-shadow: var(--shadow-md);
+  color: var(--c-text);
+  line-height: 20px;
+  pointer-events: auto;
+  animation: toast-in 160ms ease-out;
+}
+.toast-danger {
+  --toast-accent: var(--c-danger-text);
+}
+.toast-icon {
+  margin-top: 2px;
+  color: var(--toast-accent);
+}
+.toast-text {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.toast-close {
+  margin: calc((20px - var(--control-h-sm)) / 2) 0;
+  color: var(--c-text-secondary);
+}
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .toast {
+    animation: none;
+  }
+}
+@media (max-width: 820px) {
+  .toast-host {
+    right: var(--space-2);
+    bottom: var(--space-2);
+    left: var(--space-2);
+    width: auto;
+    max-width: none;
+  }
+}

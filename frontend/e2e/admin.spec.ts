@@ -1,7 +1,7 @@
 import type { Browser, Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { E2E_USER } from "./global-setup";
-import { apiGet, ciIdByName, classIdByName, expect, snap, test } from "./support";
+import { apiGet, ciIdByName, classIdByName, expect, snap, test, toast } from "./support";
 
 // One walk through Administration, in order: a profile, a user holding it, what that user can see, then account actions.
 test.describe.configure({ mode: "serial" });
@@ -57,7 +57,7 @@ test("create a permission profile from the matrix", async ({ page, request }) =>
   await expect(page.getByLabel("edit on Server", { exact: true })).toBeChecked();
   await snap(page, "23-profile-matrix");
   await page.getByRole("button", { name: "Create profile" }).click();
-  await expect(page.getByRole("status")).toContainText(`Created profile ${PROFILE}.`);
+  await expect(toast(page, `Created profile ${PROFILE}.`)).toBeVisible();
   profileId = page.url().split("/").pop()!;
 
   const saved = await apiGet<Profile>(request, `/admin/profiles/${profileId}`);
@@ -107,7 +107,7 @@ test("create a user holding the profile", async ({ page }) => {
   await page.locator("#user-confirm").fill(PASSWORD);
   await page.getByLabel(PROFILE).check();
   await page.getByRole("button", { name: "Create user" }).click();
-  await expect(page.getByRole("status").first()).toContainText(`Created user ${USERNAME}.`);
+  await expect(toast(page, `Created user ${USERNAME}.`)).toBeVisible();
   userId = page.url().split("/").pop()!;
   await snap(page, "24-user-created");
 

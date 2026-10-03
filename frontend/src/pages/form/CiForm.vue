@@ -141,11 +141,11 @@ async function onSubmit() {
       const given = Object.fromEntries(Object.entries(coreToApi(draft.core)).filter(([k, v]) => v !== null && (k !== "ident" || draft.isAdmin)));
       const body = { classId: props.classId, ...given, ...(draft.criticalityId ? { criticalityValueId: draft.criticalityId } : {}), attributes } as CiCreateBody;
       const created = await create.mutateAsync(body);
-      flash.show(created.id, `Created ${created.label}.`);
+      flash.success(`Created ${created.label}.`);
       await router.push(fromServices.value ? { path: `/services/${created.id}`, query: { edit: "owners" } } : `/cis/${created.id}`);
     } else if (props.ci) {
       const saved = await draft.save();
-      if (saved) flash.show(saved.id, `Saved ${saved.label}.`);
+      if (saved) flash.success(`Saved ${saved.label}.`);
       await router.push(`/cis/${props.ci.id}`);
     }
   } catch (err) {
