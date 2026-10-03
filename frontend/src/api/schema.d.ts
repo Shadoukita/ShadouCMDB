@@ -3962,6 +3962,7 @@ export interface components {
                 /** @enum {string} */
                 code: "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "CSRF_TOKEN_INVALID" | "NOT_FOUND" | "CONFLICT" | "IN_USE" | "VERSION_CONFLICT" | "GONE" | "INVALID_NAME" | "SCHEMA_CHANGE_REFUSED" | "SECRET_REQUIRED" | "IDEMPOTENCY_KEY_REUSED" | "LAST_ADMINISTRATOR" | "RATE_LIMITED" | "MFA_REQUIRED" | "MFA_ENROLMENT_REQUIRED" | "EMAIL_REQUIRED" | "MFA_REQUIRED_FOR_TOKEN" | "REAUTHENTICATION_REQUIRED" | "IDENTITY_PROVIDER_UNAVAILABLE" | "UNSUPPORTED_MEDIA_TYPE" | "PAYLOAD_TOO_LARGE" | "REQUEST_TIMEOUT" | "DATABASE_UNAVAILABLE" | "SERVER_BUSY" | "SCHEMA_NOT_MIGRATED" | "INTERNAL_ERROR";
                 message: string;
+                /** @description At most 100 problems; when there are more, a last entry with code `truncated` counts the rest */
                 details?: {
                     /** @enum {string} */
                     in: "body" | "query" | "params" | "header";
