@@ -318,7 +318,7 @@ fn index_name(f: &Field) -> String {
     format!("ix_{}", f.hex())
 }
 
-/// The unique index of the Person's Email (lower(email), migration 0044).
+/// The unique index of the Person's Email (cmdb.email_key(email), migrations 0044 and 0045).
 pub fn unique_index_name(f: &Field) -> String {
     format!("uq_{}", f.hex())
 }
@@ -637,17 +637,29 @@ impl Planner<'_> {
             }
         }
 
-        // The Person's Email is unique ignoring case (SHAA-1505 decision 2):
-        // the database holds the line for every write path. Built before any
-        // Person exists (the type is new in 0044), so nothing can violate it then;
-        // a later build finds duplicates and is refused with the index's error.
+        // The Person's Email is unique ignoring case and Unicode form (SHAA-1505
+        // decision 2, GH#531): the database holds the line for every write path.
+        // Built before any Person exists (the type is new in 0044), so nothing can
+        // violate it then; a later build finds duplicates and is refused with the
+        // index's error. On a database between 0044 and 0045 (`cmdb.email_key`
+        // is new in 0045) it is built on lower(), as 0044 did; 0045 rebuilds it.
         if f.is_unique_email() && !self.catalog.has_index(schema, &unique_index_name(f)) {
+            let (key, compared) = if self.catalog.email_key {
+                (format!("cmdb.email_key({col})"), "case and Unicode form")
+            } else {
+                (format!("lower({col})"), "case")
+            };
             let i = plan.ddl(format!(
-                "CREATE UNIQUE INDEX {} ON {} (lower({col}))",
+                "CREATE UNIQUE INDEX {} ON {} ({key})",
                 quote_ident(&unique_index_name(f)),
                 table.sql()
             ));
-            plan.note(Some(i), "unique_index", None, format!("{}.{} is unique ignoring case", table.display(), f.key));
+            plan.note(
+                Some(i),
+                "unique_index",
+                None,
+                format!("{}.{} is unique ignoring {compared}", table.display(), f.key),
+            );
         }
 
         // NOT NULL for a required, active field; refused while any asset has no value.

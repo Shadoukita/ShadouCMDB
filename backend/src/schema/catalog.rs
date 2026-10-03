@@ -36,6 +36,8 @@ pub struct Catalog {
     pub reporting: Option<ReportingGrants>,
     /// Other relations in the area schemas (sequences, a DBA's tables, ...)
     pub other_relations: HashSet<(String, String)>,
+    /// Whether `cmdb.email_key` exists (migration 0045)
+    pub email_key: bool,
 }
 
 #[derive(Debug, Default)]
@@ -114,6 +116,10 @@ impl Catalog {
         for (schema, table, name, references) in constraints {
             cat.constraints.entry((schema, table)).or_default().push(Constraint { name, references });
         }
+
+        cat.email_key = sqlx::query_scalar("SELECT to_regprocedure('cmdb.email_key(text)') IS NOT NULL")
+            .fetch_one(&mut *conn)
+            .await?;
 
         let role_exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)")
             .bind(REPORTING_ROLE)
