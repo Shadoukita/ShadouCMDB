@@ -574,7 +574,8 @@ type LoginAnswer = Either<WithCookies<Json<Session>>, ErrorWithCookies>;
 /// local accounts apart (GH#216). The failure is recorded before the wait, and
 /// the wait itself is `api::route`'s ([`AppError::hold_until`]), once this has
 /// returned its database connections and throttle reservation. 429 and 503
-/// answers, a second factor due and a success are not held.
+/// answers (a directory account's directory unreachable), a second factor
+/// due and a success are not held.
 async fn login(
     pool: &PgPool,
     auth: &AuthState,
@@ -792,12 +793,25 @@ async fn directory_answer(
             record_failure(pool, ctx, &b.username, Some(refusal.code()), locked).await?;
             Err(invalid_credentials())
         }
+        // A name no account has gets an unknown name's answer: a 503 for it
+        // alone would tell, quickly and unthrottled, which names are local
+        // accounts while a directory is down (GH#499).
+        sso::DirectoryAnswer::Unavailable if account.is_none() => {
+            password::verify(&b.password, None).await?;
+            Err(wrong_credentials(pool, attempt, ctx, &b.username, None, Some(DIRECTORY_UNAVAILABLE)).await?)
+        }
+        // A directory account's own directory: no password was checked, so
+        // nothing is counted; retrying through an outage does not lock the user.
         sso::DirectoryAnswer::Unavailable => Err(AppError::new(
             ErrorCode::IdentityProviderUnavailable,
             "The directory service could not be reached; try again shortly, or sign in with a local account",
         )),
     }
 }
+
+/// `login.failure` reason: a directory that might know the name could not be
+/// reached, so the password was not checked (GH#499).
+const DIRECTORY_UNAVAILABLE: &str = "directory_unavailable";
 
 /// `login.failure` reason: the right password for a disabled local account.
 const ACCOUNT_DISABLED: &str = "account_disabled";
@@ -1084,7 +1098,7 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("Sign in with username and password")
             .description(
-                "Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax) and the `shadoucmdb_csrf` cookie; behind HTTPS they are `Secure` and named `__Host-shadoucmdb_session` and `__Host-shadoucmdb_csrf`. 401 for a wrong username or password. When the user has set up two-factor authentication, a right password answers 401 MFA_REQUIRED instead and sets the `shadoucmdb_mfa` cookie (HttpOnly, 5 min; `__Host-shadoucmdb_mfa` behind HTTPS): send the code to POST /api/v1/auth/login/mfa. Every 401 for a wrong username or password, a disabled account or a directory's refusal is answered no earlier than `SIGN_IN_FAILURE_FLOOR_MS` (default 1 s) after the throttle let the attempt through, so response times do not tell which names are accounts; 429, 503, MFA_REQUIRED and successful answers are not delayed. The first 4 failures for a username from one client network (the IPv4 /24 or IPv6 /64 of the TCP peer address or, when the peer is listed in `TRUSTED_PROXIES`, of the client address the proxies report) cost nothing; from the 5th on, each failure locks it for that network for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Other networks are not locked, so guessing cannot lock the account holder out; only failures from several networks that add up to 15 (at most 5 counted per network) lock the username for every network, with the same backoff. Attempts for a username that arrive while as many earlier ones as it has free failures left are still being checked are answered 429 with Retry-After: 1. Once 300 failures in 10 min for all usernames together are reached, sign-in is slowed rather than refused: attempts queue and go through one per 2 s (a correct password still signs in); only when 64 are already queued, or 4 from the same client network, is the next one answered 429. When an LDAP/AD directory is enabled, directory accounts sign in here too with their directory password (see GET /api/v1/auth/providers): a name no local account has is looked up in the enabled directories in order, under the same throttle; 503 IDENTITY_PROVIDER_UNAVAILABLE when a directory that might know the name cannot be reached. A directory account that has set up two-factor authentication gets MFA_REQUIRED after the directory password, like a local one. Accounts of an OIDC provider cannot sign in here.",
+                "Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax) and the `shadoucmdb_csrf` cookie; behind HTTPS they are `Secure` and named `__Host-shadoucmdb_session` and `__Host-shadoucmdb_csrf`. 401 for a wrong username or password. When the user has set up two-factor authentication, a right password answers 401 MFA_REQUIRED instead and sets the `shadoucmdb_mfa` cookie (HttpOnly, 5 min; `__Host-shadoucmdb_mfa` behind HTTPS): send the code to POST /api/v1/auth/login/mfa. Every 401 for a wrong username or password, a disabled account or a directory's refusal is answered no earlier than `SIGN_IN_FAILURE_FLOOR_MS` (default 1 s) after the throttle let the attempt through, so response times do not tell which names are accounts; 429, 503, MFA_REQUIRED and successful answers are not delayed. The first 4 failures for a username from one client network (the IPv4 /24 or IPv6 /64 of the TCP peer address or, when the peer is listed in `TRUSTED_PROXIES`, of the client address the proxies report) cost nothing; from the 5th on, each failure locks it for that network for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Other networks are not locked, so guessing cannot lock the account holder out; only failures from several networks that add up to 15 (at most 5 counted per network) lock the username for every network, with the same backoff. Attempts for a username that arrive while as many earlier ones as it has free failures left are still being checked are answered 429 with Retry-After: 1. Once 300 failures in 10 min for all usernames together are reached, sign-in is slowed rather than refused: attempts queue and go through one per 2 s (a correct password still signs in); only when 64 are already queued, or 4 from the same client network, is the next one answered 429. When an LDAP/AD directory is enabled, directory accounts sign in here too with their directory password (see GET /api/v1/auth/providers): a name no local account has is looked up in the enabled directories in order, under the same throttle; 503 IDENTITY_PROVIDER_UNAVAILABLE when the directory a directory account belongs to cannot be reached (not counted as a failure). While a directory cannot be reached, a name no account has gets the 401 for a wrong username or password, so the answer does not tell which names are local accounts. A directory account that has set up two-factor authentication gets MFA_REQUIRED after the directory password, like a local one. Accounts of an OIDC provider cannot sign in here.",
             )
             .public()
             .errors(&[ErrorCode::MfaRequired, ErrorCode::RateLimited, ErrorCode::IdentityProviderUnavailable])
@@ -2329,6 +2343,61 @@ pub(crate) mod tests {
         }
         let e = login(pool, &auth, &headers, &from("198.51.100.8"), login_body("owner", &wrong)).await.err().unwrap();
         assert_eq!((e.code, e.hold_until), (ErrorCode::RateLimited, None), "a 429 is not held");
+        db.drop().await;
+    }
+
+    /// GH#499: while the directory cannot be reached, a name no account has
+    /// gets a local account's answer (same body, held to the floor, counted
+    /// and audited), not a quick unthrottled 503. A directory account still
+    /// gets the 503.
+    #[tokio::test]
+    async fn an_unreachable_directory_does_not_tell_unknown_names_apart() {
+        let Some(db) = scratch::database("an_unreachable_directory_does_not_tell_unknown_names_apart").await else {
+            return;
+        };
+        let (pool, auth, headers) = (&db.pool, auth_state(), HeaderMap::new());
+        setup(pool, &auth, &headers, &from("192.0.2.1"), body("owner")).await.unwrap();
+        // Nothing listens on port 1: every sign-in it is asked about is Unavailable.
+        let ldap = crate::modules::mfa::tests::provider(pool, "ldap", true, "ldaps://127.0.0.1:1").await;
+        let mut tx = pool.begin().await.unwrap();
+        let linked = crate::data::identity_providers::NewLinkedUser {
+            provider_id: ldap,
+            external_id: "erin",
+            username: "erin",
+            display_name: "erin",
+            email: None,
+        };
+        crate::data::identity_providers::insert_linked(&mut tx, &linked).await.unwrap();
+        tx.commit().await.unwrap();
+
+        let wrong = OWNER_PASSWORD.to_uppercase();
+        let mut answers = vec![];
+        for name in ["owner", "nobody"] {
+            let start = tokio::time::Instant::now();
+            let e = login(pool, &auth, &headers, &from("198.51.100.7"), login_body(name, &wrong)).await.err().unwrap();
+            assert_eq!(e.code, ErrorCode::Unauthenticated, "{name}");
+            assert!(e.hold_until.expect("held") >= start + auth.config.sign_in_failure_floor, "{name}: held");
+            answers.push(answer_bytes(e).await);
+        }
+        assert_eq!(answers[0], answers[1], "an unknown name answers like a local account");
+        let failures = auth_rows(pool, "login.failure").await;
+        assert_eq!(failures.len(), 2, "both audited");
+        assert_eq!(failures[1].3["attemptedUsername"], "nobody");
+        assert_eq!(failures[1].3["reason"], "directory_unavailable");
+
+        let e = login(pool, &auth, &headers, &from("198.51.100.7"), login_body("erin", &wrong)).await.err().unwrap();
+        assert_eq!((e.code, e.hold_until), (ErrorCode::IdentityProviderUnavailable, None), "a directory account");
+        assert_eq!(auth_rows(pool, "login.failure").await.len(), 2, "its password was not checked: no failure");
+
+        // An unknown name is throttled like any failure: one free failure was spent above.
+        auth.throttle.freeze();
+        for _ in 1..crate::auth::throttle::FREE_FAILURES {
+            let e =
+                login(pool, &auth, &headers, &from("198.51.100.7"), login_body("nobody", &wrong)).await.err().unwrap();
+            assert_eq!(e.code, ErrorCode::Unauthenticated, "free failures left");
+        }
+        let e = login(pool, &auth, &headers, &from("198.51.100.7"), login_body("nobody", &wrong)).await.err().unwrap();
+        assert_eq!(e.code, ErrorCode::RateLimited, "locked");
         db.drop().await;
     }
 
