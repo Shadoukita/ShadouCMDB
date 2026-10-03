@@ -46,7 +46,6 @@ const group = useGroup(id);
 const create = useCreateGroup();
 const update = useUpdateGroup();
 const pending = computed(() => create.isPending.value || update.isPending.value);
-const flashText = computed(() => (id.value ? flash.forCi(id.value) : undefined));
 useDocumentTitle(() => (isNew.value ? t("groups.new") : group.data.value?.name));
 
 // ---------- Name and description ----------
@@ -105,7 +104,7 @@ async function submit() {
   try {
     if (isNew.value) {
       const created = await create.mutateAsync({ name, description });
-      flash.show(created.id, t("groups.created", { name: created.name }));
+      flash.show(t("groups.created", { name: created.name }));
       await router.push(`/admin/groups/${created.id}`);
       return;
     }
@@ -214,7 +213,7 @@ function confirmDelete() {
       // A withheld count (null) is not repeated: the dialog already said so.
       const n = res?.affectedServices;
       const services = typeof n === "number" ? t("groups.deleted.services", { n }) : "";
-      flash.show("groups", `${t("groups.deleted", { name: g.name })} ${services}`.trim());
+      flash.show(`${t("groups.deleted", { name: g.name })} ${services}`.trim());
       router.replace("/admin/groups");
     },
   });
@@ -248,7 +247,6 @@ const notFound = computed(() => {
         <span v-if="group.data.value && !isNew" class="muted">{{ t("groups.members.count", { n: memberCount }) }}</span>
       </div>
     </div>
-    <div v-if="flashText" class="alert alert-success" role="status">{{ flashText }}</div>
 
     <div class="grid-2">
       <form class="panel" aria-labelledby="group-form-title" novalidate @submit.prevent="submit">

@@ -45,7 +45,7 @@ function submit() {
       onSuccess: (copy) => {
         emit("close");
         if (copy) {
-          flash.show(copy.id, `Created ${copy.name} as a copy of ${props.profile?.name ?? "the profile"}.`);
+          flash.show(`Created ${copy.name} as a copy of ${props.profile?.name ?? "the profile"}.`);
           router.push(`/admin/profiles/${copy.id}`);
         }
       },

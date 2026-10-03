@@ -1,24 +1,60 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 
+export interface Toast {
+  id: number;
+  text: string;
+}
+
+/** How long a toast stays on screen (design document §2.7). */
+export const TOAST_MS = 6000;
+/** At most this many toasts are on screen; a new one pushes out the oldest. */
+export const TOAST_MAX = 4;
+
 /**
- * One-shot confirmation shown on the next CI detail page ("Created crm-app-01.").
- * Tied to the CI id so it never leaks onto another record, and cleared after a
- * few seconds so reload/back do not repeat it.
+ * One-shot confirmations ("Created crm-app-01.") shown as toasts by ToastHost in the shell.
+ * They outlive the navigation that usually follows a create or delete, so a message no longer needs
+ * a key for the page that should show it, and nothing on the page moves when it closes. Errors are
+ * not toasts: they stay inline next to what failed (ErrorAlert, field errors).
+ * While keyboard focus is on a toast, `pause()` stops the clocks so it never closes under the reader;
+ * `resume()` gives each toast its full time again.
  */
 export const useFlashStore = defineStore("flash", () => {
-  const message = ref<{ ciId: string; text: string } | null>(null);
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  const toasts = ref<Toast[]>([]);
+  const timers = new Map<number, ReturnType<typeof setTimeout>>();
+  let nextId = 1;
+  let paused = false;
 
-  function show(ciId: string, text: string) {
-    clearTimeout(timer);
-    message.value = { ciId, text };
-    timer = setTimeout(() => (message.value = null), 6000);
+  function arm(t: Toast) {
+    if (paused) return;
+    clearTimeout(timers.get(t.id));
+    timers.set(t.id, setTimeout(() => dismiss(t.id), TOAST_MS));
   }
 
-  function forCi(ciId: string): string | undefined {
-    return message.value?.ciId === ciId ? message.value.text : undefined;
+  function show(text: string): number {
+    const t: Toast = { id: nextId++, text };
+    toasts.value = [...toasts.value, t];
+    while (toasts.value.length > TOAST_MAX) dismiss(toasts.value[0].id);
+    arm(t);
+    return t.id;
   }
 
-  return { message, show, forCi };
+  function dismiss(id: number) {
+    clearTimeout(timers.get(id));
+    timers.delete(id);
+    toasts.value = toasts.value.filter((t) => t.id !== id);
+  }
+
+  function pause() {
+    paused = true;
+    for (const timer of timers.values()) clearTimeout(timer);
+    timers.clear();
+  }
+
+  function resume() {
+    paused = false;
+    toasts.value.forEach(arm);
+  }
+
+  return { toasts, show, dismiss, pause, resume };
 });

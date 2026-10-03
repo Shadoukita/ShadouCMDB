@@ -48,7 +48,6 @@ const classes = useCiClasses();
 const create = useCreateProfile();
 const update = useUpdateProfile();
 const pending = computed(() => create.isPending.value || update.isPending.value);
-const flashText = computed(() => (id.value ? flash.forCi(id.value) : undefined));
 useDocumentTitle(() => (isNew.value ? "New profile" : profile.data.value?.name));
 
 const builtin = computed(() => !!profile.data.value?.isBuiltin);
@@ -165,7 +164,7 @@ async function submit() {
     if (isNew.value) {
       const created = await create.mutateAsync({ ...body, name: body.name! });
       if (created) {
-        flash.show(created.id, `Created profile ${created.name}.`);
+        flash.show(`Created profile ${created.name}.`);
         await router.push(`/admin/profiles/${created.id}`);
       }
       return;
@@ -218,7 +217,6 @@ const notFound = computed(() => {
         <DeleteProfileButton v-if="!builtin" :profile="profile.data.value" />
       </div>
     </div>
-    <div v-if="flashText" class="alert alert-success" role="status">{{ flashText }}</div>
     <div v-if="builtin" class="alert" role="note">
       The built-in Administrator profile holds every permission, on every class, and cannot be deleted. Only its two-factor
       requirement can be changed. Clone it to start an editable profile from it.

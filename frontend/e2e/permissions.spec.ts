@@ -400,7 +400,7 @@ test("disabling a user or resetting their password ends their open session in th
   await apiSend(request, "PATCH", `/admin/users/${userId}`, { isActive: false });
   await page.locator("#f-q").fill("crm");
   await expect(page).toHaveURL(/\/login\?redirect=/);
-  await expect(page.getByRole("status")).toContainText("Your session has ended");
+  await expect(page.getByRole("status").filter({ hasText: "Your session has ended" })).toBeVisible();
   await page.getByLabel("Username").fill(USERNAME);
   await page.getByLabel("Password").fill(PASSWORD);
   await page.getByRole("button", { name: "Sign in" }).click();

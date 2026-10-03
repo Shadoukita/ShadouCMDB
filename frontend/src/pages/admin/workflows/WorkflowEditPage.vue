@@ -8,7 +8,6 @@ import EmptyState from "../../../components/EmptyState.vue";
 import ErrorAlert from "../../../components/ErrorAlert.vue";
 import LoadingState from "../../../components/LoadingState.vue";
 import { useDocumentTitle } from "../../../lib/composables";
-import { useFlashStore } from "../../../stores/flash";
 import WorkflowDesigner from "./WorkflowDesigner.vue";
 import WorkflowGrantsMatrix from "./WorkflowGrantsMatrix.vue";
 import WorkflowSettingsForm from "./WorkflowSettingsForm.vue";
@@ -20,11 +19,9 @@ import WorkflowVersions from "./WorkflowVersions.vue";
  */
 const route = useRoute();
 const router = useRouter();
-const flash = useFlashStore();
 const id = computed(() => (route.path.endsWith("/new") ? undefined : String(route.params.id ?? "")));
 const isNew = computed(() => !id.value);
 const wf = useWorkflow(id);
-const flashText = computed(() => (id.value ? flash.forCi(id.value) : undefined));
 useDocumentTitle(() => (isNew.value ? "New workflow" : wf.data.value?.name));
 
 const TABS = [
@@ -92,7 +89,6 @@ const notFound = computed(() => {
         <span v-if="wf.data.value.draftVersionNo !== null" class="badge info">v{{ wf.data.value.draftVersionNo }} draft</span>
       </div>
     </div>
-    <div v-if="flashText" class="alert" role="status">{{ flashText }}</div>
 
     <div class="tabs" role="tablist" aria-label="Workflow sections">
       <button

@@ -65,7 +65,7 @@ test("create a workflow for Server with Status as its state field", async ({ pag
 
   await expect(page).toHaveURL(/\/admin\/workflows\/[0-9a-f-]{36}\?tab=designer$/);
   wfId = new URL(page.url()).pathname.split("/").pop()!;
-  await expect(page.getByRole("status").first()).toContainText(`Workflow ${NAME} created.`);
+  await expect(page.getByRole("status").filter({ hasText: `Workflow ${NAME} created.` })).toBeVisible();
   const wf = await apiGet<{ key: string; isActive: boolean; stateAttributeKey: string; draftVersionNo: number; classId: string }>(request, `/admin/workflow-definitions/${wfId}`);
   expect(wf).toMatchObject({ key: KEY, isActive: false, stateAttributeKey: "status", draftVersionNo: 1 });
   expect(wf.classId).toBe(await classIdByName(request, "Server"));
@@ -183,7 +183,7 @@ test("publish version 1 with a change note", async ({ page, request }) => {
   await dialog.getByRole("button", { name: "Publish" }).click();
 
   await expect(page).toHaveURL(/tab=versions/);
-  await expect(page.getByRole("status").first()).toContainText("Version 1 published.");
+  await expect(page.getByRole("status").filter({ hasText: "Version 1 published." })).toBeVisible();
   const row = page.getByRole("row").filter({ hasText: "First cut of the server lifecycle" });
   await expect(row).toContainText("Published");
   await expect(row).toContainText("Current");
@@ -261,7 +261,7 @@ test("retire version 1, then delete the workflow", async ({ page, request }) => 
   await page.getByRole("button", { name: "Delete workflow" }).click();
   await page.getByRole("dialog", { name: `Delete workflow ${NAME}?` }).getByRole("button", { name: "Delete workflow" }).click();
   await expect(page).toHaveURL(/\/admin\/workflows$/);
-  await expect(page.getByRole("status").first()).toContainText(`Workflow ${NAME} deleted.`);
+  await expect(page.getByRole("status").filter({ hasText: `Workflow ${NAME} deleted.` })).toBeVisible();
   const gone = await request.get(`/api/v1/admin/workflow-definitions/${wfId}`);
   expect(gone.status()).toBe(404);
 });

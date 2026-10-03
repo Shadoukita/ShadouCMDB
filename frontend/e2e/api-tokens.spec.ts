@@ -144,7 +144,7 @@ test("revoke asks first, keeps the token listed as revoked, and the secret stops
   await snap(page, "41-api-token-revoke");
   await confirm.getByRole("button", { name: "Revoke token" }).click();
   await expect(confirm).toBeHidden();
-  await expect(page.getByRole("status")).toContainText(`Revoked API token ${NAME}`);
+  await expect(page.getByRole("status").filter({ hasText: `Revoked API token ${NAME}` })).toBeVisible();
   await expect(row.getByText("Revoked", { exact: true })).toBeVisible();
   await expect(row).toContainText(`by ${E2E_USER.username}`);
   await expect(row.getByRole("button", { name: `Revoke ${NAME}` })).toHaveCount(0);

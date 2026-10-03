@@ -57,7 +57,7 @@ test("create a permission profile from the matrix", async ({ page, request }) =>
   await expect(page.getByLabel("edit on Server", { exact: true })).toBeChecked();
   await snap(page, "23-profile-matrix");
   await page.getByRole("button", { name: "Create profile" }).click();
-  await expect(page.getByRole("status")).toContainText(`Created profile ${PROFILE}.`);
+  await expect(page.getByRole("status").filter({ hasText: `Created profile ${PROFILE}.` })).toBeVisible();
   profileId = page.url().split("/").pop()!;
 
   const saved = await apiGet<Profile>(request, `/admin/profiles/${profileId}`);
@@ -107,7 +107,7 @@ test("create a user holding the profile", async ({ page }) => {
   await page.locator("#user-confirm").fill(PASSWORD);
   await page.getByLabel(PROFILE).check();
   await page.getByRole("button", { name: "Create user" }).click();
-  await expect(page.getByRole("status").first()).toContainText(`Created user ${USERNAME}.`);
+  await expect(page.getByRole("status").filter({ hasText: `Created user ${USERNAME}.` })).toBeVisible();
   userId = page.url().split("/").pop()!;
   await snap(page, "24-user-created");
 

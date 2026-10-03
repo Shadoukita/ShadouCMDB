@@ -343,7 +343,7 @@ test("11: groups admin: create a group, add a member, delete it while it owns se
   await page.goto("/admin/groups/new");
   await page.getByLabel("Name").fill(GROUP11);
   await page.getByRole("button", { name: "Create group" }).click();
-  await expect(page.getByRole("status").first()).toContainText(`Created group ${GROUP11}.`);
+  await expect(page.getByRole("status").filter({ hasText: `Created group ${GROUP11}.` })).toBeVisible();
   ids.group11 = page.url().split("/").pop()!;
 
   const add = page.getByRole("combobox", { name: "Add a member" });

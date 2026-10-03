@@ -14,7 +14,6 @@ import { useListQuery } from "../../../lib/listQuery";
 import { moveItem, useDragReorder } from "../../../lib/reorder";
 import { useSchemaChangeFlow } from "../../../lib/schemaChange";
 import { bySortOrder, flattenTree } from "../../../lib/tree";
-import { useFlashStore } from "../../../stores/flash";
 import Icon from "../../../components/Icon.vue";
 
 /**
@@ -33,8 +32,7 @@ const patch = usePatch<CiClass>("ci-classes");
 const remove = useRemove("ci-classes");
 const areas = useAreas();
 const flow = useSchemaChangeFlow();
-const flash = useFlashStore();
-const notice = ref<string | null>(flash.forCi("classes") ?? null);
+const notice = ref<string | null>(null);
 const failure = ref<unknown>(null);
 const areaFilter = computed(() => lq.get("areaId") ?? "");
 const areaById = computed(() => new Map((areas.data.value ?? []).map((a) => [a.id, a])));

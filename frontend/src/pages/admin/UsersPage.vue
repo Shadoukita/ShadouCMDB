@@ -12,7 +12,6 @@ import { formatRelative } from "../../lib/format";
 import { useListQuery } from "../../lib/listQuery";
 import { parseSignInStatus, SIGN_IN_STATUSES, signInStatusLabel } from "../../lib/people";
 import { t } from "../../i18n";
-import { useFlashStore } from "../../stores/flash";
 import SortIcon from "../../components/SortIcon.vue";
 
 /** Administration › Users. Search, filters, sort and page live in the URL; the API filters and pages. */
@@ -45,8 +44,6 @@ const query = computed<UserListQuery>(() => ({
 }));
 const list = useUserList(query);
 // Set by the user page after a delete.
-const flash = useFlashStore();
-const flashText = computed(() => flash.forCi("users"));
 const profiles = useAllProfiles();
 
 const qText = ref(get("q"));
@@ -80,7 +77,6 @@ function clearFilters() {
     </div>
   </div>
 
-  <div v-if="flashText" class="alert alert-success" role="status" data-testid="users-flash">{{ flashText }}</div>
 
   <section class="panel" aria-label="Users">
     <form class="toolbar" role="search" @submit.prevent>

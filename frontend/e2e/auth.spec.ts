@@ -48,7 +48,7 @@ test("an expired session goes to sign-in and back to where the operator was", as
   await context.clearCookies(); // the server-side session is gone from the browser's point of view
   await page.locator("#f-q").fill("crm");
   await expect(page).toHaveURL(/\/login\?redirect=/);
-  await expect(page.getByRole("status")).toContainText("Your session has ended");
+  await expect(page.getByRole("status").filter({ hasText: "Your session has ended" })).toBeVisible();
   await snap(page, "21-session-expired");
 
   await page.getByLabel("Username").fill(E2E_USER.username);
