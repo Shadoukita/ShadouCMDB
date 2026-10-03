@@ -2,6 +2,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { test as base, expect, type APIRequestContext, type Locator, type Page, type TestInfo } from "@playwright/test";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { E2E_USER, FRESH_ADMIN } from "./global-setup";
 
 export { expect };
 
@@ -9,7 +10,7 @@ export { expect };
  * Every test fails on uncaught page errors, console errors and Vue warnings.
  * "Failed to load resource" is excluded: the tests provoke 4xx responses on purpose.
  */
-export const test = base.extend<{ failOnPageErrors: void }>({
+export const test = base.extend<{ failOnPageErrors: void; recentPassword: void }>({
   failOnPageErrors: [
     async ({ page }, use) => {
       const problems: string[] = [];
@@ -21,6 +22,25 @@ export const test = base.extend<{ failOnPageErrors: void }>({
       });
       await use();
       expect(problems, "page errors / Vue warnings").toEqual([]);
+    },
+    { auto: true },
+  ],
+  /**
+   * The suite signs in once and runs far longer than 10 minutes, but changes to users, profiles, API tokens
+   * and identity providers need the password confirmed in the last 10 minutes (GH#498): confirm it before
+   * each test for the signed-in e2e accounts. A test without a session, or signed in as another account, is left alone.
+   */
+  recentPassword: [
+    async ({ request }, use) => {
+      const me = await request.get("/api/v1/auth/me");
+      const username = me.ok() ? ((await me.json()) as { user?: { username?: string } }).user?.username : undefined;
+      const password = [E2E_USER, FRESH_ADMIN].find((u) => u.username === username)?.password;
+      if (password) {
+        const csrf = (await request.storageState()).cookies.find((c) => c.name === "shadoucmdb_csrf")?.value ?? "";
+        const res = await request.post("/api/v1/auth/reauthenticate", { data: { currentPassword: password }, headers: { "X-CSRF-Token": csrf } });
+        expect(res.status(), `confirming the password of ${username}: ${await res.text()}`).toBe(204);
+      }
+      await use();
     },
     { auto: true },
   ],
