@@ -70,7 +70,7 @@ function disableInstead() {
   <section class="panel" aria-labelledby="provider-access-title">
     <div class="panel-header"><h2 id="provider-access-title">Availability</h2></div>
     <div class="panel-body stack">
-      <div v-if="done" class="alert" role="status">{{ done }}</div>
+      <div v-if="done" class="alert alert-success" role="status">{{ done }}</div>
       <p class="muted no-margin">
         {{ accounts }} {{ provider.userCount === 1 ? "signs" : "sign" }} in through this provider.
         <template v-if="provider.isEnabled">Disabling it stops those sign-ins and ends their sessions; local accounts keep working.</template>

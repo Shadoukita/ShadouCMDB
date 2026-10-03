@@ -267,13 +267,13 @@ const notFound = computed(() => {
         <button v-if="!cls.data.value.isActive" type="button" class="btn btn-danger" :disabled="pending" @click="purgeClass">Purge…</button>
       </div>
     </div>
-    <div v-if="flashText" class="alert" role="status">{{ flashText }}</div>
+    <div v-if="flashText" class="alert alert-success" role="status">{{ flashText }}</div>
     <div v-if="cls.data.value && !cls.data.value.isActive" class="alert alert-warn" role="note">
       This class is archived: its CIs and its table <code>{{ cls.data.value.tableName }}</code> are kept and still shown, but
       no new CIs can be created. Restore it to allow new CIs, or purge it to drop the table and delete its CIs.
     </div>
     <FormErrorBanner v-if="error" :error="error" :unplaced="unplaced" />
-    <div v-if="saved" class="alert" role="status">{{ saved }}</div>
+    <div v-if="saved" class="alert alert-success" role="status">{{ saved }}</div>
 
     <form novalidate class="panel" aria-label="Class" @submit.prevent="submit">
       <div class="panel-header"><h2>Class</h2></div>

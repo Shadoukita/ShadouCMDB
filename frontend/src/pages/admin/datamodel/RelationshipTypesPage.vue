@@ -197,7 +197,7 @@ const ruleLabel = (r: { sourceClassId: string; targetClassId: string }) =>
       <button type="button" class="btn btn-primary" @click="openType(null)">+ New relationship type</button>
     </div>
   </div>
-  <div v-if="notice" class="alert" role="status">{{ notice }}</div>
+  <div v-if="notice" class="alert alert-success" role="status">{{ notice }}</div>
   <ErrorAlert v-if="reorder.isError.value" :error="reorder.error.value" title="The new order was not saved completely" />
   <ErrorAlert v-if="patchType.isError.value" :error="patchType.error.value" title="Not saved" />
 

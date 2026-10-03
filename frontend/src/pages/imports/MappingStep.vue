@@ -506,13 +506,13 @@ const editable = computed(() => props.job.status === "ready" || props.job.status
           </template>
         </div>
 
-        <p v-if="appliedNotice" class="alert" role="status">
+        <p v-if="appliedNotice" class="alert alert-success" role="status">
           Mapping <em>{{ appliedNotice }}</em> applied because the column names match.
         </p>
         <p v-else-if="fromJobNotice" class="alert" role="status">
           The mapping of the previous upload was applied: columns with the same names keep their targets.
         </p>
-        <p v-if="savedMessage" class="alert" role="status">{{ savedMessage }}</p>
+        <p v-if="savedMessage" class="alert alert-success" role="status">{{ savedMessage }}</p>
         <ErrorAlert
           v-if="suggestion.isError.value && suggestArgs"
           :error="suggestion.error.value"

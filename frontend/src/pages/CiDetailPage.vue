@@ -291,7 +291,7 @@ const crumbs = computed<Crumb[]>(() => {
         <DeleteCiButton v-if="session.canOnClass(c.classId, 'delete')" :ci="c" />
       </div>
     </div>
-    <div v-if="flashText && !draft.dirty" class="alert" role="status">{{ flashText }}</div>
+    <div v-if="flashText && !draft.dirty" class="alert alert-success" role="status">{{ flashText }}</div>
     <FormErrorBanner v-if="draft.error != null && draft.dirty && !editor.active" :error="draft.error" :unplaced="draft.unplaced" :on-reload="loadCurrent" />
     <div v-if="c.deletedAt" class="alert alert-warn">
       This CI was deleted on {{ formatDateTime(c.deletedAt) }}. It is kept read-only for history; its relationships were

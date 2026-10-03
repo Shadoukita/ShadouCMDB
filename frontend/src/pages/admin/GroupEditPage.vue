@@ -248,7 +248,7 @@ const notFound = computed(() => {
         <span v-if="group.data.value && !isNew" class="muted">{{ t("groups.members.count", { n: memberCount }) }}</span>
       </div>
     </div>
-    <div v-if="flashText" class="alert" role="status">{{ flashText }}</div>
+    <div v-if="flashText" class="alert alert-success" role="status">{{ flashText }}</div>
 
     <div class="grid-2">
       <form class="panel" aria-labelledby="group-form-title" novalidate @submit.prevent="submit">
@@ -259,7 +259,7 @@ const notFound = computed(() => {
             <div><button type="button" class="btn btn-sm" @click="reloadAfterConflict">{{ t("groups.conflictReload") }}</button></div>
           </div>
           <FormErrorBanner v-else-if="error" :error="error" :unplaced="unplaced" />
-          <div v-if="saved" class="alert" role="status">{{ saved }}</div>
+          <div v-if="saved" class="alert alert-success" role="status">{{ saved }}</div>
           <div class="form-grid">
             <FormField id="group-name" :label="t('groups.field.name')" required :error="fieldErrors.name" :hint="t('groups.field.nameHint')">
               <template #default="{ id: fid, invalid, describedBy }">

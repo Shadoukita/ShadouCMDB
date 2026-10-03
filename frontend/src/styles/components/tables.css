@@ -1,0 +1,112 @@
+/*
+ * Data tables and pagination (design document §2.7). Rows are --row-h high with --cell-px inline
+ * padding; the header is an 11 px uppercase overline on --c-surface-alt; row rules use --c-divider;
+ * numbers are right-aligned in tabular figures. Paging is always server-side.
+ */
+.table-wrap {
+  overflow-x: auto;
+}
+table.data {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-table);
+}
+table.data th,
+table.data td {
+  height: var(--row-h);
+  padding: 0 var(--cell-px);
+  border-bottom: 1px solid var(--c-divider);
+  text-align: left;
+  white-space: nowrap;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+table.data th {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-raised);
+  background: var(--c-surface-alt);
+  border-bottom-color: var(--c-border);
+  font-size: var(--fs-overline);
+  font-weight: var(--fw-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--ls-overline);
+  color: var(--c-text-secondary);
+}
+/* Row headers (a th in the body) read as the row's name, not as a column header. */
+table.data tbody th {
+  position: static;
+  background: none;
+  border-bottom-color: var(--c-divider);
+  font-size: var(--fs-table);
+  font-weight: var(--fw-medium);
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--c-text);
+}
+table.data th button.sort {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  cursor: pointer;
+}
+table.data th button.sort:hover {
+  color: var(--c-text);
+}
+table.data th button.sort:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: 2px;
+}
+table.data th[aria-sort="ascending"],
+table.data th[aria-sort="descending"] {
+  color: var(--c-text);
+}
+table.data tbody tr:hover {
+  background: var(--c-row-hover);
+}
+table.data tbody tr:last-child > * {
+  border-bottom: 0;
+}
+table.data td.num,
+table.data th.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+table.data td.mono,
+table.data td .mono,
+table.data td code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+}
+table.data tr.deleted td {
+  color: var(--c-text-muted);
+  text-decoration: line-through;
+}
+/* Stale rows while the next page loads: a wash and muted text, never opacity, so the text keeps AA contrast. */
+table.data.loading tbody {
+  cursor: progress;
+}
+table.data.loading tbody td {
+  background: var(--c-surface-alt);
+  color: var(--c-text-muted);
+}
+
+/* ---------- Pagination: "Showing n of total" on the left, page controls on the right ---------- */
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--panel-p);
+  font-size: var(--fs-sm);
+  color: var(--c-text-secondary);
+  border-top: 1px solid var(--c-border);
+  font-variant-numeric: tabular-nums;
+}
+.pagination .actions select {
+  height: var(--control-h-sm);
+  font-size: var(--fs-sm);
+}

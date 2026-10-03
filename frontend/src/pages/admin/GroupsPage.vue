@@ -68,7 +68,7 @@ function clearSearch() {
       <RouterLink class="btn btn-primary" to="/admin/groups/new">+ {{ t("groups.create") }}</RouterLink>
     </div>
   </div>
-  <div v-if="flashText" class="alert" role="status">{{ flashText }}</div>
+  <div v-if="flashText" class="alert alert-success" role="status">{{ flashText }}</div>
 
   <section class="panel" :aria-label="t('groups.title')">
     <form class="toolbar" role="search" @submit.prevent>

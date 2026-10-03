@@ -193,7 +193,7 @@ function codesSaved() {
       <RecoveryCodes v-if="codes" :codes="codes" :username="session.user?.username ?? 'user'" @done="codesSaved" />
 
       <template v-else>
-        <div v-if="notice" class="alert" role="status">{{ notice }}</div>
+        <div v-if="notice" class="alert alert-success" role="status">{{ notice }}</div>
         <ErrorAlert v-if="generalError" :error="generalError" :title="t('account.mfa.failed')" />
 
         <!-- Off: set up an authenticator app -->

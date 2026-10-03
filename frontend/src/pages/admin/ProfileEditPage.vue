@@ -218,14 +218,14 @@ const notFound = computed(() => {
         <DeleteProfileButton v-if="!builtin" :profile="profile.data.value" />
       </div>
     </div>
-    <div v-if="flashText" class="alert" role="status">{{ flashText }}</div>
+    <div v-if="flashText" class="alert alert-success" role="status">{{ flashText }}</div>
     <div v-if="builtin" class="alert" role="note">
       The built-in Administrator profile holds every permission, on every class, and cannot be deleted. Only its two-factor
       requirement can be changed. Clone it to start an editable profile from it.
     </div>
     <div v-else-if="readOnly" class="alert" role="note">You can view this profile. Changing it needs the <code>profiles.manage</code> permission.</div>
     <FormErrorBanner v-if="error" :error="error" :unplaced="unplaced" />
-    <div v-if="saved" class="alert" role="status">{{ saved }}</div>
+    <div v-if="saved" class="alert alert-success" role="status">{{ saved }}</div>
 
     <section class="panel">
       <div class="panel-header"><h2>Profile</h2></div>

@@ -121,7 +121,7 @@ function revokedTitle(t: ApiToken): string | undefined {
       <button type="button" class="btn btn-primary" @click="creating = true">+ New API token</button>
     </div>
   </div>
-  <div v-if="notice" class="alert" role="status">{{ notice }}</div>
+  <div v-if="notice" class="alert alert-success" role="status">{{ notice }}</div>
 
   <section class="panel" aria-label="API tokens">
     <form class="toolbar" role="search" @submit.prevent>

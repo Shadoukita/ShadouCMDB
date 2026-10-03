@@ -1,0 +1,158 @@
+/*
+ * Popovers, menus and listboxes (design document §2.7). One surface and one item style for every
+ * floating list: combobox results (.combo-list, .listbox), the row menu (.row-menu-list) and the
+ * View menu (.view-menu-popup). Items are --menu-item-h high; the pointer highlights with
+ * --c-row-hover only, keyboard focus adds the focus ring, and the active option of a combobox
+ * (aria-activedescendant: focus stays in the input) gets a 2 px primary bar (audit X13).
+ */
+.popover,
+.combo-list,
+.listbox,
+.row-menu-list {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  color: var(--c-text);
+}
+/* Dark theme: a floating surface is drawn on a near-black canvas, so the ring carries the edge. */
+:root[data-theme="dark"] :is(.popover, .combo-list, .listbox, .row-menu-list) {
+  border-color: var(--c-border-control);
+}
+
+.popover {
+  position: absolute;
+  left: 0;
+  top: calc(100% + var(--space-1));
+  z-index: var(--z-dropdown);
+  width: 320px;
+  max-height: min(70vh, 560px);
+  overflow-y: auto;
+  padding: var(--space-3) var(--space-4);
+}
+.popover-title {
+  margin: 0 0 var(--space-3);
+  font-size: var(--fs-h2);
+}
+.popover-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.combo {
+  position: relative;
+}
+.combo-list {
+  position: absolute;
+  z-index: var(--z-dropdown);
+  top: calc(100% + var(--space-1));
+  left: 0;
+  min-width: 100%;
+  width: max-content;
+  max-width: 520px;
+  max-height: 360px;
+  overflow-y: auto;
+  margin: 0;
+  padding: var(--space-1) 0;
+  list-style: none;
+}
+.listbox,
+.row-menu-list {
+  margin: 0;
+  padding: var(--space-1) 0;
+  list-style: none;
+}
+/* Under <body> at the button's place (a table cell would clip it); above the drawer like any menu. */
+.row-menu-list {
+  position: fixed;
+  z-index: var(--z-drawer);
+  min-width: 200px;
+}
+
+/* ---------- Items ---------- */
+.combo-list li,
+.listbox [role="option"],
+.listbox-empty {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: var(--menu-item-h);
+  padding: var(--space-1) var(--space-3);
+  color: var(--c-text);
+  font: inherit;
+  font-size: var(--fs-md);
+  text-align: left;
+}
+/* Menu items are buttons: unset the button look, then the same item metrics. */
+.row-menu-list [role="menuitem"],
+.view-menu-popup [role^="menuitem"] {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: var(--menu-item-h);
+  padding: var(--space-1) var(--space-3);
+  color: var(--c-text);
+  cursor: pointer;
+}
+.combo-list li,
+.listbox [role="option"] {
+  cursor: pointer;
+}
+.listbox [role="option"],
+.listbox-empty {
+  white-space: nowrap;
+}
+.combo-list li:hover,
+.listbox [role="option"]:hover,
+.row-menu-list [role="menuitem"]:hover,
+.view-menu-popup [role^="menuitem"]:hover {
+  background: var(--c-row-hover);
+}
+.row-menu-list [role="menuitem"]:focus-visible,
+.view-menu-popup [role^="menuitem"]:focus-visible {
+  background: var(--c-row-hover);
+  outline: 2px solid var(--c-focus);
+  outline-offset: -2px;
+}
+.combo-list li[aria-selected="true"],
+.listbox [role="option"].active {
+  background: var(--c-row-hover);
+  box-shadow: inset 2px 0 0 var(--c-primary);
+}
+.combo-list li.note,
+.listbox [role="option"].excluded,
+.view-menu-popup [role^="menuitem"][aria-disabled="true"] {
+  color: var(--c-text-muted);
+  cursor: default;
+}
+.combo-list li.note:hover,
+.listbox [role="option"].excluded:hover {
+  background: none;
+}
+.view-menu-popup [role^="menuitem"][aria-disabled="true"] {
+  cursor: not-allowed;
+}
+.row-menu-list [role="menuitem"].danger,
+.view-menu-popup [role^="menuitem"].danger {
+  color: var(--c-danger-text);
+}
+.view-menu-popup [role^="menuitem"] .check {
+  display: inline-flex;
+  flex: 0 0 16px;
+}
+/* Group labels and separators inside a menu. */
+.view-menu-heading {
+  display: block;
+  padding: var(--space-2) var(--space-3) var(--space-1);
+  color: var(--c-text-secondary);
+}
+.view-menu-popup [role="separator"] {
+  margin: var(--space-1) 0;
+  border-top: 1px solid var(--c-divider);
+}

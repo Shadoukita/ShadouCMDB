@@ -38,6 +38,9 @@ const ICONS = [
   "grip-horizontal",
   "grip-vertical",
   "hard-drive",
+  "inbox",
+  "info",
+  "lock",
   "map-pin",
   "menu",
   "minus",
@@ -45,6 +48,7 @@ const ICONS = [
   "network",
   "pencil",
   "plus",
+  "search",
   "server",
   "smartphone",
   "square",
@@ -55,7 +59,7 @@ const ICONS = [
 ];
 
 /** Icons a stylesheet draws as a CSS mask (pseudo-elements that cannot hold an <svg>). */
-const CSS_ICONS = ["chevron-down", "chevron-right"];
+const CSS_ICONS = ["chevron-down", "chevron-right", "circle-alert", "circle-check", "info", "triangle-alert"];
 
 const src = process.argv[2];
 if (!src) {

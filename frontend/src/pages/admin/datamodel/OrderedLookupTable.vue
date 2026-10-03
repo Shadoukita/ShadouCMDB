@@ -122,7 +122,7 @@ async function save(body: Record<string, unknown>, isNew: boolean): Promise<stri
       <button type="button" class="btn btn-primary btn-sm" style="margin-left: auto" @click="open(null)">+ Add {{ noun }}</button>
     </div>
     <div v-if="notice || reorder.isError.value || patch.isError.value" class="panel-body">
-      <div v-if="notice" class="alert" role="status">{{ notice }}</div>
+      <div v-if="notice" class="alert alert-success" role="status">{{ notice }}</div>
       <ErrorAlert v-if="reorder.isError.value" :error="reorder.error.value" title="The new order was not saved completely" />
       <ErrorAlert v-if="patch.isError.value" :error="patch.error.value" title="Not saved" />
     </div>

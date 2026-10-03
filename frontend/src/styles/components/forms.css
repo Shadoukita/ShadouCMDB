@@ -1,0 +1,156 @@
+/*
+ * Inputs, selects, checkboxes and the field anatomy (design document §2.7): label, control, hint,
+ * error. Control boundaries use --c-border-control (3:1 or more on every surface, WCAG 1.4.11).
+ */
+input[type="text"],
+input[type="search"],
+input[type="password"],
+input[type="email"],
+input[type="number"],
+input[type="url"],
+input[type="tel"],
+input[type="date"],
+input[type="datetime-local"],
+input:not([type]),
+select,
+textarea {
+  height: var(--control-h);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--c-border-control);
+  border-radius: var(--radius-md);
+  background: var(--c-surface);
+  color: var(--c-text);
+  font: inherit;
+  font-size: var(--fs-md);
+  min-width: 0;
+}
+:is(input, select, textarea):hover:not(:disabled, [readonly]) {
+  border-color: var(--c-border-control-hover);
+}
+:is(input, select, textarea):focus-visible {
+  border-color: var(--c-primary);
+}
+::placeholder {
+  color: var(--c-text-tertiary);
+  opacity: 1;
+}
+:is(input, select, textarea):disabled,
+:is(input, textarea)[readonly] {
+  background: var(--c-surface-sunken);
+  color: var(--c-text-secondary);
+}
+textarea {
+  height: auto;
+  min-height: 64px;
+  padding: var(--space-1_5) var(--space-2);
+  resize: vertical;
+}
+/* A single-line select draws its own chevron, so it looks the same in every browser and theme. */
+select:not([multiple], [size]) {
+  appearance: none;
+  padding-right: calc(var(--space-2) + 20px);
+  background-image: var(--select-chevron);
+  background-repeat: no-repeat;
+  background-position: right var(--space-2) center;
+  background-size: 14px;
+}
+input[type="checkbox"],
+input[type="radio"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--c-primary);
+  cursor: pointer;
+}
+/* Invalid: a danger border and the error line under the field (named by aria-describedby). */
+:is(input, select, textarea)[aria-invalid="true"] {
+  border-color: var(--c-danger-text);
+  background-color: var(--c-danger-subtle);
+}
+:is(input, select, textarea)[aria-invalid="true"]:focus-visible {
+  outline-color: var(--c-danger-text);
+}
+
+/* ---------- Field anatomy ---------- */
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: var(--space-3) var(--space-5);
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.field.wide {
+  grid-column: 1 / -1;
+}
+.field label,
+.field .label {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  line-height: 16px;
+  color: var(--c-text);
+}
+.field .req {
+  color: var(--c-danger-text);
+  margin-left: var(--space-0_5);
+}
+.field .hint,
+.hint {
+  font-size: var(--fs-sm);
+  line-height: 16px;
+  color: var(--c-text-tertiary);
+}
+.field .error {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+  font-size: var(--fs-sm);
+  line-height: 16px;
+  color: var(--c-danger-text);
+}
+.field .error::before {
+  content: "";
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-top: 1px;
+  background: currentColor;
+  mask: var(--icon-circle-alert) center / contain no-repeat;
+}
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-h);
+}
+.field label.checkbox-row {
+  font-weight: var(--fw-regular);
+}
+fieldset.group {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+fieldset.group + fieldset.group {
+  margin-top: var(--space-5);
+}
+fieldset.group legend {
+  color: var(--c-text-secondary);
+  padding: 0 0 var(--space-3);
+}
+/* The save bar at the end of a form: right after the fields, sticky to the bottom of the page while it scrolls. */
+.form-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--panel-p);
+  border-top: 1px solid var(--c-border);
+  background: var(--c-surface);
+  position: sticky;
+  bottom: calc(-1 * var(--space-6));
+  z-index: var(--z-sticky);
+}

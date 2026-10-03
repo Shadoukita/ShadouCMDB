@@ -1,74 +1,20 @@
 @import "./fonts.css";
 @import "./tokens.css";
+@import "./base.css";
+@import "./components/buttons.css";
+@import "./components/forms.css";
+@import "./components/panels.css";
+@import "./components/tables.css";
+@import "./components/badges.css";
+@import "./components/tabs.css";
+@import "./components/menus.css";
+@import "./components/dialogs.css";
+@import "./components/alerts.css";
 
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-}
-html,
-body,
-#root,
-#app {
-  height: 100%;
-}
-body {
-  margin: 0;
-  font-family: var(--font-sans);
-  font-size: var(--fs-md);
-  line-height: var(--lh-body);
-  color: var(--c-text);
-  background: var(--c-bg);
-}
-a {
-  color: var(--c-link);
-  text-decoration: none;
-}
-a:hover {
-  text-decoration: underline;
-}
-/* A link inside running text is told apart by more than its colour (WCAG 1.4.1). */
-p a:not(.btn),
-.hint a:not(.btn),
-.alert a:not(.btn) {
-  text-decoration: underline;
-}
-:focus-visible {
-  outline: 2px solid var(--c-focus);
-  outline-offset: 1px;
-}
-h1,
-h2,
-h3 {
-  margin: 0;
-  font-weight: var(--fw-semibold);
-  line-height: var(--lh-tight);
-}
-h1 {
-  font-size: var(--fs-h1);
-}
-h2 {
-  font-size: var(--fs-h2);
-}
-h3 {
-  font-size: var(--fs-h3);
-}
-code,
-.mono {
-  font-family: var(--font-mono);
-  font-size: var(--fs-sm);
-}
-.muted {
-  color: var(--c-text-muted);
-}
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
-}
+/*
+ * Page and shell rules. The primitives (SHAA-1670 design document, §2.7) live in base.css and
+ * components/*.css; rules here only place them, and later rollout PRs move each page onto them.
+ */
 
 /* ---------- Shell ---------- */
 .shell {
@@ -112,9 +58,6 @@ code,
   overflow-y: auto;
 }
 .shell-nav h2 {
-  font-size: var(--fs-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
   color: var(--c-sidebar-text-muted);
   padding: var(--sp-4) var(--sp-5) var(--sp-2);
 }
@@ -259,177 +202,6 @@ code,
   flex-wrap: wrap;
 }
 
-/* ---------- Panels ---------- */
-.panel {
-  background: var(--c-surface);
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius);
-  margin-bottom: var(--sp-4);
-}
-.panel-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--sp-3);
-  padding: var(--sp-3) var(--sp-4);
-  border-bottom: 1px solid var(--c-border);
-  background: var(--c-surface-alt);
-}
-.panel-body {
-  padding: var(--sp-4);
-}
-.panel-body.flush {
-  padding: 0;
-}
-.grid-2 {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
-  gap: var(--sp-4);
-  align-items: start;
-}
-.grid-2 > .panel {
-  margin-bottom: 0;
-}
-.stack > * + * {
-  margin-top: var(--sp-4);
-}
-/* Spacing overrides as classes: the served CSP (style-src 'self') blocks style attributes that Vue renders as static HTML. */
-.no-margin {
-  margin: 0;
-}
-.no-margin-top {
-  margin-top: 0;
-}
-.badge.spaced {
-  margin-left: 6px;
-}
-
-/* ---------- Controls ---------- */
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-2);
-  height: var(--control-h);
-  padding: 0 var(--sp-4);
-  border: 1px solid var(--c-border-control);
-  border-radius: var(--radius);
-  background: var(--c-surface);
-  color: var(--c-text);
-  font: inherit;
-  font-weight: var(--fw-medium);
-  cursor: pointer;
-  white-space: nowrap;
-}
-.btn:hover {
-  background: var(--c-surface-alt);
-  border-color: var(--c-border-control-hover);
-  text-decoration: none;
-}
-.btn:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-.btn-primary {
-  background: var(--c-primary);
-  border-color: var(--c-primary);
-  color: var(--c-primary-text);
-}
-.btn-primary:hover {
-  background: var(--c-primary-hover);
-  border-color: var(--c-primary-hover);
-}
-.btn-danger {
-  background: var(--c-danger-solid);
-  border-color: var(--c-danger-solid);
-  color: var(--c-on-solid);
-}
-.btn-danger:hover {
-  background: var(--c-danger-solid-hover);
-  border-color: var(--c-danger-solid-hover);
-}
-.btn-sm {
-  height: 22px;
-  padding: 0 var(--sp-3);
-  font-size: var(--fs-sm);
-}
-/* Icon-only button: square, the icon centred. The button carries the aria-label. */
-.btn-icon {
-  justify-content: center;
-  width: var(--control-h);
-  padding: 0;
-}
-.btn-sm.btn-icon {
-  width: 22px;
-}
-.btn-link {
-  border: 0;
-  background: none;
-  color: var(--c-link);
-  padding: 0;
-  height: auto;
-  cursor: pointer;
-  font: inherit;
-}
-/* Row-level destructive action in dense tables: the confirmation dialog carries the red button. */
-.btn-quiet-danger {
-  color: var(--c-danger-text);
-}
-.btn-quiet-danger:hover {
-  border-color: var(--c-danger-text);
-}
-.btn-link.danger {
-  color: var(--c-danger-text);
-}
-/* Inline icons (components/Icon.vue) sit on the text's x-height; in flex rows they never shrink. */
-.icon {
-  flex: none;
-  vertical-align: -0.2em;
-}
-input[type="text"],
-input[type="search"],
-input[type="password"],
-input[type="email"],
-input[type="number"],
-input[type="date"],
-input[type="datetime-local"],
-input:not([type]),
-select,
-textarea {
-  height: var(--control-h);
-  padding: 0 var(--sp-3);
-  border: 1px solid var(--c-border-control);
-  border-radius: var(--radius);
-  background: var(--c-surface);
-  color: var(--c-text);
-  font: inherit;
-  min-width: 0;
-}
-textarea {
-  height: auto;
-  min-height: 64px;
-  padding: var(--sp-2) var(--sp-3);
-  resize: vertical;
-}
-[aria-invalid="true"] {
-  border-color: var(--c-danger) !important;
-  background: var(--c-danger-bg);
-}
-
-/* ---------- Forms ---------- */
-.form-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: var(--sp-3) var(--sp-5);
-}
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-1);
-}
-.field.wide {
-  grid-column: 1 / -1;
-}
-
 /* ---------- Layout grid (tabs → sections → fields; Customization › Detail and form layout) ----------
  * The sections a layout places are windows (lg-free below); the ones it leaves to the built-in placement
  * sit on a grid of 12 columns at the full width (lg-sec lg-s-N; lg-new-row starts a row). A section is a
@@ -543,171 +315,6 @@ dl.lg-grid dd {
 .tabs .tab-errors {
   margin-left: var(--sp-1);
 }
-.field label,
-.field .label {
-  font-size: var(--fs-sm);
-  font-weight: 600;
-  color: var(--c-text);
-}
-.field .req {
-  color: var(--c-danger-text);
-  margin-left: 2px;
-}
-.field .hint {
-  font-size: var(--fs-xs);
-  color: var(--c-text-muted);
-}
-.field .error {
-  font-size: var(--fs-sm);
-  color: var(--c-danger-text);
-}
-.checkbox-row {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  height: var(--control-h);
-}
-.field label.checkbox-row {
-  font-weight: 400;
-}
-fieldset.group {
-  border: 0;
-  margin: 0;
-  padding: 0;
-}
-fieldset.group + fieldset.group {
-  margin-top: var(--sp-5);
-}
-fieldset.group legend {
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-semibold);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--c-text-muted);
-  padding: 0 0 var(--sp-3);
-}
-.form-footer {
-  display: flex;
-  gap: var(--sp-3);
-  padding: var(--sp-4);
-  border-top: 1px solid var(--c-border);
-  background: var(--c-surface-alt);
-  position: sticky;
-  bottom: calc(-1 * var(--sp-6));
-}
-
-/* ---------- Alerts / states ---------- */
-.alert {
-  border: 1px solid var(--c-border);
-  border-left-width: 4px;
-  border-radius: var(--radius);
-  padding: var(--sp-3) var(--sp-4);
-  background: var(--c-surface);
-  margin-bottom: var(--sp-4);
-}
-.alert-error {
-  border-color: var(--c-danger-border);
-  border-left-color: var(--c-danger-text);
-  background: var(--c-danger-bg);
-}
-.alert-warn {
-  border-color: var(--c-warn-border);
-  background: var(--c-warn-bg);
-}
-.alert ul {
-  margin: var(--sp-2) 0 0;
-  padding-left: var(--sp-5);
-}
-.alert .meta {
-  font-size: var(--fs-xs);
-  color: var(--c-text-muted);
-  margin-top: var(--sp-2);
-}
-.state {
-  padding: var(--sp-6) var(--sp-5);
-  text-align: center;
-  color: var(--c-text-muted);
-}
-.state h2 {
-  color: var(--c-text);
-  margin-bottom: var(--sp-3);
-}
-.state .actions {
-  justify-content: center;
-  margin-top: var(--sp-4);
-}
-.spinner {
-  display: inline-block;
-  width: 12px;
-  height: 12px;
-  border: 2px solid var(--c-border-strong);
-  border-top-color: var(--c-primary);
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
-  vertical-align: -2px;
-}
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-/* ---------- Tables ---------- */
-.table-wrap {
-  overflow-x: auto;
-}
-table.data {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: var(--fs-md);
-}
-table.data th,
-table.data td {
-  height: var(--row-h);
-  padding: 0 var(--sp-3);
-  border-bottom: 1px solid var(--c-border);
-  text-align: left;
-  white-space: nowrap;
-  max-width: 320px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-table.data th {
-  position: sticky;
-  top: 0;
-  background: var(--c-surface-alt);
-  font-size: var(--fs-sm);
-  font-weight: 600;
-  color: var(--c-text-muted);
-  z-index: 1;
-}
-table.data th button.sort {
-  all: unset;
-  cursor: pointer;
-}
-table.data th button.sort:focus-visible {
-  outline: 2px solid var(--c-focus);
-}
-table.data tbody tr:hover {
-  background: var(--c-row-hover);
-}
-table.data td.num,
-table.data th.num {
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-table.data tr.deleted td {
-  color: var(--c-text-muted);
-  text-decoration: line-through;
-}
-/* Stale rows while the next page loads: a wash and muted text, never opacity, so the text keeps AA contrast. */
-table.data.loading tbody {
-  cursor: progress;
-}
-table.data.loading tbody td {
-  background: var(--c-surface-alt);
-  color: var(--c-text-muted);
-}
 
 /* ---------- Toolbar / filters / pagination ---------- */
 .toolbar {
@@ -728,8 +335,7 @@ table.data.loading tbody td {
 /* The text-input width is not for checkboxes: a 150 px box centres the tick far from its label (GH#479). */
 .toolbar .field input[type="checkbox"],
 .toolbar .field input[type="radio"] {
-  width: auto;
-  margin: 0;
+  width: 16px;
 }
 /* A filter select is as wide as its longest option, so its value is never clipped. */
 .toolbar .field select {
@@ -744,28 +350,10 @@ table.data.loading tbody td {
 .columns-menu {
   position: relative;
 }
-.popover {
-  position: absolute;
-  left: 0;
-  top: calc(100% + 4px);
-  z-index: var(--z-dropdown);
-  width: 320px;
-  max-height: min(70vh, 560px);
-  overflow-y: auto;
-  padding: var(--sp-3) var(--sp-4);
-  background: var(--c-surface);
-  border: 1px solid var(--c-border-strong);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-pop);
-}
 /* A popover of a control at the end of the toolbar opens leftwards, inside the page. */
 .toolbar-end .popover {
   left: auto;
   right: 0;
-}
-.popover-title {
-  margin: 0 0 var(--sp-3);
-  font-size: var(--fs-md);
 }
 .columns-shown {
   list-style: none;
@@ -799,11 +387,6 @@ fieldset.columns-more legend {
   font-size: var(--fs-sm);
   color: var(--c-text-muted);
 }
-.popover-actions {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--sp-3);
-}
 /* Narrow screens and high zoom: the popover is a sheet across the toolbar. */
 @media (max-width: 480px) {
   .toolbar {
@@ -818,48 +401,6 @@ fieldset.columns-more legend {
     right: var(--sp-3);
     width: auto;
   }
-}
-.pagination {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--sp-3);
-  padding: var(--sp-2) var(--sp-4);
-  font-size: var(--fs-sm);
-  color: var(--c-text-muted);
-  border-top: 1px solid var(--c-border);
-}
-.pagination .actions select {
-  height: 22px;
-}
-
-/* ---------- Badges ---------- */
-.badge {
-  display: inline-block;
-  padding: 0 6px;
-  border-radius: 9px;
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  line-height: 18px;
-  background: var(--badge-neutral-bg);
-  color: var(--badge-neutral-fg);
-  white-space: nowrap;
-}
-.badge.ok {
-  background: var(--badge-ok-bg);
-  color: var(--badge-ok-fg);
-}
-.badge.warn {
-  background: var(--badge-warn-bg);
-  color: var(--badge-warn-fg);
-}
-.badge.off {
-  background: var(--badge-off-bg);
-  color: var(--badge-off-fg);
-}
-.badge.danger {
-  background: var(--badge-danger-bg);
-  color: var(--badge-danger-fg);
 }
 
 /* ---------- Detail view ---------- */
@@ -888,38 +429,12 @@ dl.props dd {
 }
 dl.props .group-title {
   grid-column: 1 / -1;
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-semibold);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
   color: var(--c-text-muted);
   padding: var(--sp-4) 0 var(--sp-2);
   border-bottom: 1px solid var(--c-border);
 }
 dl.props .group-title:first-child {
   padding-top: 0;
-}
-.tabs {
-  display: flex;
-  gap: 0;
-  border-bottom: 1px solid var(--c-border);
-  margin-bottom: var(--sp-4);
-}
-.tabs button {
-  all: unset;
-  cursor: pointer;
-  padding: var(--sp-3) var(--sp-4);
-  font-weight: 600;
-  color: var(--c-text-muted);
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
-}
-.tabs button[aria-selected="true"] {
-  color: var(--c-text);
-  border-bottom-color: var(--c-primary);
-}
-.tabs button:focus-visible {
-  outline: 2px solid var(--c-focus);
 }
 .rel-add {
   display: flex;
@@ -953,23 +468,6 @@ dl.props .group-title:first-child {
   gap: var(--sp-4);
   margin-bottom: var(--sp-4);
 }
-.kpi {
-  background: var(--c-surface);
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius);
-  padding: var(--sp-3) var(--sp-4);
-  min-width: 150px;
-}
-.kpi .value {
-  font-size: var(--fs-kpi);
-  line-height: var(--lh-tight);
-  font-weight: var(--fw-semibold);
-  font-variant-numeric: tabular-nums;
-}
-.kpi .label {
-  font-size: var(--fs-sm);
-  color: var(--c-text-muted);
-}
 .bar {
   height: 8px;
   background: var(--c-primary);
@@ -978,41 +476,6 @@ dl.props .group-title:first-child {
 }
 
 /* ---------- Combobox / dialog ---------- */
-.combo {
-  position: relative;
-}
-.combo-list {
-  position: absolute;
-  z-index: var(--z-dropdown);
-  top: calc(100% + 2px);
-  left: 0;
-  min-width: 100%;
-  width: max-content;
-  max-width: 520px;
-  max-height: 360px;
-  overflow-y: auto;
-  margin: 0;
-  padding: var(--sp-1) 0;
-  list-style: none;
-  background: var(--c-surface);
-  border: 1px solid var(--c-border-strong);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-pop);
-}
-.combo-list li {
-  padding: 5px var(--sp-3);
-  cursor: pointer;
-  display: flex;
-  gap: var(--sp-3);
-  align-items: baseline;
-}
-.combo-list li[aria-selected="true"] {
-  background: var(--c-row-hover);
-}
-.combo-list li.note {
-  cursor: default;
-  color: var(--c-text-muted);
-}
 .global-search {
   flex: 1 1 auto;
   min-width: 150px;
@@ -1020,33 +483,6 @@ dl.props .group-title:first-child {
 }
 .global-search input {
   width: 100%;
-}
-dialog.confirm {
-  border: 1px solid var(--c-border-strong);
-  border-radius: var(--radius);
-  padding: 0;
-  width: min(560px, 92vw);
-  box-shadow: var(--shadow-lg);
-  color: var(--c-text);
-}
-dialog.confirm::backdrop {
-  background: var(--c-scrim);
-}
-dialog.confirm .body {
-  padding: var(--sp-4) var(--sp-5);
-  max-height: 60vh;
-  overflow-y: auto;
-}
-dialog.confirm h2 {
-  padding: var(--sp-4) var(--sp-5) 0;
-}
-dialog.confirm .footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--sp-3);
-  padding: var(--sp-3) var(--sp-5);
-  border-top: 1px solid var(--c-border);
-  background: var(--c-surface-alt);
 }
 
 /* ---------- Signed-out screens (sign-in, first-run setup) ---------- */
@@ -1085,10 +521,6 @@ dialog.confirm .footer {
   font-weight: var(--fw-semibold);
   color: var(--c-text-muted);
   letter-spacing: 0.2px;
-}
-.btn.block {
-  justify-content: center;
-  width: 100%;
 }
 
 /* ---------- Header user menu ---------- */
@@ -1248,9 +680,6 @@ button.who:hover {
   top: 0;
 }
 .admin-nav h2 {
-  font-size: var(--fs-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
   color: var(--c-text-muted);
   padding: var(--sp-3) var(--sp-4) var(--sp-2);
 }
@@ -1410,41 +839,10 @@ table.reorderable tr.drop-target th {
 }
 table.attributes tr.section-row th {
   background: var(--c-surface-alt);
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-semibold);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
   color: var(--c-text-muted);
 }
 table.attributes tr.section-row td {
   background: var(--c-surface-alt);
-}
-dialog.form-dialog {
-  width: min(640px, 94vw);
-}
-dialog.form-dialog.wide {
-  width: min(820px, 96vw);
-}
-dialog.form-dialog .body {
-  max-height: 70vh;
-}
-dialog.form-dialog .body > .alert {
-  margin-bottom: var(--sp-4);
-}
-nav.tabs a {
-  padding: var(--sp-3) var(--sp-4);
-  font-weight: 600;
-  color: var(--c-text-muted);
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
-}
-nav.tabs a:hover {
-  color: var(--c-text);
-  text-decoration: none;
-}
-nav.tabs a[aria-current="page"] {
-  color: var(--c-text);
-  border-bottom-color: var(--c-primary);
 }
 .panel.callout {
   border-color: var(--c-primary);
@@ -2176,46 +1574,10 @@ fieldset.impact-direction {
 fieldset.impact-direction legend {
   padding: 0;
 }
-.segmented {
-  display: flex;
-}
-.segmented label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0;
-  padding: 0 var(--sp-3);
-  min-height: var(--row-h);
-  border: 1px solid var(--c-border-strong);
-  background: var(--c-surface);
-  cursor: pointer;
-  color: var(--c-text);
-  font-weight: normal;
-  white-space: nowrap;
-}
-.segmented label + label {
-  border-left: 0;
-}
-.segmented label:first-child {
-  border-radius: var(--radius) 0 0 var(--radius);
-}
-.segmented label:last-child {
-  border-radius: 0 var(--radius) var(--radius) 0;
-}
-.segmented label:has(input:checked) {
-  background: var(--c-surface-alt);
-  box-shadow: inset 0 -2px 0 var(--c-primary);
-  font-weight: 600;
-}
-.segmented label:has(input:focus-visible) {
-  outline: 2px solid var(--c-focus);
-  outline-offset: 1px;
-}
 /* The toolbar's text-input width is not for radios and checkboxes. */
 .impact-controls input[type="radio"],
 .impact-controls input[type="checkbox"] {
-  width: auto;
-  margin: 0;
+  width: 16px;
 }
 .impact-types {
   position: relative;
@@ -2399,34 +1761,6 @@ ol.impact-path li + li::before {
   max-width: 420px;
   max-height: 280px;
   overflow-y: auto;
-  margin: 0;
-  padding: var(--sp-1) 0;
-  list-style: none;
-  background: var(--c-surface);
-  border: 1px solid var(--c-border-strong);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-pop);
-}
-.listbox [role="option"],
-.listbox-empty {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  min-height: 28px;
-  padding: 2px var(--sp-3);
-  white-space: nowrap;
-}
-.listbox [role="option"] {
-  cursor: pointer;
-}
-.listbox [role="option"].active {
-  background: var(--c-row-hover);
-  outline: 2px solid var(--c-focus);
-  outline-offset: -2px;
-}
-.listbox [role="option"].excluded {
-  cursor: default;
-  color: var(--c-text-muted);
 }
 .listbox .option-name {
   font-weight: 600;
@@ -2561,38 +1895,6 @@ table.data .select-col input[type="checkbox"] {
 .row-menu > button {
   min-width: 28px;
   min-height: 24px;
-}
-/* Under <body> at the button's place (a table cell would clip it). */
-.row-menu-list {
-  position: fixed;
-  z-index: 40;
-  min-width: 200px;
-  margin: 0;
-  padding: var(--sp-1) 0;
-  list-style: none;
-  background: var(--c-surface);
-  border: 1px solid var(--c-border-strong);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-pop);
-}
-.row-menu-list [role="menuitem"] {
-  all: unset;
-  box-sizing: border-box;
-  display: block;
-  width: 100%;
-  min-height: 28px;
-  padding: var(--sp-1) var(--sp-4);
-  color: var(--c-text);
-  cursor: pointer;
-}
-.row-menu-list [role="menuitem"]:hover,
-.row-menu-list [role="menuitem"]:focus-visible {
-  background: var(--c-row-hover);
-  outline: 2px solid var(--c-focus);
-  outline-offset: -2px;
-}
-.row-menu-list [role="menuitem"].danger {
-  color: var(--c-danger-text);
 }
 dialog.member-picker {
   width: min(960px, 96vw);
@@ -2742,48 +2044,6 @@ dialog.member-picker td .badge {
   list-style: none;
   margin: 0;
   padding: 0;
-}
-.view-menu-heading {
-  display: block;
-  padding: var(--sp-2) var(--sp-4) var(--sp-1);
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--c-text-muted);
-}
-.view-menu-popup [role^="menuitem"] {
-  all: unset;
-  box-sizing: border-box;
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  width: 100%;
-  min-height: 28px;
-  padding: var(--sp-1) var(--sp-4);
-  color: var(--c-text);
-  cursor: pointer;
-}
-.view-menu-popup [role^="menuitem"] .check {
-  display: inline-flex;
-  flex: 0 0 16px;
-}
-.view-menu-popup [role^="menuitem"]:hover,
-.view-menu-popup [role^="menuitem"]:focus-visible {
-  background: var(--c-row-hover);
-  outline: 2px solid var(--c-focus);
-  outline-offset: -2px;
-}
-.view-menu-popup [role^="menuitem"][aria-disabled="true"] {
-  color: var(--c-text-muted);
-  cursor: not-allowed;
-}
-.view-menu-popup [role^="menuitem"].danger {
-  color: var(--c-danger-text);
-}
-.view-menu-popup [role="separator"] {
-  margin: var(--sp-1) 0;
-  border-top: 1px solid var(--c-divider);
 }
 /* Banners and errors of the View menu take a row of their own under the toolbar's controls. */
 .view-menu-banner {
