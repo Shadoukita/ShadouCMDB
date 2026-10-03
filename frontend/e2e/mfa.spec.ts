@@ -138,7 +138,7 @@ test.describe("an operator's own two-factor authentication", () => {
   let codes: string[] = [];
 
   test.beforeAll(async ({ request, browser }) => {
-    await apiSend(request, "POST", "/admin/users", { username: USERNAME, displayName: `MFA operator ${stamp}`, password: PASSWORD, profileIds: [] });
+    await apiSend(request, "POST", "/admin/users", { username: USERNAME, email: `${USERNAME}@example.test`, displayName: `MFA operator ${stamp}`, password: PASSWORD, profileIds: [] });
     page = await newPage(browser);
   });
   test.afterAll(async () => page.context().close());
@@ -231,6 +231,7 @@ test.describe("administrators: required two-factor authentication and reset", ()
     profile = await apiSend<Profile>(request, "POST", "/admin/profiles", { name: PROFILE, globalPermissions: [], classPermissions: [] });
     user = await apiSend<User>(request, "POST", "/admin/users", {
       username: USERNAME,
+      email: `${USERNAME}@example.test`,
       displayName: `MFA required ${stamp}`,
       password: PASSWORD,
       profileIds: [profile.id],

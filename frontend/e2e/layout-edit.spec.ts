@@ -21,7 +21,7 @@ test.beforeAll(async ({ request }) => {
     globalPermissions: [],
     classPermissions: [{ classId: serverId, view: true, create: false, edit: false, delete: false }],
   });
-  await apiSend(request, "POST", "/admin/users", { username: VIEWER, displayName: `E2E Layout viewer ${stamp}`, password: PASSWORD, profileIds: [profile.id] });
+  await apiSend(request, "POST", "/admin/users", { username: VIEWER, email: `${VIEWER}@example.test`, displayName: `E2E Layout viewer ${stamp}`, password: PASSWORD, profileIds: [profile.id] });
 });
 test.afterAll(async ({ request }) => resetUiSettings(request));
 

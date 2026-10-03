@@ -194,7 +194,8 @@ async fn a_backup_restores_into_another_database_value_for_value() {
     let server = header.tables.iter().find(|t| t.schema == "infrastruktur" && t.name == "server").unwrap();
     assert!(server.rows > 0 && server.columns.contains(&"cpu_cores".to_owned()));
     let first_type = header.tables.iter().position(|t| t.schema == "infrastruktur").unwrap();
-    assert!(header.tables[first_type..].iter().all(|t| t.schema == "infrastruktur"));
+    // The area schemas: the template's, and the Person type's (0044).
+    assert!(header.tables[first_type..].iter().all(|t| t.schema == "infrastruktur" || t.schema == "people"));
 
     // The target is a migrated install: it has to be replaced.
     let report = restore::restore(&mut cb, buf.as_slice(), &header, true, true).await.unwrap();

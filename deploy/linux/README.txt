@@ -116,7 +116,7 @@ Install as a systemd service
   sudo -u shadoucmdb shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env seed --template it_infrastructure
   # First administrator (or skip this and use first-run setup in the web UI, with the setup token from
   # `sudo cat /var/lib/shadoucmdb/setup-token`; it is in the journal only if that file cannot be written):
-  sudo -u shadoucmdb shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env create-admin --username admin
+  sudo -u shadoucmdb shadoucmdb --env-file /etc/shadoucmdb/shadoucmdb.env create-admin --username admin --email admin@example.com
   sudo install -m 0644 shadoucmdb.service /etc/systemd/system/
   sudo systemctl daemon-reload && sudo systemctl enable --now shadoucmdb
   curl -s http://127.0.0.1:3000/readyz

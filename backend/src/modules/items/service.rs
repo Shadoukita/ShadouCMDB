@@ -15,7 +15,7 @@ use super::schemas::{
     Graph, GraphDirection, GraphEdge, GraphEdgeType, GraphNode, GraphQuery, ItemFilterQuery, ListItemsQuery, SearchHit,
     SearchMatch, SearchQuery, SearchResults, UpdateItemBody,
 };
-use crate::api::context::RequestContext;
+use crate::api::context::{Caller, RequestContext};
 use crate::api::route::InvalidBody;
 use crate::api::schemas::{KEY_PATTERN, LookupRef, Page, Paged};
 use crate::api::validate;
@@ -506,6 +506,24 @@ pub async fn remove(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<(),
         }
         _ => return Err(AppError::missing("Configuration item", id)),
     }
+    // A Person linked to a sign-in account stays (SHAA-1505 decision 7); the
+    // trigger configuration_items_keep_person is the backstop.
+    if let Some(account) = crate::data::people::linked_user(&mut tx, id).await? {
+        return Err(AppError::new(
+            ErrorCode::Conflict,
+            format!(
+                "This person is linked to the sign-in account \"{}\" and cannot be deleted. Disable or delete the \
+                 account first (Administration > Users).",
+                account.username
+            ),
+        )
+        .with_details(vec![FieldError {
+            location: FieldLocation::Params,
+            field: "id".into(),
+            message: format!("Linked to the sign-in account \"{}\"", account.username),
+            code: "person_linked".into(),
+        }]));
+    }
     let model = Model::load(&mut tx).await?;
     let before = must_detail(&mut tx, &model, id, None).await?;
     let edges = data::soft_delete_edges_of(&mut tx, id).await?;
@@ -530,6 +548,115 @@ pub async fn remove(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<(),
     });
     crud::write_audit(&mut tx, ctx, entries).await?;
     tx.commit().await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Writes on behalf of another operation
+// ---------------------------------------------------------------------------
+
+/// `ctx` with the system caller's rights: for CI writes another operation
+/// makes as part of its own (a user's Person, SHAA-1505), which needs the
+/// rights of that operation, not class rights. The audit rows still name `ctx`.
+fn on_behalf(ctx: &RequestContext) -> RequestContext {
+    RequestContext { caller: Caller::System, ..ctx.clone() }
+}
+
+/// Creates a CI of `class_id` with these attribute values, validated as any
+/// create is, in the caller's transaction; writes its audit row. Returns its id.
+pub(crate) async fn create_on_behalf(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    class_id: Uuid,
+    attributes: Map<String, Value>,
+) -> Result<Uuid, AppError> {
+    let system = on_behalf(ctx);
+    let model = Model::load(conn).await?;
+    let defs = class_data::effective_attributes(conn, class_id).await?;
+    let input = CreateItemBody {
+        class_id,
+        ident: None,
+        valid_from: None,
+        valid_until: None,
+        attributes: Some(attributes),
+        criticality_value_id: None,
+    };
+    let needs = Needs::for_create(&defs, input.attributes.as_ref());
+    let resolver = DbResolver::load(conn, None, &needs).await?;
+    let plan = plan::plan_create(&system, &model, &defs, &input, &resolver)?;
+    let id = plan::apply(conn, &model, &plan).await?;
+    let dto = must_detail(conn, &model, id, None).await?;
+    let entry = AuditEntry {
+        action: AuditAction::Create,
+        entity_type: "configuration_items",
+        entity_id: id,
+        old_value: None,
+        new_value: Some(crud::json(&dto)),
+    };
+    crud::write_audit(conn, ctx, vec![entry]).await?;
+    Ok(id)
+}
+
+/// Sets these attribute values on a live CI, validated as any update is, in
+/// the caller's transaction; writes its audit row unless nothing changed.
+pub(crate) async fn update_on_behalf(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    id: Uuid,
+    attributes: Map<String, Value>,
+) -> Result<(), AppError> {
+    let system = on_behalf(ctx);
+    let locked = data::lock(conn, id).await?.ok_or_else(|| AppError::missing("Configuration item", id))?;
+    let model = Model::load(conn).await?;
+    let before = must_detail(conn, &model, id, None).await?;
+    let defs = class_data::effective_attributes(conn, locked.class_id).await?;
+    let input = UpdateItemBody {
+        class_id: None,
+        ident: None,
+        valid_from: None,
+        valid_until: None,
+        attributes: Some(attributes),
+        criticality_value_id: None,
+        version: None,
+    };
+    let needs = Needs::for_update(&defs, input.attributes.as_ref(), &before.attributes);
+    let resolver = DbResolver::load(conn, None, &needs).await?;
+    let plan = plan::plan_update(&system, &model, &defs, before, &input, &resolver, None)?;
+    plan::apply(conn, &model, &plan).await?;
+    let dto = must_detail(conn, &model, id, None).await?;
+    let old = plan.before.as_ref().map(crud::json);
+    let new = crud::json(&dto);
+    if old.as_ref() != Some(&new) {
+        let entry = AuditEntry {
+            action: AuditAction::Update,
+            entity_type: "configuration_items",
+            entity_id: id,
+            old_value: old,
+            new_value: Some(new),
+        };
+        crud::write_audit(conn, ctx, vec![entry]).await?;
+    }
+    Ok(())
+}
+
+/// Brings a soft-deleted CI back (its relationships stay deleted), in the
+/// caller's transaction, with a `restore` audit row.
+pub(crate) async fn restore_on_behalf(conn: &mut PgConnection, ctx: &RequestContext, id: Uuid) -> Result<(), AppError> {
+    let model = Model::load(conn).await?;
+    let before = must_detail(conn, &model, id, None).await?;
+    if before.summary.deleted_at.is_none() {
+        return Ok(());
+    }
+    data::restore(conn, id).await?;
+    let after = must_detail(conn, &model, id, None).await?;
+    let entry = AuditEntry {
+        action: AuditAction::Restore,
+        entity_type: "configuration_items",
+        entity_id: id,
+        old_value: Some(crud::json(&before)),
+        new_value: Some(crud::json(&after)),
+    };
+    crud::write_audit(conn, ctx, vec![entry]).await?;
     Ok(())
 }
 

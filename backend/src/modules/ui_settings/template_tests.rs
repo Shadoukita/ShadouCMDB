@@ -18,7 +18,7 @@ struct World {
 
 async fn world(db: &scratch::Scratch) -> World {
     let app = app(db.pool.clone());
-    let setup = json!({ "username": "owner", "displayName": "Owner", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
+    let setup = json!({ "username": "owner", "email": "owner@example.test", "displayName": "Owner", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
     let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
     assert_eq!(status, 201, "{me}");
     let admin = session_of(&me, &headers);
@@ -105,7 +105,7 @@ impl World {
                 .await
                 .unwrap();
         }
-        let body = json!({ "username": name, "displayName": format!("User {name}"), "password": "a long enough password", "profileIds": [profile] });
+        let body = json!({ "username": name, "email": format!("{name}@example.test"), "displayName": format!("User {name}"), "password": "a long enough password", "profileIds": [profile] });
         let (status, v, _) = call(&self.app, "POST", "/api/v1/admin/users", &self.admin, Some(body)).await;
         assert_eq!(status, 201, "{v}");
         let login = json!({ "username": name, "password": "a long enough password" });
@@ -261,12 +261,13 @@ async fn cis_use_another_template_or_their_own_layout_and_used_templates_stay() 
     };
     assert_eq!(usage(&u, "compact"), (json!([]), json!(1)), "{u}");
     assert_eq!(usage(&u, "server"), (json!(["server"]), json!(0)), "{u}");
-    // The built-in business service class has no layout entry: Standard.
-    assert_eq!(usage(&u, "standard"), (json!(["business_service"]), json!(0)), "{u}");
+    // The built-in business service and Person classes have no layout entry: Standard.
+    assert_eq!(usage(&u, "standard"), (json!(["business_service", "person"]), json!(0)), "{u}");
     assert_eq!(
         u["classes"],
         json!([
             { "classKey": "business_service", "className": "Business service", "templateKey": "standard", "explicit": false, "ownLayoutCount": 0 },
+            { "classKey": "person", "className": "Person", "templateKey": "standard", "explicit": false, "ownLayoutCount": 0 },
             { "classKey": "server", "className": "Server", "templateKey": "server", "explicit": true, "ownLayoutCount": 1 }
         ])
     );
@@ -368,7 +369,7 @@ async fn cis_use_another_template_or_their_own_layout_and_used_templates_stay() 
     let (status, _, _) = call(&w.app, "PUT", &path, &w.admin, Some(json!({ "templateKey": "standard" }))).await;
     assert_eq!(status, 404, "deleted CIs are not edited");
     let (_, u, _) = call(&w.app, "GET", "/api/v1/ui-settings/layout-templates/usage", &w.admin, None).await;
-    assert_eq!(usage(&u, "standard"), (json!(["business_service", "server"]), json!(0)), "{u}");
+    assert_eq!(usage(&u, "standard"), (json!(["business_service", "person", "server"]), json!(0)), "{u}");
 
     db.drop().await;
 }

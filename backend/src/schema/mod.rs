@@ -318,6 +318,11 @@ fn index_name(f: &Field) -> String {
     format!("ix_{}", f.hex())
 }
 
+/// The unique index of the Person's Email (lower(email), migration 0044).
+pub fn unique_index_name(f: &Field) -> String {
+    format!("uq_{}", f.hex())
+}
+
 fn fk_target(t: AttributeDataType) -> Option<&'static str> {
     match t {
         AttributeDataType::Reference => Some("cmdb.configuration_items"),
@@ -630,6 +635,19 @@ impl Planner<'_> {
             if !self.catalog.has_index(schema, &index_name(f)) {
                 plan.ddl(format!("CREATE INDEX {} ON {} ({col})", quote_ident(&index_name(f)), table.sql()));
             }
+        }
+
+        // The Person's Email is unique ignoring case (SHAA-1505 decision 2):
+        // the database holds the line for every write path. Built before any
+        // Person exists (the type is new in 0044), so nothing can violate it then;
+        // a later build finds duplicates and is refused with the index's error.
+        if f.is_unique_email() && !self.catalog.has_index(schema, &unique_index_name(f)) {
+            let i = plan.ddl(format!(
+                "CREATE UNIQUE INDEX {} ON {} (lower({col}))",
+                quote_ident(&unique_index_name(f)),
+                table.sql()
+            ));
+            plan.note(Some(i), "unique_index", None, format!("{}.{} is unique ignoring case", table.display(), f.key));
         }
 
         // NOT NULL for a required, active field; refused while any asset has no value.
@@ -1242,6 +1260,7 @@ mod tests {
             is_active: true,
             sort_order: 0,
             lookup_list_id: None,
+            system_role: None,
         };
         let run = async |conn: &mut PgConnection, f: &Field, from: &str| {
             let mut plan = Plan::default();

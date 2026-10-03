@@ -151,6 +151,7 @@ async function collect(request) {
     await request("POST", "admin/users", {
       username: "dast-target",
       displayName: name,
+      email: "dast-target@example.test",
       password: randomBytes(24).toString("base64url"),
     })
   ).id;

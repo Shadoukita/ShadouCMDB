@@ -49,6 +49,7 @@ async function works(playwright: Ctx, baseURL: string, token: Token): Promise<nu
 async function createUser(request: APIRequestContext, name: string, profileIds: string[]): Promise<{ id: string; username: string }> {
   const user = await apiSend<{ id: string; username: string }>(request, "POST", "/admin/users", {
     username: `e2e-toksec-${name}-${stamp}`,
+    email: `e2e-toksec-${name}-${stamp}@example.test`,
     displayName: `E2E token security ${name} ${stamp}`,
     password: PASSWORD,
     profileIds,

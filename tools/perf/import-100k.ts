@@ -94,7 +94,7 @@ async function idByKey(collection: string, key: string): Promise<string> {
 
 async function signIn() {
   if ((await get('/api/v1/setup')).setupRequired) {
-    const json = await post('/api/v1/setup', { username: USERNAME, displayName: 'Performance check', password: PASSWORD, setupToken: SETUP_TOKEN });
+    const json = await post('/api/v1/setup', { username: USERNAME, email: `${USERNAME}@example.com`, displayName: 'Performance check', password: PASSWORD, setupToken: SETUP_TOKEN });
     csrf = json.csrfToken;
   } else {
     csrf = (await post('/api/v1/auth/login', { username: USERNAME, password: PASSWORD })).csrfToken;

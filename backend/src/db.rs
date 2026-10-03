@@ -430,15 +430,17 @@ async fn migrate_with(pool: &PgPool, cfg: &DatabaseConfig, adopt_drizzle: bool) 
     }
     let after = applied_count(pool).await?;
 
-    // Area schemas, type tables and reporting views follow the data model; bring
-    // anything missing (after migration 0009, or a new reporting role) in line.
-    let ctx = crate::api::context::RequestContext::system("migrate", "migrate");
-    let mut tx = pool.begin().await?;
-    act_as_api_role(&mut tx).await?;
-    let change = crate::schema::reconcile(&mut tx, &ctx, "Reconcile after migrate")
-        .await
-        .map_err(|e| anyhow::anyhow!("reconciling the data model failed: {}", e.message))?;
-    tx.commit().await?;
+    let (change, linked) = reconcile_and_link(pool).await?;
+    if linked > 0 {
+        println!("Users: {linked} accounts linked to their Person (created where none had the account's e-mail)");
+    }
+    let waiting = crate::data::auth::count_without_email(&mut *pool.acquire().await?).await?;
+    if waiting > 0 {
+        println!(
+            "Users: {waiting} accounts have no e-mail yet; they must enter one at their next sign-in (listed under \
+             Administration > Users, sign-in status \"e-mail required\")"
+        );
+    }
     let reconciled = match &change {
         Some(c) => {
             println!("Data model: {} statements applied (reporting views and grants)", c.statements.len());
@@ -457,6 +459,26 @@ async fn migrate_with(pool: &PgPool, cfg: &DatabaseConfig, adopt_drizzle: bool) 
         if pending.is_empty() && !reconciled { " (nothing to do)" } else { "" }
     );
     Ok(())
+}
+
+/// What `migrate` does after the migrations: area schemas, type tables and
+/// reporting views follow the data model (anything missing after migration
+/// 0009, a new reporting role, the Person type of 0044), then every account
+/// with an e-mail gets its Person (SHAA-1505), in the same transaction as the
+/// reconcile that built its table: all or nothing. Returns the schema change
+/// and how many accounts were linked.
+pub async fn reconcile_and_link(pool: &PgPool) -> anyhow::Result<(Option<crate::schema::SchemaChange>, usize)> {
+    let ctx = crate::api::context::RequestContext::system("migrate", "migrate");
+    let mut tx = pool.begin().await?;
+    act_as_api_role(&mut tx).await?;
+    let change = crate::schema::reconcile(&mut tx, &ctx, "Reconcile after migrate")
+        .await
+        .map_err(|e| anyhow::anyhow!("reconciling the data model failed: {}", e.message))?;
+    let linked = crate::modules::people::link_all(&mut tx, &ctx)
+        .await
+        .map_err(|e| anyhow::anyhow!("linking the user accounts to their persons failed: {}", e.message))?;
+    tx.commit().await?;
+    Ok((change, linked))
 }
 
 /// One-time hand-over from the Node/Drizzle runner: checks that every row in
@@ -544,9 +566,11 @@ pub mod scratch {
         pub pool: PgPool,
     }
 
+    /// A database `shadoucmdb migrate` left: migrated and reconciled.
     pub async fn database(test: &str) -> Option<Scratch> {
         let db = empty(test).await?;
         super::MIGRATOR.run(&db.pool).await.expect("migrations");
+        super::reconcile_and_link(&db.pool).await.expect("reconcile after migrate");
         Some(db)
     }
 
@@ -623,6 +647,7 @@ pub mod scratch {
             ];
             let db = create(self.admin.clone(), &settings).await;
             super::MIGRATOR.run(&db.pool).await.expect("migrations");
+            super::reconcile_and_link(&db.pool).await.expect("reconcile after migrate");
             db
         }
 
@@ -838,3 +863,5 @@ mod upgrade_0039;
 mod upgrade_0041;
 #[cfg(test)]
 mod upgrade_0042;
+#[cfg(test)]
+mod upgrade_0044;

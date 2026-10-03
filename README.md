@@ -165,7 +165,7 @@ the same flow for a source checkout.
    such file the token is written to the log instead), or run:
 
    ```sh
-   shadoucmdb create-admin --username admin --display-name "Jane Admin"   # prompts for the password
+   shadoucmdb create-admin --username admin --display-name "Jane Admin" --email jane.admin@example.com   # prompts for the password
    ```
 
    Further users and their permission profiles are managed under Administration. The server speaks plain
@@ -206,7 +206,7 @@ For a PostgreSQL running on the Docker host itself, set `PGHOST=host.docker.inte
 The container has no env file and no token file, so a generated first-run setup token goes to
 `docker compose logs api`, where anyone with access to the container logs (or a log shipper) can read it.
 Where that is more people than should own the instance, create the first administrator with
-`docker compose run --rm seed create-admin --username admin` instead, or set `SETUP_TOKEN` in `.env` and
+`docker compose run --rm seed create-admin --username admin --email admin@example.com` instead, or set `SETUP_TOKEN` in `.env` and
 remove it once setup is done.
 
 ## Backup, restore and reset

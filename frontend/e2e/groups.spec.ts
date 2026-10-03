@@ -22,6 +22,7 @@ interface Group {
 async function createUser(request: APIRequestContext, username: string): Promise<string> {
   const u = await apiSend<{ id: string }>(request, "POST", "/admin/users", {
     username,
+    email: `${username}@example.test`,
     displayName: `Group member ${username}`,
     password: "group-member-password-1",
     isActive: true,

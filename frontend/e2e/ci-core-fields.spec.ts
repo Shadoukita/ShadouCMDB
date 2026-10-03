@@ -163,7 +163,7 @@ test("ident: read-only for anyone but an administrator", async ({ page, request,
     globalPermissions: [],
     classPermissions: [{ classId, view: true, create: true, edit: true, delete: false }],
   });
-  await apiSend(request, "POST", "/admin/users", { username: USERNAME, displayName: `E2E Core ${stamp}`, password: PASSWORD, profileIds: [profile.id] });
+  await apiSend(request, "POST", "/admin/users", { username: USERNAME, email: `${USERNAME}@example.test`, displayName: `E2E Core ${stamp}`, password: PASSWORD, profileIds: [profile.id] });
   const editor = await signInUi(browser, USERNAME, PASSWORD);
   try {
     await editor.goto(`/cis/${expiredId}/edit`);

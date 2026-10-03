@@ -9,6 +9,12 @@
 //! that leaves no active Administrator, and a non-administrator user manager
 //! can only act on accounts, and assign profiles, whose permissions they hold
 //! themselves.
+//!
+//! Every account has a unique e-mail (ignoring case) and is linked to a CI of
+//! the built-in Person type with that e-mail ([`super::people`], SHAA-1505):
+//! creating an account or changing its e-mail links or creates the Person in
+//! the same transaction. Accounts from before 0044 without an e-mail sign in
+//! once more and must enter one (`signInStatus: email_required`).
 
 use std::collections::HashSet;
 
@@ -21,7 +27,7 @@ use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use super::groups::OwnerRemoval;
-use super::{api_tokens, profiles};
+use super::{api_tokens, people, profiles};
 use crate::api::context::{Count, RequestContext, forbidden};
 use crate::api::route::{Body, Check, IdPath, In, Json, NoBody, NoPath, NoQuery, Query, Route, route};
 use crate::api::schemas::{
@@ -34,9 +40,9 @@ use crate::auth::secret::Secret;
 use crate::data::auth::{self as data, UserRow};
 use crate::data::crud::{self, AuditAction, AuditEntry, ColumnSet, Where};
 use crate::data::mfa;
+use crate::data::people as people_data;
 use crate::data::service_owners::{self, OwnerCleanup, Principal};
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
-use crate::modules::lookups::email_schema;
 use crate::modules::simple_resource::non_empty;
 use crate::paged;
 
@@ -53,6 +59,48 @@ pub struct ProfileRef {
     pub id: Uuid,
     pub name: String,
     pub is_builtin: bool,
+}
+
+/// The Person CI an account is linked to
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PersonRef {
+    pub id: Uuid,
+    /// The Person's label (its Name)
+    pub label: String,
+}
+
+/// Whether the account can sign in as it is (independent of `isActive`)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SignInStatus {
+    /// Has an e-mail and a linked Person
+    Ready,
+    /// Created before e-mails were required: must enter one at the next sign-in
+    /// before anything else (403 EMAIL_REQUIRED until then)
+    EmailRequired,
+    /// Has an e-mail but no linked Person ("account incomplete"): sign-in is
+    /// refused. Saving the account's e-mail again links it.
+    PersonMissing,
+}
+
+impl SignInStatus {
+    fn of(email: Option<&str>, person: Option<Uuid>) -> Self {
+        match (email, person) {
+            (None, _) => SignInStatus::EmailRequired,
+            (Some(_), None) => SignInStatus::PersonMissing,
+            (Some(_), Some(_)) => SignInStatus::Ready,
+        }
+    }
+
+    /// The SQL condition on `users`.
+    fn sql(self) -> &'static str {
+        match self {
+            SignInStatus::Ready => "email IS NOT NULL AND person_ci_id IS NOT NULL",
+            SignInStatus::EmailRequired => "email IS NULL",
+            SignInStatus::PersonMissing => "email IS NOT NULL AND person_ci_id IS NULL",
+        }
+    }
 }
 
 /// The identity provider an account signs in through
@@ -72,8 +120,16 @@ pub struct User {
     /// Sign-in name, unique regardless of case
     pub username: String,
     pub display_name: String,
+    /// Unique regardless of case. Null only for accounts created before
+    /// e-mails were required (`signInStatus: email_required`).
     #[schema(required = true)]
     pub email: Option<String>,
+    /// The Person CI linked to the account (same e-mail); null while
+    /// `signInStatus` is not `ready`
+    #[schema(required = true)]
+    pub person: Option<PersonRef>,
+    #[schema(inline)]
+    pub sign_in_status: SignInStatus,
     /// Disabled users cannot sign in and their sessions end
     pub is_active: bool,
     /// Holds the built-in Administrator profile
@@ -100,6 +156,16 @@ pub struct User {
 
 pub fn username_schema() -> Schema {
     ObjectBuilder::new().schema_type(Type::String).pattern(Some(USERNAME_PATTERN)).into()
+}
+
+/// An account's e-mail: required, never null (SHAA-1505). At most 254
+/// characters (RFC 5321), the limit of the Person's Email.
+pub fn required_email_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .format(Some(SchemaFormat::KnownFormat(KnownFormat::Email)))
+        .max_length(Some(254))
+        .into()
 }
 
 pub fn password_schema() -> Schema {
@@ -130,9 +196,10 @@ pub struct UserCreate {
     #[schema(schema_with = name_schema)]
     #[serde(deserialize_with = "trimmed")]
     pub display_name: String,
-    #[schema(schema_with = email_schema)]
-    #[serde(default)]
-    pub email: Option<String>,
+    /// Unique regardless of case. The account is linked to the Person with this
+    /// e-mail, which is created when there is none (Name = the display name).
+    #[schema(schema_with = required_email_schema)]
+    pub email: String,
     #[schema(schema_with = password_schema)]
     pub password: Secret,
     /// Default true
@@ -157,9 +224,11 @@ pub struct UserUpdate {
     #[schema(schema_with = name_schema)]
     #[serde(default, deserialize_with = "schemas::trimmed_opt")]
     display_name: Option<String>,
-    #[schema(schema_with = email_schema)]
-    #[serde(default, deserialize_with = "schemas::patch")]
-    email: Option<Option<String>>,
+    /// Cannot be cleared. Changes the linked Person's Email too (409 CONFLICT
+    /// when another account or another Person has the address); an account
+    /// without a Person is linked to the Person with the address, or one is created.
+    #[schema(schema_with = required_email_schema)]
+    email: Option<String>,
     /// false disables the account and ends its sessions
     #[schema(nullable = false)]
     is_active: Option<bool>,
@@ -172,7 +241,7 @@ impl UserUpdate {
         let mut c = ColumnSet::default();
         c.opt("username", self.username.clone())
             .opt("display_name", self.display_name.clone())
-            .opt("email", self.email.clone())
+            .opt("email", self.email.clone().map(Some))
             .opt("is_active", self.is_active);
         c
     }
@@ -235,6 +304,12 @@ pub struct UserList {
     /// Users holding any of these profiles
     #[param(schema_with = schemas::uuid_list_schema)]
     profile_id: Option<UuidList>,
+    /// Accounts in this state, e.g. `email_required` for the accounts that must
+    /// still enter an e-mail, `person_missing` for incomplete ones
+    #[param(inline)]
+    sign_in_status: Option<SignInStatus>,
+    /// The account linked to this Person CI
+    person_ci_id: Option<Uuid>,
 }
 paged!(UserList);
 
@@ -246,6 +321,8 @@ async fn dtos(conn: &mut PgConnection, rows: Vec<UserRow>) -> Result<Vec<User>, 
     let ids: Vec<Uuid> = rows.iter().map(|r| r.id).collect();
     let held = data::profiles_of_users(conn, &ids).await?;
     let mfa = crate::data::mfa::enabled_among(conn, &ids).await?;
+    let person_ids: Vec<Uuid> = rows.iter().filter_map(|r| r.person_ci_id).collect();
+    let persons = if person_ids.is_empty() { Vec::new() } else { people_data::labels(conn, &person_ids).await? };
     let provider_ids: Vec<Uuid> = rows.iter().filter_map(|r| r.identity_provider_id).collect();
     let providers: Vec<(Uuid, String, String)> = if provider_ids.is_empty() {
         Vec::new()
@@ -267,7 +344,11 @@ async fn dtos(conn: &mut PgConnection, rows: Vec<UserRow>) -> Result<Vec<User>, 
                 id: r.id,
                 username: r.username,
                 display_name: r.display_name,
+                sign_in_status: SignInStatus::of(r.email.as_deref(), r.person_ci_id),
                 email: r.email,
+                person: r.person_ci_id.and_then(|id| {
+                    persons.iter().find(|p| p.0 == id).map(|(id, label)| PersonRef { id: *id, label: label.clone() })
+                }),
                 is_active: r.is_active,
                 is_administrator: profiles.iter().any(|p| p.is_builtin),
                 mfa_enabled: mfa.contains(&r.id),
@@ -291,6 +372,11 @@ async fn dtos(conn: &mut PgConnection, rows: Vec<UserRow>) -> Result<Vec<User>, 
 pub async fn load(conn: &mut PgConnection, id: Uuid) -> Result<User, AppError> {
     let row = data::get_user(conn, id, false).await?.ok_or_else(|| AppError::missing("User", id))?;
     Ok(dtos(conn, vec![row]).await?.remove(0))
+}
+
+/// The user, their row locked until the transaction ends.
+pub async fn lock_for_update(conn: &mut PgConnection, id: Uuid) -> Result<User, AppError> {
+    lock(conn, id).await
 }
 
 async fn lock(conn: &mut PgConnection, id: Uuid) -> Result<User, AppError> {
@@ -383,6 +469,12 @@ pub async fn list(pool: &PgPool, q: &UserList) -> Result<Page<User>, AppError> {
                 .push_bind(ids.0.clone())
                 .push("))");
         }
+        if let Some(status) = q.sign_in_status {
+            w.and().push("(").push(status.sql()).push(")");
+        }
+        if let Some(id) = q.person_ci_id {
+            w.and().push("person_ci_id = ").push_bind(id);
+        }
     };
     let column = match q.sort.field.as_str() {
         "displayName" => "lower(display_name)",
@@ -418,13 +510,14 @@ pub async fn create_in(conn: &mut PgConnection, ctx: &RequestContext, b: &UserCr
         &data::NewUser {
             username: &b.username,
             display_name: &b.display_name,
-            email: b.email.as_deref(),
+            email: Some(&b.email),
             password_hash: &hash,
             is_active: b.is_active.unwrap_or(true),
         },
     )
     .await?;
     data::set_user_profiles(conn, id, &b.profile_ids).await?;
+    people::link_user(conn, ctx, id).await?;
     let dto = load(conn, id).await?;
     let entry = AuditEntry {
         action: AuditAction::Create,
@@ -466,6 +559,10 @@ pub async fn update(pool: &PgPool, ctx: &RequestContext, id: Uuid, b: &UserUpdat
     let columns = b.columns();
     if !columns.is_empty() {
         crud::update_row::<UserRow>(&mut tx, TABLE, data::USER_COLUMNS, id, columns).await?;
+    }
+    // The Person follows the e-mail; saving it again links an account without one.
+    if b.email.is_some() {
+        people::link_user(&mut tx, ctx, id).await?;
     }
     if disabling {
         let ended = data::delete_user_sessions(&mut tx, id, None).await?;

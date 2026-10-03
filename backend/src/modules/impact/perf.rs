@@ -85,7 +85,7 @@ pub(crate) struct Seeded {
 
 pub(crate) async fn seed(pool: &PgPool) -> Seeded {
     let app = app(pool.clone());
-    let setup = json!({ "username": "owner", "displayName": "Owner", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
+    let setup = json!({ "username": "owner", "email": "owner@example.test", "displayName": "Owner", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
     let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
     assert_eq!(status, 201, "{me}");
     let cookie = headers

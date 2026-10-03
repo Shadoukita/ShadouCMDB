@@ -56,9 +56,9 @@ test.beforeAll(async ({ request }) => {
     globalPermissions: [],
     classPermissions: [{ classId: null, view: true, create: true, edit: true, delete: false }],
   });
-  await apiSend(request, "POST", "/admin/users", { username: IMPORTER, displayName: `E2E Importer ${stamp}`, password: PASSWORD, profileIds: [importers.id] });
-  await apiSend(request, "POST", "/admin/users", { username: PLAIN, displayName: `E2E Plain ${stamp}`, password: PASSWORD, profileIds: [plain.id] });
-  await apiSend(request, "POST", "/admin/users", { username: OTHER_IMPORTER, displayName: `E2E Other importer ${stamp}`, password: PASSWORD, profileIds: [importers.id] });
+  await apiSend(request, "POST", "/admin/users", { username: IMPORTER, email: `${IMPORTER}@example.test`, displayName: `E2E Importer ${stamp}`, password: PASSWORD, profileIds: [importers.id] });
+  await apiSend(request, "POST", "/admin/users", { username: PLAIN, email: `${PLAIN}@example.test`, displayName: `E2E Plain ${stamp}`, password: PASSWORD, profileIds: [plain.id] });
+  await apiSend(request, "POST", "/admin/users", { username: OTHER_IMPORTER, email: `${OTHER_IMPORTER}@example.test`, displayName: `E2E Other importer ${stamp}`, password: PASSWORD, profileIds: [importers.id] });
   await setImport(request, false);
 });
 
@@ -568,7 +568,7 @@ test("a user with rights on one class can only pick that class", async ({ browse
     classPermissions: [{ classId: serverClass, view: true, create: true, edit: true, delete: false }],
   });
   const user = `e2e-srv-importer-${stamp}`;
-  await apiSend(request, "POST", "/admin/users", { username: user, displayName: `E2E Server importer ${stamp}`, password: PASSWORD, profileIds: [profile.id] });
+  await apiSend(request, "POST", "/admin/users", { username: user, email: `${user}@example.test`, displayName: `E2E Server importer ${stamp}`, password: PASSWORD, profileIds: [profile.id] });
   const page = await signInUi(browser, user);
   await newImport(page, { name: `one-class-${stamp}.csv`, mimeType: "text/csv", buffer: appsCsv([appRow(1)]) });
   const classes = await page.getByLabel("Target class").locator("option").allTextContents();

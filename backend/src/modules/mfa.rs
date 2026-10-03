@@ -614,7 +614,7 @@ pub(crate) mod tests {
     }
 
     pub(crate) async fn setup(app: &Router) -> (Creds, Value) {
-        let body = json!({ "username": "owner", "displayName": "Owner", "password": PASSWORD, "setupToken": crate::auth::setup_token::TEST_TOKEN });
+        let body = json!({ "username": "owner", "email": "owner@example.test", "displayName": "Owner", "password": PASSWORD, "setupToken": crate::auth::setup_token::TEST_TOKEN });
         let (status, me, headers) = call(app, "POST", "/api/v1/setup", &Creds::default(), Some(body)).await;
         assert_eq!(status, 201, "{me}");
         (session_of(&me, &headers), me)
@@ -689,7 +689,7 @@ pub(crate) mod tests {
                 .fetch_one(pool)
                 .await
                 .unwrap();
-        let body = json!({ "username": "second", "displayName": "Second", "password": PASSWORD,
+        let body = json!({ "username": "second", "email": "second@example.test", "displayName": "Second", "password": PASSWORD,
             "profileIds": [administrators] });
         let (status, v, _) = call(app, "POST", "/api/v1/admin/users", session, Some(body)).await;
         assert_eq!(status, 201, "{v}");
@@ -896,7 +896,7 @@ pub(crate) mod tests {
                 .fetch_one(pool)
                 .await
                 .unwrap();
-        let body = json!({ "username": "second", "displayName": "Second", "password": PASSWORD,
+        let body = json!({ "username": "second", "email": "second@example.test", "displayName": "Second", "password": PASSWORD,
             "profileIds": [administrators] });
         let (status, v, _) = call(&app, "POST", "/api/v1/admin/users", &session, Some(body)).await;
         assert_eq!(status, 201, "{v}");
@@ -1022,8 +1022,7 @@ pub(crate) mod tests {
                 .await
                 .unwrap();
         // Right after signing in, the owner creates a colleague: allowed.
-        let body =
-            json!({ "username": "bob", "displayName": "Bob", "password": PASSWORD, "profileIds": [administrators] });
+        let body = json!({ "username": "bob", "email": "bob@example.test", "displayName": "Bob", "password": PASSWORD, "profileIds": [administrators] });
         let (status, v, _) = call(&app, "POST", "/api/v1/admin/users", &session, Some(body)).await;
         assert_eq!(status, 201, "{v}");
         let bob = v["id"].as_str().unwrap().to_owned();
@@ -1033,7 +1032,7 @@ pub(crate) mod tests {
         let before = bob_hash().await.unwrap();
 
         stale(pool, "owner").await;
-        let second = json!({ "username": "owner2", "displayName": "Owner 2", "password": PASSWORD,
+        let second = json!({ "username": "owner2", "email": "owner2@example.test", "displayName": "Owner 2", "password": PASSWORD,
             "profileIds": [administrators] });
         let refused = [
             ("POST", "/api/v1/admin/users".to_owned(), Some(second.clone()), "createUser"),
@@ -1107,7 +1106,7 @@ pub(crate) mod tests {
         let (status, v, _) = call(&app, "POST", path, &session, Some(body)).await;
         assert_eq!((status, code(&v)), (400, "VALIDATION_ERROR"), "{v}");
         assert!(audit_rows(pool, "session.reauthenticate").await.is_empty());
-        let body = json!({ "username": "x", "displayName": "X", "password": PASSWORD });
+        let body = json!({ "username": "x", "email": "x@example.test", "displayName": "X", "password": PASSWORD });
         let (status, v, _) = call(&app, "POST", "/api/v1/admin/users", &session, Some(body.clone())).await;
         assert_eq!((status, code(&v)), (403, "REAUTHENTICATION_REQUIRED"), "{v}");
 
@@ -1276,7 +1275,7 @@ pub(crate) mod tests {
         let clone = json!({ "name": "Delegated admin" });
         let (status, v, _) = call(&app, "POST", &format!("{path}/clone"), &session, Some(clone)).await;
         assert_eq!(status, 201, "{v}");
-        let body = json!({ "username": "delegate", "displayName": "Delegate", "password": PASSWORD,
+        let body = json!({ "username": "delegate", "email": "delegate@example.test", "displayName": "Delegate", "password": PASSWORD,
             "profileIds": [v["id"]] });
         let (status, v, _) = call(&app, "POST", "/api/v1/admin/users", &session, Some(body)).await;
         assert_eq!(status, 201, "{v}");
@@ -1522,7 +1521,7 @@ pub(crate) mod tests {
                 let input = users::UserCreate {
                     username: name.into(),
                     display_name: name.into(),
-                    email: None,
+                    email: format!("{name}@example.test"),
                     password: PASSWORD.into(),
                     is_active: Some(true),
                     profile_ids: vec![profile],
@@ -1536,10 +1535,11 @@ pub(crate) mod tests {
                     external_id: &format!("entry-{name}"),
                     username: name,
                     display_name: name,
-                    email: None,
+                    email: Some(&format!("{name}@example.test")),
                 };
                 let id = crate::data::identity_providers::insert_linked(&mut tx, &new).await.unwrap();
                 auth_data::set_user_profiles(&mut tx, id, &[profile]).await.unwrap();
+                crate::modules::people::link_user(&mut tx, &system, id).await.unwrap();
                 tx.commit().await.unwrap();
                 id
             }
@@ -1818,7 +1818,7 @@ pub(crate) mod tests {
         let (admin, _) = setup(&app).await;
         let readers = readers_profile(pool).await;
         let strict = strict_profile(pool).await;
-        let svc = json!({ "username": "svc-backup", "displayName": "Backup", "password": "service account password",
+        let svc = json!({ "username": "svc-backup", "email": "svc-backup@example.test", "displayName": "Backup", "password": "service account password",
             "profileIds": [strict, readers] });
         let (status, v, _) = call(&app, "POST", "/api/v1/admin/users", &admin, Some(svc)).await;
         assert_eq!(status, 201, "{v}");

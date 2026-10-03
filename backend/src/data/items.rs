@@ -521,6 +521,15 @@ pub async fn soft_delete(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<()> 
     Ok(())
 }
 
+/// Undoes a soft delete (a Person adopted by a new account, SHAA-1505).
+pub async fn restore(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<()> {
+    sqlx::query("UPDATE cmdb.configuration_items SET deleted_at = NULL, version = version + 1 WHERE id = $1")
+        .bind(id)
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
 /// A relationship row as stored, for the audit entries of a cascaded delete.
 #[derive(Debug, serde::Serialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]

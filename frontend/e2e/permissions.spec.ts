@@ -76,6 +76,7 @@ test.beforeAll(async ({ request, playwright, baseURL }) => {
   userId = (
     await apiSend<{ id: string }>(request, "POST", "/admin/users", {
       username: USERNAME,
+      email: `${USERNAME}@example.test`,
       displayName: `E2E Restricted ${stamp}`,
       password: PASSWORD,
       profileIds: [profileId],
@@ -93,11 +94,11 @@ test("anonymous callers get 401 from every protected endpoint", async ({ playwri
   for (const path of ["/configuration-items", "/ci-classes", "/admin/users", "/admin/profiles", "/audit-log", "/auth/me"]) {
     await expectError(await anon.get(`/api/v1${path}`), 401, "UNAUTHENTICATED");
   }
-  await expectError(await anon.post("/api/v1/admin/users", { data: { username: "x", displayName: "x", password: "long-enough-pw" } }), 401, "UNAUTHENTICATED");
+  await expectError(await anon.post("/api/v1/admin/users", { data: { username: "x", email: "x@example.test", displayName: "x", password: "long-enough-pw" } }), 401, "UNAUTHENTICATED");
   // Setup is closed once a user exists, and cannot be used to mint a second administrator.
   expect((await (await anon.get("/api/v1/setup")).json()).setupRequired).toBe(false);
   await expectError(
-    await anon.post("/api/v1/setup", { data: { username: `sneaky-${stamp}`, displayName: "x", password: "long-enough-pw", setupToken: "guessed" } }),
+    await anon.post("/api/v1/setup", { data: { username: `sneaky-${stamp}`, email: `sneaky-${stamp}@example.test`, displayName: "x", password: "long-enough-pw", setupToken: "guessed" } }),
     409,
     "CONFLICT",
   );
@@ -118,7 +119,7 @@ test("a restricted user cannot call any administration endpoint", async ({ reque
   const refused: [string, () => Promise<APIResponse>][] = [
     ["list users", () => restricted.get("/admin/users")],
     ["read a user", () => restricted.get(`/admin/users/${userId}`)],
-    ["create a user", () => restricted.send("POST", "/admin/users", { username: `x-${stamp}`, displayName: "x", password: "long-enough-pw", profileIds: [adminProfile.id] })],
+    ["create a user", () => restricted.send("POST", "/admin/users", { username: `x-${stamp}`, email: `x-${stamp}@example.test`, displayName: "x", password: "long-enough-pw", profileIds: [adminProfile.id] })],
     ["grant themselves Administrator", () => restricted.send("PATCH", `/admin/users/${me.user.id}`, { profileIds: [adminProfile.id] })],
     ["reset a password", () => restricted.send("PUT", `/admin/users/${userId}/password`, { password: "hijacked-password-1" })],
     ["list profiles", () => restricted.get("/admin/profiles")],
@@ -325,7 +326,7 @@ test("audit.view shows a class-restricted auditor no values of CIs they may not 
     })
   ).id;
   const auditorName = `e2e-auditor-${stamp}`;
-  await apiSend(request, "POST", "/admin/users", { username: auditorName, displayName: `E2E Auditor ${stamp}`, password: PASSWORD, profileIds: [auditorProfile] });
+  await apiSend(request, "POST", "/admin/users", { username: auditorName, email: `${auditorName}@example.test`, displayName: `E2E Auditor ${stamp}`, password: PASSWORD, profileIds: [auditorProfile] });
   const auditor = await apiSignIn(playwright, baseURL!, auditorName, PASSWORD);
 
   // Fresh audit rows for both CIs and for an edge between them, written by the administrator.

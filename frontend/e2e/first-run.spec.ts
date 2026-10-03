@@ -9,7 +9,7 @@ const freshURL = process.env.E2E_FRESH_BASE_URL;
 test.skip(!freshURL, "E2E_FRESH_BASE_URL (an API on an empty, migrated database) is not set");
 test.use({ baseURL: freshURL, storageState: { cookies: [], origins: [] } });
 
-const ADMIN = { username: "first-admin", displayName: "First Administrator", password: "first-run-password-123" };
+const ADMIN = { username: "first-admin", displayName: "First Administrator", email: "first-admin@example.test", password: "first-run-password-123" };
 
 test("first-run setup creates the administrator once, signs them in, and then closes", async ({ page, playwright }) => {
   const anon = await playwright.request.newContext({ baseURL: freshURL });
@@ -28,6 +28,7 @@ test("first-run setup creates the administrator once, signs them in, and then cl
   await page.locator("#setup-setupToken").fill("not-the-setup-token");
   await page.locator("#setup-username").fill(ADMIN.username);
   await page.locator("#setup-displayName").fill(ADMIN.displayName);
+  await page.locator("#setup-email").fill(ADMIN.email);
   await page.locator("#setup-password").fill(ADMIN.password);
   await page.locator("#setup-confirm").fill(ADMIN.password);
   await page.getByRole("button", { name: "Create administrator and sign in" }).click();
@@ -38,6 +39,7 @@ test("first-run setup creates the administrator once, signs them in, and then cl
   // The server's own validation answers, not just the form's.
   await page.locator("#setup-username").fill(ADMIN.username);
   await page.locator("#setup-displayName").fill(ADMIN.displayName);
+  await page.locator("#setup-email").fill(ADMIN.email);
   await page.locator("#setup-password").fill("short");
   await page.locator("#setup-confirm").fill("short");
   await page.getByRole("button", { name: "Create administrator and sign in" }).click();
@@ -61,7 +63,7 @@ test("first-run setup creates the administrator once, signs them in, and then cl
   // Setup is now closed, to the UI and to the API alike.
   expect((await (await anon.get("/api/v1/setup")).json()).setupRequired).toBe(false);
   const again = await anon.post("/api/v1/setup", {
-    data: { username: "second-admin", displayName: "Second", password: "another-password-123", setupToken: SETUP_TOKEN },
+    data: { username: "second-admin", displayName: "Second", email: "second-admin@example.test", password: "another-password-123", setupToken: SETUP_TOKEN },
   });
   expect(again.status()).toBe(409);
   expect((await again.json()).error.code).toBe("CONFLICT");

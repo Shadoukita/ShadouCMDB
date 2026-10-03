@@ -55,10 +55,18 @@ pub struct Principal {
 pub enum Credential {
     /// The session cookie; state-changing requests must echo `csrf_token`.
     /// While `mfa_enrolment_required`, only the routes marked
-    /// `before_mfa_enrolment` answer (a profile requires MFA, none is set up).
+    /// `before_mfa_enrolment` answer (a profile requires MFA, none is set up);
+    /// while `email_required`, only those marked `before_email_entry` (the
+    /// account was created before e-mails were required, SHAA-1505).
     /// Unless `recently_confirmed`, the routes marked `recent_reauthentication`
     /// answer 403 REAUTHENTICATION_REQUIRED (GH#498).
-    Session { id: Uuid, csrf_token: String, mfa_enrolment_required: bool, recently_confirmed: bool },
+    Session {
+        id: Uuid,
+        csrf_token: String,
+        mfa_enrolment_required: bool,
+        email_required: bool,
+        recently_confirmed: bool,
+    },
     /// `Authorization: Bearer`; not sent by browsers on their own, so no CSRF token.
     Token,
 }
@@ -73,6 +81,10 @@ impl Principal {
 
     pub fn mfa_enrolment_required(&self) -> bool {
         matches!(self.credential, Credential::Session { mfa_enrolment_required: true, .. })
+    }
+
+    pub fn email_required(&self) -> bool {
+        matches!(self.credential, Credential::Session { email_required: true, .. })
     }
 
     /// A session whose owner confirmed their credentials (signed in, or
@@ -197,6 +209,7 @@ pub async fn authenticate(
             id: s.session_id,
             csrf_token: s.csrf_token,
             mfa_enrolment_required: s.mfa_enrolment_required,
+            email_required: s.email_required,
             recently_confirmed: s.recently_confirmed,
         },
         permissions,

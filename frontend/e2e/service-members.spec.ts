@@ -27,7 +27,7 @@ test.beforeAll(async ({ request }) => {
     globalPermissions: [],
     classPermissions: [{ classId: settings.classId, view: true, create: false, edit: false, delete: false }],
   });
-  await apiSend(request, "POST", "/admin/users", { username: VIEWER, displayName: VIEWER, password: PASSWORD, profileIds: [profile.id] });
+  await apiSend(request, "POST", "/admin/users", { username: VIEWER, email: `${VIEWER}@example.test`, displayName: VIEWER, password: PASSWORD, profileIds: [profile.id] });
 });
 
 async function signInUi(browser: Browser, username: string): Promise<Page> {

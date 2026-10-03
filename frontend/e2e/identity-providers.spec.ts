@@ -73,6 +73,7 @@ test.beforeAll(async ({ request }) => {
   managerId = (
     await apiSend<{ id: string }>(request, "POST", "/admin/users", {
       username: MANAGER,
+      email: `${MANAGER}@example.test`,
       displayName: `E2E User Manager ${stamp}`,
       password: MANAGER_PASSWORD,
       profileIds: [managerProfileId],
