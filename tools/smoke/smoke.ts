@@ -758,6 +758,20 @@ async function main() {
   await get('/api/v1/audit-log?actorName=smoke&action=delete&limit=5');
   await get('/api/v1/audit-log?from=not-a-date', 400);
 
+  // Change histogram (SHAA-1687): the inventory list filters, bucketed over the CI audit history.
+  const hourly = (await get('/api/v1/configuration-items/change-histogram')).json;
+  const sum = (h: Json) => h.buckets.reduce((n: number, b: Json) => n + b.created + b.updated + b.statusChanged, 0);
+  check(
+    hourly.bucket === 'hour' && [24, 25].includes(hourly.buckets.length) && hourly.total === sum(hourly) && hourly.total > 0,
+    'change histogram: the last 24 hours in hour buckets by default, the total is their sum and includes this run',
+  );
+  const daily = (await get(`/api/v1/configuration-items/change-histogram?bucket=day&classId=${serverClass}`)).json;
+  check(daily.bucket === 'day' && [30, 31].includes(daily.buckets.length) && daily.total === sum(daily) && daily.total > 0, 'change histogram: the last 30 days in day buckets, filtered by class');
+  const tooLarge = await get('/api/v1/configuration-items/change-histogram?from=2026-01-01T00:00:00Z&to=2026-01-09T00:00:00Z', 400);
+  check(tooLarge.json.error?.details?.[0]?.code === 'range_too_large', 'change histogram: more than 7 days of hour buckets is refused');
+  const inverted = await get('/api/v1/configuration-items/change-histogram?from=2026-01-02T00:00:00Z&to=2026-01-01T00:00:00Z', 400);
+  check(inverted.json.error?.details?.[0]?.code === 'invalid_range', 'change histogram: an inverted range is refused');
+
   // --- Sign-out ------------------------------------------------------------------
   console.log('\n# Sign-out');
   await call('POST', '/api/v1/auth/logout', undefined, 403, { 'x-csrf-token': 'wrong' });
