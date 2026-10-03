@@ -41,3 +41,14 @@ export function emailErrorMessage(details: readonly ApiErrorDetail[]): string | 
 export function looksLikeEmail(value: string): boolean {
   return value.length <= 254 && /^[^\s@]+@[^\s@]+$/.test(value);
 }
+
+/**
+ * The user form's check of its Email field: required, except on an account that has none yet (from before
+ * SHAA-1505; its owner enters it at the next sign-in), which may be saved with the field left empty so its
+ * other fields can still be changed. A value that was entered is always format-checked.
+ */
+export function userEmailError(value: string, hasNoEmailYet: boolean): string | undefined {
+  const v = value.trim();
+  if (!v) return hasNoEmailYet ? undefined : "Required";
+  return looksLikeEmail(v) ? undefined : t("people.entry.invalid");
+}

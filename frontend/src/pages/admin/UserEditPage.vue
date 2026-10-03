@@ -11,7 +11,7 @@ import { t } from "../../i18n";
 import { useDocumentTitle } from "../../lib/composables";
 import { vAutofocus } from "../../lib/directives";
 import { formatDateTime } from "../../lib/format";
-import { emailErrorMessage, looksLikeEmail, signInStatusLabel } from "../../lib/people";
+import { emailErrorMessage, signInStatusLabel, userEmailError } from "../../lib/people";
 import { useFlashStore } from "../../stores/flash";
 import { useSessionStore } from "../../stores/session";
 import FormErrorBanner from "../form/FormErrorBanner.vue";
@@ -91,9 +91,8 @@ async function submit() {
   if (!f.displayName.trim()) errs.displayName = "Required";
   // Required since SHAA-1505: it links the account to its Person CI. An account from before then may stay
   // without one here (its owner enters it at their next sign-in), so its other fields can still be changed.
-  const legacy = !isNew.value && user.data.value?.email === null;
-  if (!f.email.trim() && !legacy) errs.email = "Required";
-  else if (!looksLikeEmail(f.email.trim())) errs.email = t("people.entry.invalid");
+  const emailError = userEmailError(f.email, !isNew.value && user.data.value?.email === null);
+  if (emailError) errs.email = emailError;
   if (isNew.value) {
     if ([...f.password].length < 12) errs.password = "Too short";
     if (f.password !== f.confirm) errs.confirm = "The passwords do not match";

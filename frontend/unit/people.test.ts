@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { setLocaleForTests } from "../src/i18n/index";
-import { emailErrorMessage, looksLikeEmail, parseSignInStatus, signInStatusLabel } from "../src/lib/people";
+import { emailErrorMessage, looksLikeEmail, parseSignInStatus, signInStatusLabel, userEmailError } from "../src/lib/people";
 import { ssoErrorMessage } from "../src/lib/signIn";
 
 describe("parseSignInStatus", () => {
@@ -51,4 +51,21 @@ describe("looksLikeEmail", () => {
 test("an incomplete account's SSO refusal has its own message", () => {
   assert.equal(signInStatusLabel("person_missing"), "Account incomplete");
   assert.match(ssoErrorMessage("account_incomplete") ?? "", /^Your ShadouCMDB account is incomplete/);
+});
+
+describe("userEmailError", () => {
+  test("required on a new account or one that has an e-mail", () => {
+    assert.equal(userEmailError("", false), "Required");
+    assert.equal(userEmailError("   ", false), "Required");
+  });
+  test("an account without an e-mail yet can be saved with the field left empty", () => {
+    assert.equal(userEmailError("", true), undefined);
+    assert.equal(userEmailError("  ", true), undefined);
+  });
+  test("an entered value is format-checked either way", () => {
+    for (const legacy of [false, true]) {
+      assert.equal(userEmailError(" ada@example.com ", legacy), undefined);
+      assert.ok(userEmailError("not-an-address", legacy));
+    }
+  });
 });
