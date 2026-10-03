@@ -18,3 +18,31 @@
   font-display: swap;
   src: url("../assets/fonts/inter/InterVariable-Italic.woff2") format("woff2");
 }
+
+/* JetBrains Mono 2.304 (SIL OFL-1.1, licence in assets/fonts/jetbrains-mono/LICENSE.txt), for
+ * identifiers: hostnames, IPs, serials, IDs, timestamps and code. Not for body text. The files are
+ * the unmodified upstream web fonts; only the weights the UI uses are bundled. Fallback: the
+ * system mono stack after "JetBrains Mono" in --font-mono. */
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../assets/fonts/jetbrains-mono/JetBrainsMono-Regular.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("../assets/fonts/jetbrains-mono/JetBrainsMono-Medium.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("../assets/fonts/jetbrains-mono/JetBrainsMono-SemiBold.woff2") format("woff2");
+}

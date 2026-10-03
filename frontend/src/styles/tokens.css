@@ -8,7 +8,7 @@
  *
  * Branding (stores/branding.ts) overrides --c-primary, --c-primary-hover, --c-primary-text,
  * --c-link, --c-focus and --c-accent on <html> at runtime. Its SURFACE and SIDEBAR constants
- * mirror --c-surface and --c-sidebar here; unit/branding.test.ts keeps them in step.
+ * mirror --c-surface and --c-sidebar here; unit/brandColors.test.ts keeps them in step.
  */
 :root {
   /* ---------- Raw scales ---------- */
@@ -35,7 +35,7 @@
 
   /* ---------- Typography ---------- */
   --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 
   --fs-xs: 11px; /* badges, overline labels, kbd hints */
   --fs-sm: 12px; /* labels, help text, table headers, breadcrumbs */
