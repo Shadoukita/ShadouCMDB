@@ -135,6 +135,7 @@ mod tests {
                 id: Uuid::new_v4(),
                 csrf_token: String::new(),
                 mfa_enrolment_required: false,
+                recently_confirmed: true,
             },
             permissions,
         };

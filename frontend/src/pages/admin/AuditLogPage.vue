@@ -63,6 +63,8 @@ const ACTION_SET: Record<Action, true> = {
   "login.locked": true,
   logout: true,
   "session.revoke": true,
+  "session.reauthenticate": true,
+  "session.reauthentication_required": true,
   "audit.purge": true,
   "token.use": true,
   "mfa.enrol": true,
