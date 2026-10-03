@@ -51,7 +51,7 @@ test("first-run setup creates the administrator once, signs them in, and then cl
   await snap(page, "40-first-run-filled");
   await page.getByRole("button", { name: "Create administrator and sign in" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
-  await expect(page.getByRole("banner").getByText(ADMIN.displayName)).toBeVisible();
+  await expect(page.getByRole("banner").getByText(ADMIN.displayName, { exact: true })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Administration", exact: true })).toBeVisible();
 
   // The new session is a real one, holding the built-in Administrator profile.

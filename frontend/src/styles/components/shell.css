@@ -277,15 +277,13 @@
   background: var(--c-surface);
   border-bottom: 1px solid var(--c-border);
 }
+/* The actions keep their size; the search takes up the slack, so the user menu never spills out of the header. */
 .shell-actions {
   display: flex;
+  flex: none;
   align-items: center;
   gap: var(--space-3);
   margin-left: auto;
-  min-width: 0;
-}
-.shell-actions .new-ci {
-  flex-shrink: 0;
 }
 
 /* Global search: the header's main control, with a search icon and the "/" shortcut hint. */
@@ -562,7 +560,7 @@ button.who[aria-expanded="true"] {
 /* Phone width (WCAG 1.4.10 reflow at 320 px, GH#363). */
 @media (max-width: 480px) {
   .shell-header {
-    gap: var(--space-3);
+    gap: var(--space-2);
     padding: 0 var(--space-3);
   }
   .shell-actions {
@@ -584,8 +582,8 @@ button.who[aria-expanded="true"] {
     gap: var(--space-1);
     padding: 0 var(--space-1);
   }
+  /* The initials alone open the menu; the chevron would push 320 px past the viewport. */
   .who-chevron {
-    width: 12px;
-    height: 12px;
+    display: none;
   }
 }

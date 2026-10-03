@@ -1,6 +1,6 @@
 import type { Browser, Page } from "@playwright/test";
 import { createHmac } from "node:crypto";
-import { apiGet, apiSend, at, expect, snap, test, signOut } from "./support";
+import { apiGet, apiSend, at, expect, openUserMenu, snap, test, signOut } from "./support";
 
 // Two-factor authentication, in order: an operator sets up an authenticator (QR code, recovery codes), signs in
 // with a code and with a recovery code, replaces the codes and turns it off; then an administrator makes it
@@ -147,7 +147,10 @@ test.describe("an operator's own two-factor authentication", () => {
     test.slow(); // three argon2id checks: sign-in, a wrong password, the set-up
     await signInWithPassword(page, USERNAME);
     await expect(page).toHaveURL(at("/"), ARGON2);
-    await page.getByRole("link", { name: /MFA operator/ }).click();
+    // My account sits in the user menu, which names the signed-in user.
+    await openUserMenu(page);
+    await expect(page.locator(".user-menu-panel").getByText(/^Signed in as MFA operator/)).toBeVisible();
+    await page.getByRole("link", { name: "My account" }).click();
     await expect(page).toHaveURL(at("/account"));
     const panel = page.getByRole("region", { name: "Two-factor authentication" });
     await expect(panel.getByText("Off", { exact: true })).toBeVisible();

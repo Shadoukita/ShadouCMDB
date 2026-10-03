@@ -130,7 +130,7 @@ test("create a user holding the profile", async ({ page }) => {
 test("the user sees only the actions their profile allows", async ({ browser, request }) => {
   const page = await signInAs(browser, USERNAME, PASSWORD);
   await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
-  await expect(page.getByRole("banner").getByText(DISPLAY)).toBeVisible();
+  await expect(page.getByRole("banner").getByText(DISPLAY, { exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: /New CI$/ })).toHaveCount(0);
 
   // Server: may edit, may not delete.
