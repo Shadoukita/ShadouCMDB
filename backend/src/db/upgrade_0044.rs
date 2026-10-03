@@ -2,13 +2,14 @@
 //! v0.4 database: the Person type is created next to a customer's own
 //! "person" type, `migrate` builds its table and links every account with an
 //! e-mail (audited), accounts without one are left for their next sign-in,
-//! and a second run changes nothing. Shared e-mails stop the upgrade with
-//! the list, and nothing changes.
+//! and a second run changes nothing. Shared e-mails, and e-mails or display
+//! names the Person type refuses, stop the upgrade with the list, and nothing
+//! changes. An account refused after 0044 is reported, the others are linked.
 
 use sqlx::{Executor, PgPool};
 use uuid::Uuid;
 
-use crate::db::{MIGRATOR, reconcile_and_link, scratch};
+use crate::db::{MIGRATOR, reconcile_and_link, refuse_accounts_person_refuses, scratch};
 
 /// A v0.4 install (migration 0043) with a type keyed "person" in an area keyed
 /// "people", and accounts with and without e-mails.
@@ -59,8 +60,8 @@ async fn upgrade_links_every_account_with_an_email_to_a_person() {
     assert_eq!(roles, [("email".into(), "person_email".into()), ("name".into(), "person_name".into())]);
 
     // What `migrate` does next: build the table, link the accounts.
-    let (change, linked) = reconcile_and_link(pool).await.expect("reconcile and link");
-    assert_eq!(linked, 2, "alice and carol");
+    let (change, links) = reconcile_and_link(pool).await.expect("reconcile and link");
+    assert_eq!((links.linked, links.refused.len()), (2, 0), "alice and carol");
     let statements = change.unwrap().statements;
     assert!(statements.iter().any(|s| s.starts_with("CREATE UNIQUE INDEX \"uq_")), "{statements:?}");
 
@@ -99,9 +100,9 @@ async fn upgrade_links_every_account_with_an_email_to_a_person() {
     assert_eq!(person_in_log, 2, "the link shows in the account's audit row");
 
     // A second run finds nothing to do.
-    let (change, linked) = reconcile_and_link(pool).await.expect("again");
+    let (change, links) = reconcile_and_link(pool).await.expect("again");
     assert!(change.is_none());
-    assert_eq!(linked, 0);
+    assert_eq!(links.linked, 0);
     let persons: i64 = scalar(pool, "SELECT count(*) FROM people_2.person_2").await;
     assert_eq!(persons, 2);
 
@@ -154,8 +155,85 @@ async fn shared_emails_stop_the_upgrade_with_the_list() {
     pool.execute("UPDATE users SET email = 'ops2@example.test' WHERE username = 'Ops2'").await.unwrap();
     pool.execute("UPDATE users SET email = 'monitor@example.test' WHERE username = 'monitor'").await.unwrap();
     MIGRATOR.run(pool).await.expect("migration 0044");
-    let (_, linked) = reconcile_and_link(pool).await.unwrap();
-    assert_eq!(linked, 5);
+    let (_, links) = reconcile_and_link(pool).await.unwrap();
+    assert_eq!(links.linked, 5);
+
+    db.drop().await;
+}
+
+/// An e-mail of 255-320 characters (accepted before 0044) or a display name
+/// the Person's Name refuses (GH#543).
+fn long_email() -> String {
+    format!("{}@example.test", "a".repeat(247))
+}
+
+#[tokio::test]
+async fn emails_the_person_type_refuses_stop_the_upgrade_with_the_list() {
+    let Some(db) = scratch::empty("upgrade_0044_refused_emails").await else { return };
+    let pool = &db.pool;
+    MIGRATOR.run_to(43, pool).await.expect("migrations up to 0043");
+    sqlx::query(
+        "INSERT INTO users (username, display_name, email, password_hash) VALUES
+           ('admin', 'Ada Admin', 'Ada.Admin@Acme.test', '$argon2id$x'),
+           ('longmail', 'Long Mail', $1, '$argon2id$x'),
+           ('longname', $2, 'longname@example.test', '$argon2id$x'),
+           ('noemail', $2, NULL, '$argon2id$x')",
+    )
+    .bind(long_email())
+    .bind("n".repeat(201))
+    .execute(pool)
+    .await
+    .unwrap();
+
+    let err = refuse_accounts_person_refuses(pool).await.expect_err("refused").to_string();
+    assert!(err.contains("  longmail: e-mail has 260 characters, at most 254\n"), "{err}");
+    assert!(err.contains("  longname: display name has 201 characters, at most 200\n"), "{err}");
+    assert!(!err.contains("admin:") && !err.contains("noemail"), "{err}");
+    assert!(err.contains("Nothing was changed"), "{err}");
+
+    pool.execute("UPDATE users SET email = 'long@example.test' WHERE username = 'longmail'").await.unwrap();
+    pool.execute("UPDATE users SET display_name = 'Long Name' WHERE username = 'longname'").await.unwrap();
+    refuse_accounts_person_refuses(pool).await.expect("every account fits");
+
+    db.drop().await;
+}
+
+#[tokio::test]
+async fn an_account_the_person_type_refuses_does_not_lock_out_the_others() {
+    let Some(db) = scratch::empty("upgrade_0044_refused_link").await else { return };
+    let pool = &db.pool;
+    MIGRATOR.run_to(43, pool).await.expect("migrations up to 0043");
+    sqlx::query(
+        "INSERT INTO users (username, display_name, email, password_hash) VALUES
+           ('admin', 'Ada Admin', 'Ada.Admin@Acme.test', '$argon2id$x'),
+           ('longmail', 'Long Mail', $1, '$argon2id$x'),
+           ('carol', 'Carol', 'carol@example.test', '$argon2id$x')",
+    )
+    .bind(long_email())
+    .execute(pool)
+    .await
+    .unwrap();
+    // 0044 applied without the pre-check, as a build before GH#543 did.
+    MIGRATOR.run(pool).await.expect("migration 0044");
+
+    let (_, links) = reconcile_and_link(pool).await.expect("reconcile and link");
+    assert_eq!(links.linked, 2, "admin and carol");
+    assert_eq!(links.refused.len(), 1, "{:?}", links.refused);
+    assert!(links.refused[0].starts_with("longmail (email: "), "{:?}", links.refused);
+    let linked: Vec<(String, bool)> =
+        sqlx::query_as("SELECT username, person_ci_id IS NOT NULL FROM users ORDER BY username")
+            .fetch_all(pool)
+            .await
+            .unwrap();
+    assert_eq!(linked, [("admin".into(), true), ("carol".into(), true), ("longmail".into(), false)]);
+    // Only the linked accounts are audited.
+    let audited: i64 =
+        scalar(pool, "SELECT count(*) FROM audit_log WHERE actor_name = 'migrate' AND entity_type = 'users'").await;
+    assert_eq!(audited, 2);
+
+    // Running it again reports the account again and changes nothing else.
+    let (_, links) = reconcile_and_link(pool).await.expect("again");
+    assert_eq!((links.linked, links.refused.len()), (0, 1));
 
     db.drop().await;
 }
