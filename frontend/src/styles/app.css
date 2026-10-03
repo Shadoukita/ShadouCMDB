@@ -2076,6 +2076,232 @@ dialog.manage-views td.row-actions {
   }
 }
 
+/* ---------- Administration › Workflows: the designer (SHAA-1426) ---------- */
+.badge.info {
+  background: var(--badge-info-bg);
+  color: var(--badge-info-fg);
+}
+.inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.wf-toolbar {
+  align-items: center;
+  margin-bottom: var(--space-3);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  background: var(--c-surface);
+}
+.wf-save-state {
+  font-size: var(--fs-sm);
+  color: var(--c-text-secondary);
+}
+.wf-save-state.ok {
+  color: var(--c-success-text);
+}
+.wf-save-state.warn {
+  color: var(--c-warning-text);
+}
+.wf-designer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
+  gap: var(--space-4);
+  align-items: start;
+  margin-bottom: var(--space-4);
+}
+@media (max-width: 1100px) {
+  .wf-designer {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.wf-diagram {
+  margin-bottom: 0;
+}
+.wf-side .panel {
+  margin-bottom: 0;
+}
+.wf-canvas {
+  overflow: auto;
+  max-height: 560px;
+  background: var(--c-surface-sunken);
+  border-radius: var(--radius-md);
+}
+.wf-canvas svg {
+  display: block;
+  touch-action: none;
+  user-select: none;
+}
+.wf-node {
+  cursor: grab;
+}
+.wf-node.readonly {
+  cursor: pointer;
+}
+.wf-node:focus {
+  outline: none;
+}
+.wf-node-box {
+  fill: var(--c-surface);
+  stroke: var(--c-border-strong);
+  stroke-width: 1;
+}
+.wf-node-inner {
+  fill: none;
+  stroke: var(--c-border-strong);
+  stroke-width: 1;
+}
+.wf-node-stripe {
+  fill: var(--c-text-tertiary);
+}
+.wf-node.cat-active .wf-node-stripe {
+  fill: var(--c-primary);
+}
+.wf-node.cat-done .wf-node-stripe {
+  fill: var(--c-success);
+}
+.wf-node.cat-cancelled .wf-node-stripe {
+  fill: var(--c-text-muted);
+}
+.wf-node-name {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+  fill: var(--c-text);
+}
+.wf-node-meta {
+  font-size: var(--fs-xs);
+  fill: var(--c-text-secondary);
+}
+.wf-node.warning .wf-node-box {
+  stroke: var(--c-warning);
+  stroke-width: 2;
+}
+.wf-node.error .wf-node-box {
+  stroke: var(--c-danger);
+  stroke-width: 2;
+}
+.wf-node.selected .wf-node-box,
+.wf-node:focus-visible .wf-node-box {
+  stroke: var(--c-focus);
+  stroke-width: 3;
+}
+.wf-initial {
+  stroke: var(--c-text-secondary);
+  stroke-width: 2;
+}
+.wf-edge {
+  cursor: pointer;
+}
+.wf-edge:focus {
+  outline: none;
+}
+.wf-edge-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 14;
+}
+.wf-edge-line {
+  fill: none;
+  stroke: var(--c-text-tertiary);
+  stroke-width: 1.5;
+}
+.wf-arrowhead {
+  fill: var(--c-text-tertiary);
+}
+.wf-arrowhead.selected {
+  fill: var(--c-focus);
+}
+.wf-edge-label {
+  font-size: var(--fs-xs);
+  fill: var(--c-text);
+  paint-order: stroke;
+  stroke: var(--c-surface-sunken);
+  stroke-width: 4;
+}
+.wf-edge.warning .wf-edge-line {
+  stroke: var(--c-warning);
+}
+.wf-edge.error .wf-edge-line {
+  stroke: var(--c-danger);
+  stroke-width: 2;
+}
+.wf-edge.selected .wf-edge-line,
+.wf-edge:focus-visible .wf-edge-line {
+  stroke: var(--c-focus);
+  stroke-width: 2.5;
+}
+.wf-edge.selected .wf-edge-label,
+.wf-edge:focus-visible .wf-edge-label {
+  font-weight: var(--fw-semibold);
+}
+.wf-problems {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-1);
+  font-size: var(--fs-sm);
+}
+.wf-problems .badge {
+  margin-right: var(--space-2);
+}
+.wf-problems .btn-link {
+  margin-right: var(--space-1);
+}
+.wf-cond-group {
+  display: grid;
+  gap: var(--space-2);
+}
+.wf-cond-group.nested {
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--c-border-strong);
+  background: var(--c-surface-alt);
+  border-radius: var(--radius-sm);
+}
+.wf-cond-head,
+.wf-cond-leaf {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+.wf-cond-leaf > select {
+  max-width: 11rem;
+}
+.wf-cond-value {
+  flex: 1 1 10rem;
+  min-width: 8rem;
+}
+.wf-cond-value > input,
+.wf-cond-value > select {
+  width: 100%;
+}
+.wf-choices {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: var(--space-3);
+}
+.wf-choices .checkbox-row {
+  height: auto;
+}
+table.data.wf-fields {
+  margin: var(--space-2) 0;
+}
+table.data.wf-grants th[scope="row"] {
+  font-weight: var(--fw-medium);
+  text-align: left;
+  position: sticky;
+  left: 0;
+  background: var(--c-surface);
+}
+table.data.wf-grants .wf-grant-col,
+table.data.wf-grants .wf-grant-cell {
+  text-align: center;
+}
+
 /* ---------- CI page form (SHAA-1644) ----------
  * A CI's fields open as inputs; a field the user may not change shows its value where the input would be. */
 .ro-value {
