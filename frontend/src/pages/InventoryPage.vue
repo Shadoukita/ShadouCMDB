@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { RouterLink } from "vue-router";
+import { RouterLink, useRouter } from "vue-router";
 import { useAllLookupListValues, useAreas, useLookupLists } from "../api/datamodel";
 import { useCiClasses, useCiList, useClassAttributes, type CiListQuery } from "../api/queries";
 import { dataModelEmpty } from "../lib/dataModel";
@@ -28,6 +28,8 @@ import InventoryFilterChips from "../components/InventoryFilterChips.vue";
 import RowMenu from "../components/RowMenu.vue";
 import SkeletonRows from "../components/SkeletonRows.vue";
 import { ciRowMenu } from "../lib/ciRowMenu";
+import { onRowKeydown } from "../lib/rowKeyboard";
+import KeyboardHints from "../components/KeyboardHints.vue";
 import { formatNumber, t } from "../i18n";
 
 /**
@@ -128,6 +130,19 @@ const catalogue = computed(() =>
 /** The total once the list for this URL has loaded (not the previous list's, kept while it loads). */
 const settledTotal = computed(() => (list.data.value && !list.isPlaceholderData.value && !list.isFetching.value ? total.value : undefined));
 
+// Keyboard rows (lib/rowKeyboard): ↑/↓ between rows, Enter opens, `e` edits, `c` opens Columns.
+const router = useRouter();
+const columnsPopover = ref<InstanceType<typeof ColumnsPopover>>();
+const canEdit = (ci: (typeof rows.value)[number]) => !ci.deletedAt && session.canOnClass(ci.classId, "edit");
+const anyEditable = computed(() => rows.value.some(canEdit));
+const rowKeys = {
+  edit: (id: string) => {
+    const ci = rows.value.find((r) => r.id === id);
+    if (ci && canEdit(ci)) void router.push(`/cis/${id}/edit`);
+  },
+  columns: () => void columnsPopover.value?.show(),
+};
+
 function clearFilters() {
   qText.value = "";
   selection.skipNextDefault();
@@ -162,6 +177,7 @@ function clearFilters() {
       <InventoryFilters :state="state" id-prefix="f" />
       <button v-if="activeFilters.length > 0" type="button" class="btn btn-ghost" @click="clearFilters"><Icon name="x" />{{ t("inventory.clearFilters") }}</button>
       <ColumnsPopover
+        ref="columnsPopover"
         class="toolbar-end"
         :columns="columns"
         :fields="fieldChoices"
@@ -201,7 +217,7 @@ function clearFilters() {
 
     <template v-if="rows.length > 0">
       <div class="table-wrap table-scroll">
-        <table :class="['data', { loading: list.isPlaceholderData.value }]">
+        <table :class="['data', { loading: list.isPlaceholderData.value }]" aria-describedby="inventory-keys">
           <thead>
             <tr>
               <th v-for="c in columns" :key="c" scope="col" :aria-sort="columnSort(c) ? state.ariaSort(columnSort(c)!) : undefined">
@@ -213,8 +229,8 @@ function clearFilters() {
               <th scope="col" class="row-actions"><span class="sr-only">{{ t("inventory.actions") }}</span></th>
             </tr>
           </thead>
-          <tbody>
-            <tr v-for="ci in rows" :key="ci.id" :class="{ deleted: ci.deletedAt }">
+          <tbody @keydown="onRowKeydown($event, rowKeys)">
+            <tr v-for="ci in rows" :key="ci.id" :data-id="ci.id" :class="{ deleted: ci.deletedAt }">
               <td v-for="c in columns" :key="c"><CiCell :ci="ci" :field="c" :defs="attrDefs" :class-of="classById" /></td>
               <td class="row-actions">
                 <RowMenu :label="t('inventory.rowMenu', { name: ci.label })" :items="ciRowMenu(ci)" />
@@ -224,6 +240,7 @@ function clearFilters() {
         </table>
       </div>
       <PaginationBar :total="total" :limit="limit" :offset="offset" @change="state.onPage" />
+      <KeyboardHints id="inventory-keys" :edit="anyEditable" columns />
     </template>
   </section>
 </template>

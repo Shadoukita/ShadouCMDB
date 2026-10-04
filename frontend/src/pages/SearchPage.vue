@@ -18,6 +18,8 @@ import RowMenu from "../components/RowMenu.vue";
 import SkeletonRows from "../components/SkeletonRows.vue";
 import { t } from "../i18n";
 import { ciRowMenu } from "../lib/ciRowMenu";
+import { onRowKeydown } from "../lib/rowKeyboard";
+import KeyboardHints from "../components/KeyboardHints.vue";
 import { useDebounced, useDocumentTitle } from "../lib/composables";
 import { highlight } from "../lib/highlight";
 import { useInventoryQueryState } from "../lib/useInventoryQueryState";
@@ -123,7 +125,7 @@ const inventoryLink = computed(() => {
     </EmptyState>
     <template v-if="rows.length > 0">
       <div class="table-wrap table-scroll">
-        <table :class="['data', { loading: search.isPlaceholderData.value }]">
+        <table :class="['data', { loading: search.isPlaceholderData.value }]" aria-describedby="search-keys">
           <thead>
             <tr>
               <th scope="col">{{ t("search.col.label") }}</th>
@@ -133,8 +135,8 @@ const inventoryLink = computed(() => {
               <th scope="col" class="row-actions"><span class="sr-only">{{ t("inventory.actions") }}</span></th>
             </tr>
           </thead>
-          <tbody>
-            <tr v-for="{ item, matches } in rows" :key="item.id">
+          <tbody @keydown="onRowKeydown($event)">
+            <tr v-for="{ item, matches } in rows" :key="item.id" :data-id="item.id">
               <td><RouterLink :to="`/cis/${item.id}`" dir="auto">{{ item.label }}</RouterLink> <CiStateBadge :ci="item" /></td>
               <td class="mono">{{ item.ident }}</td>
               <td>
@@ -155,6 +157,7 @@ const inventoryLink = computed(() => {
         </table>
       </div>
       <PaginationBar :total="search.data.value!.page.total" :limit="limit" :offset="offset" @change="state.onPage" />
+      <KeyboardHints id="search-keys" />
     </template>
   </section>
 </template>

@@ -3,6 +3,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import { ApiError } from "../../api/client";
 import ErrorAlert from "../ErrorAlert.vue";
 import FormDialog from "../FormDialog.vue";
+import { t } from "../../i18n";
 
 export type SavedViewDialogMode = "create" | "rename" | "copy" | "share";
 export interface SavedViewDialogValues {
@@ -45,10 +46,8 @@ watch(
   { immediate: true },
 );
 
-const title = computed(
-  () => ({ create: "Save as new view", rename: "Rename view", copy: "Copy to my views", share: "Share a copy with everyone" })[props.mode],
-);
-const submitLabel = computed(() => ({ create: "Save view", rename: "Rename", copy: "Copy view", share: "Share copy" })[props.mode]);
+const title = computed(() => t(`views.dialog.${props.mode}`));
+const submitLabel = computed(() => t(`views.dialog.submit.${props.mode}`));
 const withDescription = computed(() => props.mode === "create" || props.mode === "rename");
 
 const apiError = computed(() => (props.error instanceof ApiError ? props.error : null));
@@ -75,7 +74,7 @@ watch(nameError, async (e) => {
 function submit() {
   const n = name.value.trim();
   if (!n) {
-    localError.value = "Enter a name for the view.";
+    localError.value = t("views.dialog.nameRequired");
     return void nameInput.value?.focus();
   }
   localError.value = null;
@@ -88,18 +87,18 @@ function submit() {
     <div class="stack">
       <div v-if="limitReached" class="alert alert-error" role="alert">
         {{ apiError?.message }}
-        <div><button type="button" class="btn btn-sm" @click="emit('manage')">Manage views…</button></div>
+        <div><button type="button" class="btn btn-sm" @click="emit('manage')">{{ t("views.action.manage") }}</button></div>
       </div>
-      <ErrorAlert v-else-if="otherError" :error="error" title="The view was not saved" />
+      <ErrorAlert v-else-if="otherError" :error="error" :title="t('views.error.notSaved')" />
       <div v-if="definitionErrors.length > 0" class="alert alert-error" role="alert">
-        The view cannot be saved as it is:
+        {{ t("views.dialog.invalid") }}
         <ul>
           <li v-for="m in definitionErrors" :key="m">{{ m }}</li>
         </ul>
       </div>
-      <p v-if="mode === 'share'" class="muted">Everyone who may view its classes will see the copy under Shared views. Your own view stays as it is.</p>
+      <p v-if="mode === 'share'" class="muted">{{ t("views.dialog.shareNote") }}</p>
       <div class="field">
-        <label for="sv-name">Name<span class="req" aria-hidden="true">*</span></label>
+        <label for="sv-name">{{ t("views.dialog.name") }}<span class="req" aria-hidden="true">*</span></label>
         <input
           id="sv-name"
           ref="nameInput"
@@ -114,7 +113,7 @@ function submit() {
         <span v-if="nameError" id="sv-name-err" class="error">{{ nameError }}</span>
       </div>
       <div v-if="withDescription" class="field">
-        <label for="sv-description">Description</label>
+        <label for="sv-description">{{ t("views.dialog.description") }}</label>
         <textarea
           id="sv-description"
           v-model="description"
@@ -126,7 +125,7 @@ function submit() {
         <span v-if="descriptionError" id="sv-description-err" class="error">{{ descriptionError }}</span>
       </div>
       <label v-if="mode === 'create' && canShare" class="checkbox-row" for="sv-shared">
-        <input id="sv-shared" v-model="shared" type="checkbox" /> Share with everyone
+        <input id="sv-shared" v-model="shared" type="checkbox" /> {{ t("views.dialog.shareWithEveryone") }}
       </label>
     </div>
   </FormDialog>

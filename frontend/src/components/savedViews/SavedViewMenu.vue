@@ -11,7 +11,7 @@ import {
   useUpdateSavedView,
   type SavedView,
 } from "../../api/savedViews";
-import { plural } from "../../lib/format";
+import { formatNumber, t, tAround } from "../../i18n";
 import { param, type QueryContext } from "../../lib/inventoryQuery";
 import { definitionFromUrl, droppedSummary, groupViews, homeName, sameState, urlState, viewState, viewUrlQuery, type DefinitionCatalogue } from "../../lib/savedViews";
 import type { useInventoryQueryState } from "../../lib/useInventoryQueryState";
@@ -78,8 +78,8 @@ const groups = computed(() => groupViews(views.value, filter.value));
 const searchNeedsTerm = computed(() => props.context === "search" && !param(route.query, "q").trim());
 
 const buttonLabel = computed(() => {
-  if (viewsQuery.isPending.value && props.selection.viewId.value) return "Views…";
-  return current.value ? current.value.name : "Unsaved view";
+  if (viewsQuery.isPending.value && props.selection.viewId.value) return t("views.loadingButton");
+  return current.value ? current.value.name : t("views.unsaved");
 });
 
 /** The default of the list shown: its class's, or the unscoped inventory's. */
@@ -104,27 +104,27 @@ interface Action {
 const actions = computed<Action[]>(() => {
   const v = current.value;
   const out: Action[] = [];
-  if (v?.canEdit) out.push({ key: "save", label: "Save view", run: () => void saveCurrent() });
+  if (v?.canEdit) out.push({ key: "save", label: t("views.action.save"), run: () => void saveCurrent() });
   out.push({
     key: "saveAs",
-    label: "Save as new view…",
+    label: t("views.action.saveAs"),
     run: () => openDialog("create"),
     disabled: searchNeedsTerm.value || !props.catalogue,
-    hint: searchNeedsTerm.value ? "Type a search term first: a search view saves the term." : undefined,
+    hint: searchNeedsTerm.value ? t("views.action.saveAs.needsTerm") : undefined,
   });
-  if (v?.canEdit) out.push({ key: "rename", label: "Rename…", run: () => openDialog("rename", v) });
+  if (v?.canEdit) out.push({ key: "rename", label: t("views.action.rename"), run: () => openDialog("rename", v) });
   if (props.context === "inventory") {
-    if (v && v.isDefault) out.push({ key: "clearDefault", label: "Clear my default", run: () => void setDefault(v, false) });
+    if (v && v.isDefault) out.push({ key: "clearDefault", label: t("views.action.clearDefault"), run: () => void setDefault(v, false) });
     else if (v && v.resolved.state !== "unavailable")
-      out.push({ key: "setDefault", label: `Set as my default for ${homeName(v, props.classes)}`, run: () => void setDefault(v, true) });
+      out.push({ key: "setDefault", label: t("views.action.setDefault", { list: homeName(v, props.classes) }), run: () => void setDefault(v, true) });
     else if (!v && listDefault.value)
-      out.push({ key: "clearDefault", label: "Clear my default", run: () => void setDefault(listDefault.value!, false) });
+      out.push({ key: "clearDefault", label: t("views.action.clearDefault"), run: () => void setDefault(listDefault.value!, false) });
   }
-  if (v?.visibility === "shared") out.push({ key: "copy", label: "Copy to my views", run: () => openDialog("copy", v) });
-  if (v?.visibility === "personal" && canShare.value) out.push({ key: "share", label: "Share a copy…", run: () => openDialog("share", v) });
-  if (v?.canEdit) out.push({ key: "delete", label: "Delete…", run: () => openDelete(v), danger: true });
-  out.push({ key: "copyLink", label: "Copy link", run: () => void copyLink() });
-  out.push({ key: "manage", label: "Manage views…", run: () => (manageOpen.value = true) });
+  if (v?.visibility === "shared") out.push({ key: "copy", label: t("views.action.copy"), run: () => openDialog("copy", v) });
+  if (v?.visibility === "personal" && canShare.value) out.push({ key: "share", label: t("views.action.share"), run: () => openDialog("share", v) });
+  if (v?.canEdit) out.push({ key: "delete", label: t("views.action.delete"), run: () => openDelete(v), danger: true });
+  out.push({ key: "copyLink", label: t("views.action.copyLink"), run: () => void copyLink() });
+  out.push({ key: "manage", label: t("views.action.manage"), run: () => (manageOpen.value = true) });
   return out;
 });
 
@@ -229,7 +229,7 @@ watch(
   ([name, total, pending]) => {
     if (!name || pending || total === undefined) return;
     props.selection.applied.value = null;
-    say(props.context === "inventory" ? `View ${name} applied, ${plural(total, "configuration item")}` : `View ${name} applied`);
+    say(props.context === "inventory" ? t("views.say.appliedCount", { name, n: total }) : t("views.say.applied", { name }));
   },
 );
 
@@ -245,7 +245,7 @@ const setDefaultMutation = useSetSavedViewDefault();
 const actionError = ref<unknown>(null);
 
 function definitionNow() {
-  if (!props.catalogue) return { ok: false as const, message: "The data model is still loading. Try again in a moment." };
+  if (!props.catalogue) return { ok: false as const, message: t("views.error.modelLoading") };
   return definitionFromUrl(route.query, props.context, props.catalogue, { sort: props.state.sort.value, limit: props.state.limit.value });
 }
 /** Show the saved view: its full state in the URL, so a reload shows what was saved. */
@@ -289,16 +289,16 @@ async function submitDialog(values: SavedViewDialogValues) {
       });
       closeDialog();
       showView(v);
-      say(`View ${v.name} saved`);
+      say(t("views.say.saved", { name: v.name }));
     } else if (d.mode === "rename" && d.view) {
       const v = await update.mutateAsync({ id: d.view.id, version: d.view.version, name: values.name, description: values.description });
       closeDialog();
-      say(`View renamed to ${v.name}`);
+      say(t("views.say.renamed", { name: v.name }));
     } else if (d.view) {
       const v = await copy.mutateAsync({ id: d.view.id, name: values.name, visibility: d.mode === "share" ? "shared" : "personal" });
       closeDialog();
       if (d.mode === "copy") showView(v);
-      say(d.mode === "share" ? `Shared copy ${v.name} created` : `View copied to My views as ${v.name}`);
+      say(t(d.mode === "share" ? "views.say.shared" : "views.say.copied", { name: v.name }));
     }
   } catch (e) {
     if (e instanceof ApiError && e.code === "VERSION_CONFLICT" && d.view) {
@@ -320,7 +320,7 @@ async function saveCurrent() {
   try {
     const saved = await update.mutateAsync({ id: v.id, version: v.version, definition: def.definition });
     showView(saved);
-    say(`View ${saved.name} saved`);
+    say(t("views.say.saved", { name: saved.name }));
   } catch (e) {
     if (e instanceof ApiError && e.code === "VERSION_CONFLICT") conflict.value = { view: v, message: e.message };
     else actionError.value = e;
@@ -337,7 +337,8 @@ async function setDefault(v: SavedView, on: boolean) {
   actionError.value = null;
   try {
     await setDefaultMutation.mutateAsync({ classKey: v.home ?? null, viewId: on ? v.id : null });
-    say(on ? `${v.name} is now your default for ${homeName(v, props.classes)}` : `Default for ${homeName(v, props.classes)} cleared`);
+    const list = homeName(v, props.classes);
+    say(on ? t("views.say.defaultSet", { name: v.name, list }) : t("views.say.defaultCleared", { list }));
   } catch (e) {
     actionError.value = e;
   }
@@ -347,9 +348,9 @@ async function copyLink() {
   actionError.value = null;
   try {
     await navigator.clipboard.writeText(window.location.href);
-    say("Link copied");
+    say(t("views.say.linkCopied"));
   } catch {
-    actionError.value = new Error("The browser did not allow copying. Copy the address from the address bar instead.");
+    actionError.value = new Error(t("views.error.clipboard"));
   }
 }
 
@@ -383,7 +384,7 @@ async function confirmDelete() {
   try {
     await remove.mutateAsync({ id: v.id, version: v.version });
     deleting.value = null;
-    say(`View ${v.name} deleted`);
+    say(t("views.say.deleted", { name: v.name }));
     if (v.id === props.selection.viewId.value) {
       // The view is gone: its list as it opens without it (the class's list view, then the defaults).
       const classId = props.classes?.find((c) => c.key === v.home)?.id;
@@ -415,6 +416,10 @@ function openManageFromLimit() {
 
 const notice = computed(() => props.selection.notice.value);
 /** What resolution dropped from the view shown, while the list still shows it as it came. */
+/** Messages that wrap a value in <strong>, split around it so the word order stays the translator's. */
+const noViews = computed(() => tAround("views.none", "action"));
+const sharedDefault = (n: number) => tAround("views.delete.sharedDefault", "count", { n });
+const myDefault = (v: SavedView) => tAround("views.delete.myDefault", "list", { listName: homeName(v, props.classes) });
 const dropped = computed(() => {
   const v = current.value;
   if (!v || modified.value || v.resolved.issues.length === 0) return null;
@@ -424,7 +429,7 @@ const dropped = computed(() => {
 
 <template>
   <div class="view-menu">
-    <span :id="`${menuId}-label`" class="label">View</span>
+    <span :id="`${menuId}-label`" class="label">{{ t("views.label") }}</span>
     <div class="view-menu-row">
       <button
         ref="button"
@@ -438,42 +443,42 @@ const dropped = computed(() => {
         @keydown="onButtonKey"
       >
         <span :id="`${menuId}-button-text`" class="view-menu-name">{{ buttonLabel }}</span>
-        <span v-if="current?.isDefault" class="badge">Default</span>
+        <span v-if="current?.isDefault" class="badge">{{ t("views.default") }}</span>
         <Icon name="chevron-down" />
       </button>
       <template v-if="modified">
-        <span class="view-modified"><Icon name="pencil" :size="14" /> Modified</span>
+        <span class="view-modified"><Icon name="pencil" :size="14" /> {{ t("views.modified") }}</span>
         <button v-if="current?.canEdit" type="button" class="btn btn-sm" :disabled="update.isPending.value" @click="saveCurrent">
-          {{ update.isPending.value ? "Saving…" : "Save" }}
+          {{ update.isPending.value ? t("common.saving") : t("views.save") }}
         </button>
-        <button type="button" class="btn btn-sm" @click="revert">Revert</button>
+        <button type="button" class="btn btn-sm" @click="revert">{{ t("views.revert") }}</button>
       </template>
     </div>
 
     <div v-if="open" ref="popup" class="popover view-menu-popup">
       <div v-if="showFilter" class="field">
-        <label :for="`${menuId}-filter`" class="sr-only">Filter views</label>
-        <input :id="`${menuId}-filter`" ref="filterInput" v-model="filter" type="search" placeholder="Filter views…" @keydown="onFilterKey" />
+        <label :for="`${menuId}-filter`" class="sr-only">{{ t("views.filter") }}</label>
+        <input :id="`${menuId}-filter`" ref="filterInput" v-model="filter" type="search" :placeholder="t('views.filter.placeholder')" @keydown="onFilterKey" />
       </div>
       <p v-if="viewsQuery.isPending.value" class="view-menu-status" role="status">
-        <span class="spinner" aria-hidden="true" /> Loading saved views…
+        <span class="spinner" aria-hidden="true" /> {{ t("views.loading") }}
       </p>
       <div v-else-if="loadError" :id="`${menuId}-error`" class="view-menu-status alert alert-error">
-        Saved views could not be loaded.
-        <span v-if="requestId" class="meta">Request ID: <span class="mono">{{ requestId }}</span></span>
+        {{ t("views.loadFailed") }}
+        <span v-if="requestId" class="meta">{{ t("views.requestId") }} <span class="mono">{{ requestId }}</span></span>
       </div>
       <p v-else-if="views.length === 0" class="view-menu-status muted">
-        No saved views yet. Set filters, sort and columns, then choose <strong>Save as new view</strong>.
+        {{ noViews[0] }}<strong>{{ t("views.dialog.create") }}</strong>{{ noViews[1] }}
       </p>
-      <p v-else-if="filter && groups.personal.length + groups.shared.length === 0" class="view-menu-status muted">No view matches “{{ filter }}”.</p>
+      <p v-else-if="filter && groups.personal.length + groups.shared.length === 0" class="view-menu-status muted">{{ t("views.noMatch", { filter }) }}</p>
 
-      <ul :id="menuId" ref="menuEl" role="menu" aria-label="Views" :aria-describedby="loadError ? `${menuId}-error` : undefined" @keydown="onMenuKey">
+      <ul :id="menuId" ref="menuEl" role="menu" :aria-label="t('views.menu')" :aria-describedby="loadError ? `${menuId}-error` : undefined" @keydown="onMenuKey">
         <li v-if="loadError" role="none">
-          <button type="button" role="menuitem" tabindex="-1" @click="retry">Retry</button>
+          <button type="button" role="menuitem" tabindex="-1" @click="retry">{{ t("common.retry") }}</button>
         </li>
         <template v-for="g in (['personal', 'shared'] as const)" :key="g">
           <li v-if="groups[g].length > 0" role="none">
-            <span :id="`${menuId}-${g}`" class="view-menu-heading">{{ g === "personal" ? "My views" : "Shared views" }}</span>
+            <span :id="`${menuId}-${g}`" class="view-menu-heading">{{ g === "personal" ? t("views.mine") : t("views.shared") }}</span>
             <ul role="group" :aria-labelledby="`${menuId}-${g}`">
               <li v-for="v in groups[g]" :key="v.id" role="none">
                 <button
@@ -484,13 +489,13 @@ const dropped = computed(() => {
                   :data-label="v.name"
                   :aria-disabled="v.resolved.state === 'unavailable' ? 'true' : undefined"
                   :aria-describedby="v.resolved.state === 'unavailable' ? `${menuId}-unavailable` : undefined"
-                  :title="v.resolved.state === 'unavailable' ? 'This view refers to a filter that no longer exists.' : (v.description ?? undefined)"
+                  :title="v.resolved.state === 'unavailable' ? t('views.unavailable.hint') : (v.description ?? undefined)"
                   @click="pick(v)"
                 >
                   <span class="check"><Icon v-if="v.id === current?.id" name="check" /></span>
                   <span class="view-menu-name">{{ v.name }}</span>
-                  <span v-if="v.isDefault" class="badge">Default</span>
-                  <span v-if="v.resolved.state === 'unavailable'" class="muted">(unavailable)</span>
+                  <span v-if="v.isDefault" class="badge">{{ t("views.default") }}</span>
+                  <span v-if="v.resolved.state === 'unavailable'" class="muted">{{ t("views.unavailable") }}</span>
                 </button>
               </li>
             </ul>
@@ -511,39 +516,36 @@ const dropped = computed(() => {
           </button>
         </li>
       </ul>
-      <span :id="`${menuId}-unavailable`" class="sr-only">This view refers to a filter that no longer exists.</span>
+      <span :id="`${menuId}-unavailable`" class="sr-only">{{ t("views.unavailable.hint") }}</span>
     </div>
 
     <span class="sr-only" role="status" aria-live="polite">{{ announcement }}</span>
   </div>
 
   <div v-if="notice" class="view-menu-banner alert alert-warn" role="alert">
-    <template v-if="notice.kind === 'notAvailable'">The saved view in this link is not available to you. Showing the default list.</template>
-    <template v-else>
-      The view “{{ notice.name }}” refers to a filter that no longer exists, so it was not applied. Showing the default list.
-    </template>
-    <button type="button" class="btn btn-sm" @click="selection.dismissNotice()">Dismiss</button>
+    <template v-if="notice.kind === 'notAvailable'">{{ t("views.notice.notAvailable") }}</template>
+    <template v-else>{{ t("views.notice.unresolved", { name: notice.name }) }}</template>
+    <button type="button" class="btn btn-sm" @click="selection.dismissNotice()">{{ t("views.dismiss") }}</button>
   </div>
   <div v-if="dropped && dropped.count > 0" class="view-menu-banner alert alert-warn" role="status">
     <template v-if="dropped.messages.length > 0">
-      Parts of this view no longer exist and were left out:
+      {{ t("views.dropped.list") }}
       <ul>
         <li v-for="m in dropped.messages" :key="m">{{ m }}</li>
       </ul>
     </template>
     <template v-else>
-      {{ dropped.count === 1 ? "1 part of this view is" : `${dropped.count} parts of this view are` }} not available to you and
-      {{ dropped.count === 1 ? "was" : "were" }} left out.
+      {{ t("views.dropped.count", { n: dropped.count }) }}
     </template>
     <p v-if="dropped.notes.length > 0" class="meta">{{ dropped.notes.join(" ") }}</p>
     <div v-if="current?.canEdit">
-      <button type="button" class="btn btn-sm" :disabled="update.isPending.value" @click="saveCurrent">Save to fix</button>
-      <span class="muted"> Saves the view as the list shows it now.</span>
+      <button type="button" class="btn btn-sm" :disabled="update.isPending.value" @click="saveCurrent">{{ t("views.dropped.fix") }}</button>
+      <span class="muted"> {{ t("views.dropped.fixHint") }}</span>
     </div>
   </div>
   <div v-else-if="dropped && dropped.notes.length > 0" class="view-menu-banner alert" role="status">{{ dropped.notes.join(" ") }}</div>
   <div v-if="actionError" class="view-menu-banner">
-    <ErrorAlert :error="actionError" title="The view action failed" />
+    <ErrorAlert :error="actionError" :title="t('views.error.action')" />
   </div>
 
   <!-- In <body>, not the toolbar: the toolbar's control widths would apply to the dialog fields (GH#483). -->
@@ -562,41 +564,38 @@ const dropped = computed(() => {
 
     <ConfirmDialog
       :open="!!deleting"
-      :title="`Delete view “${deleting?.name ?? ''}”?`"
-      confirm-label="Delete view"
-      busy-label="Deleting…"
+      :title="t('views.delete.title', { name: deleting?.name ?? '' })"
+      :confirm-label="t('views.delete.confirm')"
+      :busy-label="t('views.delete.busy')"
       :busy="remove.isPending.value"
       @confirm="confirmDelete"
       @cancel="deleting = null"
     >
       <template v-if="deleting">
-        <ErrorAlert v-if="deleteError" :error="deleteError" title="The view was not deleted" />
-        <p v-if="deleting.visibility === 'shared'">
-          It is shared with everyone<template v-if="deleting.defaultCount !== undefined">
-            and is the default for <strong>{{ deleting.defaultCount.toLocaleString() }}</strong>
-            {{ deleting.defaultCount === 1 ? "user" : "users" }}</template
-          >. They will return to the standard list. Configuration items are not affected.
+        <ErrorAlert v-if="deleteError" :error="deleteError" :title="t('views.error.notDeleted')" />
+        <p v-if="deleting.visibility === 'shared' && deleting.defaultCount !== undefined">
+          {{ sharedDefault(deleting.defaultCount)[0] }}<strong>{{ formatNumber(deleting.defaultCount) }}</strong>{{ sharedDefault(deleting.defaultCount)[1] }}
         </p>
+        <p v-else-if="deleting.visibility === 'shared'">{{ t("views.delete.shared") }}</p>
         <p v-else-if="deleting.isDefault">
-          This cannot be undone. It is your default for <strong>{{ homeName(deleting, classes) }}</strong>. The
-          {{ homeName(deleting, classes) }} list will open with the standard columns and filters.
+          {{ myDefault(deleting)[0] }}<strong>{{ homeName(deleting, classes) }}</strong>{{ myDefault(deleting)[1] }}
         </p>
-        <p v-else>This cannot be undone. Configuration items are not affected.</p>
+        <p v-else>{{ t("views.delete.plain") }}</p>
       </template>
     </ConfirmDialog>
 
     <ConfirmDialog
       :open="!!conflict"
-      title="This view was changed elsewhere"
-      confirm-label="Load latest"
-      cancel-label="Cancel"
+      :title="t('views.conflict.title')"
+      :confirm-label="t('views.conflict.load')"
+      :cancel-label="t('common.cancel')"
       tone="primary"
       @confirm="loadLatest"
       @cancel="conflict = null"
     >
       <p>{{ conflict?.message }}</p>
-      <p>Load the latest version, or keep what the list shows now as a new view.</p>
-      <p><button type="button" class="btn" @click="conflictSaveAs">Save as new view…</button></p>
+      <p>{{ t("views.conflict.body") }}</p>
+      <p><button type="button" class="btn" @click="conflictSaveAs">{{ t("views.action.saveAs") }}</button></p>
     </ConfirmDialog>
   </Teleport>
 

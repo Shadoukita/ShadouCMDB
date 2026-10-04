@@ -59,6 +59,15 @@ table.data th button.sort:focus-visible {
   outline: 2px solid var(--c-focus);
   outline-offset: 2px;
 }
+/* An unsorted sortable column shows its neutral icon on hover and focus only; the space stays reserved so the header does not shift (audit I3). */
+table.data th button.sort .sort-icon.idle {
+  visibility: hidden;
+  color: var(--c-text-tertiary);
+}
+table.data th button.sort:hover .sort-icon.idle,
+table.data th button.sort:focus-visible .sort-icon.idle {
+  visibility: visible;
+}
 table.data th[aria-sort="ascending"],
 table.data th[aria-sort="descending"] {
   color: var(--c-text);

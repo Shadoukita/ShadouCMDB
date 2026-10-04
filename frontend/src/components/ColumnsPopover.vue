@@ -58,6 +58,8 @@ function onDocClick(e: MouseEvent) {
 }
 onMounted(() => document.addEventListener("click", onDocClick));
 onBeforeUnmount(() => document.removeEventListener("click", onDocClick));
+/** The list's `c` shortcut opens the popover (lib/rowKeyboard). */
+defineExpose({ show });
 
 /**
  * Focus follows the column: once the URL has changed and the list has re-rendered,

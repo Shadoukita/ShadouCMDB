@@ -1,6 +1,7 @@
 import type { LocationQuery, LocationQueryRaw } from "vue-router";
 import type { SavedView, SavedViewDefinition } from "../api/savedViews";
 import { DEFAULT_LIMIT, DEFAULT_SORT, FILTER_KEYS, param, parseColumns, type QueryContext } from "./inventoryQuery";
+import { t } from "../i18n/index";
 
 /**
  * Saved views and the URL (saved-views spec §1.3, D6). A view is stored by key
@@ -103,19 +104,19 @@ export function definitionFromUrl(
 ): DefinitionResult {
   const ids = (k: string) => param(query, k).split(",").filter(Boolean);
   if (param(query, "ownLayout") || param(query, "layoutTemplate")) {
-    return { ok: false, message: "A saved view cannot hold the layout filter. Remove that filter, then save again." };
+    return { ok: false, message: t("views.def.layout") };
   }
   const classKeys: string[] = [];
   for (const id of ids("classId")) {
     const c = cat.classes.find((x) => x.id === id);
-    if (!c) return { ok: false, message: "The class filter names a class that no longer exists. Change the class filter, then save again." };
+    if (!c) return { ok: false, message: t("views.def.class") };
     classKeys.push(c.key);
   }
   const lookups: Record<string, string[]> = {};
   for (const id of [...ids("lookupValueId"), ...ids("criticalityValueId")]) {
     const v = cat.values.find((x) => x.id === id);
     const list = v && cat.lists.find((l) => l.id === v.listId);
-    if (!v || !list) return { ok: false, message: "A lookup filter names a value that no longer exists. Remove that filter, then save again." };
+    if (!v || !list) return { ok: false, message: t("views.def.lookup") };
     const keys = (lookups[list.key] ??= []);
     if (!keys.includes(v.key)) keys.push(v.key);
   }
@@ -146,7 +147,7 @@ export function definitionFromUrl(
 
 /** The list a view is the default of, for the screen: its class's name, or the unscoped inventory. */
 export function homeName(view: Pick<SavedView, "home">, classes: readonly { key: string; name: string }[] | undefined): string {
-  if (!view.home) return "Inventory";
+  if (!view.home) return t("views.home.inventory");
   return classes?.find((c) => c.key === view.home)?.name ?? view.home;
 }
 
