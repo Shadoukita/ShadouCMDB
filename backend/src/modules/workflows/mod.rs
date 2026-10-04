@@ -478,7 +478,9 @@ pub fn runtime_routes() -> Vec<Route> {
             .summary("The workflows of one CI: running and recent instances, and the workflows you may start")
             .description(
                 "Running instances first, then the 20 that ended last, each with the transitions the caller may \
-                 run. 404 for a CI of a type the caller may not view.",
+                 run. `controlledFields` lists the CI's fields an active workflow drives: they change only \
+                 through the workflow (409 WORKFLOW_CONTROLLED_FIELD on a direct write). 404 for a CI of a type the \
+                 caller may not view.",
             )
             .errors(&[ErrorCode::NotFound])
             .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {

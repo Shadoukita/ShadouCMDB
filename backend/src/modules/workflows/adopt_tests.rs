@@ -311,6 +311,7 @@ async fn an_auto_start_workflow_starts_on_a_new_ci() {
     assert_eq!(v["attributes"]["lifecycle"], json!(w.value("planned").to_string()), "{v}");
     let (status, v) = w.call(&w.admin, "GET", &format!("{CIS}/{ci}/workflows"), None).await;
     assert_eq!(status, 200, "{v}");
+    assert_eq!(v["controlledFields"], json!(["lifecycle"]), "{v}");
     let running = v["data"].as_array().unwrap_or_else(|| panic!("{v}"));
     assert_eq!((running.len(), running[0]["instance"]["state"]["key"].as_str()), (1, Some("planned")), "{v}");
     let audit: Vec<(String, Option<String>)> = sqlx::query_as(
@@ -327,6 +328,8 @@ async fn an_auto_start_workflow_starts_on_a_new_ci() {
 
     // A CI of a type it does not cover starts nothing; nor does a new CI once auto-start is off.
     let other = w.ci(w.network).await;
+    let (_, v) = w.call(&w.admin, "GET", &format!("{CIS}/{other}/workflows"), None).await;
+    assert_eq!(v["controlledFields"], json!([]), "{v}");
     w.set_active(true, false).await;
     let (_, v) = w.create(None).await;
     for ci in [other, id(&v)] {

@@ -35,6 +35,7 @@ use super::eval::{self, Subject};
 use super::graph::{self, VERSION_COLUMNS, VersionRow};
 use super::runtime_schemas::*;
 use super::schemas::WorkflowStateCategory;
+use super::state_field::StateFields;
 use crate::api::context::{Caller, RequestContext};
 use crate::api::schemas::{Page, Paged};
 use crate::auth::Credential;
@@ -1029,7 +1030,8 @@ pub async fn of_ci(pool: &PgPool, ctx: &RequestContext, ci: Uuid) -> Result<CiWo
         .fetch_all(&mut *conn)
         .await?
     };
-    Ok(CiWorkflows { data, startable })
+    let controlled_fields = StateFields::load(&mut conn).await?.driven_keys(&model, class_id);
+    Ok(CiWorkflows { data, startable, controlled_fields })
 }
 
 // ---------------------------------------------------------------------------

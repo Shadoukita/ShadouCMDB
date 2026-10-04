@@ -3213,7 +3213,7 @@ export interface paths {
         };
         /**
          * The workflows of one CI: running and recent instances, and the workflows you may start
-         * @description Running instances first, then the 20 that ended last, each with the transitions the caller may run. 404 for a CI of a type the caller may not view.
+         * @description Running instances first, then the 20 that ended last, each with the transitions the caller may run. `controlledFields` lists the CI's fields an active workflow drives: they change only through the workflow (409 WORKFLOW_CONTROLLED_FIELD on a direct write). 404 for a CI of a type the caller may not view.
          */
         get: operations["getConfigurationItemWorkflows"];
         put?: never;
@@ -3708,6 +3708,11 @@ export interface components {
              *     on the type); empty for a deleted CI
              */
             startable: components["schemas"]["WorkflowStartable"][];
+            /**
+             * @description Keys of the CI's fields an active workflow drives (its state fields): they change only through the
+             *     workflow, so a form shows them read-only (a direct write is 409 WORKFLOW_CONTROLLED_FIELD)
+             */
+            controlledFields: string[];
         };
         /** @description Rights on one CI class, or on every class when `classId` is null. */
         ClassPermission: {
@@ -28378,7 +28383,9 @@ export interface operations {
                      */
                     expectedVersion: number;
                     /** @description Values of the transition's fields by field key, in the form of PATCH /configuration-items/{id} (null clears one). Only the fields the transition lists. */
-                    fields?: Record<string, never>;
+                    fields?: {
+                        [key: string]: unknown;
+                    };
                     comment?: string | null;
                 };
             };

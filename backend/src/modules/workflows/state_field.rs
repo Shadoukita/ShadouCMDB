@@ -105,6 +105,16 @@ impl StateFields {
             .collect()
     }
 
+    /// Keys of the fields these workflows drive on a CI of `class_id`.
+    pub fn driven_keys(&self, model: &Model, class_id: Uuid) -> Vec<String> {
+        let StateFields::Guarded(drivers) = self else { return Vec::new() };
+        drivers
+            .iter()
+            .filter(|d| d.covers(model, class_id))
+            .filter_map(|d| model.field(d.attribute_id).map(|f| f.key.clone()))
+            .collect()
+    }
+
     /// A new CI of `class_id` may leave a driven field out, or give it the
     /// value the workflow starts with or the field's default (what a form
     /// fills in); any other value is refused.
