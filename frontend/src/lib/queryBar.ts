@@ -59,8 +59,9 @@ export interface BarCatalogue {
 export type BarErrorCode = "negation" | "unknownKey" | "unknownValue" | "badValue" | "twice";
 export interface BarError {
   code: BarErrorCode;
-  /** The token as typed. */
+  /** The token as typed, and where it starts in the text. */
   token: string;
+  at: number;
   key: string;
   value?: string;
   /** For badValue: the values the key takes. */
@@ -150,11 +151,11 @@ export function parseBar(text: string, catalogue: BarCatalogue): Parsed {
     if (!isFixed(key) && !list) {
       // An unknown key may be a lookup list that is still loading.
       if (!lists) pending = true;
-      else errors.push({ code: "unknownKey", token: tok.raw, key });
+      else errors.push({ code: "unknownKey", token: tok.raw, at: tok.start, key });
       continue;
     }
     if (k.negated) {
-      errors.push({ code: "negation", token: tok.raw, key });
+      errors.push({ code: "negation", token: tok.raw, at: tok.start, key });
       continue;
     }
     const values = splitValues(value).filter(Boolean);
@@ -174,7 +175,7 @@ export function parseBar(text: string, catalogue: BarCatalogue): Parsed {
       for (const v of values) {
         const hit = find(items, v);
         if (hit) ids[p].includes(hit.id) || ids[p].push(hit.id);
-        else errors.push({ code: "unknownValue", token: tok.raw, key, value: v });
+        else errors.push({ code: "unknownValue", token: tok.raw, at: tok.start, key, value: v });
       }
     } else if (list) {
       named.add("lookupValueId");
@@ -188,19 +189,19 @@ export function parseBar(text: string, catalogue: BarCatalogue): Parsed {
       for (const v of values) {
         const hit = find(mine, v);
         if (hit) acc.includes(hit.id) || acc.push(hit.id);
-        else errors.push({ code: "unknownValue", token: tok.raw, key, value: v });
+        else errors.push({ code: "unknownValue", token: tok.raw, at: tok.start, key, value: v });
       }
     } else if (key === "ip" || key === "template") {
       const p = key === "ip" ? "ipWithin" : "layoutTemplate";
-      if (named.has(p)) errors.push({ code: "twice", token: tok.raw, key });
+      if (named.has(p)) errors.push({ code: "twice", token: tok.raw, at: tok.start, key });
       named.add(p);
       patch[p] = unquote(value.trim());
     } else {
       const e = ENUMS[key as EnumKey];
-      if (named.has(e.param)) errors.push({ code: "twice", token: tok.raw, key });
+      if (named.has(e.param)) errors.push({ code: "twice", token: tok.raw, at: tok.start, key });
       named.add(e.param);
       const v = values[0]!.toLowerCase();
-      if (values.length > 1 || !(v in e.values)) errors.push({ code: "badValue", token: tok.raw, key, value: value.trim(), allowed: Object.keys(e.values) });
+      if (values.length > 1 || !(v in e.values)) errors.push({ code: "badValue", token: tok.raw, at: tok.start, key, value: value.trim(), allowed: Object.keys(e.values) });
       else patch[e.param] = e.values[v as keyof typeof e.values];
     }
   }
@@ -290,6 +291,45 @@ const norm = (p: BarParam, v: string | undefined) => {
 /** Whether the URL already holds what the text says, so the text can stay as the operator typed it. */
 export function sameAsUrl(query: LocationQuery | LocationQueryRaw, patch: BarPatch): boolean {
   return Object.entries(patch).every(([p, v]) => norm(p as BarParam, param(query, p)) === norm(p as BarParam, v));
+}
+
+// ---------- Syntax colouring ----------
+
+export type SegmentKind = "space" | "word" | "negation" | "key" | "punct" | "value";
+export interface Segment {
+  text: string;
+  kind: SegmentKind;
+  /** Part of a token the bar reports an error on. */
+  error?: true;
+}
+
+/**
+ * The text cut into coloured runs for the bar's overlay: the negation sign, the key, the colon and
+ * commas, the values, and plain words. The runs join back into the text exactly (the overlay must
+ * line up with the input glyph by glyph). `errorAt` holds the starts of the tokens with an error.
+ */
+export function segmentBar(text: string, errorAt: ReadonlySet<number> = new Set()): Segment[] {
+  const out: Segment[] = [];
+  let pos = 0;
+  for (const tk of tokenize(text)) {
+    if (tk.start > pos) out.push({ text: text.slice(pos, tk.start), kind: "space" });
+    pos = tk.end;
+    const mark = errorAt.has(tk.start) ? ({ error: true } as const) : {};
+    const k = keyToken(tk.raw);
+    if (!k) {
+      out.push({ text: tk.raw, kind: "word", ...mark });
+      continue;
+    }
+    const colon = tk.raw.indexOf(":");
+    if (k.negated) out.push({ text: "-", kind: "negation", ...mark });
+    out.push({ text: tk.raw.slice(k.negated ? 1 : 0, colon), kind: "key", ...mark });
+    out.push({ text: ":", kind: "punct", ...mark });
+    // A quoted value is one value, commas and all; otherwise commas separate the values.
+    const parts = k.value.trimStart().startsWith('"') ? [k.value] : k.value.split(/(,)/);
+    for (const part of parts) if (part) out.push({ text: part, kind: part === "," ? "punct" : "value", ...mark });
+  }
+  if (pos < text.length) out.push({ text: text.slice(pos), kind: "space" });
+  return out;
 }
 
 // ---------- Autocomplete ----------

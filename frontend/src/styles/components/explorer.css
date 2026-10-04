@@ -73,6 +73,63 @@
 .toolbar .field.query-bar input::placeholder {
   font-family: var(--font-sans);
 }
+/*
+ * Syntax colouring: .query-overlay lies over the input with the same box, font and padding, and the
+ * input's own glyphs are transparent (the caret and the selection stay the input's). Ligatures and
+ * kerning are off on both, so a run boundary in the overlay can never shift a glyph. The native
+ * clear button is hidden: it would narrow the input's text box but not the overlay's (Escape clears).
+ */
+.query-input > input,
+.query-overlay {
+  font-family: var(--font-mono);
+  font-size: var(--fs-md);
+  font-variant-ligatures: none;
+  font-kerning: none;
+  letter-spacing: normal;
+}
+.query-input > input {
+  color: transparent;
+  caret-color: var(--c-text);
+}
+.query-input > input::selection {
+  color: transparent;
+}
+.query-input > input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+.query-overlay {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  padding: 0 var(--space-2) 0 calc(var(--space-2) + 16px + var(--space-1_5));
+  border: 1px solid transparent;
+  line-height: calc(var(--control-h) - 2px);
+  white-space: pre;
+  color: var(--c-text);
+  pointer-events: none;
+}
+/* Room past the end, so the overlay can always scroll as far as the input does (it pads its end for the caret). */
+.query-overlay::after {
+  content: "";
+  display: inline-block;
+  width: var(--space-4);
+}
+.qs-key {
+  color: var(--c-link);
+}
+.qs-punct {
+  color: var(--c-text-secondary);
+}
+.qs-negation,
+.qs-error {
+  color: var(--c-danger-text);
+}
+.qs-error {
+  text-decoration: underline wavy var(--c-danger-text);
+  text-decoration-skip-ink: none;
+  text-underline-offset: 3px;
+}
 .query-suggestions {
   min-width: 280px;
 }

@@ -7,6 +7,7 @@ import {
   barPatch,
   parseBar,
   sameAsUrl,
+  segmentBar,
   serializeBar,
   suggest,
   type BarCatalogue,
@@ -22,11 +23,18 @@ import Icon from "./Icon.vue";
  * `key:value` tokens, read from and written to the URL like every other control (lib/queryBar).
  * Typing applies after a pause, Enter at once; a text with an error is not applied, and the error
  * says why under the bar. Keys and values are offered from the catalogue as the operator types.
+ *
+ * The text is coloured by an overlay laid over the input (keys, separators, values, the negation
+ * sign, and the tokens an error is reported on): the input's own glyphs are transparent, so the
+ * caret, selection and native editing stay the input's, and the overlay only has to follow its
+ * horizontal scroll. Both use the same font metrics with ligatures and kerning off (explorer.css),
+ * which e2e/query-bar.spec.ts checks glyph run by glyph run.
  */
 const props = defineProps<{ state: ReturnType<typeof useInventoryQueryState>; catalogue: BarCatalogue }>();
 
 const route = useRoute();
 const input = ref<HTMLInputElement>();
+const overlay = ref<HTMLElement>();
 const labels = computed<BarLabels>(() => ({
   class: t("filters.class"),
   criticality: t("filters.criticality"),
@@ -78,6 +86,19 @@ function apply() {
 let timer: ReturnType<typeof setTimeout> | undefined;
 onBeforeUnmount(() => clearTimeout(timer));
 
+// ---------- Syntax colouring ----------
+const segments = computed(() => segmentBar(text.value, new Set(errors.value.map((e) => e.at))));
+/** The overlay follows the input's horizontal scroll (a long query scrolls under the caret). */
+function syncScroll() {
+  if (input.value && overlay.value) overlay.value.scrollLeft = input.value.scrollLeft;
+}
+// After Vue has written a new text into both, and once more after the browser has scrolled the input to the caret.
+watch(text, async () => {
+  await nextTick();
+  syncScroll();
+  requestAnimationFrame(syncScroll);
+});
+
 // ---------- Suggestions (a combobox: focus stays in the input) ----------
 const caret = ref(0);
 const open = ref(false);
@@ -86,7 +107,10 @@ const suggestions = computed(() => (open.value ? suggest(text.value, caret.value
 const expanded = computed(() => !!suggestions.value);
 watch(suggestions, () => (active.value = -1));
 
-const readCaret = () => (caret.value = input.value?.selectionStart ?? text.value.length);
+function readCaret() {
+  caret.value = input.value?.selectionStart ?? text.value.length;
+  syncScroll();
+}
 
 function onInput(e: Event) {
   text.value = (e.target as HTMLInputElement).value;
@@ -106,6 +130,7 @@ async function take(item: Suggestion) {
   caret.value = next.caret;
   await nextTick();
   input.value?.setSelectionRange(next.caret, next.caret);
+  syncScroll();
   clearTimeout(timer);
   timer = setTimeout(apply, 300);
 }
@@ -136,6 +161,7 @@ function onKeydown(e: KeyboardEvent) {
 let closeTimer: ReturnType<typeof setTimeout> | undefined;
 function onBlur() {
   focused.value = false;
+  requestAnimationFrame(syncScroll);
   closeTimer = setTimeout(() => (open.value = false), 150);
 }
 function onFocus() {
@@ -154,7 +180,7 @@ const describedBy = computed(() => ["f-q-help", errors.value.length ? "f-q-error
 <template>
   <div class="field search query-bar">
     <label for="f-q">{{ t("inventory.search") }}</label>
-    <div class="combo input-icon">
+    <div class="combo input-icon query-input">
       <Icon name="search" />
       <input
         id="f-q"
@@ -177,7 +203,11 @@ const describedBy = computed(() => ["f-q-help", errors.value.length ? "f-q-error
         @click="readCaret"
         @focus="onFocus"
         @blur="onBlur"
+        @scroll="syncScroll"
+        @select="syncScroll"
       />
+      <!-- The coloured copy of the text (see above). Hidden from assistive technology: the input is the text. -->
+      <div ref="overlay" class="query-overlay" aria-hidden="true"><span v-for="(s, i) in segments" :key="i" :class="[`qs-${s.kind}`, { 'qs-error': s.error }]">{{ s.text }}</span></div>
       <!-- Hover only highlights (CSS): if it moved `active`, a list opening under a resting pointer
            would choose what Enter takes instead of applying the text. -->
       <ul v-show="expanded" id="f-q-list" class="combo-list query-suggestions" role="listbox" :aria-label="t('queryBar.suggestions')">

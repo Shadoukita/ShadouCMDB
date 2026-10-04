@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { accept, barPatch, parseBar, sameAsUrl, serializeBar, suggest, tokenize, type BarCatalogue } from "../src/lib/queryBar";
+import { accept, barPatch, parseBar, sameAsUrl, segmentBar, serializeBar, suggest, tokenize, type BarCatalogue } from "../src/lib/queryBar";
 
 const catalogue: BarCatalogue = {
   classes: [
@@ -86,6 +86,59 @@ describe("parseBar", () => {
     const loading = parseBar("class:server environment:prod", {});
     assert.equal(loading.pending, true);
     assert.deepEqual(loading.errors, []);
+  });
+});
+
+describe("segmentBar", () => {
+  const runs = (text: string, at?: Set<number>) => segmentBar(text, at).map((s) => [s.kind, s.text, ...(s.error ? ["!"] : [])]);
+
+  test("colours the key, the separators and each value, and leaves words plain", () => {
+    assert.deepEqual(runs(" class:server,vm  fra1 "), [
+      ["space", " "],
+      ["key", "class"],
+      ["punct", ":"],
+      ["value", "server"],
+      ["punct", ","],
+      ["value", "vm"],
+      ["space", "  "],
+      ["word", "fra1"],
+      ["space", " "],
+    ]);
+  });
+
+  test("a quoted value is one run, a negation sign its own, and an unfinished key ends at its colon", () => {
+    assert.deepEqual(runs('-env:"a, b" class: "x:y z"'), [
+      ["negation", "-"],
+      ["key", "env"],
+      ["punct", ":"],
+      ["value", '"a, b"'],
+      ["space", " "],
+      ["key", "class"],
+      ["punct", ":"],
+      ["space", " "],
+      ["word", '"x:y z"'],
+    ]);
+  });
+
+  test("marks every run of a token with an error, found by where it starts", () => {
+    const text = "class:server owner:me";
+    const at = new Set(parseBar(text, catalogue).errors.map((e) => e.at));
+    assert.deepEqual([...at], [13]);
+    assert.deepEqual(runs(text, at).slice(4), [
+      ["key", "owner", "!"],
+      ["punct", ":", "!"],
+      ["value", "me", "!"],
+    ]);
+  });
+
+  test("the runs always join back into the text", () => {
+    for (const text of ["", "   ", "a", 'ip:2001:db8::/32 "un closed', "class:,,vm, -x: y", "\tclass:server\n"])
+      assert.equal(
+        segmentBar(text)
+          .map((s) => s.text)
+          .join(""),
+        text,
+      );
   });
 });
 
