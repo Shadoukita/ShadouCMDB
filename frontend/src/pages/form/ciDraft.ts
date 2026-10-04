@@ -2,6 +2,7 @@ import { computed, reactive, ref, shallowRef, toValue, watch, type MaybeRefOrGet
 import { useIsPersonClass, useSignInAccount } from "../../api/admin";
 import { ApiError } from "../../api/client";
 import { useCriticalityValues, useUpdateCi, type Ci, type CiUpdateBody, type EffectiveAttribute } from "../../api/queries";
+import { useCiWorkflows } from "../../api/workflowRuntime";
 import { t } from "../../i18n";
 import { hintFor, nowFormValue, toFormValue, type FormValue } from "../../lib/attributeValues";
 import { ciEdits, type CoreValues } from "../../lib/ciEdits";
@@ -152,9 +153,16 @@ export function useCiDraft(opts: CiDraftOptions) {
     const d = managedBy.value ? defs.value.find((x) => x.systemRole === "person_email") : undefined;
     return d ? `${ATTRIBUTE_PREFIX}${d.key}` : null;
   });
+  /**
+   * Fields an active workflow drives on this CI (its state field, Q3): they change only through a transition and the
+   * API refuses a direct write (409 WORKFLOW_CONTROLLED_FIELD), so they are read-only and say why.
+   */
+  const workflows = useCiWorkflows(() => (create ? undefined : toValue(opts.ci)?.id));
+  const controlled = computed(() => new Set((workflows.data.value?.controlledFields ?? []).map((k) => `${ATTRIBUTE_PREFIX}${k}`)));
   const readOnly = computed(() => {
     const ro = new Set((toValue(opts.readOnlyFields) ?? []).filter((f) => !keepEditable(f)));
     if (managedEmail.value) ro.add(managedEmail.value);
+    for (const f of controlled.value) ro.add(f);
     return ro;
   });
   const locked = computed(() => !!toValue(opts.locked));
@@ -189,10 +197,16 @@ export function useCiDraft(opts: CiDraftOptions) {
     return [hint, EDITABLE_CORE.has(f) && !locked.value && !editable(f) ? "read-only" : ""].filter(Boolean).join(" · ") || undefined;
   }
   /** What a field shown read-only says about it: who manages it. */
-  const readOnlyHint = (f: string) => (f === managedEmail.value ? t("people.form.managedBy", { username: managedBy.value ?? "" }) : undefined);
+  const readOnlyHint = (f: string) =>
+    f === managedEmail.value
+      ? t("people.form.managedBy", { username: managedBy.value ?? "" })
+      : controlled.value.has(f)
+        ? t("workflows.controlledField")
+        : undefined;
   function attrHint(d: EffectiveAttribute): string | undefined {
     const f = `${ATTRIBUTE_PREFIX}${d.key}`;
-    if (f === managedEmail.value) return t("people.form.managedBy", { username: managedBy.value ?? "" });
+    const managed = readOnlyHint(f);
+    if (managed) return managed;
     const parent = lookupParent(d);
     const ro = !locked.value && readOnly.value.has(f) ? "read-only" : "";
     return [hintFor(d), parent ? `depends on ${parent.label}` : "", d.inherited ? `from ${d.definedOn.name}` : "", d.isActive ? "" : "retired attribute", ro].filter(Boolean).join(" · ") || undefined;

@@ -4,6 +4,7 @@
 export const en = {
   "services.nav": "Business services",
   "workflows.nav": "Workflows",
+  "workflows.controlledField": "Set by a workflow: change it with a transition on the Workflows tab",
   "services.title": "Business services",
   "services.badge": "Business service",
   "services.create": "Create business service",

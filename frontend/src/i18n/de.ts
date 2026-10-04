@@ -5,6 +5,7 @@ import type { MessageKey } from "./en";
 export const de: { [K in MessageKey]: string } = {
   "services.nav": "Business-Services",
   "workflows.nav": "Workflows",
+  "workflows.controlledField": "Von einem Workflow gesetzt: über einen Übergang auf dem Reiter Workflows ändern",
   "services.title": "Business-Services",
   "services.badge": "Business-Service",
   "services.create": "Business-Service anlegen",

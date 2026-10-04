@@ -4,6 +4,8 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/vue-query";
 import { toValue, type MaybeRefOrGetter } from "vue";
 import { ApiError, api, unwrap, type JsonBody as Body, type ListQuery, type Schemas } from "./client";
+import { keys } from "./queries";
+import { runtimeKeys } from "./workflowRuntime";
 
 export type WorkflowDefinition = Schemas["WorkflowDefinition"];
 /**
@@ -21,6 +23,7 @@ export type WorkflowTransitionField = Schemas["WorkflowTransitionField"];
 export type WorkflowValidation = Schemas["WorkflowValidation"];
 export type WorkflowProblem = Schemas["WorkflowProblem"];
 export type WorkflowGrants = Schemas["WorkflowGrants"];
+export type WorkflowBootstrapResult = Schemas["WorkflowBootstrapResult"];
 export type StateCategory = WorkflowState["category"];
 
 export type WorkflowListQuery = ListQuery<"/api/v1/admin/workflow-definitions">;
@@ -141,6 +144,24 @@ export const useUpdateWorkflow = () =>
   useDefinitionMutation(({ id, body }: { id: string; body: WorkflowUpdateBody }) =>
     unwrap(api.PATCH("/api/v1/admin/workflow-definitions/{id}", { ...path(id), body })) as Promise<WorkflowDefinitionDetail>,
   );
+
+/**
+ * Starts the workflow on the covered CIs that have no running instance, each in the state of its state field value.
+ * A dry run only counts; a real run changes instances (and their CIs' audit), not the definition.
+ */
+export function useBootstrapWorkflow() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, dryRun }: { id: string; dryRun: boolean }) =>
+      unwrap(api.POST("/api/v1/admin/workflow-definitions/{id}/bootstrap", { ...path(id), body: { stateFromAttribute: true, dryRun } })),
+    onSuccess: (r) => {
+      if (r.dryRun) return;
+      void qc.invalidateQueries({ queryKey: runtimeKeys.all });
+      void qc.invalidateQueries({ queryKey: keys.cis });
+      void qc.invalidateQueries({ queryKey: ["audit"] });
+    },
+  });
+}
 
 export function useDeleteWorkflow() {
   const qc = useQueryClient();
