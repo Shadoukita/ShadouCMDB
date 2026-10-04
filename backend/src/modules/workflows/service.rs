@@ -23,6 +23,8 @@ use crate::schema::model::Model;
 
 const TABLE: &str = "workflow_definitions";
 const LABEL: &str = "Workflow definition";
+/// The grant key for cancelling an instance; never a transition key.
+const CANCEL_KEY: &str = "_cancel";
 
 const COLUMNS: &str = "d.id, d.key, d.name, d.description, d.class_id, c.key AS class_key, d.include_subclasses, \
      d.state_attribute_id, a.key AS state_attribute_key, d.auto_start, d.is_active, \
@@ -892,7 +894,16 @@ pub async fn replace_grants(
     let by_name: HashMap<String, Uuid> = profiles.iter().map(|(id, n)| (n.to_lowercase(), *id)).collect();
     let mut errors = Vec::new();
     let mut rows: Vec<(String, Uuid)> = Vec::new();
+    let known = transition_keys(&mut tx, id).await?;
     for (i, g) in b.grants.iter().enumerate() {
+        if !known.contains(&g.transition_key) {
+            errors.push(FieldError {
+                location: FieldLocation::Body,
+                field: format!("grants[{i}].transitionKey"),
+                message: unknown_transition(&before.key, &g.transition_key),
+                code: "unknown_transition".into(),
+            });
+        }
         let mut seen = HashSet::new();
         for (j, p) in g.profiles.iter().enumerate() {
             let found = if validate::is_uuid(p) {
@@ -923,6 +934,26 @@ pub async fn replace_grants(
     let (version, grants) = set_grants_in(&mut tx, ctx, &before, &rows).await?;
     tx.commit().await?;
     Ok(WorkflowGrants { version, grants })
+}
+
+/// The keys a grant may name: `_cancel` and every transition key of any
+/// version of the definition, its draft included.
+pub(crate) async fn transition_keys(conn: &mut PgConnection, id: Uuid) -> Result<HashSet<String>, AppError> {
+    let mut keys: HashSet<String> = sqlx::query_scalar(
+        "SELECT DISTINCT t.key FROM cmdb.workflow_transitions t
+         JOIN cmdb.workflow_versions v ON v.id = t.version_id WHERE v.definition_id = $1",
+    )
+    .bind(id)
+    .fetch_all(&mut *conn)
+    .await?
+    .into_iter()
+    .collect();
+    keys.insert(CANCEL_KEY.to_owned());
+    Ok(keys)
+}
+
+pub(crate) fn unknown_transition(workflow: &str, key: &str) -> String {
+    format!("Workflow {workflow} has no transition \"{key}\" in any version or draft")
 }
 
 /// Replaces the grants of `before` with `rows` (transition key, profile id),

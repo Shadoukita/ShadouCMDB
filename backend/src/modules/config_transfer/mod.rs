@@ -2193,7 +2193,9 @@ pub fn routes() -> Vec<Route> {
             .description(
                 "Data model (classes, attributes, relationship types and rules), lookup lists and their values, \
                  permission profiles (not the built-in one), UI settings including the logo and favicon, and \
-                 saved import mappings and shared saved views. Never contains users, user groups, passwords, sessions, \
+                 saved import mappings, shared saved views and workflows (each workflow's current published version \
+                 with its settings and grants; drafts, retired versions and workflow instances are never part of a \
+                 file). Never contains users, user groups, passwords, sessions, \
                  CIs, relationships, business service members or owners, import jobs, the import switch, personal \
                  saved views or anyone's default view. \
                  Everything refers to everything else by key, so the file imports into another install. Answers \
@@ -2203,9 +2205,11 @@ pub fn routes() -> Vec<Route> {
                  the target's profiles untouched. Likewise `importMappings` is only present when the caller holds \
                  `cis.import`, and holds only the mappings of classes the caller can view; `savedViews` only when \
                  the caller holds `views.share`, without the class keys the caller may not view and without views \
-                 whose classes they may view none of. Every export is recorded in the audit log as one `export` \
+                 whose classes they may view none of; `workflows` only when the caller holds `workflows.manage`, \
+                 so a file exported without it carries no workflows and is not a full copy of the configuration. \
+                 Every export is recorded in the audit log as one `export` \
                  entry (entity type `config`) naming the sections included and the number of import mappings and \
-                 saved views, never their content, so the request must send X-CSRF-Token as on a write.",
+                 saved views and the number of workflows, never their content, so the request must send X-CSRF-Token as on a write.",
             )
             .requires(GlobalPermission::ConfigExportImport)
             .session_only()
@@ -2234,7 +2238,7 @@ pub fn routes() -> Vec<Route> {
                  400 VALIDATION_ERROR with paths into the file; a change the data model does not allow (e.g. making \
                  an attribute required while CIs lack a value) fails with the same error the admin API gives, with \
                  the file path prefixed. A file holds at most 25,000 entries in all: data-model entries, lookup values \
-                 (former tables included), permission profiles, saved import mappings and saved views (400 \
+                 (former tables included), permission profiles, saved import mappings, saved views and workflows (400 \
                  VALIDATION_ERROR with code too_big at the largest section otherwise, dry run included): split a \
                  larger configuration across several files. A non-empty `dataModel` or `lookups` section also requires \
                  `datamodel.manage`, a `uiSettings` section `customization.manage`, and a non-empty \
@@ -2245,7 +2249,15 @@ pub fn routes() -> Vec<Route> {
                  `savedViews` section (version 6) needs `views.share`; shared views are matched by context and name \
                  (case-insensitive), an existing one gets the file's description and definition (keeping the class \
                  keys the importer may not view), nothing is deleted, keys the target lacks are warnings, and a view \
-                 naming a class the importer cannot view is skipped. Profiles cannot \
+                 naming a class the importer cannot view is skipped. A non-empty `workflows` section (version 8) \
+                 needs `workflows.manage` (403 otherwise, dry run included). Workflows are matched by key: a new \
+                 key creates the workflow and publishes v1; an existing one gets the file's settings and grants, and \
+                 a new published version only when the file's graph differs from its current one (instances keep \
+                 their version, and no published version is ever changed). A changed graph while the workflow has an \
+                 unpublished draft here fails with 409 CONFLICT at `workflows.N.graph` (publish or delete the draft \
+                 first). A graph the publish lint refuses is reported at `workflows.N.graph…`, and a grant naming a \
+                 transition in no version of the workflow (the file's graph included) at \
+                 `workflows.N.grants.M.transition` (code `unknown_transition`). Profiles cannot \
                  grant more than the importing user holds (403). Every applied change is audited. Files of earlier \
                  versions (0.1.0-rc.1) may carry `lookups.statuses`, `environments`, `locations` and `owners` (the former \
                  tables): they are imported as the lookup lists `status`, `environment`, `location` and `owner`, \

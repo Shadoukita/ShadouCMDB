@@ -434,6 +434,18 @@ async fn workflow_definitions_are_designed_published_and_retired() {
         )
         .await;
     assert_eq!((status, code(&v)), (409, "VERSION_CONFLICT"), "{v}");
+    // GH#587: a key in no version or draft is refused, not stored.
+    let (status, v) = w
+        .call(
+            "PUT",
+            &grants,
+            Some(json!({ "version": 4, "grants": [{ "transitionKey": "teleport", "profiles": [profile] }] })),
+        )
+        .await;
+    assert_eq!(
+        (status, details(&v)),
+        (400, vec![("grants[0].transitionKey".to_owned(), "unknown_transition".to_owned())])
+    );
     let body = json!({ "version": 4, "grants": [
         { "transitionKey": "approve", "profiles": ["change MANAGERS"] },
         { "transitionKey": "_cancel", "profiles": [profile] } ] });
@@ -742,6 +754,16 @@ async fn workflows_round_trip_through_the_configuration_file() {
     .execute(&dst.pool)
     .await
     .unwrap();
+    // GH#587: a grant for a key in no version (here or in the file) fails the import.
+    let mut typo = file.clone();
+    typo["workflows"][0]["grants"] = json!([
+        { "transition": "approve", "profiles": ["Change managers"] },
+        { "transition": "go_lve", "profiles": ["Change managers"] } ]);
+    let (status, v) = import_config(&app2, &admin2, &typo).await;
+    assert_eq!(
+        (status, details(&v)),
+        (400, vec![("workflows.0.grants.1.transition".to_owned(), "unknown_transition".to_owned())])
+    );
     let mut changed = file.clone();
     changed["workflows"][0]["graph"]["states"][1]["name"] = json!("Approved by CAB");
     changed["workflows"][0]["grants"] = json!([]);
@@ -834,13 +856,13 @@ async fn validation_details_are_capped() {
         v["error"]["details"][MAX_DETAILS]["message"].as_str().unwrap().to_owned()
     };
 
-    // 301 grants × 100 unknown profiles: 30,100 problems.
+    // 301 grants with unknown keys × 100 unknown profiles: 30,401 problems.
     let grants: Vec<Value> =
         (0..301).map(|i| json!({ "transitionKey": format!("t{i}"), "profiles": vec!["a"; 100] })).collect();
     let (status, v) = w.call("PUT", &format!("{by_id}/grants"), Some(json!({ "version": 1, "grants": grants }))).await;
     assert_eq!((status, code(&v)), (400, "VALIDATION_ERROR"), "{v}");
-    assert_eq!(details(&v)[0], ("grants[0].profiles[0]".to_owned(), "not_found".to_owned()));
-    assert_eq!(capped(&v), "30000 more problems not shown");
+    assert_eq!(details(&v)[0], ("grants[0].transitionKey".to_owned(), "unknown_transition".to_owned()));
+    assert_eq!(capped(&v), "30301 more problems not shown");
 
     // 300 transitions with a condition of 200 leaves naming an unknown field each.
     let states = json!([
@@ -859,7 +881,7 @@ async fn validation_details_are_capped() {
     assert!(capped(&v).ends_with(" more problems not shown"));
 
     // At the cap nothing is truncated.
-    let grants = json!([{ "transitionKey": "t0", "profiles": vec!["a"; 100] }]);
+    let grants = json!([{ "transitionKey": "_cancel", "profiles": vec!["a"; 100] }]);
     let (status, v) = w.call("PUT", &format!("{by_id}/grants"), Some(json!({ "version": 1, "grants": grants }))).await;
     assert_eq!(status, 400, "{v}");
     let found = details(&v);

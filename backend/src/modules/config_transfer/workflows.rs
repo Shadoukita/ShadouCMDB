@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 use super::format::{ConfigFile, WorkflowGrantSpec, WorkflowGraphSpec, WorkflowSpec};
 use super::{ChangeAction, FieldChange, ImportWarning, Importer, at, diff, not_in_file, problem};
-use crate::http::error::{AppError, ErrorCode, FieldError};
+use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
 use crate::modules::classes::ClassSystemRole;
 use crate::modules::workflows::graph::{self, Fields, LintContext, VERSION_COLUMNS, VersionRow};
 use crate::modules::workflows::schemas::{
@@ -178,6 +178,30 @@ fn invalid(path: &str, field: &str, message: String, code: &str) -> AppError {
     at(path, AppError::field(field, message, code))
 }
 
+/// Every grant of `w` must name `_cancel` or a transition of some version of
+/// `d` (the file's graph is one by now), as the grants API requires.
+async fn check_grant_keys(
+    conn: &mut PgConnection,
+    d: &WorkflowDefinition,
+    w: &WorkflowSpec,
+    path: &str,
+) -> Result<(), AppError> {
+    let known = service::transition_keys(conn, d.id).await?;
+    let errors: Vec<FieldError> = w
+        .grants
+        .iter()
+        .enumerate()
+        .filter(|(_, g)| !known.contains(&g.transition))
+        .map(|(j, g)| FieldError {
+            location: FieldLocation::Body,
+            field: format!("{path}.grants.{j}.transition"),
+            message: service::unknown_transition(&d.key, &g.transition),
+            code: "unknown_transition".into(),
+        })
+        .collect();
+    if errors.is_empty() { Ok(()) } else { Err(AppError::validation(errors)) }
+}
+
 impl Importer<'_> {
     /// Stores `draft` as the definition's draft (its empty v1, or a new
     /// version), lints it with the file's grants and publishes it.
@@ -293,6 +317,7 @@ impl Importer<'_> {
                 let d = service::create_in(self.conn, self.ctx, &create).await.map_err(|e| at(&path, e))?;
                 self.publish_graph(&d, &fields, &draft, &granted, &path, warnings).await?;
                 let d = service::load(self.conn, d.id, true).await?;
+                check_grant_keys(self.conn, &d, w, &path).await?;
                 service::set_grants_in(self.conn, self.ctx, &d, &rows).await.map_err(|e| at(&path, e))?;
                 self.record(SECTION, w.key.clone(), Some(ChangeAction::Create), Vec::new());
                 continue;
@@ -373,6 +398,7 @@ impl Importer<'_> {
             }
 
             // Grants are replaced.
+            check_grant_keys(self.conn, &d, w, &path).await?;
             let was = grant_set(&specs(service::grant_rows(self.conn, id).await?));
             let wanted = grant_set(&w.grants);
             if was != wanted {
