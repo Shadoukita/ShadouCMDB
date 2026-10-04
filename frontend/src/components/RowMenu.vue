@@ -16,7 +16,7 @@ export interface RowMenuItem {
  * A row's action menu (ARIA menu button): Enter, Space or Down opens it on the first item, Up on the last;
  * the arrow keys, Home and End move, Esc and Tab close it, and Esc returns focus to the button.
  */
-defineProps<{ label: string; items: RowMenuItem[] }>();
+defineProps<{ label: string; items: RowMenuItem[]; /** At the control height, for a page header (default: small, for a table row). */ large?: boolean }>();
 const open = ref(false);
 const button = ref<HTMLButtonElement>();
 const menu = ref<HTMLElement>();
@@ -83,7 +83,7 @@ function run(item: RowMenuItem) {
     <button
       ref="button"
       type="button"
-      class="btn btn-sm btn-icon"
+      :class="['btn', 'btn-icon', { 'btn-sm': !large }]"
       aria-haspopup="menu"
       :aria-expanded="open"
       :aria-controls="open ? menuId : undefined"

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed } from "vue";
 import { useRouter } from "vue-router";
 import { useIsPersonClass, useSignInAccount } from "../../api/admin";
 import { useDeleteCi, useRelationships, type Ci } from "../../api/queries";
@@ -10,10 +10,10 @@ import { t } from "../../i18n";
 import { plural } from "../../lib/format";
 import { describeEdge } from "../../lib/relationships";
 
-/** Delete with a confirmation that lists every relationship that will break. */
+/** The delete confirmation: it lists every relationship that will break. Opened from the record's actions menu. */
 const props = defineProps<{ ci: Ci }>();
+const open = defineModel<boolean>("open", { required: true });
 const router = useRouter();
-const open = ref(false);
 const rels = useRelationships(() => props.ci.id);
 const del = useDeleteCi();
 const edges = computed(() => (rels.data.value?.data ?? []).map((r) => ({ r, d: describeEdge(r, props.ci.id) })));
@@ -34,7 +34,6 @@ function confirm() {
 </script>
 
 <template>
-  <button type="button" class="btn btn-danger" @click="open = true">Delete</button>
   <ConfirmDialog
     :open="open"
     :title="`Delete ${ci.class.name.toLowerCase()} “${ci.label}”?`"

@@ -246,7 +246,7 @@ test("the UI shows a restricted user only what they may do", async ({ browser, r
   await expect(page.getByRole("heading", { level: 1, name: "fra1-esx-01" })).toBeVisible();
   await expect(roValue(page, "attributes.name")).toHaveText("fra1-esx-01");
   await expect(page.locator("#attr-name")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Delete" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "More actions" })).toHaveCount(0);
   await expect(page.getByRole("tab", { name: "History" })).toHaveCount(0); // no audit.view
   await page.goto(`/cis/${esx}/edit`);
   await expect(page.getByRole("heading", { name: "Permission denied" })).toBeVisible();
@@ -264,7 +264,7 @@ test("the UI shows a restricted user only what they may do", async ({ browser, r
   // An Application: editable on its page and saved end to end; Delete is not offered.
   const app = await ciIdByName(request, `e2e-app-${stamp}`);
   await page.goto(`/cis/${app}`);
-  await expect(page.getByRole("button", { name: "Delete" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "More actions" })).toHaveCount(0);
   // The ident is generated and only administrators may change it.
   await expect(roValue(page, "ident")).toHaveText(/\S/);
   await expect(page.locator("#f-ident")).toHaveCount(0);

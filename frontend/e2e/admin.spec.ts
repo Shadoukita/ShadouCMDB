@@ -139,7 +139,7 @@ test("the user sees only the actions their profile allows", async ({ browser, re
   // The page opens with the fields as inputs (SHAA-1644); no separate edit mode.
   await expect(page.locator("#attr-name")).toBeEnabled();
   await expect(page.getByRole("link", { name: "Edit", exact: true })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Delete" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "More actions" })).toHaveCount(0);
   await expect(page.getByRole("tab", { name: "History" })).toBeVisible(); // audit.view
   await snap(page, "25-limited-user-ci");
 
