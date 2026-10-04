@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from "vue";
-import { RouterLink, useRoute, useRouter } from "vue-router";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { onBeforeRouteLeave, onBeforeRouteUpdate, RouterLink, useRoute, useRouter, type RouteLocationNormalized } from "vue-router";
 import { ApiError } from "../../api/client";
 import { useCi, useCiClasses, useClassAttributes } from "../../api/queries";
 import { useService, useServiceSettings } from "../../api/services";
@@ -13,11 +13,14 @@ import { useAppSettings } from "../../lib/appSettings";
 import { useDocumentTitle } from "../../lib/composables";
 import type { TrailStep } from "../../lib/trail";
 import { builtInLayout, DETAIL_CORE, DETAIL_RECORD, layoutFor, resolveLayout, withoutKinds } from "../../lib/uiSettings";
+import { useFlashStore } from "../../stores/flash";
 import { useSessionStore } from "../../stores/session";
 import HistoryPanel from "../detail/HistoryPanel.vue";
 import ImpactPanel from "../detail/ImpactPanel.vue";
 import LayoutPanels from "../detail/LayoutPanels.vue";
 import RelationshipGraphPanel from "../detail/RelationshipGraphPanel.vue";
+import { fieldIdFor, useCiDraft } from "../form/ciDraft";
+import FormErrorBanner from "../form/FormErrorBanner.vue";
 import DeleteServiceButton from "./DeleteServiceButton.vue";
 import OwnersCard from "./OwnersCard.vue";
 import ServiceError from "./ServiceError.vue";
@@ -27,7 +30,9 @@ import ServiceMembersPanel from "./ServiceMembersPanel.vue";
  * A business service (spec §5.3): /services/:id, with the tabs Overview, Members, Impact (its own URL,
  * /services/:id/impact, defaulting to Upstream), Relationship map and History. The service view (owners,
  * counts, limits) and the CI record (attributes, validity, version) load in parallel; the CI record drives
- * the class layout, the map, the impact analysis and the history, exactly as on any CI.
+ * the class layout, the map, the impact analysis and the history, exactly as on any CI. Like a CI's page
+ * (SHAA-1644, GH#588) the Overview's fields open as inputs, and once something was changed a bar offers
+ * Save and Discard; leaving the service with unsaved changes asks first.
  */
 type Tab = "overview" | "members" | "impact" | "graph" | "history";
 
@@ -67,12 +72,70 @@ const classes = useCiClasses();
 const classKey = computed(() => classes.data.value?.find((k) => k.id === c.value?.classId)?.key);
 const attrs = useClassAttributes(() => c.value?.classId);
 const defs = computed(() => (attrs.data.value ?? []).filter((d) => d.isActive || c.value?.attributes[d.key] != null));
+const layout = computed(() => layoutFor(settings.doc.value, classKey.value));
 const sections = computed(() => {
-  const l = layoutFor(settings.doc.value, classKey.value) ?? builtInLayout(classKey.value ?? "");
+  const l = layout.value ?? builtInLayout(classKey.value ?? "");
   const shown = session.can("audit.view") ? l : withoutKinds(l, ["history", "audit"]);
   return resolveLayout(shown, defs.value, DETAIL_CORE, DETAIL_RECORD).flatMap((tab) => tab.sections);
 });
 const self = computed<TrailStep | undefined>(() => (c.value ? { id: c.value.id, name: c.value.label } : undefined));
+
+// The service's values being edited on the Overview (ciDraft.ts, as on a CI's page).
+const flash = useFlashStore();
+const draft = useCiDraft({
+  mode: "edit",
+  classId: () => c.value?.classId,
+  ci: () => c.value,
+  attrs: () => attrs.data.value,
+  readOnlyFields: () => layout.value?.readOnlyFields,
+  locked: () => !canEdit.value || !!c.value?.deletedAt,
+});
+const sectionFields = () => new Set(sections.value.flatMap((sec) => sec.fields.map((f) => f.field)));
+async function focusField(field: string) {
+  if (current.value !== "overview") selectTab("overview");
+  await nextTick();
+  document.getElementById(fieldIdFor(field))?.focus();
+}
+async function onSave() {
+  draft.error = null;
+  // Catch empty required fields before the round trip; everything else is validated by the API.
+  const missing = draft.checkRequired(sectionFields());
+  if (missing.length > 0) {
+    await focusField(missing[0]);
+    return;
+  }
+  try {
+    const saved = await draft.save();
+    if (!saved) return;
+    draft.reset(saved);
+    // The header (name, criticality, state) comes from the service view.
+    void svc.refetch();
+    flash.show(t("services.detail.saved", { name: saved.label }));
+  } catch (err) {
+    draft.error = err;
+    if (current.value !== "overview") selectTab("overview");
+    window.scrollTo({ top: 0 });
+  }
+}
+/** After a version conflict: the service as saved now, with the operator's changes dropped. */
+async function loadCurrent() {
+  const r = await ci.refetch();
+  if (r.data) draft.reset(r.data);
+}
+
+// Unsaved changes: confirm before leaving this service in the app (its tabs are the same page), and let the
+// browser ask before a reload or closing the tab.
+const keepChanges = (to: RouteLocationNormalized) =>
+  !draft.dirty || String(to.params.id ?? "") === id.value || window.confirm(t("services.detail.leave", { name: s.value?.name ?? "" }));
+onBeforeRouteLeave(keepChanges);
+onBeforeRouteUpdate(keepChanges);
+function onBeforeUnload(e: BeforeUnloadEvent) {
+  if (!draft.dirty) return;
+  e.preventDefault();
+  e.returnValue = "";
+}
+onMounted(() => window.addEventListener("beforeunload", onBeforeUnload));
+onBeforeUnmount(() => window.removeEventListener("beforeunload", onBeforeUnload));
 
 const TABS = computed<[Tab, string][]>(() => [
   ["overview", t("services.tab.overview")],
@@ -145,10 +208,10 @@ watch(
         <span :class="['badge', s.active ? 'ok' : 'off']">{{ s.active ? t("services.state.active") : t("services.state.inactive") }}</span>
       </div>
       <div class="actions">
-        <RouterLink v-if="canEdit" class="btn" :to="`/cis/${s.id}/edit`">{{ t("common.edit") }}</RouterLink>
         <DeleteServiceButton v-if="canDelete" :service="s" />
       </div>
     </div>
+    <FormErrorBanner v-if="draft.error != null && draft.dirty" :error="draft.error" :unplaced="draft.unplaced" :on-reload="loadCurrent" />
 
     <div class="tabs" role="tablist" :aria-label="t('services.tabsLabel')">
       <button
@@ -172,7 +235,7 @@ watch(
         <OwnersCard ref="owners" :service="s" :can-edit="canEdit" :on-reload="() => svc.refetch()" />
         <LoadingState v-if="attrs.isLoading.value" :label="t('services.detail.loadingAttributes')" />
         <ServiceError v-else-if="attrs.isError.value" :error="attrs.error.value" :on-retry="() => attrs.refetch()" />
-        <LayoutPanels v-else :ci="c" :sections="sections" :defs="defs" :self="self" :trail="[]" orphans />
+        <LayoutPanels v-else :ci="c" :sections="sections" :defs="defs" :self="self" :trail="[]" orphans :draft="draft" />
       </template>
       <ServiceMembersPanel
         v-else-if="current === 'members'"
@@ -185,6 +248,13 @@ watch(
       <ImpactPanel v-else-if="current === 'impact'" :ci="c" :self="self" :trail="[]" default-direction="upstream" />
       <RelationshipGraphPanel v-else-if="current === 'graph'" :ci="c" :self="self" :trail="[]" />
       <HistoryPanel v-else :ci="c" />
+    </div>
+    <div v-if="draft.dirty || draft.pending" class="save-bar ci-save-bar" role="region" :aria-label="t('services.detail.unsaved')">
+      <span class="badge warn">{{ t("services.detail.unsaved") }}</span>
+      <button type="button" class="btn btn-primary" :disabled="draft.pending" @click="onSave">
+        {{ draft.pending ? t("common.saving") : t("services.detail.save") }}
+      </button>
+      <button type="button" class="btn" :disabled="draft.pending" @click="draft.reset(c)">{{ t("services.detail.discard") }}</button>
     </div>
   </template>
 </template>

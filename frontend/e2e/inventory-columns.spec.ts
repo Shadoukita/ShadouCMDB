@@ -43,6 +43,15 @@ test("adding a column keeps the default columns and puts the choice in the URL (
   await expect(page.getByRole("button", { name: /^Columns/ })).toContainText("Custom");
 });
 
+test("every column has a header cell, the row actions included, so the header band spans the table (GH#589)", async ({ page }) => {
+  await page.goto(`/cis?classId=${serverId}&q=${tag}`);
+  const firstRow = page.locator("table.data tbody tr").first();
+  await expect(firstRow).toContainText(`${tag}-server`);
+  const bodyCells = await firstRow.locator("td").count();
+  await expect(page.locator("table.data thead th")).toHaveCount(bodyCells);
+  await expect(page.locator("table.data thead th.row-actions")).toHaveCount(1);
+});
+
 test("reorder, remove, reload, Back and Forward, and Reset", async ({ page }) => {
   await page.goto(`/cis?classId=${serverId}&columns=label,ident,class,active,updatedAt,attributes.hostname`);
   await page.getByRole("button", { name: /^Columns/ }).click();

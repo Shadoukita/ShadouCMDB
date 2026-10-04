@@ -136,6 +136,36 @@ test("create: the operator lands on the detail with the Owners editor open, pick
   await checkA11y(page, testInfo, "service overview");
 });
 
+test("the service opens ready to edit like any CI: Save once something changed, Discard drops it (GH#588)", async ({ page }) => {
+  await page.goto(`/services/${ids.shop}`);
+  // No separate edit mode: the Overview's values are inputs, and with nothing changed there is nothing to save.
+  await expect(page.getByRole("link", { name: "Edit", exact: true })).toHaveCount(0);
+  await expect(page.locator("#attr-name")).toHaveValue(SHOP);
+  const bar = page.getByRole("region", { name: "Unsaved changes" });
+  await expect(bar).toHaveCount(0);
+
+  await page.locator("#attr-name").fill(`${SHOP} draft`);
+  await expect(bar).toBeVisible();
+  await bar.getByRole("button", { name: "Discard" }).click();
+  await expect(bar).toHaveCount(0);
+  await expect(page.locator("#attr-name")).toHaveValue(SHOP);
+
+  // Save sends the change and the page stays as it is; the header follows.
+  await page.locator("#attr-name").fill(`${SHOP} renamed`);
+  await bar.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByRole("status").filter({ hasText: `Saved ${SHOP} renamed.` })).toBeVisible();
+  await expect(bar).toHaveCount(0);
+  await expect(page).toHaveURL(new RegExp(`/services/${ids.shop}$`));
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(`${SHOP} renamed`);
+  await page.reload();
+  await expect(page.locator("#attr-name")).toHaveValue(`${SHOP} renamed`);
+
+  // Back to the name the later tests use.
+  await page.locator("#attr-name").fill(SHOP);
+  await bar.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(SHOP);
+});
+
 test("list filters live in the URL: reload and Back keep them; the disabled owner is marked in text", async ({ page }) => {
   await page.goto("/services");
   await page.locator("#svc-q").fill(stamp);
