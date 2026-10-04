@@ -1,12 +1,24 @@
-import { checkA11y, classIdByName, createCi, expect, test } from "./support";
+import { checkA11y, classIdByName, createCi, csrf, expect, test } from "./support";
 
 // The inventory's change histogram (SHAA-1670 rollout 5d): changes per hour or day to the CIs the
 // list's filters match, from GET /configuration-items/change-histogram. The admin has audit.view.
 
+// The servers created below are deleted afterwards: "e2e-hist-…" sorts before the demo servers, and
+// later specs open the first Server by label and expect its demo relationships.
+const created: string[] = [];
+
+test.afterAll(async ({ request }) => {
+  const headers = { "X-CSRF-Token": await csrf(request) };
+  for (const id of created.splice(0)) {
+    const res = await request.delete(`/api/v1/configuration-items/${id}`, { headers });
+    expect(res.ok(), `delete ${id} → ${res.status()}`).toBeTruthy();
+  }
+});
+
 test("inventory: the change histogram counts the filtered CIs' changes, by range and by day", async ({ page, request }, testInfo) => {
   const stamp = `e2e-hist-${Date.now().toString(36)}`;
-  await createCi(request, await classIdByName(request, "Server"), `${stamp}-a`);
-  await createCi(request, await classIdByName(request, "Server"), `${stamp}-b`);
+  const serverId = await classIdByName(request, "Server");
+  for (const n of ["a", "b"]) created.push((await createCi(request, serverId, `${stamp}-${n}`)).id);
 
   await page.goto(`/cis?q=${stamp}`);
   await expect(page.locator("table.data tbody tr")).toHaveCount(2);
