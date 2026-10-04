@@ -26,6 +26,9 @@ export type ImpactSettings = Schemas["ImpactSettings"];
 export type ImpactParams = NonNullable<paths["/api/v1/configuration-items/{id}/impact"]["get"]["parameters"]["query"]>;
 
 export type ChangeHistogramQuery = NonNullable<paths["/api/v1/configuration-items/change-histogram"]["get"]["parameters"]["query"]>;
+export type FacetsQuery = NonNullable<paths["/api/v1/configuration-items/facets"]["get"]["parameters"]["query"]>;
+export type ItemFacets = Schemas["ItemFacets"];
+export type Facet = ItemFacets["facets"][number];
 export type CiListQuery = NonNullable<paths["/api/v1/configuration-items"]["get"]["parameters"]["query"]>;
 export type SearchQuery = paths["/api/v1/search"]["get"]["parameters"]["query"];
 export type CiCreateBody = NonNullable<paths["/api/v1/configuration-items"]["post"]["requestBody"]>["content"]["application/json"];
@@ -40,6 +43,7 @@ export const keys = {
   ciList: (q: CiListQuery) => ["cis", "list", q] as const,
   ciCount: (q: CiListQuery) => ["cis", "count", q] as const,
   changeHistogram: (q: ChangeHistogramQuery) => ["cis", "change-histogram", q] as const,
+  facets: (q: FacetsQuery) => ["cis", "facets", q] as const,
   ci: (id: string) => ["cis", "detail", id] as const,
   graph: (id: string, depth: number, direction: string) => ["cis", "graph", id, depth, direction] as const,
   impact: (id: string, params: ImpactParams) => ["cis", "impact", id, params] as const,
@@ -80,6 +84,23 @@ export function useChangeHistogram(query: MaybeRefOrGetter<ChangeHistogramQuery>
       retry: false,
       staleTime: 60_000,
       queryFn: ({ signal }: { signal: AbortSignal }) => unwrap(api.GET("/api/v1/configuration-items/change-histogram", { params: { query: q }, signal })),
+      placeholderData: keepPreviousData,
+    };
+  });
+}
+
+/**
+ * Facet counts for a list query: per class, criticality and lookup value, the CIs matching every
+ * other filter. The previous counts stay on screen while a changed filter loads.
+ */
+export function useCiFacets(query: MaybeRefOrGetter<FacetsQuery>, enabled: MaybeRefOrGetter<boolean> = true) {
+  return useQuery(() => {
+    const q = toValue(query);
+    return {
+      queryKey: keys.facets(q),
+      enabled: toValue(enabled),
+      retry: false,
+      queryFn: ({ signal }: { signal: AbortSignal }) => unwrap(api.GET("/api/v1/configuration-items/facets", { params: { query: q }, signal })),
       placeholderData: keepPreviousData,
     };
   });
