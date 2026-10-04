@@ -472,7 +472,10 @@ async function main() {
   await get(`/api/v1/configuration-items?classId=${hardware}&lookupValueId=${inService}&sort=className`);
   await get('/api/v1/configuration-items?ipWithin=10.0.0.0/8&sort=ident&active=all');
   await get('/api/v1/configuration-items?statusId=x', 400); // removed in 0016
-  const server = (await post('/api/v1/configuration-items', {
+  const facets = (await get(`/api/v1/configuration-items/facets?classId=${hardware}&lookupValueId=${inService}`)).json;
+  check(facets.facets.some((f: Json) => f.key === 'class'), 'facets: the class facet is returned');
+  await get('/api/v1/configuration-items/facets?valueLimit=0', 400);
+  const server =(await post('/api/v1/configuration-items', {
     classId: serverClass,
     attributes: {
       name: `smoke-srv-${RUN}`, status: inService, environment: production, owner: ownerValue.id, location: roomValue.id,
