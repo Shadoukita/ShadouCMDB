@@ -162,7 +162,11 @@ async fn check_changed_attributes(
 // Reads
 // ---------------------------------------------------------------------------
 
-async fn filters(conn: &mut PgConnection, model: &Model, q: &impl ItemFilterQuery) -> Result<ItemFilters, AppError> {
+pub(super) async fn filters(
+    conn: &mut PgConnection,
+    model: &Model,
+    q: &impl ItemFilterQuery,
+) -> Result<ItemFilters, AppError> {
     let mut class_ids = match q.class_id() {
         Some(ids) if q.include_subclasses() => Some(class_data::with_descendant_classes(conn, &ids.0).await?),
         Some(ids) => Some(ids.0.clone()),
@@ -202,6 +206,13 @@ async fn filters(conn: &mut PgConnection, model: &Model, q: &impl ItemFilterQuer
         }
         lookups.extend(by_list.into_iter().map(|(list, values)| (values, model.lookup_columns(list))));
     }
+    let business_services = match q.business_service_id() {
+        Some(ids) => Some(data::ServiceMembers {
+            service_ids: ids.0.clone(),
+            member_type: crate::data::business_services::roles(conn).await?.map(|r| r.member_type),
+        }),
+        None => None,
+    };
     Ok(ItemFilters {
         q: None,
         class_ids,
@@ -220,6 +231,27 @@ async fn filters(conn: &mut PgConnection, model: &Model, q: &impl ItemFilterQuer
         excluded_class_ids,
         // Also where ipWithin looks.
         search_tables: data::search_tables(model),
+        business_services,
+    })
+}
+
+/// The inventory list's filters, view scope included: the list and its facet counts.
+pub(super) async fn inventory_filters(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    model: &Model,
+    q: &impl ItemFilterQuery,
+    text: Option<&str>,
+    own_layout: Option<bool>,
+    layout_template: Option<&str>,
+) -> Result<ItemFilters, AppError> {
+    check_layout_template(layout_template)?;
+    Ok(ItemFilters {
+        q: text.map(str::to_owned),
+        visible_class_ids: ctx.class_scope(ClassOp::View),
+        own_layout,
+        layout_template: layout_template.map(str::to_owned),
+        ..filters(conn, model, q).await?
     })
 }
 
@@ -280,14 +312,9 @@ pub async fn list(
     let mut conn = pool.acquire().await?;
     let model = Model::load(&mut conn).await?;
     let sort = list_sort(&model, q)?;
-    check_layout_template(q.layout_template.as_deref())?;
-    let f = ItemFilters {
-        q: q.q.clone(),
-        visible_class_ids: ctx.class_scope(ClassOp::View),
-        own_layout: q.own_layout.map(bool::from),
-        layout_template: q.layout_template.clone(),
-        ..filters(&mut conn, &model, q).await?
-    };
+    let own_layout = q.own_layout.map(bool::from);
+    let f =
+        inventory_filters(&mut conn, ctx, &model, q, q.q.as_deref(), own_layout, q.layout_template.as_deref()).await?;
     let (rows, total) = data::list(&mut conn, &f, sort, q.sort.desc, q.limit, q.offset).await?;
     let data = with_attributes(&mut conn, &model, rows, f.visible_class_ids.as_deref()).await?;
     Ok(Page { data, page: q.page_meta(total) })
@@ -331,19 +358,12 @@ pub async fn change_histogram(
         let message = format!("The range may span at most {} days with {} buckets", cap.num_days(), unit(q.bucket));
         return Err(query_error("from", &message, "range_too_large"));
     }
-    check_layout_template(q.layout_template.as_deref())?;
-
     let mut conn = pool.acquire().await?;
     let model = Model::load(&mut conn).await?;
-    let scope = ctx.class_scope(ClassOp::View);
-    let f = ItemFilters {
-        q: q.q.clone(),
-        visible_class_ids: scope.clone(),
-        own_layout: q.own_layout.map(bool::from),
-        layout_template: q.layout_template.clone(),
-        ..filters(&mut conn, &model, q).await?
-    };
-    let counts = data::change_counts(&mut conn, &f, scope.as_deref(), unit(q.bucket), from, to).await?;
+    let own_layout = q.own_layout.map(bool::from);
+    let f =
+        inventory_filters(&mut conn, ctx, &model, q, q.q.as_deref(), own_layout, q.layout_template.as_deref()).await?;
+    let counts = data::change_counts(&mut conn, &f, f.visible_class_ids.as_deref(), unit(q.bucket), from, to).await?;
 
     let buckets = histogram_buckets(q.bucket, from, to, width, counts);
     let total = buckets.iter().map(|b| b.created + b.updated + b.status_changed).sum();

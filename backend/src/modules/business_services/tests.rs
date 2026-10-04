@@ -1791,3 +1791,173 @@ async fn process_records_stay_out_of_the_asset_inventory() {
     let (status, v, _) = call(&w.app, "PATCH", &service_class, &admin, Some(json!({ "kind": "process" }))).await;
     assert_eq!((status, code(&v)), (409, "IN_USE"), "{v}");
 }
+
+// ---------------------------------------------------------------------------
+// Inventory facet counts (SHAA-1686): business service membership is one of
+// the facets and a list filter, so they are tested with this world.
+// ---------------------------------------------------------------------------
+
+/// `facet key -> [(value key, count, selected)]`, as returned.
+fn facet_values(v: &Value) -> HashMap<String, Vec<(String, i64, bool)>> {
+    v["facets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| {
+            let values = f["values"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|x| {
+                    (x["key"].as_str().unwrap().to_owned(), x["count"].as_i64().unwrap(), x["selected"] == json!(true))
+                })
+                .collect();
+            (f["key"].as_str().unwrap().to_owned(), values)
+        })
+        .collect()
+}
+
+fn vals(list: &[(&str, i64, bool)]) -> Vec<(String, i64, bool)> {
+    list.iter().map(|(k, n, s)| ((*k).to_owned(), *n, *s)).collect()
+}
+
+#[tokio::test]
+async fn inventory_facets_count_each_facet_without_its_own_filter() {
+    let Some(db) = scratch::database("inventory_facets").await else { return };
+    let mut w = World::new(&db, BusinessServiceConfig::default()).await;
+    let admin = w.admin.clone();
+    // Two lookup lists: env on servers and datastores (databases inherit it), loc on servers only.
+    let mut value = HashMap::new();
+    for (list, values) in [("env", ["prod", "test"]), ("loc", ["fra", "nyc"])] {
+        let list_id: Uuid =
+            sqlx::query_scalar("INSERT INTO lookup_lists (key, name) VALUES ($1, upper($1)) RETURNING id")
+                .bind(list)
+                .fetch_one(&w.pool)
+                .await
+                .unwrap();
+        for (i, v) in values.iter().enumerate() {
+            let id: Uuid = sqlx::query_scalar(
+                "INSERT INTO lookup_list_values (list_id, key, name, sort_order) VALUES ($1, $2, $2, $3) RETURNING id",
+            )
+            .bind(list_id)
+            .bind(v)
+            .bind(i as i32)
+            .fetch_one(&w.pool)
+            .await
+            .unwrap();
+            value.insert(*v, id);
+        }
+        let classes: &[&str] = if list == "env" { &["server", "datastore"] } else { &["server"] };
+        for class in classes {
+            let field = json!({ "classId": w.classes[class], "key": list, "label": list, "dataType": "lookup", "lookupListId": list_id });
+            let (status, f, _) = call(&w.app, "POST", "/api/v1/attribute-definitions", &admin, Some(field)).await;
+            assert_eq!(status, 201, "{f}");
+        }
+    }
+    let ci = |name: &str, env: &str, loc: Option<&str>| {
+        let mut a = json!({ "name": name, "env": value[env] });
+        if let Some(loc) = loc {
+            a["loc"] = json!(value[loc]);
+        }
+        json!({ "attributes": a })
+    };
+    w.ci_with("server", "s1", ci("s1", "prod", Some("fra"))).await;
+    w.ci_with("server", "s2", ci("s2", "test", Some("fra"))).await;
+    w.ci_with("server", "s3", ci("s3", "prod", Some("nyc"))).await;
+    w.ci_with("datastore", "d1", ci("d1", "prod", None)).await;
+    w.ci_with("database", "db1", ci("db1", "test", None)).await;
+    w.ci("business_service", "S", "Shop").await;
+    w.ci("business_service", "T", "Tools").await;
+    let (status, v) = w.add(&admin, "S", &["s1", "db1"]).await;
+    assert_eq!(status, 200, "{v}");
+    w.add(&admin, "T", &["s2"]).await;
+
+    let facets = |creds: Creds, query: String| {
+        let app = w.app.clone();
+        async move {
+            let (status, v, _) =
+                call(&app, "GET", &format!("/api/v1/configuration-items/facets?{query}"), &creds, None).await;
+            assert_eq!(status, 200, "{v}");
+            v
+        }
+    };
+
+    // No filter: every CI (the administrator's Person CI too), every facet.
+    let v = facets(admin.clone(), String::new()).await;
+    assert_eq!(v["total"], 8, "{v}");
+    let f = facet_values(&v);
+    let class_counts: HashMap<&str, i64> = f["class"].iter().map(|(k, n, _)| (k.as_str(), *n)).collect();
+    assert_eq!(
+        class_counts,
+        HashMap::from([("server", 3), ("datastore", 1), ("database", 1), ("business_service", 2), ("person", 1)])
+    );
+    assert_eq!(f["lookup.env"], vals(&[("prod", 3, false), ("test", 2, false)]));
+    assert_eq!(f["lookup.loc"], vals(&[("fra", 2, false), ("nyc", 1, false)]));
+    assert_eq!(f["businessService"], vals(&[("S", 2, false), ("T", 1, false)]));
+    let env = v["facets"].as_array().unwrap().iter().find(|x| x["key"] == "lookup.env").unwrap();
+    assert_eq!(
+        (env["kind"].as_str(), env["param"].as_str(), env["label"].as_str()),
+        (Some("lookup"), Some("lookupValueId"), Some("ENV"))
+    );
+
+    // classId=server and env=prod: each facet drops only its own filter.
+    let q = format!("classId={}&lookupValueId={}", w.classes["server"], value["prod"]);
+    let v = facets(admin.clone(), q.clone()).await;
+    assert_eq!(v["total"], 2, "{v}");
+    let f = facet_values(&v);
+    assert_eq!(f["class"], vals(&[("server", 2, true), ("datastore", 1, false)]));
+    assert_eq!(f["lookup.env"], vals(&[("prod", 2, true), ("test", 1, false)]));
+    assert_eq!(f["lookup.loc"], vals(&[("fra", 1, false), ("nyc", 1, false)]));
+    assert_eq!(f["businessService"], vals(&[("S", 1, false)]));
+    let (_, list) = w.get(&admin, &format!("/api/v1/configuration-items?{q}")).await;
+    assert_eq!(list["page"]["total"], v["total"]);
+
+    // Values of two lists: the env facet keeps loc=fra, the loc facet keeps env=prod.
+    let v = facets(admin.clone(), format!("lookupValueId={},{}", value["prod"], value["fra"])).await;
+    assert_eq!(v["total"], 1, "{v}");
+    let f = facet_values(&v);
+    assert_eq!(f["lookup.env"], vals(&[("prod", 1, true), ("test", 1, false)]));
+    assert_eq!(f["lookup.loc"], vals(&[("fra", 1, true), ("nyc", 1, false)]));
+
+    // A selected value without CIs is still returned (at 0), so it can be unticked.
+    let v = facets(admin.clone(), format!("classId={}&lookupValueId={}", w.classes["database"], value["fra"])).await;
+    assert_eq!(v["total"], 0, "{v}");
+    assert_eq!(facet_values(&v)["class"], vals(&[("server", 2, false), ("database", 0, true)]));
+
+    // valueLimit keeps the largest values and says so.
+    let v = facets(admin.clone(), "valueLimit=1".into()).await;
+    let class = v["facets"].as_array().unwrap().iter().find(|x| x["key"] == "class").unwrap();
+    assert_eq!((class["values"].as_array().unwrap().len(), class["truncated"].as_bool()), (1, Some(true)), "{v}");
+    assert_eq!(class["values"][0]["key"], "server");
+
+    // businessServiceId filters the list to direct members, and is its facet's filter.
+    let (_, list) =
+        w.get(&admin, &format!("/api/v1/configuration-items?businessServiceId={}&sort=label", w.id("S"))).await;
+    let idents: Vec<&str> = list["data"].as_array().unwrap().iter().map(|c| c["ident"].as_str().unwrap()).collect();
+    assert_eq!(idents, ["db1", "s1"]);
+    let v = facets(admin.clone(), format!("businessServiceId={}", w.id("S"))).await;
+    assert_eq!(v["total"], 2, "{v}");
+    assert_eq!(facet_values(&v)["businessService"], vals(&[("S", 2, true), ("T", 1, false)]));
+
+    // A user who may view servers only: counts cover servers, services are no values, and a
+    // hidden service id filters to nothing (no membership oracle).
+    let (_, r) = w.user("r", &[("server", false)], &[]).await;
+    let v = facets(r.clone(), String::new()).await;
+    assert_eq!(v["total"], 3, "{v}");
+    let f = facet_values(&v);
+    assert_eq!(f["class"], vals(&[("server", 3, false)]));
+    assert_eq!(f["lookup.env"], vals(&[("prod", 2, false), ("test", 1, false)]));
+    assert_eq!(f["businessService"], vals(&[]));
+    let v = facets(r.clone(), format!("businessServiceId={}&classId={}", w.id("S"), w.classes["database"])).await;
+    assert_eq!(v["total"], 0, "{v}");
+    let f = facet_values(&v);
+    assert_eq!(f["businessService"], vals(&[]), "a hidden selected service is not echoed");
+    assert_eq!(f["class"], vals(&[]), "a hidden selected class is not echoed");
+    let (_, list) = w.get(&r, &format!("/api/v1/configuration-items?businessServiceId={}", w.id("S"))).await;
+    assert_eq!(list["page"]["total"], 0, "{list}");
+
+    // Bad input is a 400 like the list's.
+    let (status, v, _) =
+        call(&w.app, "GET", "/api/v1/configuration-items/facets?valueLimit=0&classId=nope", &admin, None).await;
+    assert_eq!((status, code(&v)), (400, "VALIDATION_ERROR"), "{v}");
+}

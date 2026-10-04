@@ -427,6 +427,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/configuration-items/facets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Facet counts for the inventory list: CIs per class, criticality, lookup value and business service
+         * @description Takes the filters of `listConfigurationItems` and returns, per facet, the values with how many CIs match. Each facet is counted with its own filter left out and every other filter applied (class counts ignore `classId`, a lookup list's counts ignore that list's values in `lookupValueId`), so the counts are what ticking one more value would add. `total` is the count with every filter. Facets: `class` (per exact class), `criticality`, one `lookup.<list key>` per lookup list stored in a lookup attribute (status, environment, location, ...), and `businessService` (direct members) when business services exist. Counts are exact and cover only CIs in classes the caller may view, like the list; a business service the caller may not view is not a facet value.
+         */
+        get: operations["getConfigurationItemFacets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/configuration-items/{id}": {
         parameters: {
             query?: never;
@@ -3985,6 +4005,11 @@ export interface components {
                 requestId: string;
             };
         };
+        /**
+         * @description What a facet counts, and so which list filter its value ids go into.
+         * @enum {string}
+         */
+        FacetKind: "class" | "criticality" | "lookup" | "businessService";
         /** @description One changed field: API names, values as in the file format (keys, not ids) */
         FieldChange: {
             field: string;
@@ -4742,6 +4767,47 @@ export interface components {
             /** @enum {string} */
             code: "unknown_class" | "unknown_attribute" | "unknown_lookup_list" | "unknown_lookup_value" | "required_field_not_editable" | "core_field_hidden" | "unknown_template";
             message: string;
+        };
+        ItemFacets: {
+            /**
+             * Format: int64
+             * @description CIs matching every filter: `page.total` of the same list query
+             */
+            total: number;
+            facets: {
+                /** @description "class", "criticality", "businessService", or "lookup.<list key>" */
+                key: string;
+                kind: components["schemas"]["FacetKind"];
+                /** @description Display name: "Class", "Criticality", "Business service" or the lookup list's name */
+                label: string;
+                /** @description The `listConfigurationItems` query parameter that filters by this facet's value ids */
+                param: string;
+                /**
+                 * Format: uuid
+                 * @description The lookup list (kind lookup); null otherwise
+                 */
+                listId: string | null;
+                /** @description Values with at least one CI, most CIs first, then by label; selected values are included even at 0 */
+                values: {
+                    /**
+                     * Format: uuid
+                     * @description The id to send in the facet's filter parameter
+                     */
+                    id: string;
+                    /** @description Class key, lookup value key, or the service's ident */
+                    key: string;
+                    label: string;
+                    /**
+                     * Format: int64
+                     * @description CIs matching every other filter that hold this value
+                     */
+                    count: number;
+                    /** @description True when the id is in the facet's filter parameter of this request */
+                    selected: boolean;
+                }[];
+                /** @description True when values with a count were left out by `valueLimit` */
+                truncated: boolean;
+            }[];
         };
         /** @description Who uses a template */
         LayoutTemplateUsage: {
@@ -8416,6 +8482,8 @@ export interface operations {
                 layoutTemplate?: string;
                 /** @description CIs by the kind of their type: asset, process (records such as change requests) or any. Without it, process records are left out unless their type is named in classId. */
                 kind?: "asset" | "process" | "any";
+                /** @description Business service ids (CI ids), comma-separated: CIs that are a direct member of one of them. A service the caller may not view, or a deleted one, has no members here. */
+                businessServiceId?: string;
             };
             header?: never;
             path?: never;
@@ -8644,6 +8712,8 @@ export interface operations {
                 layoutTemplate?: string;
                 /** @description CIs by the kind of their type: asset, process (records such as change requests) or any. Without it, process records are left out unless their type is named in classId. */
                 kind?: "asset" | "process" | "any";
+                /** @description Business service ids (CI ids), comma-separated: CIs that are a direct member of one of them. A service the caller may not view, or a deleted one, has no members here. */
+                businessServiceId?: string;
             };
             header?: never;
             path?: never;
@@ -8658,6 +8728,106 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChangeHistogram"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getConfigurationItemFacets: {
+        parameters: {
+            query?: {
+                /** @description Search label, ident and attribute values */
+                q?: string;
+                /** @description Filter by class (includes subclasses unless includeSubclasses=false) */
+                classId?: string;
+                includeSubclasses?: "true" | "false";
+                /** @description true: only CIs inside their validity period (validFrom <= now < validUntil); false: only those outside it; all: both */
+                active?: "true" | "false" | "all";
+                /** @description Lookup list value ids, comma-separated: CIs holding one of them in a lookup attribute. Values of different lists must all match (status A or B, and environment C). */
+                lookupValueId?: string;
+                /** @description Only CIs with a value of an IP attribute inside this CIDR, e.g. 10.20.0.0/16 */
+                ipWithin?: string;
+                /** @description Criticality value ids, comma-separated: CIs holding one of them */
+                criticalityValueId?: string;
+                /** @description Soft-deleted CIs: exclude (default), include, or only */
+                deleted?: "exclude" | "include" | "only";
+                /** @description true: only CIs with a layout of their own (another template or a custom layout, see /configuration-items/{id}/layout); false: only CIs that show their class's default template */
+                ownLayout?: "true" | "false";
+                /** @description Only CIs that show this layout template (`layoutTemplates[].key`) as their own layout, not as their class's default */
+                layoutTemplate?: string;
+                /** @description CIs by the kind of their type: asset, process (records such as change requests) or any. Without it, process records are left out unless their type is named in classId. */
+                kind?: "asset" | "process" | "any";
+                /** @description Business service ids (CI ids), comma-separated: CIs that are a direct member of one of them. A service the caller may not view, or a deleted one, has no members here. */
+                businessServiceId?: string;
+                /** @description Values returned per facet, most CIs first (1-200); selected values are always returned */
+                valueLimit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ItemFacets"];
                 };
             };
             /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
@@ -9141,6 +9311,8 @@ export interface operations {
                 deleted?: "exclude" | "include" | "only";
                 /** @description CIs by the kind of their type: asset, process (records such as change requests) or any. Without it, process records are left out unless their type is named in classId. */
                 kind?: "asset" | "process" | "any";
+                /** @description Business service ids (CI ids), comma-separated: CIs that are a direct member of one of them. A service the caller may not view, or a deleted one, has no members here. */
+                businessServiceId?: string;
             };
             header?: never;
             path?: never;
