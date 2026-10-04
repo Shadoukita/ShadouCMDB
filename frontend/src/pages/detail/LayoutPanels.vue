@@ -2,7 +2,7 @@
 import { computed } from "vue";
 import type { Ci, EffectiveAttribute } from "../../api/queries";
 import type { TrailStep } from "../../lib/trail";
-import { attributeKey, cellClass, fieldLabel, freeAreaStyle, gridClass, sectionClass, sectionStyle, windowClass, windowStyle, type ResolvedSection } from "../../lib/uiSettings";
+import { attributeKey, cellClass, fieldLabel, freeAreaStyle, gridClass, isSeparator, sectionClass, sectionStyle, windowClass, windowStyle, type ResolvedSection } from "../../lib/uiSettings";
 import type { CiDraft } from "../form/ciDraft";
 import CiFieldInput from "../form/CiFieldInput.vue";
 import AttributeValue from "./AttributeValue.vue";
@@ -13,9 +13,11 @@ import CoreFieldValue from "./CoreFieldValue.vue";
  * One tab of the detail page's fields (lib/uiSettings resolveLayout): its
  * sections as windows where the layout puts them (lib/freeLayout; stacked on
  * small screens), collapsed ones closed, each a grid of label/value cells as wide as
- * the class layout says. On the first tab the built-in sections follow: General,
- * the attribute groups and the record's class and timestamps. Notes and the
- * built-in panels a layout places are sections too (BlockContent). Values no current
+ * the class layout says, with the layout's separators as lines across it. On the
+ * first tab the built-in sections follow: General and the attribute groups (and,
+ * without a layout, the record details). The record details (the CI's ID, class
+ * and timestamps) are a grid like the fields wherever the layout puts them; notes
+ * and the other built-in panels are sections too (BlockContent). Values no current
  * definition describes (e.g. after a class change) are listed last on the first
  * tab (`orphans`), so nothing stored is hidden; values of archived fields
  * (`archived`) are listed there too, apart and labelled. The sections the layout
@@ -68,21 +70,24 @@ const orphanKeys = computed(() => {
         :open="!p.collapsed"
       >
         <summary class="panel-header"><h2>{{ p.label }}</h2></summary>
-        <BlockContent v-if="p.kind !== 'fields'" :kind="p.kind" :text="p.text" :ci="ci" :self="self" :trail="trail" />
+        <BlockContent v-if="p.kind !== 'fields' && p.kind !== 'record'" :kind="p.kind" :text="p.text" :ci="ci" :self="self" :trail="trail" />
         <div v-else-if="draft" class="panel-body">
           <div :class="gridClass(p.columns)">
-            <template v-for="{ field: f, width } in p.fields" :key="f">
-              <CiFieldInput v-if="draft.editable(f)" :draft="draft" :f="f" :width="width" :columns="p.columns" :ci="ci" :self="self" :trail="trail" />
-              <div v-else :class="['field', 'field-ro', cellClass(width, p.columns)]" :data-field="f">
-                <span :id="roId(f)" class="label">{{ fieldLabel(f, defs) }}</span>
-                <div class="ro-value" role="group" :aria-labelledby="roId(f)">
-                  <AttributeValue v-if="defFor(f)" :def="defFor(f)!" :value="values[defFor(f)!.key]" :ref-info="refs[defFor(f)!.key]" :self="self" :trail="trail" />
-                  <CoreFieldValue v-else :ci="ci" :field="f" />
+            <template v-for="(item, i) in p.items" :key="isSeparator(item) ? `sep-${i}` : item.field">
+              <div v-if="isSeparator(item)" class="lg-sep" role="separator" :aria-label="item.label" data-separator>
+                <span v-if="item.label" class="lg-sep-label" dir="auto">{{ item.label }}</span>
+              </div>
+              <CiFieldInput v-else-if="draft.editable(item.field)" :draft="draft" :f="item.field" :width="item.width" :columns="p.columns" :ci="ci" :self="self" :trail="trail" />
+              <div v-else :class="['field', 'field-ro', cellClass(item.width, p.columns)]" :data-field="item.field">
+                <span :id="roId(item.field)" class="label">{{ fieldLabel(item.field, defs) }}</span>
+                <div class="ro-value" role="group" :aria-labelledby="roId(item.field)">
+                  <AttributeValue v-if="defFor(item.field)" :def="defFor(item.field)!" :value="values[defFor(item.field)!.key]" :ref-info="refs[defFor(item.field)!.key]" :self="self" :trail="trail" />
+                  <CoreFieldValue v-else :ci="ci" :field="item.field" />
                 </div>
-                <span v-if="roHint(f)" class="hint" dir="auto">{{ roHint(f) }}</span>
+                <span v-if="roHint(item.field)" class="hint" dir="auto">{{ roHint(item.field) }}</span>
               </div>
             </template>
-            <div v-if="p.key === '_record'" :class="['field', 'field-ro', cellClass(1, p.columns)]" data-field="id">
+            <div v-if="p.kind === 'record'" :class="['field', 'field-ro', cellClass(1, p.columns)]" data-field="id">
               <span id="ro-id" class="label">ID</span>
               <div class="ro-value mono" role="group" aria-labelledby="ro-id">{{ ci.id }}</div>
             </div>
@@ -90,14 +95,19 @@ const orphanKeys = computed(() => {
         </div>
         <div v-else class="panel-body">
           <dl :class="gridClass(p.columns)">
-            <div v-for="{ field: f, width } in p.fields" :key="f" :class="['prop', cellClass(width, p.columns)]">
-              <dt>{{ fieldLabel(f, defs) }}</dt>
-              <dd>
-                <AttributeValue v-if="defFor(f)" :def="defFor(f)!" :value="values[defFor(f)!.key]" :ref-info="refs[defFor(f)!.key]" :self="self" :trail="trail" />
-                <CoreFieldValue v-else :ci="ci" :field="f" />
-              </dd>
-            </div>
-            <div v-if="p.key === '_record'" :class="['prop', cellClass(1, p.columns)]">
+            <template v-for="(item, i) in p.items" :key="isSeparator(item) ? `sep-${i}` : item.field">
+              <div v-if="isSeparator(item)" class="lg-sep" role="separator" :aria-label="item.label" data-separator>
+                <span v-if="item.label" class="lg-sep-label" dir="auto">{{ item.label }}</span>
+              </div>
+              <div v-else :class="['prop', cellClass(item.width, p.columns)]">
+                <dt>{{ fieldLabel(item.field, defs) }}</dt>
+                <dd>
+                  <AttributeValue v-if="defFor(item.field)" :def="defFor(item.field)!" :value="values[defFor(item.field)!.key]" :ref-info="refs[defFor(item.field)!.key]" :self="self" :trail="trail" />
+                  <CoreFieldValue v-else :ci="ci" :field="item.field" />
+                </dd>
+              </div>
+            </template>
+            <div v-if="p.kind === 'record'" :class="['prop', cellClass(1, p.columns)]">
               <dt>ID</dt>
               <dd class="mono">{{ ci.id }}</dd>
             </div>

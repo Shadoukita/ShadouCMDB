@@ -21,7 +21,7 @@ import { useLayoutEditor } from "../lib/layoutEditor";
 import { asClassLayout } from "../lib/layoutTemplates";
 import { formatDateTime } from "../lib/format";
 import { useTrail, type TrailStep } from "../lib/trail";
-import { attributeKey, builtInLayout, DETAIL_CORE, DETAIL_RECORD, layoutFor, normalizeLayout, placedPanels, resolveLayout, withoutKinds } from "../lib/uiSettings";
+import { attributeKey, builtInLayout, cellClass, DETAIL_CORE, DETAIL_RECORD, fieldLabel, gridClass, layoutFor, normalizeLayout, placedPanels, resolveLayout, withoutKinds } from "../lib/uiSettings";
 import { useFlashStore } from "../stores/flash";
 import { useSessionStore } from "../stores/session";
 import { fieldIdFor, useCiDraft } from "./form/ciDraft";
@@ -88,7 +88,9 @@ watch(
 
 // The CI's layout (its own, a template chosen for it, or its class's default template; GET
 // /configuration-items/{id}/layout), else the class's from the settings; without tabs the built-in one:
-// General (core fields and ungrouped attributes), the attribute groups, then the record's class and timestamps.
+// General (core fields and ungrouped attributes), the attribute groups, the record details (class and
+// timestamps), then the relationships. A layout with tabs shows the record details and the relationships
+// only where it places them.
 const settings = useAppSettings();
 const classes = useCiClasses();
 const areas = useAreas();
@@ -120,28 +122,19 @@ const shownLayout = computed(() => {
   return session.can("audit.view") ? l : withoutKinds(l, ["history", "audit"]);
 });
 const layoutTabs = computed(() => resolveLayout(shownLayout.value, defs.value, DETAIL_CORE, DETAIL_RECORD));
-/** Built-in panels the layout places in its tabs; the others keep their usual place. */
+/** Built-in panels the layout places in its tabs: the history has a tab of its own when it is not placed. */
 const placed = computed(() => placedPanels(layout.value));
+/** The layout has no tabs: the built-in arrangement, with the relationships after the fields. */
+const builtInArrangement = computed(() => (shownLayout.value.tabs?.length ?? 0) === 0);
 
 // Edit layout (the layout-editor route, in its own window): the class layout edited on this CI, for users who may customize.
 const activeAttrs = computed(() => attrs.data.value?.filter((d) => d.isActive));
 const editor = useLayoutEditor({ classKey, attrs: activeAttrs, ciId: id });
 const defFor = (f: string) => defs.value.find((d) => d.key === attributeKey(f));
-/** The record section as the draft layout places it (always last on the first tab). */
-const recordSection = computed(() =>
-  editor.layout ? resolveLayout(editor.layout, defs.value, DETAIL_CORE, DETAIL_RECORD, true)[0]?.sections.filter((s) => s.key === "_record") ?? [] : [],
+/** The record details as the draft layout shows them: the bookkeeping fields no field section places. */
+const recordFields = computed(() =>
+  editor.layout ? (resolveLayout(editor.layout, defs.value, DETAIL_CORE, DETAIL_RECORD, true).flatMap((t) => t.sections).find((s) => s.kind === "record")?.fields ?? []) : [],
 );
-
-/** Where the panels the draft layout does not place are shown, for the editor. */
-const usualPlaces = computed(() => {
-  const draft = placedPanels(editor.layout);
-  const rest = [
-    !draft.has("relations") && "the relationships come after the record details",
-    "the relationship map follows the layout's tabs",
-    !draft.has("history") && "then the history",
-  ].filter(Boolean);
-  return `The record details come last on the first tab; ${rest.join(", ")}. + Panel places the relationships, the history or the audit trail in any tab.`;
-});
 
 const TABS = computed<[Tab, string][]>(() => [
   ...(layoutTabs.value.length > 1 ? layoutTabs.value.map((t): [Tab, string] => [`layout:${t.key}`, t.label]) : [["overview", "Overview"] as [Tab, string]]),
@@ -301,12 +294,20 @@ const crumbs = computed<Crumb[]>(() => {
         <AttributeValue v-if="defFor(field)" :def="defFor(field)!" :value="c.attributes[defFor(field)!.key]" :ref-info="c.attributeReferences[defFor(field)!.key]" :self="self" :trail="trail" />
         <CoreFieldValue v-else :ci="c" :field="field" />
       </template>
-      <template #first-tab-end>
-        <LayoutPanels :ci="c" :sections="recordSection" :defs="defs" :self="self" :trail="trail" />
-        <p class="hint">{{ usualPlaces }}</p>
-      </template>
       <template #panel="{ kind }">
-        <BlockContent v-if="kind === 'relations' || session.can('audit.view')" :kind="kind" :ci="c" :self="self" :trail="trail" />
+        <div v-if="kind === 'record'" class="panel-body">
+          <dl :class="gridClass(3)">
+            <div v-for="f in recordFields" :key="f.field" :class="['prop', cellClass(1, 3)]">
+              <dt>{{ fieldLabel(f.field, defs) }}</dt>
+              <dd><CoreFieldValue :ci="c" :field="f.field" /></dd>
+            </div>
+            <div :class="['prop', cellClass(1, 3)]">
+              <dt>ID</dt>
+              <dd class="mono">{{ c.id }}</dd>
+            </div>
+          </dl>
+        </div>
+        <BlockContent v-else-if="kind === 'relations' || session.can('audit.view')" :kind="kind" :ci="c" :self="self" :trail="trail" />
         <p v-else class="hint panel-body">Shown to users with the audit.view permission; you do not have it, so no preview.</p>
       </template>
     </LayoutEditView>
@@ -350,7 +351,7 @@ const crumbs = computed<Crumb[]>(() => {
         />
         <SignInAccountPanel v-if="layoutIndex === 0" :ci="c" />
         <PartOfServicesPanel v-if="layoutIndex === 0" :ci="c" :self="self" :trail="trail" />
-        <template v-if="layoutIndex === 0 && !placed.has('relations')">
+        <template v-if="layoutIndex === 0 && builtInArrangement">
           <div style="height: var(--sp-4)" />
           <RelationshipsPanel :ci="c" :self="self" :trail="trail" />
         </template>

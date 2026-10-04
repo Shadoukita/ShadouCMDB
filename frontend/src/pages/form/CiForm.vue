@@ -18,6 +18,7 @@ import {
   gridClass,
   layoutFor,
   normalizeLayout,
+  isSeparator,
   PANELS,
   resolveLayout,
   sectionClass,
@@ -213,7 +214,12 @@ async function onSubmit() {
                 />
               </template>
               <div :class="gridClass(sec.columns)">
-                <CiFieldInput v-for="{ field: f, width } in sec.fields" :key="f" :draft="draft" :f="f" :width="width" :columns="sec.columns" />
+                <template v-for="(item, j) in sec.items" :key="isSeparator(item) ? `sep-${j}` : item.field">
+                  <div v-if="isSeparator(item)" class="lg-sep" role="separator" :aria-label="item.label" data-separator>
+                    <span v-if="item.label" class="lg-sep-label" dir="auto">{{ item.label }}</span>
+                  </div>
+                  <CiFieldInput v-else :draft="draft" :f="item.field" :width="item.width" :columns="sec.columns" />
+                </template>
               </div>
             </div>
           </details>
