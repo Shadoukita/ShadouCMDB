@@ -56,6 +56,8 @@ use crate::http::error::{AppError, ErrorCode};
 use crate::modules::items::plan::{self, Registry};
 use crate::modules::items::service::details;
 use crate::modules::relationships;
+use crate::modules::workflows::adopt;
+use crate::modules::workflows::state_field::StateFields;
 
 /// Runs of one chunk (or replayed row) after a deadlock or serialization failure.
 pub const RETRIES: u32 = 3;
@@ -421,6 +423,7 @@ impl State {
         c.skipped += delta.skipped;
         c.failed += delta.failed;
         c.relationships_added += delta.relationships_added;
+        c.workflows_started += delta.workflows_started;
         self.done += rows;
     }
 }
@@ -499,6 +502,7 @@ async fn write_rows(
         return Ok((delta, issues));
     }
     let mut pending = Pending::default();
+    let state = StateFields::load(conn).await?;
     let mut c = Context {
         job: data,
         ctx,
@@ -508,6 +512,7 @@ async fn write_rows(
         new_ids: None,
         lock: true,
         grow_pending: true,
+        state: &state,
     };
     let planned = planner::plan_chunk(conn, &mut c, &todo).await?;
 
@@ -528,7 +533,7 @@ async fn write_rows(
             RowOutcome::Create => {
                 let body = p.create.as_ref().ok_or_else(AppError::internal)?;
                 let defs = planned.defs.get(&body.class_id).map(Vec::as_slice).unwrap_or_default();
-                let mut plan = plan::plan_create(ctx, model, defs, body, &planned.resolver)?;
+                let mut plan = plan::plan_create(ctx, model, defs, body, &planned.resolver, &state)?;
                 if let Registry::Create { id, .. } = &mut plan.registry {
                     *id = p.ci_id;
                 }
@@ -540,7 +545,7 @@ async fn write_rows(
                 let (before, body) = p.update.as_ref().ok_or_else(AppError::internal)?;
                 let class = before.summary.class_id;
                 let defs = planned.defs.get(&class).map(Vec::as_slice).unwrap_or_default();
-                let plan = plan::plan_update(ctx, model, defs, before.clone(), body, &planned.resolver, None)?;
+                let plan = plan::plan_update(ctx, model, defs, before.clone(), body, &planned.resolver, None, &state)?;
                 let id = plan::apply_rows(conn, model, &plan).await?;
                 written.push((id, class, Some(crud::json(before))));
                 delta.updated += 1;
@@ -551,6 +556,14 @@ async fn write_rows(
             edges.push(rel_data::insert(conn, *type_id, *source, *target, None).await?);
         }
         delta.relationships_added += p.edges.len() as u32;
+    }
+
+    // Workflows that start on their own, on the CIs the chunk created
+    // (set-based; the import's one audit row for them is written at the end, Q2b).
+    let created: Vec<Uuid> = written.iter().filter(|(_, _, before)| before.is_none()).map(|(id, _, _)| *id).collect();
+    if !created.is_empty() {
+        let starts = adopt::auto_starts(conn, model, data.resolved.class_id).await?;
+        delta.workflows_started += adopt::start_imported(conn, ctx, model, &created, &starts).await?;
     }
 
     // Labels once for the chunk, then the audit entries from what was stored.
@@ -624,6 +637,7 @@ async fn record(
     c.skipped += delta.skipped;
     c.failed += delta.failed;
     c.relationships_added += delta.relationships_added;
+    c.workflows_started += delta.workflows_started;
     summary.issues_total += issues.len() as u32;
     let n = sqlx::query(
         "UPDATE cmdb.import_jobs SET committed_through_row = $4, progress_done = least($5, progress_total),
@@ -696,8 +710,12 @@ async fn finish(pool: &PgPool, lease: &Lease, status: &str, error: Option<Value>
     .fetch_optional(&mut *tx)
     .await?;
     let Some(job) = row else { return Ok(false) };
-    let entry = commit_event(&job);
-    crud::write_audit(&mut tx, &audit_context(&job), vec![entry]).await?;
+    let mut entries = vec![commit_event(&job)];
+    let started = job.summary().and_then(|s| s.committed).map_or(0, |c| c.workflows_started);
+    if started > 0 {
+        entries.push(adopt::import_audit(job.id, job.class_key.as_deref(), started));
+    }
+    crud::write_audit(&mut tx, &audit_context(&job), entries).await?;
     tx.commit().await?;
     Ok(true)
 }

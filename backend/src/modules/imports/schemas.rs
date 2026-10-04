@@ -144,6 +144,9 @@ pub struct CommitCounts {
     /// Rows that failed at commit
     pub failed: u32,
     pub relationships_added: u32,
+    /// Workflow instances started on the created CIs by workflows that start on their own
+    #[serde(default)]
+    pub workflows_started: u32,
 }
 
 /// Counts of the dry run, and of the commit once it ran.

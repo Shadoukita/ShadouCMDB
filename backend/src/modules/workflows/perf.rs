@@ -1,8 +1,8 @@
-//! Workflow runtime performance gate (SHAA-1411 §9, SHAA-1424). Not part of
+//! Workflow performance gates (SHAA-1411 §9; runtime SHAA-1424, bootstrap SHAA-1698). Not part of
 //! the normal test run:
 //!
 //! ```sh
-//! SHADOUCMDB_TEST_DATABASE_URL=postgres://… cargo test --release workflow_runtime_performance -- --ignored --nocapture
+//! SHADOUCMDB_TEST_DATABASE_URL=postgres://… cargo test --release modules::workflows::perf -- --ignored --nocapture --test-threads 1
 //! ```
 //! (`tools/perf/workflows.sh` wraps it.) It prints the measurements and fails
 //! when a threshold is missed.
@@ -148,6 +148,84 @@ async fn workflow_runtime_performance() {
         }
         report(what, ms, READ_P95_MS, &mut failures);
     }
+    db.drop().await;
+    assert!(failures.is_empty(), "thresholds missed:\n{}", failures.join("\n"));
+}
+
+/// Bootstrap of the whole inventory (SHAA-1698): with HTTP_REQUEST_TIMEOUT_SECS at its default.
+const BOOTSTRAP_LIMIT_S: f64 = 120.0;
+
+/// Bootstrap (SHAA-1698, §8.2): 500 000 server CIs without an instance, in
+/// the design example's states (60 % planned, 30 % approved, 9.9 % live, a
+/// terminal state, and 0.1 % with a value no state maps), adopted through the
+/// real router: the dry run, the run in batches of 1 000, and a second run that
+/// starts nothing. Then the audit chain is verified.
+#[tokio::test]
+#[ignore = "performance gate: run with --ignored --release (tools/perf/workflows.sh)"]
+async fn workflow_bootstrap_performance() {
+    let Some(db) = scratch::database("workflow_bootstrap_performance").await else { return };
+    let w = world(&db).await;
+    let pool = &w.pool;
+    let d = w.ok("GET", &format!("/api/v1/admin/workflow-definitions/{}", w.definition), json!(null)).await;
+    let path = format!("/api/v1/admin/workflow-definitions/{}", w.definition);
+    w.ok("PATCH", &path, json!({ "version": d["version"], "isActive": false })).await;
+    let t = Instant::now();
+    let model = Model::load(&mut pool.acquire().await.unwrap()).await.unwrap();
+    let table = model.table(w.server).unwrap().sql();
+    let column = |key: &str| model.own_fields(w.server).find(|f| f.key == key).unwrap().column().to_string();
+    exec(pool, "CREATE TABLE perf_ci (n bigint PRIMARY KEY, id uuid NOT NULL)").await;
+    exec(pool, &format!("INSERT INTO perf_ci SELECT n, gen_random_uuid() FROM generate_series(1, {CIS}) n")).await;
+    sqlx::query(
+        "INSERT INTO configuration_items (id, class_id, ident, label, valid_from)
+         SELECT id, $1, 'PERF-' || n, 'server ' || lpad(n::text, 6, '0'), now() - interval '1 day'
+         FROM perf_ci ORDER BY n",
+    )
+    .bind(w.server)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "INSERT INTO {table} (id, {}, {})
+         SELECT id, 'prod', CASE WHEN n % 1000 = 0 THEN NULL WHEN n % 10 < 6 THEN $1 WHEN n % 10 < 9 THEN $2 ELSE $3 END
+         FROM perf_ci",
+        column("environment"),
+        column("lifecycle")
+    )))
+    .bind(w.value("planned"))
+    .bind(w.value("approved"))
+    .bind(w.value("live"))
+    .execute(pool)
+    .await
+    .unwrap();
+    exec(pool, "ANALYZE").await;
+    eprintln!("seeded {CIS} CIs without an instance in {:?}", t.elapsed());
+    let d = w.ok("GET", &path, json!(null)).await;
+    w.ok("PATCH", &path, json!({ "version": d["version"], "isActive": true })).await;
+
+    let bootstrap = format!("{path}/bootstrap");
+    let mut failures = Vec::new();
+    for (what, dry_run) in [("dry run", true), ("run", false), ("second run", false)] {
+        let t = Instant::now();
+        let v = w.ok("POST", &bootstrap, json!({ "stateFromAttribute": true, "dryRun": dry_run })).await;
+        let s = t.elapsed().as_secs_f64();
+        eprintln!(
+            "bootstrap {what:<11} {s:>7.1} s   started {:>7}   already running {:>7}   terminal {:>6}   unmapped {:>4}",
+            v["started"], v["alreadyRunning"], v["skippedTerminal"], v["skippedUnmapped"]
+        );
+        if s > BOOTSTRAP_LIMIT_S {
+            failures.push(format!("bootstrap {what}: {s:.1} s > {BOOTSTRAP_LIMIT_S} s"));
+        }
+    }
+    let running: i64 = sqlx::query_scalar("SELECT count(*) FROM workflow_instances WHERE status = 'active'")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    // Planned and approved start; every 1 000th CI (a planned one) has no value.
+    assert_eq!(running, CIS / 10 * 9 - CIS / 1000);
+    let t = Instant::now();
+    let problems: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_log_verify()").fetch_one(pool).await.unwrap();
+    eprintln!("audit_log_verify() over the chain: {problems} problems in {:?}", t.elapsed());
+    assert_eq!(problems, 0);
     db.drop().await;
     assert!(failures.is_empty(), "thresholds missed:\n{}", failures.join("\n"));
 }

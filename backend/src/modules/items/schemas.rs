@@ -331,7 +331,7 @@ fn update_attributes_schema() -> Schema {
     attributes_schema("Merged into the current values; null clears an attribute")
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateItemBody {
     /// A concrete (non-abstract), active class

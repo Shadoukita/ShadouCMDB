@@ -29,6 +29,8 @@ use crate::data::items::{
 };
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
 use crate::modules::classes::AttributeDataType;
+use crate::modules::workflows::adopt;
+use crate::modules::workflows::state_field::StateFields;
 use crate::schema::model::{Field, Model};
 
 pub fn summary_dto(r: SummaryRow) -> ConfigurationItemSummary {
@@ -562,9 +564,23 @@ pub async fn create(
     let model = Model::load(&mut tx).await?;
     let defs = class_data::effective_attributes(&mut tx, input.class_id).await?;
     let visible = ctx.class_scope(ClassOp::View);
+    // A state field an active workflow drives takes no value of the caller's
+    // own (Q3); a workflow that starts on its own sets its initial value.
+    let state = StateFields::load(&mut tx).await?;
+    state.check_create(&model, input.class_id, &defs, input.attributes.as_ref())?;
+    let starts = adopt::auto_starts(&mut tx, &model, input.class_id).await?;
+    let seeded;
+    let input = if adopt::sets_state(&starts) {
+        let mut attributes = input.attributes.clone().unwrap_or_default();
+        adopt::seed(&starts, &mut attributes);
+        seeded = CreateItemBody { attributes: Some(attributes), ..input.clone() };
+        &seeded
+    } else {
+        input
+    };
     let needs = Needs::for_create(&defs, input.attributes.as_ref());
     let resolver = DbResolver::load(&mut tx, visible.as_deref(), &needs).await?;
-    let plan = plan::plan_create(ctx, &model, &defs, input, &resolver)?;
+    let plan = plan::plan_create(ctx, &model, &defs, input, &resolver, &state)?;
     check_criticality(&mut tx, input.criticality_value_id, None).await?;
     let id = plan::apply(&mut tx, &model, &plan).await?;
 
@@ -576,7 +592,9 @@ pub async fn create(
         old_value: None,
         new_value: Some(crud::json(&dto)),
     };
-    crud::write_audit(&mut tx, ctx, vec![entry]).await?;
+    let mut entries = vec![entry];
+    entries.extend(adopt::start_created(&mut tx, ctx, id, &starts).await?);
+    crud::write_audit(&mut tx, ctx, entries).await?;
     let dto = response_detail(&mut tx, ctx, &model, dto).await?;
     tx.commit().await?;
     Ok(dto)
@@ -601,7 +619,8 @@ pub async fn update(
     let resolver = DbResolver::load(&mut tx, visible.as_deref(), &needs).await?;
     let current_criticality = before.summary.criticality.as_ref().map(|c| c.id);
     let service_class = crate::data::business_services::roles(&mut tx).await?.map(|r| r.service_class);
-    let plan = plan::plan_update(ctx, &model, &defs, before, input, &resolver, service_class)?;
+    let state = StateFields::load(&mut tx).await?;
+    let plan = plan::plan_update(ctx, &model, &defs, before, input, &resolver, service_class, &state)?;
     check_criticality(&mut tx, input.criticality_value_id.flatten(), current_criticality).await?;
     plan::apply(&mut tx, &model, &plan).await?;
 
@@ -706,7 +725,8 @@ pub(crate) async fn create_on_behalf(
     };
     let needs = Needs::for_create(&defs, input.attributes.as_ref());
     let resolver = DbResolver::load(conn, None, &needs).await?;
-    let plan = plan::plan_create(&system, &model, &defs, &input, &resolver)?;
+    let state = StateFields::load(conn).await?;
+    let plan = plan::plan_create(&system, &model, &defs, &input, &resolver, &state)?;
     let id = plan::apply(conn, &model, &plan).await?;
     let dto = must_detail(conn, &model, id, None).await?;
     let entry = AuditEntry {
@@ -744,7 +764,8 @@ pub(crate) async fn update_on_behalf(
     };
     let needs = Needs::for_update(&defs, input.attributes.as_ref(), &before.attributes);
     let resolver = DbResolver::load(conn, None, &needs).await?;
-    let plan = plan::plan_update(&system, &model, &defs, before, &input, &resolver, None)?;
+    let state = StateFields::load(conn).await?;
+    let plan = plan::plan_update(&system, &model, &defs, before, &input, &resolver, None, &state)?;
     plan::apply(conn, &model, &plan).await?;
     let dto = must_detail(conn, &model, id, None).await?;
     let old = plan.before.as_ref().map(crud::json);
@@ -802,7 +823,9 @@ pub(crate) async fn update_for_workflow(
     let visible = ctx.class_scope(ClassOp::View);
     let needs = Needs::for_update(&defs, input.attributes.as_ref(), &before.attributes);
     let resolver = DbResolver::load(conn, visible.as_deref(), &needs).await?;
-    let plan = plan::plan_update(ctx, &model, &defs, before.clone(), &input, &resolver, None)?;
+    // The workflow's own write of its state field: the one write the guard lets through.
+    let state = StateFields::WorkflowWrite;
+    let plan = plan::plan_update(ctx, &model, &defs, before.clone(), &input, &resolver, None, &state)?;
     if !apply {
         return Ok(WorkflowWrite { after: before.clone(), before });
     }

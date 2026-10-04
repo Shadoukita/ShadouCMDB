@@ -8,6 +8,9 @@
 //! Running workflows on CIs is the runtime API ([`runtime`], S3), whose
 //! routes are [`runtime_routes`].
 
+pub mod adopt;
+#[cfg(test)]
+mod adopt_tests;
 pub mod condition;
 pub mod eval;
 pub mod graph;
@@ -20,6 +23,7 @@ pub mod runtime_schemas;
 mod runtime_tests;
 pub mod schemas;
 pub mod service;
+pub mod state_field;
 #[cfg(test)]
 mod tests;
 
@@ -92,6 +96,7 @@ const DRAFT: &str = "/api/v1/admin/workflow-definitions/{id}/draft";
 const VALIDATE: &str = "/api/v1/admin/workflow-definitions/{id}/draft/validate";
 const PUBLISH: &str = "/api/v1/admin/workflow-definitions/{id}/draft/publish";
 const GRANTS: &str = "/api/v1/admin/workflow-definitions/{id}/grants";
+const BOOTSTRAP: &str = "/api/v1/admin/workflow-definitions/{id}/bootstrap";
 
 pub fn routes() -> Vec<Route> {
     let manage = GlobalPermission::WorkflowsManage;
@@ -273,6 +278,31 @@ pub fn routes() -> Vec<Route> {
             .handle(|api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<WorkflowPublish>>| async move {
                 Ok(Json(service::publish(&api.pool, &api.ctx, id, &b).await?))
             }),
+        route(Method::POST, BOOTSTRAP, "bootstrapWorkflowInstances")
+            .tag(TAG)
+            .summary("Start the workflow on the existing CIs it covers, each in the state of its state field value")
+            .description(
+                "For adopting a workflow on an inventory that already exists (an active workflow makes its state \
+                 field read-only on every CI it covers, Q3). Every live CI of the covered types without a running \
+                 instance of the workflow gets one, on the current published version, in the state whose state \
+                 field value is the CI's current one (a value several states map is the first non-terminal one's). \
+                 CIs whose value no state maps, or none, are reported in `unmapped` and skipped; CIs in a terminal \
+                 state are reported and skipped. Runs in batches of 1,000 CIs, each committed on its own; a run \
+                 that stops part way is finished by running it again, since CIs that run the workflow are left \
+                 alone (a second run starts nothing). Each start is a `start` event and a `workflow.start` audit \
+                 row on the CI with `actor_type = system`, naming the caller in `requestedBy`. `dryRun: true` only \
+                 counts. `stateFromAttribute` must be true. 409 CONFLICT `no_state_field`, `unpublished`, \
+                 `inactive`, or `changed_during_bootstrap` when the workflow is deactivated or published again while \
+                 it runs. 403 when the workflow covers types the caller may not view.",
+            )
+            .requires(manage)
+            .session_only()
+            .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])
+            .handle(
+                |api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<WorkflowBootstrap>>| async move {
+                    Ok(Json(adopt::bootstrap(&api.pool, &api.ctx, id, &b).await?))
+                },
+            ),
         route(Method::GET, GRANTS, "getWorkflowGrants")
             .tag(TAG)
             .summary("Who may run which transition of a workflow")

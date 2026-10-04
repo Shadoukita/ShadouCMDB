@@ -57,13 +57,13 @@ const RECENT_ENDED: i64 = 20;
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, sqlx::FromRow)]
-struct PinnedState {
-    id: Uuid,
-    key: String,
-    name: String,
+pub(super) struct PinnedState {
+    pub(super) id: Uuid,
+    pub(super) key: String,
+    pub(super) name: String,
     category: WorkflowStateCategory,
-    is_terminal: bool,
-    state_value_id: Option<Uuid>,
+    pub(super) is_terminal: bool,
+    pub(super) state_value_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -86,15 +86,15 @@ struct PinnedField {
 
 /// A published (or retired) version's graph by id: what running an instance needs.
 #[derive(Debug)]
-struct Pinned {
-    initial_state_id: Option<Uuid>,
-    states: Vec<PinnedState>,
+pub(super) struct Pinned {
+    pub(super) initial_state_id: Option<Uuid>,
+    pub(super) states: Vec<PinnedState>,
     transitions: Vec<PinnedTransition>,
     fields: Vec<PinnedField>,
 }
 
 impl Pinned {
-    fn state(&self, id: Uuid) -> Option<&PinnedState> {
+    pub(super) fn state(&self, id: Uuid) -> Option<&PinnedState> {
         self.states.iter().find(|s| s.id == id)
     }
 
@@ -125,7 +125,7 @@ fn cache() -> &'static Mutex<HashMap<Uuid, Arc<Pinned>>> {
 /// Versions kept in the cache; it is emptied when full.
 const CACHE_SIZE: usize = 1024;
 
-async fn pinned(conn: &mut PgConnection, version_id: Uuid) -> Result<Arc<Pinned>, AppError> {
+pub(super) async fn pinned(conn: &mut PgConnection, version_id: Uuid) -> Result<Arc<Pinned>, AppError> {
     if let Some(p) = cache().lock().ok().and_then(|c| c.get(&version_id).cloned()) {
         return Ok(p);
     }
@@ -603,24 +603,28 @@ fn actor_of(ctx: &RequestContext) -> EventActor {
     EventActor { actor_type: ctx.actor.actor_type.as_str(), id: ctx.actor.id.clone(), name: ctx.actor.name.clone() }
 }
 
-fn starter(ctx: &RequestContext) -> (Option<Uuid>, String) {
+pub(super) fn starter(ctx: &RequestContext) -> (Option<Uuid>, String) {
     let id = ctx.principal().map(|p| p.user_id);
     let name = ctx.principal().map(|p| p.username.clone()).or_else(|| ctx.actor.name.clone()).unwrap_or_default();
     (id, name)
 }
 
-struct NewEvent<'a> {
-    instance: Uuid,
-    kind: &'static str,
-    transition_key: Option<&'a str>,
-    from_state_key: Option<&'a str>,
-    to_state_key: &'a str,
-    to_version_no: i32,
-    comment: Option<&'a str>,
-    field_changes: Option<Value>,
+pub(super) struct NewEvent<'a> {
+    pub(super) instance: Uuid,
+    pub(super) kind: &'static str,
+    pub(super) transition_key: Option<&'a str>,
+    pub(super) from_state_key: Option<&'a str>,
+    pub(super) to_state_key: &'a str,
+    pub(super) to_version_no: i32,
+    pub(super) comment: Option<&'a str>,
+    pub(super) field_changes: Option<Value>,
 }
 
-async fn insert_event(conn: &mut PgConnection, ctx: &RequestContext, e: NewEvent<'_>) -> Result<(), AppError> {
+pub(super) async fn insert_event(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    e: NewEvent<'_>,
+) -> Result<(), AppError> {
     let actor = actor_of(ctx);
     sqlx::query(
         "INSERT INTO cmdb.workflow_instance_events
