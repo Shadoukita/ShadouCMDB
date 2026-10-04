@@ -122,6 +122,13 @@ Install as a systemd service
   curl -s http://127.0.0.1:3000/readyz
   journalctl -u shadoucmdb -f
 
+The unit sets LimitNOFILE=65536. The server raises its soft open-files limit
+to the hard limit at start-up and logs the connection limit in effect
+("connection limit", with max_connections and open_files). When you write
+your own unit or init script, set a hard limit of at least 4 open files per
+HTTP_MAX_CONCURRENT_REQUESTS plus a quarter on top (2,731 at the default of
+512), or fewer connections are accepted.
+
 The server speaks plain HTTP only. Sign-in passwords, session cookies and API
 tokens cross the network unencrypted unless a TLS front end terminates HTTPS
 for it. For anything beyond a quick evaluation:
