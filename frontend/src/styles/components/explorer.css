@@ -1,0 +1,236 @@
+/*
+ * Explorer lists (design document §2.7): the toolbar over a list (view menu, search, filters,
+ * columns), the chips of filters without a control, and a table whose header stays in view.
+ * Used by the inventory and search, and by every admin list that has a .toolbar.
+ */
+
+/* ---------- Toolbar: one filter bar, every label in the same style (audit I5) ---------- */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  align-items: flex-end;
+  padding: var(--space-3) var(--panel-p);
+  border-bottom: 1px solid var(--c-border);
+}
+.toolbar .field label,
+.toolbar .field .label,
+.view-menu > .label {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  color: var(--c-text-secondary);
+}
+/* Controls about the list itself (columns) sit at the end of the toolbar. */
+.toolbar-end {
+  margin-left: auto;
+}
+.toolbar .field input {
+  width: 150px;
+}
+/* The text-input width is not for checkboxes: a 150 px box centres the tick far from its label (GH#479). */
+.toolbar .field input[type="checkbox"],
+.toolbar .field input[type="radio"] {
+  width: 16px;
+}
+/* A filter select is as wide as its longest option, so its value is never clipped. */
+.toolbar .field select {
+  width: auto;
+  min-width: 150px;
+  max-width: 320px;
+}
+.toolbar .field.search input {
+  width: 240px;
+}
+
+/* An input with a leading icon (the list search). */
+.input-icon {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.input-icon > .icon {
+  position: absolute;
+  left: var(--space-2);
+  color: var(--c-text-tertiary);
+  pointer-events: none;
+}
+.toolbar .field .input-icon > input,
+.input-icon > input {
+  padding-left: calc(var(--space-2) + 16px + var(--space-1_5));
+}
+
+/* ---------- Filter chips: filters set by a link or a list view, removable one by one (audit I6) ---------- */
+.filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--panel-p);
+  border-bottom: 1px solid var(--c-border);
+  background: var(--c-surface-alt);
+}
+
+/* ---------- Table area: the header sticks while the rows scroll (audit I1) ---------- */
+/*
+ * .table-wrap scrolls sideways, which makes it the sticky header's scroll container; so on wide screens the
+ * table area also scrolls vertically within the window, and the column names stay in view on a 500-row page.
+ * Under 820 px the page scrolls as a whole, as before.
+ */
+@media (min-width: 821px) {
+  .table-scroll {
+    max-height: max(320px, calc(100dvh - var(--header-h) - 176px));
+    overflow: auto;
+  }
+}
+table.data th.row-actions {
+  width: 1%;
+}
+/* Search: the matched text in each result (audit Q2). */
+table.data td.matches mark {
+  background: var(--c-warning-subtle);
+  color: var(--c-text);
+  border-radius: var(--radius-sm);
+}
+.page-header .title .count {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Columns popover (non-modal: it closes on Esc, Done, or a click or Tab outside) ---------- */
+.columns-menu {
+  position: relative;
+}
+/* A popover of a control at the end of the toolbar opens leftwards, inside the page. */
+.toolbar-end .popover {
+  left: auto;
+  right: 0;
+}
+.columns-shown {
+  list-style: none;
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+}
+.columns-shown li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-0_5) var(--space-2) var(--space-0_5) var(--space-3);
+  min-height: var(--row-h);
+}
+.columns-shown li + li {
+  border-top: 1px solid var(--c-divider);
+}
+.columns-shown .row-actions {
+  display: inline-flex;
+  gap: var(--space-1);
+}
+fieldset.columns-more {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+}
+fieldset.columns-more legend {
+  padding: 0 var(--space-1);
+  font-size: var(--fs-sm);
+  color: var(--c-text-secondary);
+}
+
+/* ---------- Saved views: the View menu at the start of the toolbar ---------- */
+.view-menu {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.view-menu-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.view-menu-button {
+  max-width: min(280px, 100%);
+}
+.view-menu-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.view-modified {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+  color: var(--c-text);
+}
+.view-menu-popup {
+  width: 320px;
+  padding: var(--space-1) 0;
+}
+.view-menu-popup .field {
+  padding: 0 var(--space-2) var(--space-1);
+}
+.view-menu-popup .field input {
+  width: 100%;
+}
+.view-menu-status {
+  margin: 0 var(--space-2) var(--space-1);
+}
+.view-menu-popup ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+/* Banners and errors of the View menu take a row of their own under the toolbar's controls. */
+.view-menu-banner {
+  flex-basis: 100%;
+  order: 99;
+  margin-bottom: 0;
+}
+.view-menu-banner > .alert {
+  margin-bottom: 0;
+}
+dialog.form-dialog.manage-views {
+  width: min(1100px, 96vw);
+}
+dialog.manage-views .table-wrap {
+  overflow-x: auto;
+}
+dialog.manage-views td.row-actions {
+  white-space: nowrap;
+}
+.manage-views-heading {
+  margin: 0 0 var(--space-2);
+  font-size: var(--fs-h3);
+}
+
+/* ---------- Narrow screens and high zoom: popovers are sheets across the toolbar ---------- */
+@media (max-width: 480px) {
+  .toolbar {
+    position: relative;
+  }
+  .toolbar .field.search,
+  .toolbar .field.search input {
+    width: 100%;
+  }
+  .columns-menu,
+  .view-menu {
+    position: static;
+  }
+  .popover,
+  .toolbar-end .popover {
+    left: var(--space-3);
+    right: var(--space-3);
+    width: auto;
+  }
+  .view-menu-popup {
+    width: auto;
+  }
+}

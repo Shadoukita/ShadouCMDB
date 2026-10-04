@@ -39,7 +39,7 @@ const NAME = "Upgrade check: servers by update";
 const viewButton = (page: Page) => page.getByRole("button", { name: /^View / });
 const menu = (page: Page) => page.getByRole("menu", { name: "Views" });
 /** Column headers by their text (not innerText: the stylesheet sets headers in uppercase). */
-const headers = async (page: Page) => (await page.locator("table.data thead th").allTextContents()).map((h) => h.trim()).filter(Boolean);
+const headers = async (page: Page) => (await page.locator("table.data thead th:not(.row-actions)").allTextContents()).map((h) => h.trim()).filter(Boolean);
 const HEADER: Record<string, string> = { label: "Label", class: "Class", createdAt: "Created", updatedAt: "Updated" };
 const SORT_HEADER = () => new RegExp(`^${HEADER[listView.defaultSort.field]}`);
 

@@ -165,12 +165,12 @@ test("list views: a class's columns, default sort, filter and page size apply to
   await expect(page.getByLabel("List preview").getByRole("columnheader", { name: "CPU cores" })).toBeVisible();
   await save(page, "e2e list view");
 
-  // Opened from the menu, the list gets the default filter in its URL: it shows in the toolbar and can be changed.
+  // Opened from the menu, the list gets the default filter in its URL: it shows as a removable chip under the toolbar.
   await page.goto("/");
   await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: /^Server/ }).click();
   await expect(page).toHaveURL(new RegExp(`classId=${serverId}`));
   await expect(page).toHaveURL(/lookupValueId=/);
-  await expect(page.locator("form.toolbar")).toContainText("In service");
+  await expect(page.getByRole("group", { name: "Applied filters" })).toContainText("In service");
   await expect(page.getByRole("columnheader", { name: "CPU cores" })).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "Ident" })).toHaveCount(0);
   // Attribute columns show the values the list API returns with each CI.
@@ -256,7 +256,7 @@ test("list views: adding a column to a view without columns keeps the default co
   await save(page, "e2e add column to default view");
 
   await page.goto(`/cis?classId=${serverId}`);
-  await expect(page.locator("table.data thead th")).toHaveText([...defaults, "Hostname"].map((h) => new RegExp(`^${h}`)));
+  await expect(page.locator("table.data thead th:not(.row-actions)")).toHaveText([...defaults, "Hostname"].map((h) => new RegExp(`^${h}`)));
   // The label column still opens the CI.
   await expect(page.locator("table.data tbody tr a").first()).toBeVisible();
 });

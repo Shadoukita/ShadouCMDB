@@ -438,7 +438,7 @@ const dropped = computed(() => {
         @keydown="onButtonKey"
       >
         <span :id="`${menuId}-button-text`" class="view-menu-name">{{ buttonLabel }}</span>
-        <span v-if="current?.isDefault" class="badge spaced">Default</span>
+        <span v-if="current?.isDefault" class="badge">Default</span>
         <Icon name="chevron-down" />
       </button>
       <template v-if="modified">

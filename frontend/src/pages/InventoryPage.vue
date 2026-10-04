@@ -12,7 +12,6 @@ import EmptyState from "../components/EmptyState.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
 import InventoryFilters from "../components/InventoryFilters.vue";
 import SavedViewMenu from "../components/savedViews/SavedViewMenu.vue";
-import LoadingState from "../components/LoadingState.vue";
 import PaginationBar from "../components/PaginationBar.vue";
 import { useAppSettings } from "../lib/appSettings";
 import { useDebounced, useDocumentTitle } from "../lib/composables";
@@ -24,6 +23,12 @@ import { useSavedViewSelection } from "../lib/useSavedViewSelection";
 import { useImportAccess } from "../lib/useImportAccess";
 import { useSessionStore } from "../stores/session";
 import SortIcon from "../components/SortIcon.vue";
+import Icon from "../components/Icon.vue";
+import InventoryFilterChips from "../components/InventoryFilterChips.vue";
+import RowMenu from "../components/RowMenu.vue";
+import SkeletonRows from "../components/SkeletonRows.vue";
+import { ciRowMenu } from "../lib/ciRowMenu";
+import { formatNumber, t } from "../i18n";
 
 /**
  * CI inventory. Every filter, the sort, the columns and the page live in the URL
@@ -82,7 +87,7 @@ const attributeChoices = computed(() =>
   attrDefs.value.filter((a) => a.isActive).map((a) => ({ key: `${ATTRIBUTE_PREFIX}${a.key}`, label: a.label })),
 );
 
-useDocumentTitle(() => currentClass.value?.name ?? "Inventory");
+useDocumentTitle(() => currentClass.value?.name ?? t("inventory.crumb"));
 
 // Search box: local state for typing, debounced into the URL.
 const qText = ref(get("q"));
@@ -107,11 +112,11 @@ const importAccess = useImportAccess();
 const importTo = computed(() =>
   currentClass.value && !currentClass.value.isAbstract ? `/imports/new?classKey=${encodeURIComponent(currentClass.value.key)}` : "/imports/new",
 );
-const newLabel = computed(() => (currentClass.value && !currentClass.value.isAbstract ? currentClass.value.name : "CI"));
+const newLabel = computed(() => (currentClass.value && !currentClass.value.isAbstract ? currentClass.value.name : t("inventory.ci")));
 const crumbs = computed(() =>
   currentClass.value
-    ? [{ label: "Inventory", to: "/cis" }, ...(currentArea.value ? [{ label: currentArea.value.name }] : []), { label: currentClass.value.name }]
-    : [{ label: "Inventory" }],
+    ? [{ label: t("inventory.crumb"), to: "/cis" }, ...(currentArea.value ? [{ label: currentArea.value.name }] : []), { label: currentClass.value.name }]
+    : [{ label: t("inventory.crumb") }],
 );
 
 /** Keys of the classes, lookup lists and values, to save the URL's ids in a view. */
@@ -134,25 +139,28 @@ function clearFilters() {
   <Breadcrumbs :items="crumbs" />
   <div class="page-header">
     <div class="title">
-      <h1>{{ currentClass ? currentClass.name : "Configuration items" }}</h1>
-      <span v-if="list.data.value" class="muted">{{ total.toLocaleString() }} total</span>
-      <span v-if="list.isFetching.value && !list.isLoading.value" class="spinner" aria-label="Refreshing" />
+      <h1>{{ currentClass ? currentClass.name : t("inventory.title") }}</h1>
+      <span v-if="list.data.value" class="muted count">{{ t("common.total", { n: formatNumber(total) }) }}</span>
+      <span v-if="list.isFetching.value && !list.isLoading.value" class="spinner" :aria-label="t('common.refreshing')" />
     </div>
     <div v-if="canCreate || importAccess.available.value" class="actions">
-      <RouterLink v-if="importAccess.available.value" class="btn" :to="importTo">Import</RouterLink>
-      <RouterLink v-if="canCreate" class="btn btn-primary" :to="newTo">+ New {{ newLabel }}</RouterLink>
+      <RouterLink v-if="importAccess.available.value" class="btn" :to="importTo"><Icon name="upload" />{{ t("inventory.import") }}</RouterLink>
+      <RouterLink v-if="canCreate" class="btn btn-primary" :to="newTo"><Icon name="plus" />{{ t("inventory.new", { name: newLabel }) }}</RouterLink>
     </div>
   </div>
 
-  <section class="panel" aria-label="Inventory">
+  <section class="panel explorer" :aria-label="t('inventory.region')">
     <form class="toolbar" role="search" @submit.prevent>
       <SavedViewMenu context="inventory" :state="state" :selection="selection" :classes="classes.data.value" :catalogue="catalogue" :total="settledTotal" />
       <div class="field search">
-        <label for="f-q">Search</label>
-        <input id="f-q" v-model="qText" type="search" placeholder="Label, ident, attribute values…" />
+        <label for="f-q">{{ t("inventory.search") }}</label>
+        <span class="input-icon">
+          <Icon name="search" />
+          <input id="f-q" v-model="qText" type="search" :placeholder="t('inventory.search.placeholder')" />
+        </span>
       </div>
       <InventoryFilters :state="state" id-prefix="f" />
-      <button v-if="activeFilters.length > 0" type="button" class="btn" @click="clearFilters">Clear filters</button>
+      <button v-if="activeFilters.length > 0" type="button" class="btn btn-ghost" @click="clearFilters"><Icon name="x" />{{ t("inventory.clearFilters") }}</button>
       <ColumnsPopover
         class="toolbar-end"
         :columns="columns"
@@ -165,34 +173,34 @@ function clearFilters() {
         @reset="state.resetColumns"
       />
     </form>
+    <InventoryFilterChips :state="state" />
 
     <div v-if="list.isError.value" class="panel-body">
       <ErrorAlert :error="list.error.value" :on-retry="() => list.refetch()" />
     </div>
-    <LoadingState v-if="list.isPending.value" label="Loading inventory…" />
+    <SkeletonRows v-if="list.isPending.value" :label="t('inventory.loading')" />
 
-    <EmptyState v-if="classDenied" title="Permission denied">
-      None of your permission profiles allows viewing {{ currentClass?.name }} configuration items, so none are listed here.
-      <template #actions><RouterLink class="btn" to="/cis">Back to inventory</RouterLink></template>
+    <EmptyState v-if="classDenied" icon="lock" :title="t('inventory.denied.title')">
+      {{ t("inventory.denied.body", { name: currentClass?.name ?? "" }) }}
+      <template #actions><RouterLink class="btn" to="/cis">{{ t("inventory.denied.back") }}</RouterLink></template>
     </EmptyState>
     <DataModelEmpty v-else-if="list.data.value && total === 0 && activeFilters.length === 0 && classes.data.value && dataModelEmpty(classes.data.value)" />
-    <EmptyState v-else-if="list.data.value && total === 0 && activeFilters.length === 0" title="The inventory is empty">
-      Configuration items are the servers, VMs, applications, databases, network devices and locations you track. Create
-      one, then relate it to others from its detail page.
+    <EmptyState v-else-if="list.data.value && total === 0 && activeFilters.length === 0" :title="t('inventory.empty.title')">
+      {{ t("inventory.empty.body") }}
       <template v-if="canCreate || importAccess.available.value" #actions>
-        <RouterLink v-if="canCreate" class="btn btn-primary" to="/cis/new">+ Create your first configuration item</RouterLink>
-        <RouterLink v-if="importAccess.available.value" class="btn" :to="importTo">Import them from a spreadsheet</RouterLink>
+        <RouterLink v-if="canCreate" class="btn btn-primary" to="/cis/new"><Icon name="plus" />{{ t("inventory.empty.create") }}</RouterLink>
+        <RouterLink v-if="importAccess.available.value" class="btn" :to="importTo"><Icon name="upload" />{{ t("inventory.empty.import") }}</RouterLink>
       </template>
     </EmptyState>
-    <EmptyState v-else-if="list.data.value && total === 0 && activeFilters.length > 0" title="No configuration items match these filters">
-      Adjust or clear the filters above.
+    <EmptyState v-else-if="list.data.value && total === 0 && activeFilters.length > 0" icon="search" :title="t('inventory.noMatch.title')">
+      {{ t("inventory.noMatch.body") }}
     </EmptyState>
-    <EmptyState v-if="list.data.value && total > 0 && rows.length === 0" title="This page is past the end of the results">
-      <template #actions><button class="btn" @click="state.update({}, true)">Go to first page</button></template>
+    <EmptyState v-if="list.data.value && total > 0 && rows.length === 0" :title="t('common.pastEnd')">
+      <template #actions><button class="btn" @click="state.update({}, true)">{{ t("common.firstPage") }}</button></template>
     </EmptyState>
 
     <template v-if="rows.length > 0">
-      <div class="table-wrap">
+      <div class="table-wrap table-scroll">
         <table :class="['data', { loading: list.isPlaceholderData.value }]">
           <thead>
             <tr>
@@ -202,13 +210,14 @@ function clearFilters() {
                 </button>
                 <template v-else>{{ columnLabel(c) }}</template>
               </th>
+              <th scope="col" class="row-actions"><span class="sr-only">{{ t("inventory.actions") }}</span></th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="ci in rows" :key="ci.id" :class="{ deleted: ci.deletedAt }">
-              <td v-for="c in columns" :key="c"><CiCell :ci="ci" :field="c" :defs="attrDefs" /></td>
+              <td v-for="c in columns" :key="c"><CiCell :ci="ci" :field="c" :defs="attrDefs" :class-of="classById" /></td>
               <td class="row-actions">
-                <RouterLink v-if="!ci.deletedAt" class="btn btn-sm" :to="`/cis/${ci.id}/impact`" :title="`Impact analysis of ${ci.label}`">Impact</RouterLink>
+                <RowMenu :label="t('inventory.rowMenu', { name: ci.label })" :items="ciRowMenu(ci)" />
               </td>
             </tr>
           </tbody>

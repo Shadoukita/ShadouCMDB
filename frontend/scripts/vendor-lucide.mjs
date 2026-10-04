@@ -1,14 +1,24 @@
 // Regenerates the vendored Lucide icon subset (src/icons/lucide.ts, src/icons/lucide-css.css and
-// src/icons/LICENSE.txt) from an unpacked lucide-static release. Nothing here runs at build time:
+// src/icons/LICENSE.txt) from the lucide-static release archive. Nothing here runs at build time:
 // the generated files are committed, so builds stay offline and air-gapped installs need nothing.
 //
 //   curl -sLO https://registry.npmjs.org/lucide-static/-/lucide-static-1.51.0.tgz
-//   tar xzf lucide-static-1.51.0.tgz
-//   node scripts/vendor-lucide.mjs ./package
+//   node scripts/vendor-lucide.mjs lucide-static-1.51.0.tgz
+//
+// The archive must match ARCHIVE_SHA256 (the hash recorded in THIRD_PARTY_NOTICES) before anything
+// is unpacked or generated. Moving to another Lucide release means updating the version and hash
+// here and in THIRD_PARTY_NOTICES in the same change.
 //
 // To add an icon, add its Lucide name to ICONS (or CSS_ICONS when a stylesheet needs it) and re-run.
-import { copyFileSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+/** The pinned release: lucide-static-<VERSION>.tgz from registry.npmjs.org. */
+const VERSION = "1.51.0";
+const ARCHIVE_SHA256 = "6936026d1512256483161ae999982e3be3d5d74226996c4ec7447e901726a2d8";
 
 /** Icons the <Icon> component can draw. Keep sorted. */
 const ICONS = [
@@ -30,6 +40,7 @@ const ICONS = [
   "circle-check",
   "circle-x",
   "cloud",
+  "columns-3",
   "container",
   "database",
   "ellipsis",
@@ -69,13 +80,22 @@ const ICONS = [
 /** Icons a stylesheet draws as a CSS mask (pseudo-elements that cannot hold an <svg>). */
 const CSS_ICONS = ["chevron-down", "chevron-right", "circle-alert", "circle-check", "info", "triangle-alert"];
 
-const src = process.argv[2];
-if (!src) {
-  console.error("usage: node scripts/vendor-lucide.mjs <unpacked lucide-static package dir>");
+const archive = process.argv[2];
+if (!archive) {
+  console.error(`usage: node scripts/vendor-lucide.mjs <lucide-static-${VERSION}.tgz>`);
   process.exit(1);
 }
+const digest = createHash("sha256").update(readFileSync(archive)).digest("hex");
+if (digest !== ARCHIVE_SHA256) {
+  console.error(`${archive}: SHA-256 ${digest} does not match the pinned lucide-static ${VERSION} (${ARCHIVE_SHA256}). Nothing was generated.`);
+  process.exit(1);
+}
+const work = mkdtempSync(join(tmpdir(), "vendor-lucide-"));
+process.on("exit", () => rmSync(work, { recursive: true, force: true }));
+execFileSync("tar", ["-xzf", archive, "-C", work, "package/package.json", "package/icon-nodes.json", "package/LICENSE"]);
+const src = join(work, "package");
 const pkg = JSON.parse(readFileSync(join(src, "package.json"), "utf8"));
-if (pkg.name !== "lucide-static") throw new Error(`${src} is ${pkg.name}, not lucide-static`);
+if (pkg.name !== "lucide-static" || pkg.version !== VERSION) throw new Error(`${archive} holds ${pkg.name} ${pkg.version}, not lucide-static ${VERSION}`);
 const nodes = JSON.parse(readFileSync(join(src, "icon-nodes.json"), "utf8"));
 
 const missing = [...ICONS, ...CSS_ICONS].filter((n) => !nodes[n]);

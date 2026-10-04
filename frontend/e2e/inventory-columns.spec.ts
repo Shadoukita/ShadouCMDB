@@ -14,7 +14,7 @@ let serverId = "";
 let applicationId = "";
 
 const DEFAULTS = ["Label", "Ident", "Class", "Active", "Updated"];
-const headers = (page: Page) => page.locator("table.data thead th");
+const headers = (page: Page) => page.locator("table.data thead th:not(.row-actions)");
 const headerTexts = (names: string[]) => names.map((h) => new RegExp(`^\\s*${h}`));
 const popover = (page: Page) => page.getByRole("dialog", { name: "Columns" });
 

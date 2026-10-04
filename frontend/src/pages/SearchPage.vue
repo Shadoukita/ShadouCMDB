@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
 import { RouterLink } from "vue-router";
 import { useAllLookupListValues, useLookupLists } from "../api/datamodel";
 import { useCiClasses, useSearch } from "../api/queries";
@@ -9,11 +9,17 @@ import EmptyState from "../components/EmptyState.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
 import InventoryFilters from "../components/InventoryFilters.vue";
 import SavedViewMenu from "../components/savedViews/SavedViewMenu.vue";
-import LoadingState from "../components/LoadingState.vue";
 import PaginationBar from "../components/PaginationBar.vue";
 import CiStateBadge from "../components/CiStateBadge.vue";
-import { useDocumentTitle } from "../lib/composables";
-import { plural } from "../lib/format";
+import ClassBadge from "../components/ClassBadge.vue";
+import Icon from "../components/Icon.vue";
+import InventoryFilterChips from "../components/InventoryFilterChips.vue";
+import RowMenu from "../components/RowMenu.vue";
+import SkeletonRows from "../components/SkeletonRows.vue";
+import { t } from "../i18n";
+import { ciRowMenu } from "../lib/ciRowMenu";
+import { useDebounced, useDocumentTitle } from "../lib/composables";
+import { highlight } from "../lib/highlight";
 import { useInventoryQueryState } from "../lib/useInventoryQueryState";
 import { useSavedViewSelection } from "../lib/useSavedViewSelection";
 
@@ -48,7 +54,16 @@ const filters = computed(() => {
   return f;
 });
 const search = useSearch(q, limit, offset, filters);
-useDocumentTitle(() => (q.value ? `Search: ${q.value}` : "Search"));
+useDocumentTitle(() => (q.value ? t("search.docTitle", { q: q.value }) : t("search.title")));
+const classById = (id: string) => classes.data.value?.find((c) => c.id === id);
+
+// The term box on the page: local state for typing, debounced into the URL (as in the inventory).
+const qText = ref(q.value);
+const debouncedQ = useDebounced(qText, 300);
+watch(debouncedQ, (v) => {
+  if (v !== q.value) state.update({ q: v.trim() ? v : undefined });
+});
+watch(q, (v) => (qText.value = v)); // back/forward and the header search
 const rows = computed(() => search.data.value?.data ?? []);
 const catalogue = computed(() =>
   classes.data.value && lookupLists.data.value && lookupValues.data.value
@@ -67,60 +82,73 @@ const inventoryLink = computed(() => {
 </script>
 
 <template>
-  <Breadcrumbs :items="[{ label: 'Search' }]" />
+  <Breadcrumbs :items="[{ label: t('search.title') }]" />
   <div class="page-header">
     <div class="title">
-      <h1>{{ q ? `Results for “${q}”` : "Search" }}</h1>
-      <span v-if="search.data.value" class="muted">{{ plural(search.data.value.page.total, "match", "matches") }}</span>
+      <h1>{{ q ? t("search.resultsFor", { q }) : t("search.title") }}</h1>
+      <span v-if="search.data.value" class="muted count">{{ t("search.matches", { n: search.data.value.page.total }) }}</span>
     </div>
-    <RouterLink v-if="q" class="btn" :to="inventoryLink">Open as filterable inventory</RouterLink>
+    <div v-if="q" class="actions">
+      <RouterLink class="btn" :to="inventoryLink"><Icon name="list" />{{ t("search.openAsInventory") }}</RouterLink>
+    </div>
   </div>
-  <section class="panel" aria-label="Search results">
-    <div class="toolbar" role="group" aria-label="Filter the results">
+  <section class="panel explorer" :aria-label="t('search.region')">
+    <div class="toolbar" role="group" :aria-label="t('search.filterGroup')">
       <SavedViewMenu context="search" :state="state" :selection="selection" :classes="classes.data.value" :catalogue="catalogue" :total="settledTotal" />
+      <div class="field search">
+        <label for="s-q">{{ t("search.term") }}</label>
+        <span class="input-icon">
+          <Icon name="search" />
+          <input id="s-q" v-model="qText" type="search" :placeholder="t('search.term.placeholder')" />
+        </span>
+      </div>
       <template v-if="q">
         <InventoryFilters :state="state" id-prefix="s" />
-        <button v-if="activeFilters.length > 0" type="button" class="btn" @click="state.clearFilters()">Clear filters</button>
+        <button v-if="activeFilters.length > 0" type="button" class="btn btn-ghost" @click="state.clearFilters()"><Icon name="x" />{{ t("inventory.clearFilters") }}</button>
       </template>
     </div>
-    <EmptyState v-if="!q" title="Type in the search box above">
-      Search covers labels, idents and attribute values, including IP addresses and networks.
+    <InventoryFilterChips v-if="q" :state="state" />
+    <EmptyState v-if="!q" icon="search" :title="t('search.empty.title')">
+      {{ t("search.empty.body") }}
     </EmptyState>
-    <LoadingState v-if="search.isLoading.value" label="Searching…" />
+    <SkeletonRows v-if="search.isLoading.value" :label="t('common.searching')" />
     <div v-if="search.isError.value" class="panel-body">
       <ErrorAlert :error="search.error.value" :on-retry="() => search.refetch()" />
     </div>
-    <EmptyState v-if="search.data.value && rows.length === 0 && activeFilters.length > 0" :title="`No configuration item matches “${q}” with these filters`">
-      Adjust or clear the filters above.
+    <EmptyState v-if="search.data.value && rows.length === 0 && activeFilters.length > 0" icon="search" :title="t('search.noMatchFiltered', { q })">
+      {{ t("inventory.noMatch.body") }}
     </EmptyState>
-    <EmptyState v-else-if="search.data.value && rows.length === 0" :title="`No configuration item matches “${q}”`">
-      Try a shorter term, an IP address, or a CIDR like 10.0.0.0/24.
+    <EmptyState v-else-if="search.data.value && rows.length === 0" icon="search" :title="t('search.noMatch', { q })">
+      {{ t("search.noMatch.body") }}
     </EmptyState>
     <template v-if="rows.length > 0">
-      <div class="table-wrap">
+      <div class="table-wrap table-scroll">
         <table :class="['data', { loading: search.isPlaceholderData.value }]">
           <thead>
             <tr>
-              <th scope="col">Label</th>
-              <th scope="col">Ident</th>
-              <th scope="col">Class</th>
-              <th scope="col">Matched on</th>
-              <th scope="col"><span class="sr-only">Actions</span></th>
+              <th scope="col">{{ t("search.col.label") }}</th>
+              <th scope="col">{{ t("search.col.ident") }}</th>
+              <th scope="col">{{ t("search.col.class") }}</th>
+              <th scope="col">{{ t("search.col.matched") }}</th>
+              <th scope="col" class="row-actions"><span class="sr-only">{{ t("inventory.actions") }}</span></th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="{ item, matches } in rows" :key="item.id">
               <td><RouterLink :to="`/cis/${item.id}`" dir="auto">{{ item.label }}</RouterLink> <CiStateBadge :ci="item" /></td>
               <td class="mono">{{ item.ident }}</td>
-              <td>{{ item.class.name }}</td>
-              <td :title="matches.map((m) => `${m.label}: ${m.value}`).join('\n')">
-                <span v-for="(m, i) in matches.slice(0, 2)" :key="i">
+              <td>
+                <ClassBadge v-if="classById(item.classId)" :icon="classById(item.classId)!.icon" :color="classById(item.classId)!.color" :name="item.class.name" />
+                <bdi v-else>{{ item.class.name }}</bdi>
+              </td>
+              <td class="matches" :title="matches.map((m) => `${m.label}: ${m.value}`).join('\n')">
+                <span v-for="(m, i) in matches.slice(0, 2)" :key="i" class="match">
                   <template v-if="i > 0">, </template>
-                  <span class="muted"><bdi>{{ m.label }}</bdi>:</span> <span class="mono" dir="auto">{{ m.value }}</span>
+                  <span class="muted"><bdi>{{ m.label }}</bdi>:</span> <span class="mono" dir="auto"><template v-for="(part, j) in highlight(m.value, q)" :key="j"><mark v-if="part.match">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></span>
                 </span>
               </td>
               <td class="row-actions">
-                <RouterLink v-if="!item.deletedAt" class="btn btn-sm" :to="`/cis/${item.id}/impact`" :title="`Impact analysis of ${item.label}`">Impact</RouterLink>
+                <RowMenu :label="t('inventory.rowMenu', { name: item.label })" :items="ciRowMenu(item)" />
               </td>
             </tr>
           </tbody>
