@@ -677,9 +677,11 @@ test("record details and relationships are panels: moved, removed and added back
   await general.locator(".le-sep").last().hover();
   await general.getByRole("button", { name: "Remove Separator", exact: true }).click();
   await expect(general.locator(".le-sep")).toHaveCount(1);
-  // Dragged before the first field.
-  await sep.dragTo(field(page, "Ident"), { targetPosition: { x: 4, y: 4 } });
-  await expect.poll(async () => (await order())[0]).toBe("|");
+  // Dragged before the field ahead of it (both in view: General's window scrolls, and a drag across that scroll is flaky).
+  const ahead = (await order()).at(-3)!;
+  await sep.dragTo(general.locator(`.le-grid > .le-field[data-field="${ahead}"]`), { targetPosition: { x: 4, y: 4 } });
+  await expect.poll(async () => (await order()).at(-3)).toBe("|");
+  expect((await order()).at(-2)).toBe(ahead);
   await snap(page, "layout-separators-editor");
 
   await saveLayout(page);
@@ -690,7 +692,10 @@ test("record details and relationships are panels: moved, removed and added back
     ["General", []],
     ["Meta", ["record"]],
   ]);
-  expect(tabs[0].sections.find((x) => x.key === "general")!.fields![0]).toEqual({ separator: true, label: "Lifecycle", width: 3 });
+  const generalFields = tabs[0].sections.find((x) => x.key === "general")!.fields!;
+  const sepAt = generalFields.findIndex((f) => f.separator);
+  expect(generalFields[sepAt]).toEqual({ separator: true, label: "Lifecycle", width: 3 });
+  expect(generalFields[sepAt + 1].field).toBe(ahead);
 
   // The detail page: no relationships, the record details on Meta, the separator a line across General.
   await page.goto(`/cis/${ci.id}`);
