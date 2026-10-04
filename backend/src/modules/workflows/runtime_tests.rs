@@ -11,8 +11,8 @@ use uuid::Uuid;
 use crate::db::scratch;
 use crate::modules::api_tokens::tests::{Creds, app, call, code, session_of};
 
-const DEFS: &str = "/api/v1/admin/workflow-definitions";
-const RUN: &str = "/api/v1/workflow-instances";
+pub(super) const DEFS: &str = "/api/v1/admin/workflow-definitions";
+pub(super) const RUN: &str = "/api/v1/workflow-instances";
 
 pub(super) struct World {
     pub(super) app: Router,
@@ -30,11 +30,11 @@ pub(super) struct World {
     pub(super) editors: Uuid,
 }
 
-fn id(v: &Value) -> Uuid {
+pub(super) fn id(v: &Value) -> Uuid {
     v["id"].as_str().unwrap_or_else(|| panic!("no id in {v}")).parse().unwrap()
 }
 
-fn details(v: &Value) -> Vec<(String, String)> {
+pub(super) fn details(v: &Value) -> Vec<(String, String)> {
     let mut d: Vec<(String, String)> = v["error"]["details"]
         .as_array()
         .map(|d| {
@@ -47,7 +47,7 @@ fn details(v: &Value) -> Vec<(String, String)> {
     d
 }
 
-fn pairs(p: &[(&str, &str)]) -> Vec<(String, String)> {
+pub(super) fn pairs(p: &[(&str, &str)]) -> Vec<(String, String)> {
     p.iter().map(|(a, b)| ((*a).to_owned(), (*b).to_owned())).collect()
 }
 
@@ -67,7 +67,7 @@ impl World {
         self.values.iter().find(|(k, _)| k == key).unwrap().1
     }
 
-    async fn profile(&self, name: &str, classes: &[(Uuid, bool)]) -> Uuid {
+    pub(super) async fn profile(&self, name: &str, classes: &[(Uuid, bool)]) -> Uuid {
         let profile: Uuid = sqlx::query_scalar("INSERT INTO permission_profiles (name) VALUES ($1) RETURNING id")
             .bind(name)
             .fetch_one(&self.pool)
@@ -90,7 +90,7 @@ impl World {
     }
 
     /// A signed-in user holding these profiles; returns the session and the user's id.
-    async fn user(&self, name: &str, profiles: &[Uuid]) -> (Creds, Uuid) {
+    pub(super) async fn user(&self, name: &str, profiles: &[Uuid]) -> (Creds, Uuid) {
         let body = json!({ "username": name, "email": format!("{name}@example.test"), "displayName": name,
             "password": self.password, "profileIds": profiles });
         let v = self.ok("POST", "/api/v1/admin/users", body).await;
@@ -115,7 +115,7 @@ impl World {
         id(&self.ok("POST", "/api/v1/configuration-items", json!({ "classId": class, "attributes": attributes })).await)
     }
 
-    async fn ci_values(&self, ci: Uuid) -> Value {
+    pub(super) async fn ci_values(&self, ci: Uuid) -> Value {
         let (status, v) = self.call(&self.admin, "GET", &format!("/api/v1/configuration-items/{ci}"), None).await;
         assert_eq!(status, 200, "{v}");
         v
@@ -129,7 +129,7 @@ impl World {
         self.call(creds, "POST", &format!("{RUN}/{instance}/transitions"), Some(body)).await
     }
 
-    async fn audit_rows(&self, ci: Uuid) -> Vec<(String, Option<String>)> {
+    pub(super) async fn audit_rows(&self, ci: Uuid) -> Vec<(String, Option<String>)> {
         sqlx::query_as(
             "SELECT action, request_id FROM audit_log WHERE entity_type = 'configuration_items' AND entity_id = $1
              ORDER BY id",

@@ -438,9 +438,9 @@ async fn published_versions_are_immutable_and_events_append_only() {
     let events: i64 =
         sqlx::query_scalar("SELECT count(*) FROM workflow_instance_events").fetch_one(pool).await.unwrap();
     assert_eq!(events, 4);
-    // Neither is deleted while their CI or definition exists.
+    // Neither is deleted while their CI or definition exists. Deleting the CI
+    // row itself moves them to the archive since 0050 (workflows::s6_tests).
     refused(pool, &format!("DELETE FROM workflow_instances WHERE id = '{instance}'"), "23503").await;
-    refused(pool, &format!("DELETE FROM configuration_items WHERE id = '{ci1}'"), "23503").await;
     refused(pool, &format!("DELETE FROM workflow_definitions WHERE id = '{def}'"), "23503").await;
 
     // A definition's key and class never change; its settings do.

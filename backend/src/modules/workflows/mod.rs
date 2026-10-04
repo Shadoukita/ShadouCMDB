@@ -11,9 +11,11 @@
 pub mod adopt;
 #[cfg(test)]
 mod adopt_tests;
+pub mod archive;
 pub mod condition;
 pub mod eval;
 pub mod graph;
+pub mod migration;
 #[cfg(test)]
 mod perf;
 pub mod refs;
@@ -21,6 +23,8 @@ pub mod runtime;
 pub mod runtime_schemas;
 #[cfg(test)]
 mod runtime_tests;
+#[cfg(test)]
+mod s6_tests;
 pub mod schemas;
 pub mod service;
 pub mod state_field;
@@ -97,6 +101,7 @@ const VALIDATE: &str = "/api/v1/admin/workflow-definitions/{id}/draft/validate";
 const PUBLISH: &str = "/api/v1/admin/workflow-definitions/{id}/draft/publish";
 const GRANTS: &str = "/api/v1/admin/workflow-definitions/{id}/grants";
 const BOOTSTRAP: &str = "/api/v1/admin/workflow-definitions/{id}/bootstrap";
+const MIGRATIONS: &str = "/api/v1/admin/workflow-definitions/{id}/instance-migrations";
 
 pub fn routes() -> Vec<Route> {
     let manage = GlobalPermission::WorkflowsManage;
@@ -335,6 +340,51 @@ pub fn routes() -> Vec<Route> {
                     Ok(Json(service::replace_grants(&api.pool, &api.ctx, id, &b).await?))
                 },
             ),
+        route(Method::POST, MIGRATIONS, "migrateWorkflowInstances")
+            .tag(TAG)
+            .summary("Move the running instances of one version to a newer version (or report what would move)")
+            .description(
+                "Every running instance on `fromVersionNo` moves to `toVersionNo` (a newer, published version), into \
+                 the state `stateMap` names for its current state; a state left out of `stateMap` moves to the state \
+                 of the same key, when the target version has one that is not terminal. With `dryRun: true` nothing \
+                 is written and the response tells how many instances each state holds and where they would go. \
+                 400 VALIDATION_ERROR: `unknown_version` or `not_newer` on the version numbers; `unknown_state`, \
+                 `terminal_source`, `unknown_target_state` or `terminal_target` on `stateMap.<key>`; `unmapped` on \
+                 `stateMap.<key>` for a state with running instances and nowhere to go (in a dry run too). 409 \
+                 CONFLICT `not_published` when the target version is a draft or retired. 403 FORBIDDEN unless the \
+                 caller may view and edit every type the workflow runs on. A real run moves up to 1,000 instances \
+                 per transaction, locking each CI before its instance: a run cut short leaves the moved batches \
+                 moved, and running it again moves the rest. Each moved instance keeps its CI and its history, gets \
+                 a `migrate` event, and is audited on its CI as `workflow.migrate` (version and state before and \
+                 after); when the workflow drives a state field and the new state maps to another value, the CI's \
+                 field is written (a CI `update` audit row).",
+            )
+            .requires(manage)
+            .session_only()
+            .class_checked()
+            .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])
+            .handle(
+                |api,
+                 In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<WorkflowInstanceMigration>>| async move {
+                    Ok(Json(migration::migrate(&api.pool, &api.ctx, id, &b).await?))
+                },
+            ),
+        route(Method::GET, "/api/v1/admin/workflow-archive", "listArchivedWorkflowInstances")
+            .tag(TAG)
+            .summary("The workflow history of CIs deleted for good, newest first (paginated)")
+            .description(
+                "When a CI is deleted for good (its type is purged), its workflow instances move here with all of \
+                 their events, in the same transaction; `requestId` joins the CI's `delete` audit row. The archive \
+                 is never changed or deleted, and audit log retention does not touch it. Entries are listed only to \
+                 a caller whose permission profile does not limit the types they may view (the CIs' types may no \
+                 longer exist to judge by); to anyone else the list is empty.",
+            )
+            .requires(manage)
+            .handle(
+                |api, In(NoPath, Query(q), NoBody): In<NoPath, Query<WorkflowArchiveList>, NoBody>| async move {
+                    Ok(Json(archive::list(&api.pool, &api.ctx, &q).await?))
+                },
+            ),
     ]
 }
 
@@ -385,6 +435,25 @@ pub fn runtime_routes() -> Vec<Route> {
             .handle(
                 |api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<WorkflowInstanceStart>>| async move {
                     Ok(Json(runtime::start(&api.pool, &api.ctx, &b).await?))
+                },
+            ),
+        route(Method::POST, "/api/v1/workflow-instances/bulk-transitions", "runWorkflowTransitionsInBulk")
+            .tag(RUN_TAG)
+            .summary("Run up to 500 transitions in one request, with a result per item")
+            .description(
+                "Each item is checked and run exactly as `POST /workflow-instances/{id}/transitions` would run it, \
+                 with the same rights, grants, validation and audit rows. All items run in one transaction, each in \
+                 a savepoint: an item that is refused is rolled back alone and reported with the error the single \
+                 endpoint would have answered (`code`, `message`, `details`); the items that ran are committed \
+                 together. Always 200 for a well-formed body: `succeeded` and `failed` count the items, `results` \
+                 has one entry per item in the request's order. Items run in the order of their CIs, so concurrent \
+                 bulk runs over the same CIs queue instead of deadlocking; items on the same instance run in the \
+                 request's order, each against the `expectedVersion` it names. A server fault rolls back every \
+                 item (500).",
+            )
+            .handle(
+                |api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<WorkflowBulkTransitions>>| async move {
+                    Ok(Json(runtime::bulk_transitions(&api.pool, &api.ctx, &b).await?))
                 },
             ),
         route(Method::GET, INSTANCE, "getWorkflowInstance")

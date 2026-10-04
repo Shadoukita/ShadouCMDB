@@ -854,6 +854,12 @@ pub async fn purge_class_in(
             items_data::delete_type_rows(conn, &t, &items).await?;
         }
     }
+    // Their workflow instances and events move to the archive as the rows go
+    // (migration 0050); the archive names this request, as the delete rows do.
+    sqlx::query("SELECT set_config('shadoucmdb.request_id', $1, true)")
+        .bind(&ctx.request_id)
+        .execute(&mut *conn)
+        .await?;
     if let Err(err) =
         sqlx::query("DELETE FROM cmdb.configuration_items WHERE id = ANY($1)").bind(&items).execute(&mut *conn).await
     {
