@@ -227,7 +227,9 @@ pub fn routes() -> Vec<Route> {
                  malformed or ill-typed conditions are 400 VALIDATION_ERROR with the path of each problem. Whether \
                  the graph can be published is the lint's question (`draft/validate`). With `expectedChecksum`, \
                  409 VERSION_CONFLICT if the draft changed (or was published or deleted) since it was loaded. The \
-                 response carries the new `checksum`. Drafts are not audited; publishing is.",
+                 response carries the new `checksum`. Drafts are not audited; publishing is. Grants on a \
+                 transition that is now in no version and not in the draft are dropped: that bumps the workflow's \
+                 version and is audited as a grant change.",
             )
             .requires(manage)
             .session_only()
@@ -235,18 +237,22 @@ pub fn routes() -> Vec<Route> {
             .errors(&[ErrorCode::NotFound, ErrorCode::VersionConflict])
             .handle(
                 |api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<WorkflowDraftReplace>>| async move {
-                    Ok(Json(service::replace_draft(&api.pool, id, &b).await?))
+                    Ok(Json(service::replace_draft(&api.pool, &api.ctx, id, &b).await?))
                 },
             ),
         route(Method::DELETE, DRAFT, "deleteWorkflowDraft")
             .tag(TAG)
             .summary("Discard the draft")
+            .description(
+                "Grants on a transition only the draft had are dropped with it: that bumps the workflow's version \
+                 and is audited as a grant change.",
+            )
             .status(StatusCode::NO_CONTENT)
             .requires(manage)
             .session_only()
             .errors(&[ErrorCode::NotFound])
             .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
-                service::delete_draft(&api.pool, id).await?;
+                service::delete_draft(&api.pool, &api.ctx, id).await?;
                 Ok(NoContent)
             }),
         route(Method::POST, VALIDATE, "validateWorkflowDraft")
@@ -330,7 +336,8 @@ pub fn routes() -> Vec<Route> {
                  VALIDATION_ERROR `not_found` on `grants[i].profiles[j]`, and a transition key that is neither `_cancel` \
                  nor a transition of any version or the draft is 400 `unknown_transition` on \
                  `grants[i].transitionKey`. A change bumps the workflow's version and \
-                 is audited with the grants before and after, by profile name.",
+                 is audited with the grants before and after, by profile name. A grant on a transition only the \
+                 draft has is dropped (audited the same way) when the draft is deleted or saved without it.",
             )
             .requires(manage)
             .session_only()

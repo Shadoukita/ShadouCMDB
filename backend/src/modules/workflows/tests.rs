@@ -889,3 +889,82 @@ async fn validation_details_are_capped() {
     assert!(found.iter().all(|(_, c)| c == "not_found"), "{found:?}");
     db.drop().await;
 }
+
+/// GH#617: a grant on a transition only the draft has goes when the draft
+/// saves without it or is deleted, audited, so the stored grants re-save
+/// unchanged and the instance's own export re-imports.
+#[tokio::test]
+async fn grants_on_draft_only_transitions_go_with_the_draft() {
+    let Some(db) = scratch::database("workflow_draft_only_grants").await else { return };
+    let w = world(&db).await;
+    let body = json!({ "key": "server_lifecycle", "name": "Server lifecycle", "classId": w.server,
+        "stateAttributeId": w.lifecycle, "isActive": true });
+    let def = id(&post(&w.app, &w.admin, BASE, body).await);
+    let draft = format!("{BASE}/{def}/draft");
+    let grants = format!("{BASE}/{def}/grants");
+    let (status, v) = w.call("PUT", &draft, Some(lifecycle_graph())).await;
+    assert_eq!(status, 200, "{v}");
+    let sum = v["checksum"].clone();
+    let (status, v) = w.call("POST", &format!("{draft}/publish"), Some(json!({ "expectedDraftChecksum": sum }))).await;
+    assert_eq!(status, 201, "{v}");
+
+    let mut fast = lifecycle_graph();
+    fast["transitions"].as_array_mut().unwrap().push(json!({ "key": "fast_track", "name": "Fast track",
+        "from": "planned", "to": "done", "requiresComment": false, "fields": [] }));
+    let grant_fast = |version: &Value| {
+        json!({ "version": version, "grants": [
+            { "transitionKey": "approve", "profiles": ["Administrator"] },
+            { "transitionKey": "fast_track", "profiles": ["Administrator"] }
+        ] })
+    };
+    let keys = |v: &Value| -> Vec<String> {
+        v["grants"].as_array().unwrap().iter().map(|g| g["transitionKey"].as_str().unwrap().to_owned()).collect()
+    };
+
+    // Renamed in the draft: the grant on the old key goes.
+    let (status, v) = w.call("PUT", &draft, Some(fast.clone())).await;
+    assert_eq!(status, 200, "{v}");
+    let (_, g) = w.call("GET", &grants, None).await;
+    let (status, v) = w.call("PUT", &grants, Some(grant_fast(&g["version"]))).await;
+    assert_eq!((status, keys(&v)), (200, vec!["approve".to_owned(), "fast_track".to_owned()]), "{v}");
+    let mut renamed = fast.clone();
+    renamed["transitions"][2]["key"] = json!("express");
+    let (status, v) = w.call("PUT", &draft, Some(renamed)).await;
+    assert_eq!(status, 200, "{v}");
+    let (_, g) = w.call("GET", &grants, None).await;
+    assert_eq!(keys(&g), vec!["approve".to_owned()]);
+
+    // Deleted with the draft (the GH#617 repro).
+    let (status, v) = w.call("PUT", &draft, Some(fast)).await;
+    assert_eq!(status, 200, "{v}");
+    let (status, v) = w.call("PUT", &grants, Some(grant_fast(&g["version"]))).await;
+    assert_eq!(status, 200, "{v}");
+    let (status, _) = w.call("DELETE", &draft, None).await;
+    assert_eq!(status, 204);
+    let (_, g) = w.call("GET", &grants, None).await;
+    assert_eq!(keys(&g), vec!["approve".to_owned()]);
+    let audit = w.audit(def).await;
+    let (action, old, new) = audit.last().unwrap();
+    assert_eq!(action, "update");
+    assert_eq!(
+        old.as_ref().unwrap()["grants"],
+        json!({ "approve": ["Administrator"], "fast_track": ["Administrator"] })
+    );
+    assert_eq!(new.as_ref().unwrap()["grants"], json!({ "approve": ["Administrator"] }));
+    assert_eq!(new.as_ref().unwrap()["version"], g["version"]);
+
+    // The stored set re-saves unchanged, and the export re-imports.
+    let same =
+        json!({ "version": g["version"], "grants": [{ "transitionKey": "approve", "profiles": ["Administrator"] }] });
+    let (status, v) = w.call("PUT", &grants, Some(same)).await;
+    assert_eq!(status, 200, "{v}");
+    let file = export_config(&w.app, &w.admin).await;
+    assert_eq!(file["workflows"][0]["grants"], json!([{ "transition": "approve", "profiles": ["Administrator"] }]));
+    for mode in ["dry_run", "apply"] {
+        let (status, v, _) =
+            call(&w.app, "POST", &format!("/api/v1/admin/config/import?mode={mode}"), &w.admin, Some(file.clone()))
+                .await;
+        assert_eq!(status, 200, "{mode}: {v}");
+    }
+    db.drop().await;
+}
