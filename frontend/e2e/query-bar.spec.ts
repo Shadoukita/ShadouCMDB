@@ -53,14 +53,19 @@ test("inventory: the query bar writes key:value tokens into the URL filters, and
   await expect(bar).toHaveValue("deleted:include");
 });
 
-test("inventory: the query bar's colouring lies exactly over the text, also once it scrolls", async ({ page }) => {
+test("inventory: the query bar's colouring lies exactly over the text, also once it scrolls", async ({ page, request }) => {
+  // Two real class keys, so the first error is the negation and not an unknown class.
+  const classes = await apiGet<{ data: { key: string }[] }>(request, "/ci-classes?limit=200");
+  expect(classes.data.length, "two classes").toBeGreaterThanOrEqual(2);
+  const [a, b] = classes.data;
+
   await page.goto("/cis");
   const bar = page.locator("#f-q");
   const overlay = page.locator(".query-overlay");
   await expect(overlay).toHaveAttribute("aria-hidden", "true");
 
   // Long enough to scroll the input sideways, with every kind of run and an error.
-  const text = `class:server,vm -deleted:include nosuchfilter:me "quoted text" ${"fra1-esx-01 ".repeat(20).trim()}`;
+  const text = `class:${a.key},${b.key} -deleted:include nosuchfilter:me "quoted text" ${"fra1-esx-01 ".repeat(20).trim()}`;
   await bar.click();
   await bar.fill(text);
   await bar.press("End");
