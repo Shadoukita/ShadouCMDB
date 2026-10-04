@@ -4,6 +4,7 @@ import type { MessageKey } from "./en";
 // so `de` always has exactly the keys of `en`. Formal "Sie"; "Business-Service" is the ITIL-DE term.
 export const de: { [K in MessageKey]: string } = {
   "services.nav": "Business-Services",
+  "workflows.nav": "Workflows",
   "services.title": "Business-Services",
   "services.badge": "Business-Service",
   "services.create": "Business-Service anlegen",

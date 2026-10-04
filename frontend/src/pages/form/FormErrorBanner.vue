@@ -28,7 +28,7 @@ const reapply = computed(() => tAround("formError.reapply", "link"));
       </template>
     </div>
   </div>
-  <div v-else-if="apiError?.code === 'VALIDATION_ERROR' || apiError?.code === 'CONFLICT' || apiError?.code === 'INVALID_NAME'" class="alert alert-error" role="alert">
+  <div v-else-if="apiError?.code === 'VALIDATION_ERROR' || apiError?.code === 'CONFLICT' || apiError?.code === 'INVALID_NAME' || apiError?.code === 'WORKFLOW_CONTROLLED_FIELD'" class="alert alert-error" role="alert">
     <strong>{{ t("formError.fixFields") }}</strong>
     <div>{{ apiError.message }}</div>
     <ul v-if="unplaced.length > 0">

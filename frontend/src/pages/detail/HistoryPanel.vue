@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import { RouterLink } from "vue-router";
 import { useAuditLog, type AuditEntry, type Ci } from "../../api/queries";
 import EmptyState from "../../components/EmptyState.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
@@ -47,6 +48,30 @@ function flatten(value: unknown, prefix = ""): Record<string, string> {
   return out;
 }
 
+/** Workflow steps on the CI (`workflow.*`): their details are in the values, not a field diff. */
+const WORKFLOW_ACTIONS: Record<string, string> = {
+  "workflow.start": "workflow started",
+  "workflow.transition": "workflow step",
+  "workflow.cancel": "workflow cancelled",
+  "workflow.migrate": "workflow migrated",
+  "workflow.force": "workflow state forced",
+};
+type WorkflowValue = { instanceId?: string; definitionKey?: string; transitionKey?: string; stateKey?: string; comment?: string | null; reason?: string; fields?: Record<string, { old?: unknown; new?: unknown }> };
+function workflowStep(entry: AuditEntry) {
+  const o = (entry.oldValue ?? {}) as WorkflowValue;
+  const n = (entry.newValue ?? {}) as WorkflowValue;
+  const show = (v: unknown) => (v === null || v === undefined ? undefined : typeof v === "object" ? JSON.stringify(v) : String(v));
+  return {
+    instanceId: n.instanceId ?? o.instanceId,
+    definitionKey: n.definitionKey ?? o.definitionKey ?? "",
+    transitionKey: n.transitionKey,
+    from: entry.action === "workflow.cancel" ? undefined : o.stateKey,
+    to: n.stateKey,
+    note: n.reason === "ci_deleted" ? "the CI was deleted" : (n.comment ?? n.reason ?? undefined),
+    fields: Object.entries(n.fields ?? {}).map(([k, v]) => ({ key: k, old: show(v?.old), new: show(v?.new) })),
+  };
+}
+
 const actionTone = (action: string) => (action === "delete" ? "danger" : action === "create" ? "ok" : "");
 </script>
 
@@ -68,10 +93,27 @@ const actionTone = (action: string) => (action === "delete" ? "danger" : action 
         <tbody>
           <tr v-for="e in entries" :key="e.id" style="vertical-align: top">
             <td style="padding-top: 5px">{{ formatDateTime(e.occurredAt) }}</td>
-            <td style="padding-top: 5px"><span :class="['badge', actionTone(e.action)]">{{ e.action }}</span></td>
+            <td style="padding-top: 5px">
+              <span :class="['badge', WORKFLOW_ACTIONS[e.action] ? 'info' : actionTone(e.action)]" :title="e.action">{{ WORKFLOW_ACTIONS[e.action] ?? e.action }}</span>
+            </td>
             <td style="padding-top: 5px"><AuditActor :entry="e" /></td>
             <td style="white-space: normal; padding-top: 5px; padding-bottom: 5px">
-              <span v-if="e.action === 'create'" class="muted">Created</span>
+              <template v-if="WORKFLOW_ACTIONS[e.action]">
+                <div v-for="w in [workflowStep(e)]" :key="e.id" data-testid="history-workflow">
+                  <RouterLink v-if="w.instanceId" :to="`/workflows/${w.instanceId}`" class="mono">{{ w.definitionKey }}</RouterLink>
+                  <span v-else class="mono">{{ w.definitionKey }}</span>
+                  <template v-if="w.transitionKey">: <code>{{ w.transitionKey }}</code></template>
+                  <span v-if="w.to">, <template v-if="w.from"><code>{{ w.from }}</code> → </template><code>{{ w.to }}</code></span>
+                  <div v-if="w.note" class="wf-comment muted" dir="auto">{{ w.note }}</div>
+                  <ul v-if="w.fields.length > 0" class="diff">
+                    <li v-for="c in w.fields" :key="c.key">
+                      <code>{{ c.key }}</code>: <del v-if="c.old !== undefined" dir="auto">{{ c.old }}</del> →
+                      <ins v-if="c.new !== undefined" dir="auto">{{ c.new }}</ins><span v-else class="muted">cleared</span>
+                    </li>
+                  </ul>
+                </div>
+              </template>
+              <span v-else-if="e.action === 'create'" class="muted">Created</span>
               <span v-else-if="e.action === 'delete'" class="muted">Deleted (relationships removed with it)</span>
               <span v-else-if="changes(e).length === 0" class="muted">No visible field changes</span>
               <ul v-else class="diff">
