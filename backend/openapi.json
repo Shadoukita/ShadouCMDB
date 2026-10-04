@@ -2448,6 +2448,15 @@
                 "any"
               ]
             }
+          },
+          {
+            "name": "businessServiceId",
+            "in": "query",
+            "description": "Business service ids (CI ids), comma-separated: CIs that are a direct member of one of them. A service the caller may not view, or a deleted one, has no members here.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -2906,6 +2915,15 @@
                 "any"
               ]
             }
+          },
+          {
+            "name": "businessServiceId",
+            "in": "query",
+            "description": "Business service ids (CI ids), comma-separated: CIs that are a direct member of one of them. A service the caller may not view, or a deleted one, has no members here.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -2915,6 +2933,256 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ChangeHistogram"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/configuration-items/facets": {
+      "get": {
+        "tags": [
+          "Configuration items"
+        ],
+        "summary": "Facet counts for the inventory list: CIs per class, criticality, lookup value and business service",
+        "description": "Takes the filters of `listConfigurationItems` and returns, per facet, the values with how many CIs match. Each facet is counted with its own filter left out and every other filter applied (class counts ignore `classId`, a lookup list's counts ignore that list's values in `lookupValueId`), so the counts are what ticking one more value would add. `total` is the count with every filter. Facets: `class` (per exact class), `criticality`, one `lookup.<list key>` per lookup list stored in a lookup attribute (status, environment, location, ...), and `businessService` (direct members) when business services exist. Counts are exact and cover only CIs in classes the caller may view, like the list; a business service the caller may not view is not a facet value.",
+        "operationId": "getConfigurationItemFacets",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Search label, ident and attribute values",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 200,
+              "minLength": 1
+            }
+          },
+          {
+            "name": "classId",
+            "in": "query",
+            "description": "Filter by class (includes subclasses unless includeSubclasses=false)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "includeSubclasses",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "true",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          },
+          {
+            "name": "active",
+            "in": "query",
+            "description": "true: only CIs inside their validity period (validFrom <= now < validUntil); false: only those outside it; all: both",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "true",
+              "enum": [
+                "true",
+                "false",
+                "all"
+              ]
+            }
+          },
+          {
+            "name": "lookupValueId",
+            "in": "query",
+            "description": "Lookup list value ids, comma-separated: CIs holding one of them in a lookup attribute. Values of different lists must all match (status A or B, and environment C).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "ipWithin",
+            "in": "query",
+            "description": "Only CIs with a value of an IP attribute inside this CIDR, e.g. 10.20.0.0/16",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "cidrv4"
+                },
+                {
+                  "type": "string",
+                  "format": "cidrv6"
+                }
+              ]
+            }
+          },
+          {
+            "name": "criticalityValueId",
+            "in": "query",
+            "description": "Criticality value ids, comma-separated: CIs holding one of them",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "deleted",
+            "in": "query",
+            "description": "Soft-deleted CIs: exclude (default), include, or only",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "exclude",
+              "enum": [
+                "exclude",
+                "include",
+                "only"
+              ]
+            }
+          },
+          {
+            "name": "ownLayout",
+            "in": "query",
+            "description": "true: only CIs with a layout of their own (another template or a custom layout, see /configuration-items/{id}/layout); false: only CIs that show their class's default template",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          },
+          {
+            "name": "layoutTemplate",
+            "in": "query",
+            "description": "Only CIs that show this layout template (`layoutTemplates[].key`) as their own layout, not as their class's default",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{0,62}$"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "CIs by the kind of their type: asset, process (records such as change requests) or any. Without it, process records are left out unless their type is named in classId.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "asset",
+                "process",
+                "any"
+              ]
+            }
+          },
+          {
+            "name": "businessServiceId",
+            "in": "query",
+            "description": "Business service ids (CI ids), comma-separated: CIs that are a direct member of one of them. A service the caller may not view, or a deleted one, has no members here.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "valueLimit",
+            "in": "query",
+            "description": "Values returned per facet, most CIs first (1-200); selected values are always returned",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemFacets"
                 }
               }
             }
@@ -3729,6 +3997,15 @@
                 "process",
                 "any"
               ]
+            }
+          },
+          {
+            "name": "businessServiceId",
+            "in": "query",
+            "description": "Business service ids (CI ids), comma-separated: CIs that are a direct member of one of them. A service the caller may not view, or a deleted one, has no members here.",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -33910,6 +34187,16 @@
         },
         "additionalProperties": false
       },
+      "FacetKind": {
+        "type": "string",
+        "description": "What a facet counts, and so which list filter its value ids go into.",
+        "enum": [
+          "class",
+          "criticality",
+          "lookup",
+          "businessService"
+        ]
+      },
       "FieldChange": {
         "type": "object",
         "description": "One changed field: API names, values as in the file format (keys, not ids)",
@@ -36224,6 +36511,104 @@
           },
           "message": {
             "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ItemFacets": {
+        "type": "object",
+        "required": [
+          "total",
+          "facets"
+        ],
+        "properties": {
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "CIs matching every filter: `page.total` of the same list query"
+          },
+          "facets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "key",
+                "kind",
+                "label",
+                "param",
+                "listId",
+                "values",
+                "truncated"
+              ],
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "description": "`class`, `criticality`, `businessService`, or `lookup.<list key>`"
+                },
+                "kind": {
+                  "$ref": "#/components/schemas/FacetKind"
+                },
+                "label": {
+                  "type": "string",
+                  "description": "Display name: \"Class\", \"Criticality\", \"Business service\" or the lookup list's name"
+                },
+                "param": {
+                  "type": "string",
+                  "description": "The `listConfigurationItems` query parameter that filters by this facet's value ids"
+                },
+                "listId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid",
+                  "description": "The lookup list (kind lookup); null otherwise"
+                },
+                "values": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "id",
+                      "key",
+                      "label",
+                      "count",
+                      "selected"
+                    ],
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "The id to send in the facet's filter parameter"
+                      },
+                      "key": {
+                        "type": "string",
+                        "description": "Class key, lookup value key, or the service's ident"
+                      },
+                      "label": {
+                        "type": "string"
+                      },
+                      "count": {
+                        "type": "integer",
+                        "format": "int64",
+                        "description": "CIs matching every other filter that hold this value"
+                      },
+                      "selected": {
+                        "type": "boolean",
+                        "description": "True when the id is in the facet's filter parameter of this request"
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "description": "Values with at least one CI, most CIs first, then by label; selected values are included even at 0"
+                },
+                "truncated": {
+                  "type": "boolean",
+                  "description": "True when values with a count were left out by `valueLimit`"
+                }
+              },
+              "additionalProperties": false
+            }
           }
         },
         "additionalProperties": false
