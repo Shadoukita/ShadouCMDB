@@ -12,7 +12,9 @@ import EmptyState from "../components/EmptyState.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
 import LoadingState from "../components/LoadingState.vue";
 import CiStateBadge from "../components/CiStateBadge.vue";
+import ClassBadge from "../components/ClassBadge.vue";
 import CriticalityBadge from "../components/CriticalityBadge.vue";
+import RowMenu, { type RowMenuItem } from "../components/RowMenu.vue";
 import LayoutEditView from "../components/layoutEdit/LayoutEditView.vue";
 import EditLayoutButton from "../components/layoutEdit/EditLayoutButton.vue";
 import { t } from "../i18n";
@@ -20,7 +22,7 @@ import { useAppSettings } from "../lib/appSettings";
 import { useDocumentTitle } from "../lib/composables";
 import { useLayoutEditor } from "../lib/layoutEditor";
 import { asClassLayout } from "../lib/layoutTemplates";
-import { formatDateTime } from "../lib/format";
+import { formatDateTime, formatRelative, isHostLike } from "../lib/format";
 import { useTrail, type TrailStep } from "../lib/trail";
 import { attributeKey, builtInLayout, cellClass, DETAIL_CORE, DETAIL_RECORD, fieldLabel, gridClass, layoutFor, normalizeLayout, placedPanels, resolveLayout, withoutKinds } from "../lib/uiSettings";
 import { useFlashStore } from "../stores/flash";
@@ -30,11 +32,13 @@ import FormErrorBanner from "./form/FormErrorBanner.vue";
 import AttributeValue from "./detail/AttributeValue.vue";
 import BlockContent from "./detail/BlockContent.vue";
 import CoreFieldValue from "./detail/CoreFieldValue.vue";
-import DeleteCiButton from "./detail/DeleteCiButton.vue";
+import DeleteCiDialog from "./detail/DeleteCiDialog.vue";
+import FactChips from "./detail/FactChips.vue";
 import HistoryPanel from "./detail/HistoryPanel.vue";
 import ImpactPanel from "./detail/ImpactPanel.vue";
 import LayoutPanels from "./detail/LayoutPanels.vue";
 import PartOfServicesPanel from "./detail/PartOfServicesPanel.vue";
+import RecordStats from "./detail/RecordStats.vue";
 import RelationshipGraphPanel from "./detail/RelationshipGraphPanel.vue";
 import RelationshipsPanel from "./detail/RelationshipsPanel.vue";
 import SignInAccountPanel from "./detail/SignInAccountPanel.vue";
@@ -96,7 +100,8 @@ watch(
 const settings = useAppSettings();
 const classes = useCiClasses();
 const areas = useAreas();
-const classKey = computed(() => classes.data.value?.find((k) => k.id === c.value?.classId)?.key);
+const cls = computed(() => classes.data.value?.find((k) => k.id === c.value?.classId));
+const classKey = computed(() => cls.value?.key);
 const ciLayout = useCiLayout(() => (c.value ? id.value : undefined));
 const layout = computed(() => {
   const own = ciLayout.data.value;
@@ -242,6 +247,13 @@ function onBeforeUnload(e: BeforeUnloadEvent) {
 onMounted(() => window.addEventListener("beforeunload", onBeforeUnload));
 onBeforeUnmount(() => window.removeEventListener("beforeunload", onBeforeUnload));
 
+// The title row's actions (audit R2): the views as secondary buttons, Delete in the overflow menu.
+const deleting = ref(false);
+const moreActions = computed<RowMenuItem[]>(() =>
+  c.value && session.canOnClass(c.value.classId, "delete") ? [{ label: t("common.delete"), danger: true, action: () => (deleting.value = true) }] : [],
+);
+const hasTab = (key: Tab) => TABS.value.some(([k]) => k === key);
+
 const self = computed<TrailStep | undefined>(() => (c.value ? { id: c.value.id, name: c.value.label } : undefined));
 const crumbs = computed<Crumb[]>(() => {
   if (!c.value) return [];
@@ -274,22 +286,46 @@ const crumbs = computed<Crumb[]>(() => {
   </template>
   <template v-else-if="c && self">
     <Breadcrumbs :items="crumbs" />
-    <div class="page-header">
-      <div class="title">
-        <h1 dir="auto">{{ c.label }}</h1>
-        <span class="mono muted" title="Ident">{{ c.ident }}</span>
-        <RouterLink :to="`/cis?classId=${c.classId}`" class="badge" dir="auto">{{ c.class.name }}</RouterLink>
-        <span v-if="c.deletedAt" class="badge danger">Deleted {{ formatDateTime(c.deletedAt) }}</span>
-        <CiStateBadge v-else :ci="c" />
-        <CriticalityBadge :value="c.criticality" />
-        <span v-if="ownLayout" class="badge ci-own-layout" data-testid="ci-own-layout" :title="ownLayout.title">{{ ownLayout.label }}</span>
+    <div class="page-header record-header">
+      <div class="record-heading">
+        <div class="title">
+          <ClassBadge :icon="cls?.icon" :color="cls?.color" />
+          <h1 dir="auto" :class="{ mono: isHostLike(c.label) }">{{ c.label }}</h1>
+          <span v-if="ownLayout" class="badge ci-own-layout" data-testid="ci-own-layout" :title="ownLayout.title">{{ ownLayout.label }}</span>
+        </div>
+        <p class="record-meta" data-testid="record-meta">
+          <span v-if="c.deletedAt" class="badge danger">Deleted {{ formatDateTime(c.deletedAt) }}</span>
+          <template v-else>
+            <span v-if="c.active" class="status"><span class="status-dot ok" aria-hidden="true" />{{ t("ciState.active") }}</span>
+            <CiStateBadge :ci="c" />
+          </template>
+          <span class="sep" aria-hidden="true">·</span>
+          <span class="ident" :title="t('record.meta.ident')">{{ c.ident }}</span>
+          <span class="sep" aria-hidden="true">·</span>
+          <RouterLink :to="`/cis?classId=${c.classId}`" dir="auto">{{ c.class.name }}</RouterLink>
+          <template v-if="c.criticality">
+            <span class="sep" aria-hidden="true">·</span>
+            <CriticalityBadge :value="c.criticality" />
+          </template>
+          <span class="sep" aria-hidden="true">·</span>
+          <time :datetime="c.updatedAt" :title="formatDateTime(c.updatedAt)">{{ t("record.meta.updated", { when: formatRelative(c.updatedAt) }) }}</time>
+        </p>
       </div>
       <div v-if="!c.deletedAt" class="actions">
         <EditLayoutButton v-if="editor.allowed && !editor.active" :editor="editor" />
-        <RouterLink v-if="!onImpactRoute" class="btn" :to="`/cis/${c.id}/impact`">Impact analysis</RouterLink>
-        <DeleteCiButton v-if="session.canOnClass(c.classId, 'delete')" :ci="c" />
+        <template v-if="!editor.active">
+          <RouterLink v-if="!onImpactRoute" class="btn" :to="`/cis/${c.id}/impact`">{{ t("record.actions.impact") }}</RouterLink>
+          <button v-if="current !== 'graph'" type="button" class="btn" @click="selectTab('graph')">{{ t("record.actions.map") }}</button>
+          <button v-if="hasTab('history') && current !== 'history'" type="button" class="btn" @click="selectTab('history')">{{ t("record.actions.history") }}</button>
+        </template>
+        <RowMenu v-if="moreActions.length > 0" :label="t('record.actions.more')" :items="moreActions" large />
+        <DeleteCiDialog v-if="moreActions.length > 0" v-model:open="deleting" :ci="c" />
       </div>
     </div>
+    <template v-if="!editor.active">
+      <FactChips :ci="c" :defs="defs" />
+      <RecordStats :ci="c" />
+    </template>
     <FormErrorBanner v-if="draft.error != null && draft.dirty && !editor.active" :error="draft.error" :unplaced="draft.unplaced" :on-reload="loadCurrent" />
     <div v-if="c.deletedAt" class="alert alert-warn">
       This CI was deleted on {{ formatDateTime(c.deletedAt) }}. It is kept read-only for history; its relationships were

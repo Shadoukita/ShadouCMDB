@@ -215,7 +215,8 @@ test("relationships: add in both directions; illegal pairs offer no type", async
   await expect(page.getByRole("status").filter({ hasText: `Added: ${name} is located in FRA1 Rack A01` })).toBeVisible();
 
   // With one relationship the delete confirmation speaks in the singular (GH#46); cancel, nothing is deleted.
-  await page.getByRole("button", { name: "Delete", exact: true }).click();
+  await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "Delete" }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toContainText("This relationship will break:");
   await expect(dialog.getByRole("button", { name: "Delete CI and 1 relationship" })).toBeVisible();
@@ -298,7 +299,8 @@ test("relationship map renders the multi-hop tree as links", async ({ page, requ
 
 test("delete: the confirmation lists the relationships that will break", async ({ page }) => {
   await page.goto(`/cis/${ciId}`);
-  await page.getByRole("button", { name: "Delete", exact: true }).click();
+  await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "Delete" }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toContainText(`Delete server “${name}”?`);
   await expect(dialog).toContainText("These 2 relationships will break:");

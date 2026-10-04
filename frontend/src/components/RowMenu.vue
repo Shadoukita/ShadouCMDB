@@ -16,18 +16,24 @@ export interface RowMenuItem {
  * A row's action menu (ARIA menu button): Enter, Space or Down opens it on the first item, Up on the last;
  * the arrow keys, Home and End move, Esc and Tab close it, and Esc returns focus to the button.
  */
-defineProps<{ label: string; items: RowMenuItem[] }>();
+defineProps<{ label: string; items: RowMenuItem[]; /** At the control height, for a page header (default: small, for a table row). */ large?: boolean }>();
 const open = ref(false);
 const button = ref<HTMLButtonElement>();
 const menu = ref<HTMLElement>();
 const menuId = `row-menu-${useId()}`;
 /** The menu sits under <body> at the button's place: a table cell clips what overflows it. */
 const place = ref<{ top: string; left: string }>({ top: "0", left: "0" });
+/** Puts the menu under the button; false when the button is out of view. */
+function align(): boolean {
+  const r = button.value?.getBoundingClientRect();
+  if (!r) return false;
+  place.value = { top: `${r.bottom + 4}px`, left: `${Math.max(8, r.right - 200)}px` };
+  return r.bottom > 0 && r.top < window.innerHeight;
+}
 
 const entries = () => [...(menu.value?.querySelectorAll<HTMLElement>("[role=menuitem]") ?? [])];
 async function show(at: "first" | "last" = "first") {
-  const r = button.value?.getBoundingClientRect();
-  if (r) place.value = { top: `${r.bottom + 4}px`, left: `${Math.max(8, r.right - 200)}px` };
+  align();
   open.value = true;
   document.addEventListener("pointerdown", onOutside, true);
   window.addEventListener("scroll", onScroll, true);
@@ -45,9 +51,14 @@ function onOutside(e: Event) {
   const target = e.target as Node;
   if (!menu.value?.contains(target) && !button.value?.contains(target)) hide(false);
 }
-/** A fixed menu would drift from its row when the page scrolls under it. */
+/**
+ * A fixed menu would drift from its row when the page scrolls under it, so it follows the button, and closes once
+ * the button has scrolled out of view. Closing on any scroll lost the menu to scroll events that arrive after the
+ * click: the one of the scroll that brought the button into view, or a reflow from content loading above it.
+ */
 const onScroll = (e: Event) => {
-  if (!menu.value?.contains(e.target as Node)) hide(false);
+  if (menu.value?.contains(e.target as Node)) return;
+  if (!align()) hide(false);
 };
 onBeforeUnmount(() => hide(false));
 
@@ -83,7 +94,7 @@ function run(item: RowMenuItem) {
     <button
       ref="button"
       type="button"
-      class="btn btn-sm btn-icon"
+      :class="['btn', 'btn-icon', { 'btn-sm': !large }]"
       aria-haspopup="menu"
       :aria-expanded="open"
       :aria-controls="open ? menuId : undefined"

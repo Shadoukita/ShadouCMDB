@@ -57,3 +57,11 @@ export function formatBytes(n: number): string {
   }
   return `${v.toLocaleString(undefined, { maximumFractionDigits: v < 10 ? 1 : 0 })} ${units[i]}`;
 }
+
+/**
+ * A name that reads as a hostname or FQDN (`fra1-esx-01`, `db01.example.com`): one DNS-style token with a digit,
+ * hyphen or dot in it. Such a record title is set in mono (design §2.2); a plain word or a phrase is not.
+ */
+export function isHostLike(name: string): boolean {
+  return /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,62})(?:\.[A-Za-z0-9-]{1,63})*$/.test(name) && /[0-9.-]/.test(name);
+}

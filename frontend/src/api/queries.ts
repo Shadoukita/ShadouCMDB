@@ -235,6 +235,24 @@ export function useAuditLog(entityId: MaybeRefOrGetter<string>) {
   });
 }
 
+/**
+ * The audit entries of one record since `days` ago: only the newest is fetched, `page.total` counts them.
+ * Keyed under the record's audit key, so whatever refreshes its history refreshes this too.
+ */
+export function useRecentChanges(entityId: MaybeRefOrGetter<string>, days: number, enabled: MaybeRefOrGetter<boolean> = true) {
+  // One start per mount: a moving `from` would re-key the query on every render.
+  const from = new Date(Date.now() - days * 86_400_000).toISOString();
+  return useQuery(() => {
+    const id = toValue(entityId);
+    return {
+      queryKey: [...keys.audit(id), "since", days] as const,
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        unwrap(api.GET("/api/v1/audit-log", { params: { query: { entityId: id, from, sort: "-occurredAt", limit: 1 } }, signal })),
+      enabled: toValue(enabled),
+    };
+  });
+}
+
 // ---------- Relationships ----------
 
 export function useRelationships(ciId: MaybeRefOrGetter<string>) {

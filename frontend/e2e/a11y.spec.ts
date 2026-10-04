@@ -54,9 +54,12 @@ test("CI detail page (built-in layout), its delete dialog and the edit form", as
   await page.goto(`/cis/${ci.id}`);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(ci.label);
   await expect(page.getByRole("region", { name: "Relationships" }).getByRole("columnheader", { name: "Related CI" })).toBeVisible();
+  // The record header (design §2.7): the stat tiles have loaded before the scan.
+  await expect(page.getByRole("region", { name: "Summary" }).locator("[data-stat=relationships] .value")).toHaveText(/^\d+$/);
   await checkA11y(page, testInfo, "ci-detail");
 
-  await page.getByRole("button", { name: "Delete", exact: true }).click();
+  await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "Delete" }).click();
   await expect(page.getByRole("dialog")).toBeVisible();
   await checkA11y(page, testInfo, "ci-delete-dialog");
   await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();

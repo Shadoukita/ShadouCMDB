@@ -12,6 +12,7 @@
 @import "./components/alerts.css";
 @import "./components/shell.css";
 @import "./components/explorer.css";
+@import "./components/record.css";
 
 /*
  * Page and shell rules. The primitives (SHAA-1670 design document, §2.7) live in base.css and

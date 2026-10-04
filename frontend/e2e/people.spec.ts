@@ -92,7 +92,8 @@ test("the Person shows its sign-in account, a read-only Email, and cannot be del
   await checkA11y(page, testInfo, "person-detail", { include: "[data-testid=sign-in-account]", strict: true });
 
   // Deleting is refused up front: the dialog names the account and keeps its confirm button disabled.
-  await page.getByRole("button", { name: "Delete" }).click();
+  await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "Delete" }).click();
   const confirm = page.getByRole("dialog");
   await expect(confirm.getByTestId("person-linked")).toContainText(`linked to the sign-in account ${USERNAME}`);
   await expect(confirm.getByRole("button", { name: /^Delete CI/ })).toBeDisabled();
