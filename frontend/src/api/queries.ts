@@ -25,6 +25,7 @@ export type SearchResults = Schemas["SearchResults"];
 export type ImpactSettings = Schemas["ImpactSettings"];
 export type ImpactParams = NonNullable<paths["/api/v1/configuration-items/{id}/impact"]["get"]["parameters"]["query"]>;
 
+export type ChangeHistogramQuery = NonNullable<paths["/api/v1/configuration-items/change-histogram"]["get"]["parameters"]["query"]>;
 export type CiListQuery = NonNullable<paths["/api/v1/configuration-items"]["get"]["parameters"]["query"]>;
 export type SearchQuery = paths["/api/v1/search"]["get"]["parameters"]["query"];
 export type CiCreateBody = NonNullable<paths["/api/v1/configuration-items"]["post"]["requestBody"]>["content"]["application/json"];
@@ -38,6 +39,7 @@ export const keys = {
   cis: ["cis"] as const,
   ciList: (q: CiListQuery) => ["cis", "list", q] as const,
   ciCount: (q: CiListQuery) => ["cis", "count", q] as const,
+  changeHistogram: (q: ChangeHistogramQuery) => ["cis", "change-histogram", q] as const,
   ci: (id: string) => ["cis", "detail", id] as const,
   graph: (id: string, depth: number, direction: string) => ["cis", "graph", id, depth, direction] as const,
   impact: (id: string, params: ImpactParams) => ["cis", "impact", id, params] as const,
@@ -60,6 +62,24 @@ export function useCiList(query: MaybeRefOrGetter<CiListQuery>, enabled: MaybeRe
       queryKey: keys.ciList(q),
       enabled: toValue(enabled),
       queryFn: ({ signal }: { signal: AbortSignal }) => unwrap(api.GET("/api/v1/configuration-items", { params: { query: q }, signal })),
+      placeholderData: keepPreviousData,
+    };
+  });
+}
+
+/**
+ * Changes per hour or day to the CIs of a list query (needs audit.view). The previous histogram
+ * stays on screen while a changed filter or range loads; a refusal is shown at once, not retried.
+ */
+export function useChangeHistogram(query: MaybeRefOrGetter<ChangeHistogramQuery>, enabled: MaybeRefOrGetter<boolean> = true) {
+  return useQuery(() => {
+    const q = toValue(query);
+    return {
+      queryKey: keys.changeHistogram(q),
+      enabled: toValue(enabled),
+      retry: false,
+      staleTime: 60_000,
+      queryFn: ({ signal }: { signal: AbortSignal }) => unwrap(api.GET("/api/v1/configuration-items/change-histogram", { params: { query: q }, signal })),
       placeholderData: keepPreviousData,
     };
   });

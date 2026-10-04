@@ -160,6 +160,12 @@
   --c-info-subtle: #ddf4ff;
   --c-info-text: #0550ae; /* 6.7:1 on the subtle background */
   --c-neutral: #6e7781; /* retired, unknown: dots only, always next to a word */
+  /* Chart series, in this order (design document §2.3). Fixed, not brandable: a customer primary
+   * could match a series. Checked as a categorical palette (lightness band, chroma, colour-blind
+   * separation) and at 3:1 on the surface (unit/tokens.test.ts). Never used for text. */
+  --c-viz-1: #0089a8;
+  --c-viz-2: #d07005;
+  --c-viz-3: #7c3aed;
   /* Older names. */
   --c-danger: var(--c-danger-solid);
   --c-danger-hover: var(--c-danger-solid-hover);
@@ -237,6 +243,9 @@
   --c-info-subtle: #132a45;
   --c-info-text: #a5d6ff;
   --c-neutral: #8a93a3;
+  --c-viz-1: #169fba;
+  --c-viz-2: #c47d24;
+  --c-viz-3: #9574f0;
   --c-danger: #ff6b5f;
   --c-danger-hover: #ff8a80;
   --c-warn-border: #8a6d1f;
