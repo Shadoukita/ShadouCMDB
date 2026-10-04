@@ -519,6 +519,13 @@ fn lookup_value_filter_schema() -> Schema {
     )
 }
 
+fn business_service_filter_schema() -> Schema {
+    schemas::uuid_list_described(
+        "Business service ids (CI ids), comma-separated: CIs that are a direct member of one of them. A service the \
+         caller may not view, or a deleted one, has no members here.",
+    )
+}
+
 /// Which CIs by validity: active (the default), inactive, or all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub enum ActiveQuery {
@@ -580,6 +587,7 @@ pub trait ItemFilterQuery {
     fn criticality_value_id(&self) -> Option<&UuidList>;
     fn deleted(&self) -> Deleted;
     fn kind(&self) -> Option<KindQuery>;
+    fn business_service_id(&self) -> Option<&UuidList>;
 }
 
 macro_rules! item_filters {
@@ -608,6 +616,9 @@ macro_rules! item_filters {
             }
             fn kind(&self) -> Option<KindQuery> {
                 self.kind
+            }
+            fn business_service_id(&self) -> Option<&UuidList> {
+                self.business_service_id.as_ref()
             }
         }
     };
@@ -648,6 +659,8 @@ pub struct ListItemsQuery {
     pub layout_template: Option<String>,
     #[param(schema_with = kind_schema)]
     pub kind: Option<KindQuery>,
+    #[param(schema_with = business_service_filter_schema)]
+    pub business_service_id: Option<UuidList>,
 }
 paged!(ListItemsQuery);
 item_filters!(ListItemsQuery);
@@ -682,6 +695,8 @@ pub struct SearchQuery {
     pub deleted: Deleted,
     #[param(schema_with = kind_schema)]
     pub kind: Option<KindQuery>,
+    #[param(schema_with = business_service_filter_schema)]
+    pub business_service_id: Option<UuidList>,
 }
 paged!(SearchQuery);
 item_filters!(SearchQuery);
@@ -768,6 +783,8 @@ pub struct ChangeHistogramQuery {
     pub layout_template: Option<String>,
     #[param(schema_with = kind_schema)]
     pub kind: Option<KindQuery>,
+    #[param(schema_with = business_service_filter_schema)]
+    pub business_service_id: Option<UuidList>,
 }
 item_filters!(ChangeHistogramQuery);
 
@@ -801,6 +818,99 @@ pub struct ChangeHistogram {
     pub buckets: Vec<ChangeHistogramBucket>,
     /// Sum of all counts over all buckets
     pub total: i64,
+}
+
+/// The filters of the inventory list (`listConfigurationItems`), without paging and sort.
+#[derive(Debug, Clone, Deserialize, IntoParams)]
+#[serde(rename_all = "camelCase")]
+#[into_params(parameter_in = Query)]
+pub struct FacetsQuery {
+    #[param(schema_with = list_q_schema)]
+    #[serde(default, deserialize_with = "schemas::trimmed_opt")]
+    pub q: Option<String>,
+    #[param(schema_with = class_filter_schema)]
+    pub class_id: Option<UuidList>,
+    #[param(required = false, schema_with = include_subclasses_schema)]
+    pub include_subclasses: QueryBool,
+    #[param(required = false, schema_with = active_schema)]
+    pub active: ActiveQuery,
+    #[param(schema_with = lookup_value_filter_schema)]
+    pub lookup_value_id: Option<UuidList>,
+    #[param(schema_with = ip_within_schema)]
+    pub ip_within: Option<String>,
+    #[param(schema_with = criticality_filter_schema)]
+    pub criticality_value_id: Option<UuidList>,
+    #[param(required = false, schema_with = deleted_items_schema)]
+    pub deleted: Deleted,
+    #[param(schema_with = own_layout_schema)]
+    pub own_layout: Option<QueryBool>,
+    #[param(schema_with = layout_template_schema)]
+    pub layout_template: Option<String>,
+    #[param(schema_with = kind_schema)]
+    pub kind: Option<KindQuery>,
+    #[param(schema_with = business_service_filter_schema)]
+    pub business_service_id: Option<UuidList>,
+    /// Values returned per facet, most CIs first (1-200); selected values are always returned
+    #[param(required = false, default = 50, minimum = 1, maximum = 200)]
+    pub value_limit: i64,
+}
+item_filters!(FacetsQuery);
+
+/// What a facet counts, and so which list filter its value ids go into.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum FacetKind {
+    /// CI classes (`classId`); counted per exact class, subclasses separately
+    Class,
+    /// Values of the criticality list (`criticalityValueId`)
+    Criticality,
+    /// Values of one lookup list held in lookup attributes (`lookupValueId`)
+    Lookup,
+    /// Business services, counting their direct members (`businessServiceId`)
+    BusinessService,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FacetValue {
+    /// The id to send in the facet's filter parameter
+    pub id: Uuid,
+    /// Class key, lookup value key, or the service's ident
+    pub key: String,
+    pub label: String,
+    /// CIs matching every other filter that hold this value
+    pub count: i64,
+    /// True when the id is in the facet's filter parameter of this request
+    pub selected: bool,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Facet {
+    /// `class`, `criticality`, `businessService`, or `lookup.<list key>`
+    pub key: String,
+    pub kind: FacetKind,
+    /// Display name: "Class", "Criticality", "Business service" or the lookup list's name
+    pub label: String,
+    /// The `listConfigurationItems` query parameter that filters by this facet's value ids
+    pub param: String,
+    /// The lookup list (kind lookup); null otherwise
+    #[schema(required = true)]
+    pub list_id: Option<Uuid>,
+    /// Values with at least one CI, most CIs first, then by label; selected values are included even at 0
+    #[schema(inline)]
+    pub values: Vec<FacetValue>,
+    /// True when values with a count were left out by `valueLimit`
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ItemFacets {
+    /// CIs matching every filter: `page.total` of the same list query
+    pub total: i64,
+    #[schema(inline)]
+    pub facets: Vec<Facet>,
 }
 
 fn direction_schema() -> Schema {

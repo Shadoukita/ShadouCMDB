@@ -16,7 +16,8 @@ import type { BarCatalogue } from "../lib/queryBar";
 import SavedViewMenu from "../components/savedViews/SavedViewMenu.vue";
 import PaginationBar from "../components/PaginationBar.vue";
 import { useAppSettings } from "../lib/appSettings";
-import { useDocumentTitle } from "../lib/composables";
+import { useDocumentTitle, useMediaQuery } from "../lib/composables";
+import ChangeHistogram from "../components/ChangeHistogram.vue";
 import { viewableClasses } from "../lib/permissions";
 import { ATTRIBUTE_PREFIX, BUILTIN_FIELDS, fieldLabel, isSortableAttribute, listViewFor, lookupValueIds } from "../lib/uiSettings";
 import { useInventoryQueryState } from "../lib/useInventoryQueryState";
@@ -130,6 +131,14 @@ const catalogue = computed(() =>
 /** The total once the list for this URL has loaded (not the previous list's, kept while it loads). */
 const settledTotal = computed(() => (list.data.value && !list.isPlaceholderData.value && !list.isFetching.value ? total.value : undefined));
 
+// The change histogram counts the audit log (audit.view) for the list's filters; wide screens only.
+const wide = useMediaQuery("(min-width: 821px)");
+const histogramFilters = computed(() => {
+  const { sort: _sort, limit: _limit, offset: _offset, ...filters } = state.listQuery.value as CiListQuery;
+  return filters;
+});
+const showHistogram = computed(() => wide.value && session.can("audit.view") && !classDenied.value && rows.value.length > 0);
+
 // Keyboard rows (lib/rowKeyboard): ↑/↓ between rows, Enter opens, `e` edits, `c` opens Columns.
 const router = useRouter();
 const columnsPopover = ref<InstanceType<typeof ColumnsPopover>>();
@@ -209,6 +218,7 @@ function clearFilters() {
     </EmptyState>
 
     <template v-if="rows.length > 0">
+      <ChangeHistogram v-if="showHistogram" :filters="histogramFilters" />
       <div class="table-wrap table-scroll">
         <table :class="['data', { loading: list.isPlaceholderData.value }]" aria-describedby="inventory-keys">
           <thead>

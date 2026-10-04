@@ -57,6 +57,10 @@ const PAIRS: [string, string[], number][] = [
   ["--c-success", ["--c-surface"], 3],
   ["--c-warning", ["--c-surface"], 3],
   ["--c-danger-solid", ["--c-surface"], 3],
+  // Chart series (the change histogram), on the plot and on a hovered column.
+  ["--c-viz-1", ["--c-surface", "--c-surface-alt"], 3],
+  ["--c-viz-2", ["--c-surface", "--c-surface-alt"], 3],
+  ["--c-viz-3", ["--c-surface", "--c-surface-alt"], 3],
 ];
 
 for (const [theme, vars] of Object.entries(THEMES)) {

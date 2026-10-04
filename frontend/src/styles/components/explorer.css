@@ -73,6 +73,63 @@
 .toolbar .field.query-bar input::placeholder {
   font-family: var(--font-sans);
 }
+/*
+ * Syntax colouring: .query-overlay lies over the input with the same box, font and padding, and the
+ * input's own glyphs are transparent (the caret and the selection stay the input's). Ligatures and
+ * kerning are off on both, so a run boundary in the overlay can never shift a glyph. The native
+ * clear button is hidden: it would narrow the input's text box but not the overlay's (Escape clears).
+ */
+.query-input > input,
+.query-overlay {
+  font-family: var(--font-mono);
+  font-size: var(--fs-md);
+  font-variant-ligatures: none;
+  font-kerning: none;
+  letter-spacing: normal;
+}
+.query-input > input {
+  color: transparent;
+  caret-color: var(--c-text);
+}
+.query-input > input::selection {
+  color: transparent;
+}
+.query-input > input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+.query-overlay {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  padding: 0 var(--space-2) 0 calc(var(--space-2) + 16px + var(--space-1_5));
+  border: 1px solid transparent;
+  line-height: calc(var(--control-h) - 2px);
+  white-space: pre;
+  color: var(--c-text);
+  pointer-events: none;
+}
+/* Room past the end, so the overlay can always scroll as far as the input does (it pads its end for the caret). */
+.query-overlay::after {
+  content: "";
+  display: inline-block;
+  width: var(--space-4);
+}
+.qs-key {
+  color: var(--c-link);
+}
+.qs-punct {
+  color: var(--c-text-secondary);
+}
+.qs-negation,
+.qs-error {
+  color: var(--c-danger-text);
+}
+.qs-error {
+  text-decoration: underline wavy var(--c-danger-text);
+  text-decoration-skip-ink: none;
+  text-underline-offset: 3px;
+}
 .query-suggestions {
   min-width: 280px;
 }
@@ -286,5 +343,176 @@ dialog.manage-views td.row-actions {
   }
   .view-menu-popup {
     width: auto;
+  }
+}
+
+/* ---------- Change histogram: optional strip above the table (design document §2.7) ---------- */
+/*
+ * Stacked bars of changes per hour or day (components/ChangeHistogram.vue). Series colours are the
+ * fixed --c-viz-* tokens, never the brandable primary; text stays in text tokens. Wide screens only
+ * (the page mounts it from 821 px), where the table area also gives up the strip's height.
+ */
+.histogram {
+  border-bottom: 1px solid var(--c-border);
+}
+.histogram-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-1_5) var(--panel-p);
+}
+.histogram-title {
+  margin: 0;
+  font-size: inherit;
+}
+.histogram-toggle {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: var(--control-h-sm);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+  color: var(--c-text);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.histogram-toggle:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: 2px;
+}
+.histogram-summary {
+  flex: 1 1 16rem;
+  min-width: 0;
+  font-size: var(--fs-sm);
+  color: var(--c-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.histogram-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-xs);
+  color: var(--c-text-secondary);
+}
+.histogram-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.histogram-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+.histogram-body {
+  padding: 0 var(--panel-p) var(--space-2);
+}
+.histogram-plot {
+  position: relative;
+  height: 80px;
+  border-radius: var(--radius-sm);
+}
+.histogram-plot svg {
+  display: block;
+}
+.histogram-plot:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: 2px;
+}
+.histogram-plot.zoomable {
+  cursor: pointer;
+}
+.histogram-plot.stale svg {
+  opacity: 0.6;
+}
+.histogram-loading {
+  background: var(--c-surface-alt);
+}
+.histogram-hover {
+  fill: var(--c-surface-alt);
+}
+.histogram-baseline {
+  stroke: var(--c-border);
+  stroke-width: 1;
+}
+.histogram-bar.s-updated,
+.histogram-swatch.s-updated {
+  fill: var(--c-viz-1);
+  background: var(--c-viz-1);
+}
+.histogram-bar.s-created,
+.histogram-swatch.s-created {
+  fill: var(--c-viz-2);
+  background: var(--c-viz-2);
+}
+.histogram-bar.s-statusChanged,
+.histogram-swatch.s-statusChanged {
+  fill: var(--c-viz-3);
+  background: var(--c-viz-3);
+}
+/* The top of the scale, at the plot's top left, over the bars' surface. */
+.histogram-max {
+  position: absolute;
+  top: 0;
+  left: 0;
+  padding: 0 var(--space-1);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 16px;
+  color: var(--c-text-tertiary);
+  background: var(--c-surface);
+  border-radius: var(--radius-sm);
+  pointer-events: none;
+}
+.histogram-axis {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-top: var(--space-1);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 16px;
+  color: var(--c-text-tertiary);
+  white-space: nowrap;
+}
+.histogram-axis .histogram-readout {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--c-text);
+}
+.histogram-error {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  min-height: 80px;
+  font-size: var(--fs-sm);
+  color: var(--c-danger-text);
+}
+.histogram-table {
+  margin-top: var(--space-2);
+}
+.histogram-table tbody th {
+  font-weight: var(--fw-regular);
+  text-align: left;
+}
+@media (min-width: 821px) {
+  .explorer:has(.histogram.open) .table-scroll {
+    max-height: max(320px, calc(100dvh - var(--header-h) - 200px - 140px));
+  }
+}
+/* Forced colours: the bars keep their shape in the system's text colour; the readout and the table carry the series. */
+@media (forced-colors: active) {
+  .histogram-bar,
+  .histogram-swatch {
+    fill: CanvasText;
+    background: CanvasText;
+    forced-color-adjust: none;
   }
 }

@@ -93,7 +93,7 @@ export interface paths {
         put?: never;
         /**
          * Sign in with username and password
-         * @description Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax) and the `shadoucmdb_csrf` cookie; behind HTTPS they are `Secure` and named `__Host-shadoucmdb_session` and `__Host-shadoucmdb_csrf`. 401 for a wrong username or password. When the user has set up two-factor authentication, a right password answers 401 MFA_REQUIRED instead and sets the `shadoucmdb_mfa` cookie (HttpOnly, 5 min; `__Host-shadoucmdb_mfa` behind HTTPS): send the code to POST /api/v1/auth/login/mfa. Every 401 for a wrong username or password, a disabled account or a directory's refusal is answered no earlier than `SIGN_IN_FAILURE_FLOOR_MS` (default 1 s) after the throttle let the attempt through, so response times do not tell which names are accounts; 429, 503, MFA_REQUIRED and successful answers are not delayed. The first 4 failures for a username from one client network (the IPv4 /24 or IPv6 /64 of the TCP peer address or, when the peer is listed in `TRUSTED_PROXIES`, of the client address the proxies report) cost nothing; from the 5th on, each failure locks it for that network for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Other networks are not locked, so guessing cannot lock the account holder out; only failures from several networks that add up to 15 (at most 5 counted per network) lock the username for every network, with the same backoff. Attempts for a username that arrive while as many earlier ones as it has free failures left are still being checked are answered 429 with Retry-After: 1. Once 300 failures in 10 min for all usernames together are reached, sign-in is slowed rather than refused: attempts queue and go through one per 2 s (a correct password still signs in); only when 64 are already queued, or 4 from the same client network, is the next one answered 429. When an LDAP/AD directory is enabled, directory accounts sign in here too with their directory password (see GET /api/v1/auth/providers): a name no local account has is looked up in the enabled directories in order, under the same throttle; 503 IDENTITY_PROVIDER_UNAVAILABLE when the directory a directory account belongs to cannot be reached (not counted as a failure). While a directory cannot be reached, a name no account has gets the 401 for a wrong username or password, so the answer does not tell which names are local accounts. A directory account that has set up two-factor authentication gets MFA_REQUIRED after the directory password, like a local one. Accounts of an OIDC provider cannot sign in here.
+         * @description Sets the `shadoucmdb_session` cookie (HttpOnly, SameSite=Lax) and the `shadoucmdb_csrf` cookie; behind HTTPS they are `Secure` and named `__Host-shadoucmdb_session` and `__Host-shadoucmdb_csrf`. 401 for a wrong username or password. When the user has set up two-factor authentication, a right password answers 401 MFA_REQUIRED instead and sets the `shadoucmdb_mfa` cookie (HttpOnly, 5 min; `__Host-shadoucmdb_mfa` behind HTTPS): send the code to POST /api/v1/auth/login/mfa. Every 401 for a wrong username or password, a disabled account or a directory's refusal, and every 503 IDENTITY_PROVIDER_UNAVAILABLE, is answered no earlier than `SIGN_IN_FAILURE_FLOOR_MS` (default 1 s) after the throttle let the attempt through, so response times do not tell which names are accounts; 429, MFA_REQUIRED and successful answers are not delayed. The first 4 failures for a username from one client network (the IPv4 /24 or IPv6 /64 of the TCP peer address or, when the peer is listed in `TRUSTED_PROXIES`, of the client address the proxies report) cost nothing; from the 5th on, each failure locks it for that network for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Other networks are not locked, so guessing cannot lock the account holder out; only failures from several networks that add up to 15 (at most 5 counted per network) lock the username for every network, with the same backoff. Attempts for a username that arrive while as many earlier ones as it has free failures left are still being checked are answered 429 with Retry-After: 1. Once 300 failures in 10 min for all usernames together are reached, sign-in is slowed rather than refused: attempts queue and go through one per 2 s (a correct password still signs in); only when 64 are already queued, or 4 from the same client network, is the next one answered 429. When an LDAP/AD directory is enabled, directory accounts sign in here too with their directory password (see GET /api/v1/auth/providers): a name no local account has is looked up in the enabled directories in order, under the same throttle; 503 IDENTITY_PROVIDER_UNAVAILABLE when the directory a directory account belongs to cannot be reached; it counts as a failed sign-in for the throttle and is recorded as `login.failure` with reason `directory_unavailable`, like a wrong password. While a directory cannot be reached, a name no account has gets the 401 for a wrong username or password, so the answer does not tell which names are local accounts. A directory account that has set up two-factor authentication gets MFA_REQUIRED after the directory password, like a local one. Accounts of an OIDC provider cannot sign in here.
          */
         post: operations["login"];
         delete?: never;
@@ -419,6 +419,26 @@ export interface paths {
          * @description Requires `audit.view`. Takes the filters of `listConfigurationItems` and counts, per bucket, the audit log entries on the CIs that match them now: `created` (create), `statusChanged` (an update that changed the `status` attribute, with or without other fields) and `updated` (every other update, deletion and restore). Exports and other read events are not counted. Buckets are aligned to UTC hours or days and every bucket of the range is returned, empty ones included. The range is `from` (inclusive) to `to` (exclusive), at most 7 days with `bucket=hour` and 90 days with `bucket=day` (400 `range_too_large` on `from`; 400 `invalid_range` when `from` is not before `to`). Needs `audit.view`, like the audit log the counts come from; a caller whose profile limits the classes they may view counts only CIs of those classes, and only the entries `listAuditLog` would show them.
          */
         get: operations["getConfigurationItemChangeHistogram"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/configuration-items/facets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Facet counts for the inventory list: CIs per class, criticality, lookup value and business service
+         * @description Takes the filters of `listConfigurationItems` and returns, per facet, the values with how many CIs match. Each facet is counted with its own filter left out and every other filter applied (class counts ignore `classId`, a lookup list's counts ignore that list's values in `lookupValueId`), so the counts are what ticking one more value would add. `total` is the count with every filter. Facets: `class` (per exact class), `criticality`, one `lookup.<list key>` per lookup list stored in a lookup attribute (status, environment, location, ...), and `businessService` (direct members) when business services exist. Counts are exact and cover only CIs in classes the caller may view, like the list; a business service the caller may not view is not a facet value.
+         */
+        get: operations["getConfigurationItemFacets"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3023,6 +3043,167 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workflow-instances": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List workflow instances on the CIs you may view (paginated, filterable)
+         * @description Instances on CIs of types the caller may not view are left out of the page and of `page.total`. Sorted by `lastTransitionAt`, newest first, unless `sort` says otherwise.
+         */
+        get: operations["listWorkflowInstances"];
+        put?: never;
+        /**
+         * Start a workflow on a CI
+         * @description Needs the edit right on the CI's type. The instance starts in the initial state of the workflow's current version and stays on that version. When the workflow drives a state field and the initial state maps to one of its values, the CI's field is set (a CI `update` audit row). 404 when the CI or the workflow does not exist or is of a type the caller may not view. 400 VALIDATION_ERROR `not_covered` when the workflow does not run on the CI's type. 409 CONFLICT `deleted` (the CI is deleted), `unpublished`, `inactive` or `already_running` (one running instance per workflow and CI). Audited on the CI as `workflow.start`.
+         */
+        post: operations["startWorkflowInstance"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflow-instances/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Count running instances per workflow and state, on the CIs you may view (for dashboards) */
+        get: operations["getWorkflowInstanceSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflow-instances/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a workflow instance with the graph of its version and the transitions you may run
+         * @description `availableTransitions` lists the transitions out of the current state that the caller is granted and may run (the edit right on the CI's type), each with its fields and the conditions that fail on the CI's current values (`blockedBy`). Transitions the caller is not granted are left out. 404 for an instance on a CI of a type the caller may not view.
+         */
+        get: operations["getWorkflowInstance"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflow-instances/{id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The history of a workflow instance, oldest step first (paginated)
+         * @description Events are kept for the life of the CI; audit log retention does not remove them. `requestId` joins an event to the audit rows of the same request.
+         */
+        get: operations["listWorkflowInstanceEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflow-instances/{id}/transitions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Move a workflow instance along a transition
+         * @description One transaction: the fields sent are validated as PATCH /configuration-items/{id} validates them (400 VALIDATION_ERROR on `fields.<key>`, and `not_a_transition_field` for a field the transition does not list); required fields, the comment and the conditions are then checked on the CI's values with the ones sent (422 WORKFLOW_CONDITION_FAILED, one detail each: `required`, `comment_required`, `condition`). The fields and the state field are written to the CI (a CI `update` audit row), the instance moves on (and completes on a terminal state), and the step is audited on the CI as `workflow.transition`. Needs the edit right on the CI's type and a grant of the transition to one of the caller's profiles; with an API token, to the token's profile as well (403 FORBIDDEN). 400 `unknown_transition` for a key the version does not have; 409 CONFLICT `not_from_current_state` or `not_active`; 409 VERSION_CONFLICT on a stale `expectedVersion`.
+         */
+        post: operations["runWorkflowTransition"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflow-instances/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel a running workflow instance
+         * @description Needs `workflows.manage`, or the edit right on the CI's type and the workflow's `_cancel` grant. The CI's fields stay as they are. Audited on the CI as `workflow.cancel` with the reason. 409 CONFLICT `not_active`; 409 VERSION_CONFLICT on a stale `expectedVersion`.
+         */
+        post: operations["cancelWorkflowInstance"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflow-instances/{id}/force": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Put a running workflow instance into another state of its version, bypassing transitions
+         * @description Requires `workflows.manage`. For administrators repairing an instance: needs `workflows.manage` and the edit right on the CI's type. No condition, field or grant is checked; the state field is written as a transition would. A terminal state completes the instance. Audited on the CI as `workflow.force` with the mandatory reason. 400 `unknown_state`; 409 CONFLICT `same_state` or `not_active`; 409 VERSION_CONFLICT on a stale `expectedVersion`.
+         */
+        post: operations["forceWorkflowInstanceState"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/configuration-items/{id}/workflows": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The workflows of one CI: running and recent instances, and the workflows you may start
+         * @description Running instances first, then the 20 that ended last, each with the transitions the caller may run. 404 for a CI of a type the caller may not view.
+         */
+        get: operations["getConfigurationItemWorkflows"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3498,6 +3679,16 @@ export interface components {
             /** @description Inside its validity period */
             active: boolean;
         };
+        /** @description The workflows of one CI */
+        CiWorkflows: {
+            /** @description Running instances first, then the 20 that ended last */
+            data: components["schemas"]["WorkflowInstanceView"][];
+            /**
+             * @description Active workflows of the CI's type that are not running on it and that the caller may start (the edit right
+             *     on the type); empty for a deleted CI
+             */
+            startable: components["schemas"]["WorkflowStartable"][];
+        };
         /** @description Rights on one CI class, or on every class when `classId` is null. */
         ClassPermission: {
             /**
@@ -3970,7 +4161,7 @@ export interface components {
         ErrorEnvelope: {
             error: {
                 /** @enum {string} */
-                code: "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "CSRF_TOKEN_INVALID" | "NOT_FOUND" | "CONFLICT" | "IN_USE" | "VERSION_CONFLICT" | "GONE" | "INVALID_NAME" | "SCHEMA_CHANGE_REFUSED" | "SECRET_REQUIRED" | "IDEMPOTENCY_KEY_REUSED" | "LAST_ADMINISTRATOR" | "RATE_LIMITED" | "MFA_REQUIRED" | "MFA_ENROLMENT_REQUIRED" | "EMAIL_REQUIRED" | "MFA_REQUIRED_FOR_TOKEN" | "REAUTHENTICATION_REQUIRED" | "IDENTITY_PROVIDER_UNAVAILABLE" | "UNSUPPORTED_MEDIA_TYPE" | "PAYLOAD_TOO_LARGE" | "REQUEST_TIMEOUT" | "DATABASE_UNAVAILABLE" | "SERVER_BUSY" | "SCHEMA_NOT_MIGRATED" | "INTERNAL_ERROR";
+                code: "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "CSRF_TOKEN_INVALID" | "NOT_FOUND" | "CONFLICT" | "IN_USE" | "VERSION_CONFLICT" | "GONE" | "INVALID_NAME" | "SCHEMA_CHANGE_REFUSED" | "SECRET_REQUIRED" | "IDEMPOTENCY_KEY_REUSED" | "WORKFLOW_CONDITION_FAILED" | "LAST_ADMINISTRATOR" | "RATE_LIMITED" | "MFA_REQUIRED" | "MFA_ENROLMENT_REQUIRED" | "EMAIL_REQUIRED" | "MFA_REQUIRED_FOR_TOKEN" | "REAUTHENTICATION_REQUIRED" | "IDENTITY_PROVIDER_UNAVAILABLE" | "UNSUPPORTED_MEDIA_TYPE" | "PAYLOAD_TOO_LARGE" | "REQUEST_TIMEOUT" | "DATABASE_UNAVAILABLE" | "SERVER_BUSY" | "SCHEMA_NOT_MIGRATED" | "INTERNAL_ERROR";
                 message: string;
                 /** @description At most 100 problems; when there are more, a last entry with code `truncated` counts the rest */
                 details?: {
@@ -3985,6 +4176,11 @@ export interface components {
                 requestId: string;
             };
         };
+        /**
+         * @description What a facet counts, and so which list filter its value ids go into.
+         * @enum {string}
+         */
+        FacetKind: "class" | "criticality" | "lookup" | "businessService";
         /** @description One changed field: API names, values as in the file format (keys, not ids) */
         FieldChange: {
             field: string;
@@ -4742,6 +4938,47 @@ export interface components {
             /** @enum {string} */
             code: "unknown_class" | "unknown_attribute" | "unknown_lookup_list" | "unknown_lookup_value" | "required_field_not_editable" | "core_field_hidden" | "unknown_template";
             message: string;
+        };
+        ItemFacets: {
+            /**
+             * Format: int64
+             * @description CIs matching every filter: `page.total` of the same list query
+             */
+            total: number;
+            facets: {
+                /** @description `class`, `criticality`, `businessService`, or `lookup.<list key>` */
+                key: string;
+                kind: components["schemas"]["FacetKind"];
+                /** @description Display name: "Class", "Criticality", "Business service" or the lookup list's name */
+                label: string;
+                /** @description The `listConfigurationItems` query parameter that filters by this facet's value ids */
+                param: string;
+                /**
+                 * Format: uuid
+                 * @description The lookup list (kind lookup); null otherwise
+                 */
+                listId: string | null;
+                /** @description Values with at least one CI, most CIs first, then by label; selected values are included even at 0 */
+                values: {
+                    /**
+                     * Format: uuid
+                     * @description The id to send in the facet's filter parameter
+                     */
+                    id: string;
+                    /** @description Class key, lookup value key, or the service's ident */
+                    key: string;
+                    label: string;
+                    /**
+                     * Format: int64
+                     * @description CIs matching every other filter that hold this value
+                     */
+                    count: number;
+                    /** @description True when the id is in the facet's filter parameter of this request */
+                    selected: boolean;
+                }[];
+                /** @description True when values with a count were left out by `valueLimit` */
+                truncated: boolean;
+            }[];
         };
         /** @description Who uses a template */
         LayoutTemplateUsage: {
@@ -6408,6 +6645,27 @@ export interface components {
             /** @description Database migrations shipped with this build */
             migrations: number;
         };
+        /** @description A transition out of the instance's state that the caller may run */
+        WorkflowAvailableTransition: {
+            key: string;
+            name: string;
+            toState: components["schemas"]["WorkflowStateRef"];
+            requiresComment: boolean;
+            fields: components["schemas"]["WorkflowTransitionFieldView"][];
+            /**
+             * @description The conditions that fail on the CI's current values: empty when it can run (given its required fields and
+             *     comment). Values sent with the transition count too, so a condition on one of its fields can still be met.
+             */
+            blockedBy: components["schemas"]["WorkflowBlockedReason"][];
+        };
+        /** @description Why a transition cannot run as the CI stands */
+        WorkflowBlockedReason: {
+            /** @description `fields.<key>` of the field the condition reads */
+            field: string;
+            /** @description `condition` */
+            code: string;
+            message: string;
+        };
         /** @description A workflow definition: the identity of a workflow and its mutable settings */
         WorkflowDefinition: {
             /** Format: uuid */
@@ -6493,6 +6751,39 @@ export interface components {
             data: components["schemas"]["WorkflowDefinition"][];
             page: components["schemas"]["PageMeta"];
         };
+        /** @description One step in an instance's history, oldest first */
+        WorkflowEvent: {
+            /** Format: int64 */
+            id: number;
+            /** @enum {string} */
+            kind: "start" | "transition" | "cancel" | "migrate" | "force";
+            /** @description The transition run (`transition` events only) */
+            transitionKey: string | null;
+            fromStateKey: string | null;
+            toStateKey: string;
+            /**
+             * Format: int32
+             * @description The version before a migration (`migrate` events only)
+             */
+            fromVersionNo: number | null;
+            /** Format: int32 */
+            toVersionNo: number;
+            /** Format: date-time */
+            occurredAt: string;
+            /** @description user, api_client, import or system (a CI deletion cancelling its instances) */
+            actorType: string;
+            actorName: string | null;
+            /** @description The comment of a step, or the reason of a cancel or forced state */
+            comment: string | null;
+            /** @description `{fieldKey: {old, new}}`: the CI fields the step wrote (transition fields and the state field) */
+            fieldChanges: Record<string, never> | null;
+            /** @description Joins to the audit log's `requestId` */
+            requestId: string | null;
+        };
+        WorkflowEventList: {
+            data: components["schemas"]["WorkflowEvent"][];
+            page: components["schemas"]["PageMeta"];
+        };
         /** @description The profiles that may run one transition */
         WorkflowGrant: {
             /** @description A transition key, or `_cancel` for cancelling an instance */
@@ -6514,6 +6805,81 @@ export interface components {
             version: number;
             grants: components["schemas"]["WorkflowGrant"][];
         };
+        /** @description One run of a workflow on a CI */
+        WorkflowInstance: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            definitionId: string;
+            definitionKey: string;
+            definitionName: string;
+            /**
+             * Format: int32
+             * @description The version of the workflow the instance is pinned to
+             */
+            versionNo: number;
+            /** Format: uuid */
+            ciId: string;
+            ciIdent: string;
+            ciLabel: string;
+            /** @description The CI's type */
+            classKey: string;
+            /** @enum {string} */
+            status: "active" | "completed" | "cancelled";
+            state: components["schemas"]["WorkflowStateRef"];
+            /** Format: date-time */
+            startedAt: string;
+            startedByName: string;
+            /** Format: date-time */
+            lastTransitionAt: string;
+            /**
+             * Format: date-time
+             * @description When it completed or was cancelled; null while active
+             */
+            endedAt: string | null;
+            /**
+             * Format: int32
+             * @description Send it back as `expectedVersion`; a stale one fails with 409 VERSION_CONFLICT
+             */
+            version: number;
+            /**
+             * Format: int32
+             * @description The CI's own `version` after the step (its fields and state field may have changed)
+             */
+            ciVersion: number;
+        };
+        /** @description An instance with its pinned graph and what the caller can do with it */
+        WorkflowInstanceDetail: {
+            instance: components["schemas"]["WorkflowInstance"];
+            graph: components["schemas"]["WorkflowPinnedGraph"];
+            availableTransitions: components["schemas"]["WorkflowAvailableTransition"][];
+            canCancel: boolean;
+        };
+        WorkflowInstanceList: {
+            data: components["schemas"]["WorkflowInstance"][];
+            page: components["schemas"]["PageMeta"];
+        };
+        /** @description Running instances per workflow and state, on the CIs the caller may view */
+        WorkflowInstanceSummary: {
+            data: components["schemas"]["WorkflowStateCount"][];
+        };
+        /** @description An instance with what the caller can do with it */
+        WorkflowInstanceView: {
+            instance: components["schemas"]["WorkflowInstance"];
+            /**
+             * @description The transitions out of the current state the caller is granted and may run (the edit right on the CI's type
+             *     included); empty when the instance has ended. Transitions the caller is not granted are left out.
+             */
+            availableTransitions: components["schemas"]["WorkflowAvailableTransition"][];
+            /** @description Whether the caller may cancel it (`workflows.manage`, or the `_cancel` grant with the edit right) */
+            canCancel: boolean;
+        };
+        /** @description The graph of the version an instance is pinned to (no grants) */
+        WorkflowPinnedGraph: {
+            initialState: string;
+            states: components["schemas"]["WorkflowState"][];
+            transitions: components["schemas"]["WorkflowTransition"][];
+        };
         /** @description One finding of the graph lint */
         WorkflowProblem: {
             /** @description Where in the draft body, e.g. `states[2]`, `transitions[0].fields[1].attribute` */
@@ -6528,6 +6894,15 @@ export interface components {
             /** @enum {string} */
             severity: "error" | "warning";
         };
+        /** @description A workflow that can be started on a CI */
+        WorkflowStartable: {
+            /** Format: uuid */
+            definitionId: string;
+            definitionKey: string;
+            definitionName: string;
+            /** Format: int32 */
+            versionNo: number;
+        };
         /** @description A state of a workflow version */
         WorkflowState: {
             /** @description Stable machine key, lower_snake_case */
@@ -6541,6 +6916,33 @@ export interface components {
             /** @description Reaching it completes the instance (default false) */
             terminal?: boolean;
             stateValue?: string | null;
+        };
+        /** @description Running instances of one workflow in one state */
+        WorkflowStateCount: {
+            /** Format: uuid */
+            definitionId: string;
+            definitionKey: string;
+            stateKey: string;
+            /** @description The state's name in the newest version that has it */
+            stateName: string;
+            /**
+             * @description What reaching a state means
+             * @enum {string}
+             */
+            category: "open" | "active" | "done" | "cancelled";
+            /** Format: int64 */
+            count: number;
+        };
+        /** @description A state as an instance is in it, or a transition leads to it */
+        WorkflowStateRef: {
+            key: string;
+            name: string;
+            /**
+             * @description What reaching a state means
+             * @enum {string}
+             */
+            category: "open" | "active" | "done" | "cancelled";
+            terminal: boolean;
         };
         /** @description A transition of a workflow version: a directed edge between two states */
         WorkflowTransition: {
@@ -6563,6 +6965,17 @@ export interface components {
             attribute: string;
             /** @description Default true */
             required?: boolean;
+        };
+        /** @description A field a transition shows */
+        WorkflowTransitionFieldView: {
+            key: string;
+            label: string;
+            /** @enum {string} */
+            dataType: "text" | "number" | "integer" | "boolean" | "enum" | "date" | "datetime" | "ip" | "cidr" | "reference" | "lookup";
+            /** @description It must have a value (the CI's, or one sent with the transition) */
+            required: boolean;
+            /** @description The CI's value, in the form of the item endpoints; null when it has none */
+            currentValue: Record<string, never> | null;
         };
         /** @description The lint of the draft */
         WorkflowValidation: {
@@ -8435,6 +8848,8 @@ export interface operations {
                 layoutTemplate?: string;
                 /** @description CIs by the kind of their type: asset, process (records such as change requests) or any. Without it, process records are left out unless their type is named in classId. */
                 kind?: "asset" | "process" | "any";
+                /** @description Business service ids (CI ids), comma-separated: CIs that are a direct member of one of them. A service the caller may not view, or a deleted one, has no members here. */
+                businessServiceId?: string;
             };
             header?: never;
             path?: never;
@@ -8663,6 +9078,8 @@ export interface operations {
                 layoutTemplate?: string;
                 /** @description CIs by the kind of their type: asset, process (records such as change requests) or any. Without it, process records are left out unless their type is named in classId. */
                 kind?: "asset" | "process" | "any";
+                /** @description Business service ids (CI ids), comma-separated: CIs that are a direct member of one of them. A service the caller may not view, or a deleted one, has no members here. */
+                businessServiceId?: string;
             };
             header?: never;
             path?: never;
@@ -8677,6 +9094,106 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChangeHistogram"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getConfigurationItemFacets: {
+        parameters: {
+            query?: {
+                /** @description Search label, ident and attribute values */
+                q?: string;
+                /** @description Filter by class (includes subclasses unless includeSubclasses=false) */
+                classId?: string;
+                includeSubclasses?: "true" | "false";
+                /** @description true: only CIs inside their validity period (validFrom <= now < validUntil); false: only those outside it; all: both */
+                active?: "true" | "false" | "all";
+                /** @description Lookup list value ids, comma-separated: CIs holding one of them in a lookup attribute. Values of different lists must all match (status A or B, and environment C). */
+                lookupValueId?: string;
+                /** @description Only CIs with a value of an IP attribute inside this CIDR, e.g. 10.20.0.0/16 */
+                ipWithin?: string;
+                /** @description Criticality value ids, comma-separated: CIs holding one of them */
+                criticalityValueId?: string;
+                /** @description Soft-deleted CIs: exclude (default), include, or only */
+                deleted?: "exclude" | "include" | "only";
+                /** @description true: only CIs with a layout of their own (another template or a custom layout, see /configuration-items/{id}/layout); false: only CIs that show their class's default template */
+                ownLayout?: "true" | "false";
+                /** @description Only CIs that show this layout template (`layoutTemplates[].key`) as their own layout, not as their class's default */
+                layoutTemplate?: string;
+                /** @description CIs by the kind of their type: asset, process (records such as change requests) or any. Without it, process records are left out unless their type is named in classId. */
+                kind?: "asset" | "process" | "any";
+                /** @description Business service ids (CI ids), comma-separated: CIs that are a direct member of one of them. A service the caller may not view, or a deleted one, has no members here. */
+                businessServiceId?: string;
+                /** @description Values returned per facet, most CIs first (1-200); selected values are always returned */
+                valueLimit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ItemFacets"];
                 };
             };
             /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
@@ -9160,6 +9677,8 @@ export interface operations {
                 deleted?: "exclude" | "include" | "only";
                 /** @description CIs by the kind of their type: asset, process (records such as change requests) or any. Without it, process records are left out unless their type is named in classId. */
                 kind?: "asset" | "process" | "any";
+                /** @description Business service ids (CI ids), comma-separated: CIs that are a direct member of one of them. A service the caller may not view, or a deleted one, has no members here. */
+                businessServiceId?: string;
             };
             header?: never;
             path?: never;
@@ -27145,6 +27664,938 @@ export interface operations {
             };
             /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listWorkflowInstances: {
+        parameters: {
+            query?: {
+                /** @description Page size (1-200) */
+                limit?: number;
+                /** @description Rows to skip */
+                offset?: number;
+                /** @description Stable machine key, lower_snake_case */
+                definitionKey?: string;
+                /** @description Stable machine key, lower_snake_case */
+                stateKey?: string;
+                status?: "active" | "completed" | "cancelled";
+                /** @description Stable machine key, lower_snake_case */
+                classKey?: string;
+                /** @description Only instances on this CI */
+                ciId?: string;
+                /** @description Sort field; prefix with "-" for descending. One of: lastTransitionAt, startedAt */
+                sort?: "lastTransitionAt" | "-lastTransitionAt" | "startedAt" | "-startedAt";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowInstanceList"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    startWorkflowInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * Format: uuid
+                     * @description The workflow, by id; or give `definitionKey`
+                     */
+                    definitionId?: string | null;
+                    /** @description Stable machine key, lower_snake_case */
+                    definitionKey?: string;
+                    /** Format: uuid */
+                    ciId: string;
+                    comment?: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowInstanceDetail"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getWorkflowInstanceSummary: {
+        parameters: {
+            query?: {
+                /** @description Stable machine key, lower_snake_case */
+                definitionKey?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowInstanceSummary"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getWorkflowInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowInstanceDetail"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listWorkflowInstanceEvents: {
+        parameters: {
+            query?: {
+                /** @description Page size (1-200) */
+                limit?: number;
+                /** @description Rows to skip */
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowEventList"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    runWorkflowTransition: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Stable machine key, lower_snake_case */
+                    transitionKey: string;
+                    /**
+                     * Format: int32
+                     * @description The instance's `version` you loaded: 409 VERSION_CONFLICT if it moved on in between
+                     */
+                    expectedVersion: number;
+                    /** @description Values of the transition's fields by field key, in the form of PATCH /configuration-items/{id} (null clears one). Only the fields the transition lists. */
+                    fields?: Record<string, never>;
+                    comment?: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowInstance"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The transition cannot run yet (code WORKFLOW_CONDITION_FAILED): one detail per condition, required field or comment that is not satisfied (details[].code condition, required or comment_required; details[].field names the field as `fields.<key>`, or `comment`). Nothing was changed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    cancelWorkflowInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: int32 */
+                    expectedVersion: number;
+                    /** @description Why; recorded in the instance's history and the audit log */
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowInstance"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    forceWorkflowInstanceState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: int32 */
+                    expectedVersion: number;
+                    /** @description Stable machine key, lower_snake_case */
+                    stateKey: string;
+                    /** @description Why; recorded in the instance's history and the audit log */
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowInstance"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getConfigurationItemWorkflows: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CiWorkflows"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };

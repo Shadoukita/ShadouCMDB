@@ -5,6 +5,7 @@ import { ApiError } from "../api/client";
 import { useAreas } from "../api/datamodel";
 import { useCi, useCiClasses, useClassAttributes } from "../api/queries";
 import { useServiceSettings } from "../api/services";
+import { useCiWorkflows } from "../api/workflowRuntime";
 import { useCiLayout } from "../api/uiSettings";
 import Breadcrumbs, { type Crumb } from "../components/Breadcrumbs.vue";
 import EmptyState from "../components/EmptyState.vue";
@@ -37,6 +38,7 @@ import PartOfServicesPanel from "./detail/PartOfServicesPanel.vue";
 import RelationshipGraphPanel from "./detail/RelationshipGraphPanel.vue";
 import RelationshipsPanel from "./detail/RelationshipsPanel.vue";
 import SignInAccountPanel from "./detail/SignInAccountPanel.vue";
+import CiWorkflowsPanel from "./workflows/CiWorkflowsPanel.vue";
 
 /**
  * A CI's page. Its fields are its form: they open as inputs (SHAA-1644), and once something was changed a
@@ -136,11 +138,16 @@ const recordFields = computed(() =>
   editor.layout ? (resolveLayout(editor.layout, defs.value, DETAIL_CORE, DETAIL_RECORD, true).flatMap((t) => t.sections).find((s) => s.kind === "record")?.fields ?? []) : [],
 );
 
+// The Workflows tab, once the CI has run a workflow or the user may start one on it.
+const ciWorkflows = useCiWorkflows(() => (c.value ? id.value : undefined));
+const hasWorkflows = computed(() => !!ciWorkflows.data.value && (ciWorkflows.data.value.data.length > 0 || ciWorkflows.data.value.startable.length > 0));
 const TABS = computed<[Tab, string][]>(() => [
   ...(layoutTabs.value.length > 1 ? layoutTabs.value.map((t): [Tab, string] => [`layout:${t.key}`, t.label]) : [["overview", "Overview"] as [Tab, string]]),
   ["graph", "Relationship map"],
   // A deleted CI has no live relationships to analyse.
   ...(c.value?.deletedAt ? [] : [["impact", "Impact"] as [Tab, string]]),
+  // Its running and recent workflow instances (a deleted CI keeps their history).
+  ...(hasWorkflows.value ? [["workflows", "Workflows"] as [Tab, string]] : []),
   // The history is the audit log, which needs audit.view.
   ...(session.can("audit.view") && !placed.value.has("history") ? [["history", "History"] as [Tab, string]] : []),
 ]);
@@ -358,6 +365,7 @@ const crumbs = computed<Crumb[]>(() => {
       </template>
       <RelationshipGraphPanel v-else-if="current === 'graph'" :ci="c" :self="self" :trail="trail" />
       <ImpactPanel v-else-if="current === 'impact'" :ci="c" :self="self" :trail="trail" />
+      <CiWorkflowsPanel v-else-if="current === 'workflows'" :ci="c" />
       <HistoryPanel v-else :ci="c" />
     </div>
     <div v-if="!editor.active && (draft.dirty || draft.pending)" class="save-bar ci-save-bar" role="region" aria-label="Unsaved changes">

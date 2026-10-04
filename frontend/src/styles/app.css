@@ -1787,3 +1787,39 @@ table.data.wf-grants .wf-grant-cell {
   margin: var(--sp-4) 0 0;
   box-shadow: 0 -2px 8px rgb(0 0 0 / 8%);
 }
+
+/* Workflow runtime: the transitions of an instance, the per-state summary and an instance's states. */
+.wf-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.wf-actions .btn.wf-blocked {
+  border-color: var(--c-warn-border);
+  background: var(--c-warning-subtle);
+  color: var(--c-warning-text);
+}
+.wf-transition-route {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+}
+.wf-summary-states {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+table.data tr.row-current td {
+  background: var(--c-primary-subtle);
+}
+.wf-comment {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin-bottom: var(--space-1);
+}
+.wf-grid {
+  margin-bottom: var(--space-4);
+}

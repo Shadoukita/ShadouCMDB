@@ -712,6 +712,9 @@ fn docs(state: &AppState, mode: ApiDocs) -> Router<AppState> {
         ApiDocs::Off => Router::new()
             .route("/openapi.json", axum::routing::any(docs_disabled))
             .route("/docs", axum::routing::any(docs_disabled))
+            // `{*rest}` does not match an empty tail, so `/docs/` needs its own
+            // route or it falls through to the embedded UI (GH#602).
+            .route("/docs/", axum::routing::any(docs_disabled))
             .route("/docs/{*rest}", axum::routing::any(docs_disabled)),
     }
 }
@@ -849,9 +852,18 @@ pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'sta
             }
         }
     };
-    let max_connections = connection_limit(cfg.http.max_concurrent_requests, open_files_limit());
-    tracing::info!(max_connections, "connection limit");
-    accept_loop(listener, app, &cfg.http, max_connections, stop).await;
+    raise_open_files_limit();
+    let open_files = open_files_limit();
+    let max_connections = connection_limit(cfg.http.max_concurrent_requests, open_files, cfg.database.pool_max);
+    let peers = PeerConnections::new(max_connections, cfg.auth.trusted_proxies.clone());
+    tracing::info!(
+        max_connections,
+        per_network = peers.by_net.max,
+        per_wide_network = peers.by_wide.max,
+        open_files = open_files.map_or_else(|| "unlimited".to_owned(), |n| n.to_string()),
+        "connection limit"
+    );
+    accept_loop(listener, app, &cfg.http, max_connections, peers, stop).await;
     // Before the exporter's last pass, so the summary rows leave too.
     refusals.stop().await;
     if let Some(exporter) = exporter {
@@ -876,19 +888,26 @@ const HTTP2_MAX_CONCURRENT_STREAMS: u32 = 100;
 /// without bound.
 const CONNECTIONS_PER_REQUEST_SLOT: usize = 4;
 /// Share of the open-files limit kept back for the database pool, import
-/// files and logs, and its floor.
+/// files and logs, and its floor on top of `DATABASE_POOL_MAX` (GH#562).
 const FD_RESERVE_DIVISOR: u64 = 4;
 const FD_RESERVE_MIN: u64 = 64;
+/// The part of the open connections one client network (`auth::throttle::Net`,
+/// an IPv4 /24 or IPv6 /64) may hold, and one wider network (`Net::wide`, an
+/// IPv4 /16 or IPv6 /48), unless the peer is in `TRUSTED_PROXIES` (GH#561).
+const CONNECTION_NET_SHARES: usize = 4;
+const CONNECTION_WIDE_SHARES: usize = 2;
 /// At most one "connection refused" warning per interval.
 const REFUSED_WARN_INTERVAL: Duration = Duration::from_secs(10);
 
 /// Connections the server keeps open at once: `CONNECTIONS_PER_REQUEST_SLOT`
 /// per request slot, and below the open-files limit, so that the listener
-/// never reaches EMFILE and the process keeps descriptors for its own work.
-fn connection_limit(max_concurrent_requests: usize, open_files: Option<u64>) -> usize {
+/// never reaches EMFILE and the process keeps descriptors for its own work:
+/// a quarter of the limit, and never fewer than the database pool's
+/// `pool_max` connections plus `FD_RESERVE_MIN`.
+fn connection_limit(max_concurrent_requests: usize, open_files: Option<u64>, pool_max: u32) -> usize {
     let by_slots = max_concurrent_requests.saturating_mul(CONNECTIONS_PER_REQUEST_SLOT);
     let by_files = open_files.map_or(usize::MAX, |n| {
-        let reserve = (n / FD_RESERVE_DIVISOR).max(FD_RESERVE_MIN);
+        let reserve = (n / FD_RESERVE_DIVISOR).max(FD_RESERVE_MIN + u64::from(pool_max));
         usize::try_from(n.saturating_sub(reserve)).unwrap_or(usize::MAX)
     });
     by_slots.min(by_files).clamp(1, tokio::sync::Semaphore::MAX_PERMITS)
@@ -902,15 +921,103 @@ fn open_files_limit() -> Option<u64> {
     line["Max open files".len()..].split_whitespace().next()?.parse().ok()
 }
 
+/// Raises the soft `RLIMIT_NOFILE` to the hard limit, as nginx and Go do:
+/// systemd and most shells start services with a soft limit of 1024, which
+/// would cap the connection limit at 768 (GH#562). Raising the soft limit up
+/// to the hard one needs no privilege; a failure is logged and the soft
+/// limit stays as it was.
+#[cfg(target_os = "linux")]
+fn raise_open_files_limit() {
+    let mut limit = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+    // SAFETY: getrlimit only writes the struct it is given.
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } != 0 || limit.rlim_cur >= limit.rlim_max {
+        return;
+    }
+    let soft = limit.rlim_cur;
+    limit.rlim_cur = limit.rlim_max;
+    // SAFETY: setrlimit only reads the struct it is given.
+    if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) } == 0 {
+        tracing::debug!(from = soft, to = limit.rlim_max, "open-files limit raised to the hard limit");
+    } else {
+        tracing::warn!(
+            error = %std::io::Error::last_os_error(),
+            soft,
+            hard = limit.rlim_max,
+            "cannot raise the open-files limit to the hard limit"
+        );
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn raise_open_files_limit() {}
+
+/// The open connections each client network and wider network holds, so one
+/// source cannot take every place under the connection limit (GH#561).
+/// Behind a reverse proxy every connection comes from the proxy, so peers in
+/// `TRUSTED_PROXIES` are not counted; the global limit still bounds them.
+struct PeerConnections {
+    by_net: Shares<crate::auth::throttle::Net>,
+    by_wide: Shares<crate::auth::throttle::Net>,
+    trusted: crate::auth::session::TrustedProxies,
+}
+
+impl PeerConnections {
+    fn new(max_connections: usize, trusted: crate::auth::session::TrustedProxies) -> Arc<Self> {
+        Arc::new(PeerConnections {
+            by_net: Shares::new((max_connections / CONNECTION_NET_SHARES).max(1)),
+            by_wide: Shares::new((max_connections / CONNECTION_WIDE_SHARES).max(1)),
+            trusted,
+        })
+    }
+
+    /// A place for a connection from `peer`, or None when its network or
+    /// wider network already holds its share.
+    fn hold(self: &Arc<Self>, peer: std::net::IpAddr) -> Option<PeerHold> {
+        if self.trusted.contains(peer) {
+            return Some(PeerHold { peers: self.clone(), net: None });
+        }
+        let net = crate::auth::throttle::Net::of(Some(peer));
+        let wide = net.wide();
+        // Always in this order (net, then wide), like BodyHold::add.
+        let mut by_net = self.by_net.lock();
+        let mut by_wide = self.by_wide.lock();
+        if !Shares::room(&by_net, net, 1, self.by_net.max) || !Shares::room(&by_wide, wide, 1, self.by_wide.max) {
+            return None;
+        }
+        *by_net.entry(net).or_default() += 1;
+        *by_wide.entry(wide).or_default() += 1;
+        drop((by_net, by_wide));
+        Some(PeerHold { peers: self.clone(), net: Some(net) })
+    }
+}
+
+/// One connection's place in its network's share, given back when dropped.
+struct PeerHold {
+    peers: Arc<PeerConnections>,
+    /// None for a trusted proxy, which is not counted.
+    net: Option<crate::auth::throttle::Net>,
+}
+
+impl Drop for PeerHold {
+    fn drop(&mut self) {
+        if let Some(net) = self.net {
+            self.peers.by_net.give_back(net, 1);
+            self.peers.by_wide.give_back(net.wide(), 1);
+        }
+    }
+}
+
 /// Accepts connections until `shutdown`, then waits for open ones to finish
 /// their current request. axum::serve sets no timer on hyper, which leaves
 /// HTTP/1 header reads unbounded; this loop sets one. Past `max_connections`
-/// open connections, new ones are closed at once (GH#557).
+/// open connections, or past its network's share of them (`PeerConnections`),
+/// new ones are closed at once (GH#557, GH#561).
 async fn accept_loop(
     listener: TcpListener,
     app: Router,
     http: &crate::config::HttpConfig,
     max_connections: usize,
+    peers: Arc<PeerConnections>,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) {
     use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
@@ -949,21 +1056,25 @@ async fn accept_loop(
             },
             () = &mut shutdown => break,
         };
-        let Ok(permit) = connections.clone().try_acquire_owned() else {
-            // Closed before any byte is read; the client sees a reset or EOF.
-            drop(stream);
-            refused += 1;
-            if last_warned.is_none_or(|at| at.elapsed() >= REFUSED_WARN_INTERVAL) {
-                tracing::warn!(
-                    max_connections,
-                    refused,
-                    "connections refused: open connection limit reached (4 x HTTP_MAX_CONCURRENT_REQUESTS, \
-                     or the open-files limit)"
-                );
-                last_warned = Some(tokio::time::Instant::now());
-                refused = 0;
+        // Closed before any byte is read; the client sees a reset or EOF.
+        let held = match peers.hold(peer.ip()) {
+            None => Err("one client network's share of the open connection limit reached"),
+            Some(hold) => connections.clone().try_acquire_owned().map(|permit| (permit, hold)).map_err(
+                |_| "open connection limit reached (4 x HTTP_MAX_CONCURRENT_REQUESTS, or the open-files limit)",
+            ),
+        };
+        let held = match held {
+            Ok(held) => held,
+            Err(why) => {
+                drop(stream);
+                refused += 1;
+                if last_warned.is_none_or(|at| at.elapsed() >= REFUSED_WARN_INTERVAL) {
+                    tracing::warn!(max_connections, refused, "connections refused: {why}");
+                    last_warned = Some(tokio::time::Instant::now());
+                    refused = 0;
+                }
+                continue;
             }
-            continue;
         };
         let _ = stream.set_nodelay(true);
         // The peer address is the client IP of last resort for the audit trail (auth::session::client_ip).
@@ -978,7 +1089,7 @@ async fn accept_loop(
             if let Err(e) = conn.await {
                 tracing::debug!(error = %e, "connection closed with an error");
             }
-            drop(permit);
+            drop(held);
         });
     }
     drop(listener);
@@ -1408,7 +1519,7 @@ mod tests {
         };
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
         let server = tokio::spawn(async move {
-            accept_loop(listener, app(), &http, 16, async {
+            accept_loop(listener, app(), &http, 16, PeerConnections::new(16, Default::default()), async {
                 let _ = rx.await;
             })
             .await
@@ -1438,7 +1549,9 @@ mod tests {
         };
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
         let server = tokio::spawn(async move {
-            accept_loop(listener, app(), &http, 2, async {
+            // Loopback is a trusted proxy here, so only the global limit applies.
+            let peers = PeerConnections::new(2, crate::auth::session::TrustedProxies::parse("127.0.0.0/8").unwrap());
+            accept_loop(listener, app(), &http, 2, peers, async {
                 let _ = rx.await;
             })
             .await
@@ -1480,17 +1593,138 @@ mod tests {
         server.await.unwrap();
     }
 
+    /// GH#561: one client network (IPv4 /24) holds at most a quarter of the
+    /// open connections; another network is still served, and peers in
+    /// TRUSTED_PROXIES are not counted.
+    #[tokio::test]
+    async fn one_network_holds_at_most_its_share_of_the_connections() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        // 127.0.0.1 and 127.0.1.1 are different /24s; Linux routes all of 127/8 to loopback.
+        if !cfg!(target_os = "linux") {
+            return;
+        }
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let http = crate::config::HttpConfig {
+            header_read_timeout: Duration::from_secs(30),
+            request_timeout: Duration::from_secs(5),
+            body_timeout: Duration::from_secs(5),
+            max_concurrent_requests: 512,
+        };
+        let peers = PeerConnections::new(8, crate::auth::session::TrustedProxies::parse("127.0.2.1").unwrap());
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn({
+            let peers = peers.clone();
+            async move {
+                accept_loop(listener, app(), &http, 8, peers, async {
+                    let _ = rx.await;
+                })
+                .await
+            }
+        });
+        async fn connect_from(from: &str, addr: std::net::SocketAddr) -> tokio::net::TcpStream {
+            let socket = tokio::net::TcpSocket::new_v4().unwrap();
+            socket.bind(format!("{from}:0").parse().unwrap()).unwrap();
+            socket.connect(addr).await.unwrap()
+        }
+        // Answers the request in full, or None when the server closed the connection unanswered.
+        async fn healthz(from: &str, addr: std::net::SocketAddr) -> Option<String> {
+            let mut stream = connect_from(from, addr).await;
+            let _ = stream.write_all(b"GET /healthz HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").await;
+            let mut buf = Vec::new();
+            let read = tokio::time::timeout(Duration::from_secs(3), stream.read_to_end(&mut buf)).await;
+            let read = read.expect("the server neither answered nor closed the connection");
+            (read.is_ok() && !buf.is_empty()).then(|| String::from_utf8_lossy(&buf).into_owned())
+        }
+        async fn slow(from: &str, addr: std::net::SocketAddr, n: usize) -> Vec<tokio::net::TcpStream> {
+            let mut held = Vec::new();
+            for _ in 0..n {
+                let mut stream = connect_from(from, addr).await;
+                stream.write_all(b"GET /healthz HTTP/1.1\r\nHost: x\r\n").await.unwrap();
+                held.push(stream);
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            held
+        }
+        let net = crate::auth::throttle::Net::of(Some("127.0.0.1".parse().unwrap()));
+
+        // One network fills its share (8 / 4 = 2) with connections still sending headers.
+        let mut first = slow("127.0.0.1", addr, 2).await;
+        assert_eq!(peers.by_net.of(net), 2);
+        assert_eq!(healthz("127.0.0.1", addr).await, None, "a connection past the network's share was served");
+        // Another network is still served.
+        let answer = healthz("127.0.1.1", addr).await.expect("another network was refused");
+        assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+        // A trusted proxy is not held to a share: 3 slow connections, and a fourth is served.
+        let proxied = slow("127.0.2.1", addr, 3).await;
+        let answer = healthz("127.0.2.1", addr).await.expect("a trusted proxy was held to a share");
+        assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+
+        // A closed connection gives its place back to its network.
+        drop(first.pop());
+        let mut answer = None;
+        for _ in 0..50 {
+            answer = healthz("127.0.0.1", addr).await;
+            if answer.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(answer.expect("the freed place was never given back").starts_with("HTTP/1.1 200"));
+
+        drop((first, proxied));
+        let _ = tx.send(());
+        server.await.unwrap();
+        assert_eq!(peers.by_net.of(net), 0, "every place is given back");
+    }
+
+    #[test]
+    fn a_wider_network_holds_at_most_half_of_the_connections() {
+        let peers = PeerConnections::new(8, Default::default());
+        // Four /24s of one /16, two connections each (their share): the /16 stops at 4.
+        let holds: Vec<_> =
+            ["10.1.1.1", "10.1.1.2", "10.1.2.1", "10.1.2.2"].iter().map(|ip| peers.hold(ip.parse().unwrap())).collect();
+        assert!(holds.iter().all(Option::is_some));
+        assert!(peers.hold("10.1.3.1".parse().unwrap()).is_none(), "the wider network is past its half");
+        let other = peers.hold("10.2.3.1".parse().unwrap());
+        assert!(other.is_some(), "another wider network is served");
+        // IPv6: one /64 holds its quarter.
+        let v6: Vec<_> =
+            ["2001:db8:1:2::1", "2001:db8:1:2::2"].iter().map(|ip| peers.hold(ip.parse().unwrap())).collect();
+        assert!(v6.iter().all(Option::is_some));
+        assert!(peers.hold("2001:db8:1:2::3".parse().unwrap()).is_none(), "the /64 is past its quarter");
+        assert!(peers.hold("2001:db8:1:3::1".parse().unwrap()).is_some(), "another /64 is served");
+        drop(holds);
+        assert!(peers.hold("10.1.3.1".parse().unwrap()).is_some(), "places are given back");
+    }
+
     #[test]
     fn the_connection_limit_follows_request_slots_and_open_files() {
         // Four per request slot when descriptors are plentiful.
-        assert_eq!(connection_limit(512, Some(1_048_576)), 2048);
-        assert_eq!(connection_limit(512, None), 2048);
-        // A quarter of the open-files limit (at least 64) stays free.
-        assert_eq!(connection_limit(512, Some(1024)), 768);
-        assert_eq!(connection_limit(512, Some(200)), 136);
+        assert_eq!(connection_limit(512, Some(1_048_576), 10), 2048);
+        assert_eq!(connection_limit(512, None, 10), 2048);
+        // A quarter of the open-files limit stays free...
+        assert_eq!(connection_limit(512, Some(1024), 10), 768);
+        assert_eq!(connection_limit(512, Some(65_536), 200), 2048);
+        // ...and never less than the database pool plus 64 (GH#562).
+        assert_eq!(connection_limit(512, Some(200), 10), 126);
+        assert_eq!(connection_limit(512, Some(256), 200), 1);
+        assert_eq!(connection_limit(512, Some(1024), 200), 760);
         // Never zero, and never more than a semaphore holds.
-        assert_eq!(connection_limit(512, Some(10)), 1);
-        assert_eq!(connection_limit(usize::MAX, None), tokio::sync::Semaphore::MAX_PERMITS);
+        assert_eq!(connection_limit(512, Some(10), 10), 1);
+        assert_eq!(connection_limit(usize::MAX, None, 10), tokio::sync::Semaphore::MAX_PERMITS);
+    }
+
+    /// GH#562: the soft open-files limit is raised to the hard one, so a
+    /// systemd default of 1024 does not cap the connection limit at 768.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_soft_open_files_limit_is_raised_to_the_hard_limit() {
+        raise_open_files_limit();
+        let limits = std::fs::read_to_string("/proc/self/limits").unwrap();
+        let line = limits.lines().find(|l| l.starts_with("Max open files")).unwrap();
+        let mut fields = line["Max open files".len()..].split_whitespace();
+        assert_eq!(fields.next(), fields.next(), "{line}");
     }
 
     #[test]

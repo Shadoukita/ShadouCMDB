@@ -2606,7 +2606,7 @@ mod tests {
             let principal = crate::auth::Principal {
                 user_id: Uuid::new_v4(),
                 username: "modeller".into(),
-                credential: crate::auth::Credential::Token,
+                credential: crate::auth::Credential::Token { profile_id: None, creator_id: None },
                 permissions,
             };
             RequestContext::user(std::sync::Arc::new(principal), "gh180".into())
@@ -2705,7 +2705,7 @@ mod tests {
             let principal = crate::auth::Principal {
                 user_id: Uuid::new_v4(),
                 username: "modeller".into(),
-                credential: crate::auth::Credential::Token,
+                credential: crate::auth::Credential::Token { profile_id: None, creator_id: None },
                 permissions,
             };
             RequestContext::user(std::sync::Arc::new(principal), "gh243".into())
@@ -2826,7 +2826,7 @@ mod tests {
             let principal = crate::auth::Principal {
                 user_id: Uuid::new_v4(),
                 username: "modeller".into(),
-                credential: crate::auth::Credential::Token,
+                credential: crate::auth::Credential::Token { profile_id: None, creator_id: None },
                 permissions,
             };
             RequestContext::user(std::sync::Arc::new(principal), "gh267".into())
@@ -3154,7 +3154,7 @@ mod tests {
             let principal = crate::auth::Principal {
                 user_id: Uuid::new_v4(),
                 username: "modeller".into(),
-                credential: crate::auth::Credential::Token,
+                credential: crate::auth::Credential::Token { profile_id: None, creator_id: None },
                 permissions,
             };
             RequestContext::user(std::sync::Arc::new(principal), "gh252".into())
@@ -3314,7 +3314,7 @@ mod tests {
             let principal = crate::auth::Principal {
                 user_id: Uuid::new_v4(),
                 username: "auditor".into(),
-                credential: crate::auth::Credential::Token,
+                credential: crate::auth::Credential::Token { profile_id: None, creator_id: None },
                 permissions,
             };
             RequestContext::user(std::sync::Arc::new(principal), "gh261".into())

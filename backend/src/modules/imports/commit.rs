@@ -749,7 +749,7 @@ fn audit_context(job: &JobRow) -> RequestContext {
     let principal = Principal {
         user_id: job.created_by_id.unwrap_or_default(),
         username: job.created_by_name.clone(),
-        credential: Credential::Token,
+        credential: Credential::Token { profile_id: None, creator_id: None },
         permissions: Permissions::default(),
     };
     let mut ctx = RequestContext::import_for_user(Arc::new(principal), job.id);

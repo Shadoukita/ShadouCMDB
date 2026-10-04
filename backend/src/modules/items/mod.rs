@@ -1,5 +1,6 @@
 //! Configuration items: inventory list, detail, CRUD, relationship graph and global search.
 
+pub mod facets;
 pub mod plan;
 pub mod schemas;
 pub mod service;
@@ -12,7 +13,9 @@ use crate::auth::permissions::GlobalPermission;
 
 use crate::api::route::{CheckedBody, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, Query, Route, route};
 use crate::http::error::ErrorCode;
-use schemas::{ChangeHistogramQuery, CreateItemBody, GraphQuery, ListItemsQuery, SearchQuery, UpdateItemBody};
+use schemas::{
+    ChangeHistogramQuery, CreateItemBody, FacetsQuery, GraphQuery, ListItemsQuery, SearchQuery, UpdateItemBody,
+};
 
 const TAG: &str = "Configuration items";
 const BASE: &str = "/api/v1/configuration-items";
@@ -38,6 +41,15 @@ pub fn routes() -> Vec<Route> {
             .requires(GlobalPermission::AuditView)
             .handle(|api, In(NoPath, Query(q), NoBody): In<NoPath, Query<ChangeHistogramQuery>, NoBody>| async move {
                 Ok(Json(service::change_histogram(&api.pool, &api.ctx, &q).await?))
+            }),
+        route(Method::GET, "/api/v1/configuration-items/facets", "getConfigurationItemFacets")
+            .tag(TAG)
+            .summary("Facet counts for the inventory list: CIs per class, criticality, lookup value and business service")
+            .description(
+                "Takes the filters of `listConfigurationItems` and returns, per facet, the values with how many CIs match. Each facet is counted with its own filter left out and every other filter applied (class counts ignore `classId`, a lookup list's counts ignore that list's values in `lookupValueId`), so the counts are what ticking one more value would add. `total` is the count with every filter. Facets: `class` (per exact class), `criticality`, one `lookup.<list key>` per lookup list stored in a lookup attribute (status, environment, location, ...), and `businessService` (direct members) when business services exist. Counts are exact and cover only CIs in classes the caller may view, like the list; a business service the caller may not view is not a facet value.",
+            )
+            .handle(|api, In(NoPath, Query(q), NoBody): In<NoPath, Query<FacetsQuery>, NoBody>| async move {
+                Ok(Json(facets::facets(&api.pool, &api.ctx, &q).await?))
             }),
         route(Method::GET, BY_ID, "getConfigurationItem")
             .tag(TAG)

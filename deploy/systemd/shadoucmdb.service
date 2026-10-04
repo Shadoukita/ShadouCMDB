@@ -29,6 +29,11 @@ StateDirectory=shadoucmdb
 StateDirectoryMode=0700
 Environment=SETUP_TOKEN_FILE=/var/lib/shadoucmdb/setup-token
 # SIGTERM triggers a graceful shutdown: in-flight requests finish, then the pool closes.
+# Open files: each client connection, database connection and import file
+# holds one. systemd's default soft limit of 1024 would cap the connections
+# the server accepts at 768 (GH#562); the server logs the limit in effect as
+# "connection limit" at start-up.
+LimitNOFILE=65536
 KillSignal=SIGTERM
 TimeoutStopSec=30
 Restart=on-failure

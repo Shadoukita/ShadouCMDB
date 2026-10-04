@@ -155,6 +155,15 @@ function active(item: NavLinkItem): (r: RouteLocationNormalizedLoaded) => boolea
           <Icon name="layers" :size="collapsed ? 20 : 16" />
           <span class="nav-label">{{ t("services.nav") }}</span>
         </NavLink>
+        <NavLink
+          v-if="item.page === 'inventory'"
+          to="/workflows"
+          :active="(r) => r.path.startsWith('/workflows')"
+          :title="collapsed ? t('workflows.nav') : undefined"
+        >
+          <Icon name="circle-check" :size="collapsed ? 20 : 16" />
+          <span class="nav-label">{{ t("workflows.nav") }}</span>
+        </NavLink>
       </template>
       <NavLink v-else-if="item.cls && !collapsed" :to="item.to" :active="active(item)">
         <ClassBadge :icon="item.cls.icon" :color="item.cls.color" plain :name="item.label" />

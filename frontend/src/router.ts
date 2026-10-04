@@ -6,6 +6,8 @@ import DashboardPage from "./pages/DashboardPage.vue";
 import InventoryPage from "./pages/InventoryPage.vue";
 import NotFoundPage from "./pages/NotFoundPage.vue";
 import SearchPage from "./pages/SearchPage.vue";
+import WorkflowInstancePage from "./pages/workflows/WorkflowInstancePage.vue";
+import WorkflowInstancesPage from "./pages/workflows/WorkflowInstancesPage.vue";
 import ServiceDetailPage from "./pages/services/ServiceDetailPage.vue";
 import ServiceListPage from "./pages/services/ServiceListPage.vue";
 import AdminLayout from "./pages/admin/AdminLayout.vue";
@@ -90,6 +92,9 @@ export const router = createRouter({
     // The service's Impact tab, defaulting to Upstream; its own URL like a CI's.
     { path: "/services/:id/impact", component: ServiceDetailPage },
     { path: "/search", component: SearchPage },
+    // Workflow instances on the CIs the user may view, and one instance with its history.
+    { path: "/workflows", component: WorkflowInstancesPage },
+    { path: "/workflows/:id", component: WorkflowInstancePage },
     { path: "/imports", component: ImportsPage },
     { path: "/imports/new", component: ImportWizardPage },
     { path: "/imports/:id", component: ImportWizardPage },

@@ -145,6 +145,19 @@ async function lastFailureReason(admin: Identity, username: string): Promise<str
   return last?.newValue?.attemptedUsername === username ? last.newValue.reason : undefined;
 }
 
+/**
+ * A sign-in that waits out the name's lock first. A 503 while the directory cannot be reached
+ * counts as a failed sign-in (GH#586), so a run of them locks the name for a few seconds.
+ */
+async function loginAfterLock(u: { username: string; password: string }): Promise<Res> {
+  let r = await login(u);
+  for (let i = 0; i < 5 && r.status === 429; i++) {
+    await new Promise((done) => setTimeout(done, Number(r.headers.get('retry-after') ?? 1) * 1000));
+    r = await login(u);
+  }
+  return r;
+}
+
 /** Runs tools/ldap-it/ldap.sh with the same environment. */
 function directory(command: string, stdin?: string): void {
   execFileSync(join(HERE, 'ldap.sh'), [command], { input: stdin, stdio: [stdin === undefined ? 'ignore' : 'pipe', 'inherit', 'inherit'] });
@@ -345,9 +358,11 @@ async function main(): Promise<void> {
     const r = await test('alice');
     check(r.ok === false && r.message === UNREACHABLE && r.details.length === 0 && r.user === null, `${what}: the test answers the generic unreachable text`, r);
     check(!LEAK.test(JSON.stringify(r)), `${what}: the test leaks no TLS or socket detail`, r);
-    const l = await login(ALICE);
+    const l = await loginAfterLock(ALICE);
     check(l.status === 503 && code(l) === 'IDENTITY_PROVIDER_UNAVAILABLE', `${what}: sign-in as alice is 503 IDENTITY_PROVIDER_UNAVAILABLE`, l.json);
     check(!LEAK.test(JSON.stringify(l.json)), `${what}: the sign-in error leaks no TLS or socket detail`, l.json);
+    const reason = await lastFailureReason(admin, 'alice');
+    check(reason === 'directory_unavailable', `${what}: the 503 is audited as login.failure, reason directory_unavailable (GH#586)`, reason);
     // GH#499: a name no account has gets the generic 401, so the outage does not tell local accounts apart.
     const nobody = await login({ username: 'nobody-else-in-the-directory', password: 'x-password' });
     check(nobody.status === 401 && code(nobody) === 'UNAUTHENTICATED', `${what}: sign-in as an unknown name is the generic 401`, nobody.json);
@@ -371,12 +386,13 @@ async function main(): Promise<void> {
   await patch({ ldap: { url: LDAP_URL, bindPassword: 'wrong-service-password' } });
   t = await test();
   check(t.ok === false && /^service account bind: /.test(t.message), "a wrong service password: the directory's own answer is shown (it answered over verified TLS)", t);
-  const noService = await login(ALICE);
+  const noService = await loginAfterLock(ALICE);
   check(noService.status === 503 && code(noService) === 'IDENTITY_PROVIDER_UNAVAILABLE', 'and sign-in is 503 IDENTITY_PROVIDER_UNAVAILABLE', noService.json);
   await patch({ ldap: { bindPassword: ldap.bindPassword } });
   t = await test('alice');
   check(t.ok === true, 'settings restored: the test passes again', t);
-  const back = await login(ALICE);
+  // The 503s above counted as failed sign-ins for alice (GH#586); once their lock runs out she signs in.
+  const back = await loginAfterLock(ALICE);
   check(back.status === 200, 'and alice signs in again', brief(back));
   alice = identity(back);
 

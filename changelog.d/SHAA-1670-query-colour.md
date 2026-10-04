@@ -1,0 +1,3 @@
+### Changed: The inventory query bar colours its filters
+
+In the query bar above the inventory, each `key:value` filter is now coloured as you type: the filter name in the link colour, the colon and commas in grey, and the values in the normal text colour. Plain search words stay uncoloured. When the bar reports a problem, such as an unknown filter name or a `-key:value` exclusion, the filter it refers to turns red with a wavy underline, so you can see which part of a long query to fix. Typing, selecting, copying and the suggestions work as before. The browser's own clear (×) button no longer appears in this field. Press Escape to clear it.

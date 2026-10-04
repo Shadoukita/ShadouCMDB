@@ -46,8 +46,12 @@ pub(crate) fn viewer(classes: &[Uuid]) -> RequestContext {
         classes: classes.iter().map(|id| (*id, ClassRights { view: true, ..Default::default() })).collect(),
         ..Default::default()
     };
-    let principal =
-        Principal { user_id: Uuid::new_v4(), username: "perf".into(), credential: Credential::Token, permissions };
+    let principal = Principal {
+        user_id: Uuid::new_v4(),
+        username: "perf".into(),
+        credential: Credential::Token { profile_id: None, creator_id: None },
+        permissions,
+    };
     RequestContext::user(Arc::new(principal), "impact-perf".into())
 }
 

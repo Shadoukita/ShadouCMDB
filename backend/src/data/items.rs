@@ -165,6 +165,29 @@ pub struct ItemFilters {
     pub excluded_class_ids: Option<Vec<Uuid>>,
     /// Type tables searched by `q` (see [`search_tables`]).
     pub search_tables: Vec<SearchTable>,
+    /// Only direct members of one of these business services (see [`ServiceMembers`]).
+    pub business_services: Option<ServiceMembers>,
+}
+
+/// Direct members of business services: targets of live edges of the member
+/// type whose source (the service) is live and, with a limited view scope, in
+/// a class the caller may view. A service the caller cannot see has no members
+/// here, so the filter is no oracle for hidden services.
+#[derive(Debug, Clone)]
+pub struct ServiceMembers {
+    pub service_ids: Vec<Uuid>,
+    /// The business-service member relationship type; `None` matches no CI.
+    pub member_type: Option<Uuid>,
+}
+
+/// `FROM ci_relationships e JOIN configuration_items s ... WHERE ...` for the
+/// member edges of visible, live services (the caller adds conditions after it).
+pub(crate) fn push_member_edges(qb: &mut QueryBuilder<Postgres>, member_type: Uuid, visible: Option<&[Uuid]>) {
+    qb.push(" FROM ci_relationships e JOIN configuration_items s ON s.id = e.source_ci_id AND s.deleted_at IS NULL");
+    if let Some(visible) = visible {
+        qb.push(" AND s.class_id = ANY(").push_bind(visible.to_vec()).push(")");
+    }
+    qb.push(" WHERE e.deleted_at IS NULL AND e.relationship_type_id = ").push_bind(member_type);
 }
 
 /// Words of a query turned into a prefix tsquery ("web prod" -> 'web:* & prod:*').
@@ -283,6 +306,16 @@ pub(crate) fn push_filters(w: &mut Where<'_>, f: &ItemFilters) {
         push_in_columns(w, &columns, |qb, c| {
             qb.push(format!("{c} <<= ")).push_bind(cidr.clone()).push("::inet");
         });
+    }
+    if let Some(members) = &f.business_services {
+        let Some(member_type) = members.member_type else {
+            w.and_sql("false");
+            return;
+        };
+        let qb = w.and();
+        qb.push("ci.id IN (SELECT e.target_ci_id");
+        push_member_edges(qb, member_type, f.visible_class_ids.as_deref());
+        qb.push(" AND e.source_ci_id = ANY(").push_bind(members.service_ids.clone()).push("))");
     }
 }
 
