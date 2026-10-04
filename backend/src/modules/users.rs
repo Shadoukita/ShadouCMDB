@@ -27,7 +27,7 @@ use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use super::groups::OwnerRemoval;
-use super::{api_tokens, people, profiles};
+use super::{api_tokens, auth, people, profiles};
 use crate::api::context::{Count, RequestContext, forbidden};
 use crate::api::route::{Body, Check, IdPath, In, Json, NoBody, NoPath, NoQuery, Query, Route, route};
 use crate::api::schemas::{
@@ -597,15 +597,21 @@ pub async fn reset_password(
     new_password: &str,
 ) -> Result<User, AppError> {
     not_your_own(ctx, id, "reset the password", "Change it under PUT /api/v1/auth/password")?;
-    set_password(pool, ctx, id, new_password).await
+    Ok(set_password(pool, ctx, id, new_password).await?.0)
 }
 
-/// Sets a new password, ends the user's sessions (all but the caller's own),
-/// drops their pending second-factor steps (GH#191) and revokes their API
-/// tokens. An administrator's reset (not the user's own change) also revokes
-/// the tokens the user created for other owners: the account may have been
-/// compromised (GH#145).
-pub async fn set_password(pool: &PgPool, ctx: &RequestContext, id: Uuid, new_password: &str) -> Result<User, AppError> {
+/// Sets a new password, ends the user's sessions, drops their pending
+/// second-factor steps (GH#191) and revokes their API tokens. An
+/// administrator's reset (not the user's own change) also revokes the tokens
+/// the user created for other owners: the account may have been compromised
+/// (GH#145). The caller's own session is not ended but replaced by a new one,
+/// returned for its cookies (GH#510).
+pub async fn set_password(
+    pool: &PgPool,
+    ctx: &RequestContext,
+    id: Uuid,
+    new_password: &str,
+) -> Result<(User, Option<auth::Rotated>), AppError> {
     let hash = password::hash(new_password).await?;
     let mut tx = pool.begin().await?;
     let before = lock(&mut tx, id).await?;
@@ -626,6 +632,10 @@ pub async fn set_password(pool: &PgPool, ctx: &RequestContext, id: Uuid, new_pas
     let ended = data::delete_user_sessions(&mut tx, id, own.and_then(|p| p.session_id())).await?;
     let reason = if own.is_some() { RevokeReason::PasswordChanged } else { RevokeReason::PasswordReset };
     events::revoked(&mut tx, ctx, &ended, reason).await?;
+    let rotated = match own.and_then(|p| p.session_id()) {
+        Some(session_id) => Some(auth::rotate_own_session(&mut tx, ctx, session_id, false).await?),
+        None => None,
+    };
     let dto = load(&mut tx, id).await?;
     let entry = AuditEntry {
         action: AuditAction::Update,
@@ -636,7 +646,7 @@ pub async fn set_password(pool: &PgPool, ctx: &RequestContext, id: Uuid, new_pas
     };
     crud::write_audit(&mut tx, ctx, vec![entry]).await?;
     tx.commit().await?;
-    Ok(dto)
+    Ok((dto, rotated))
 }
 
 /// Deletes the account. The business services it owns lose it as owner, each

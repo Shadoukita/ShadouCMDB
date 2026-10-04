@@ -152,7 +152,8 @@ pub async fn mark_session_reauthenticated(conn: &mut PgConnection, id: Uuid) -> 
     Ok(())
 }
 
-/// The session proved a second factor after sign-in (TOTP enrolment confirmed in it).
+/// The session proved a second factor after sign-in (tests that stage an enrolment by hand).
+#[cfg(test)]
 pub async fn mark_session_mfa_verified(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<()> {
     sqlx::query("UPDATE sessions SET mfa_verified = true WHERE id = $1").bind(id).execute(conn).await?;
     Ok(())
@@ -189,6 +190,46 @@ pub async fn delete_session_by_token(conn: &mut PgConnection, token_hash: &[u8])
         .bind(token_hash)
         .fetch_optional(conn)
         .await
+}
+
+/// Replaces session `id` with a new one under a new token and CSRF token, for
+/// the same user, with the same expiry, the old one's second-factor state (or
+/// `mfa_verified`) and step-up time (GH#498), and the request's client: a copy of the old cookie,
+/// however it was obtained, no longer works (GH#510). Returns the new
+/// session's id and the ended one; None when `id` had already ended.
+pub async fn rotate_session(
+    conn: &mut PgConnection,
+    id: Uuid,
+    token_hash: &[u8],
+    csrf_token: &str,
+    user_agent: Option<&str>,
+    ip_address: Option<IpAddr>,
+    mfa_verified: bool,
+) -> sqlx::Result<Option<(Uuid, EndedSession)>> {
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        new_id: Uuid,
+        #[sqlx(flatten)]
+        ended: EndedSession,
+    }
+    let row: Option<Row> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "WITH old AS ({ENDED} s.id = $1 {ENDED_COLUMNS}, s.expires_at, s.mfa_verified, s.credentials_confirmed_at),
+              new AS (INSERT INTO sessions (user_id, token_hash, csrf_token, expires_at, user_agent, ip_address, mfa_verified,
+                                            credentials_confirmed_at)
+                      SELECT user_id, $2, $3, expires_at, $4, $5, mfa_verified OR $6, credentials_confirmed_at FROM old
+                      RETURNING id)
+         SELECT new.id AS new_id, old.id, old.user_id, old.username, old.ip_address, old.user_agent, old.created_at
+         FROM old, new"
+    )))
+    .bind(id)
+    .bind(token_hash)
+    .bind(csrf_token)
+    .bind(user_agent)
+    .bind(ip_address.map(IpNetwork::from))
+    .bind(mfa_verified)
+    .fetch_optional(conn)
+    .await?;
+    Ok(row.map(|r| (r.new_id, r.ended)))
 }
 
 /// Signs a user out everywhere, optionally keeping one session (the caller's own).

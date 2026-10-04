@@ -283,6 +283,47 @@ pub(crate) async fn try_open_session(
     Ok(Ok((session_id, session::login_cookies(&auth.config, auth.session_cookie_secure(headers), &token, &csrf))))
 }
 
+/// The caller's session under its new id: the token and CSRF token for its cookies.
+pub(crate) struct Rotated {
+    token: String,
+    csrf: String,
+}
+
+impl Rotated {
+    /// Set-Cookie headers replacing the old session and CSRF cookies.
+    pub(crate) fn cookies(&self, auth: &AuthState, headers: &HeaderMap) -> Vec<axum::http::HeaderValue> {
+        session::login_cookies(&auth.config, auth.session_cookie_secure(headers), &self.token, &self.csrf)
+    }
+}
+
+/// Replaces the caller's session `session_id` with a new one (new id, token
+/// and CSRF token) in the caller's transaction, and audits the old one as
+/// `session.revoke` with reason `rotated`. For changes that re-prove who the
+/// user is (their own password change, confirming an authenticator): a copy
+/// of the old cookie must not survive them (GH#510). `mfa_verified`: the
+/// request proved a second factor. 401 when the session ended meanwhile.
+pub(crate) async fn rotate_own_session(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    session_id: Uuid,
+    mfa_verified: bool,
+) -> Result<Rotated, AppError> {
+    let rotated = Rotated { token: session::new_token(), csrf: session::new_token() };
+    let (new_id, old) = data::rotate_session(
+        conn,
+        session_id,
+        &session::token_hash(&rotated.token),
+        &rotated.csrf,
+        ctx.client.user_agent.as_deref(),
+        ctx.client.ip,
+        mfa_verified,
+    )
+    .await?
+    .ok_or_else(unauthenticated)?;
+    events::rotated(conn, ctx, &old, new_id).await?;
+    Ok(rotated)
+}
+
 /// Why a sign-in whose credentials were right when checked gets no session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Changed {
@@ -1060,12 +1101,13 @@ async fn change_password(
     pool: &PgPool,
     auth: &AuthState,
     ctx: &RequestContext,
+    headers: &HeaderMap,
     b: PasswordChange,
-) -> Result<(), AppError> {
+) -> Result<Vec<axum::http::HeaderValue>, AppError> {
     let me = principal(ctx)?;
     check_current_password(pool, auth, me, &b.current_password).await?;
-    users::set_password(pool, ctx, me.user_id, &b.new_password).await?;
-    Ok(())
+    let (_, rotated) = users::set_password(pool, ctx, me.user_id, &b.new_password).await?;
+    Ok(rotated.map(|r| r.cookies(auth, headers)).unwrap_or_default())
 }
 
 // ---------------------------------------------------------------------------
@@ -1157,16 +1199,16 @@ pub fn routes() -> Vec<Route> {
             }),
         route(Method::PUT, "/api/v1/auth/password", "changeOwnPassword")
             .tag(TAG)
-            .summary("Change your own password (ends your other sessions and revokes your API tokens)")
+            .summary("Change your own password (ends your other sessions, renews this one and revokes your API tokens)")
             .session_only()
             .before_mfa_enrolment()
             .description(
-                "Every API token you own that still works is revoked; create new ones after the change. 400 when `currentPassword` is wrong; 409 for an account that signs in through an identity provider. The first 4 wrong current passwords cost nothing; from the 5th on, each one locks password changes for this user for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After.",
+                "Every API token you own that still works is revoked; create new ones after the change. This session continues under a new session and CSRF token: the response sets both cookies again, the old session cookie stops working (audited as `session.revoke`, reason rotated, with `replacedBy`), and GET /api/v1/auth/me returns the new CSRF token. 400 when `currentPassword` is wrong; 409 for an account that signs in through an identity provider. The first 4 wrong current passwords cost nothing; from the 5th on, each one locks password changes for this user for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After.",
             )
             .errors(&[ErrorCode::RateLimited, ErrorCode::Conflict])
             .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<PasswordChange>>| async move {
-                change_password(&api.pool, &api.auth, &api.ctx, b).await?;
-                Ok(NoContent)
+                let cookies = change_password(&api.pool, &api.auth, &api.ctx, &api.headers, b).await?;
+                Ok(WithCookies(NoContent, cookies))
             }),
     ]
 }
@@ -1431,10 +1473,10 @@ pub(crate) mod tests {
         };
         auth.password_throttle.freeze();
         for _ in 0..crate::auth::throttle::FREE_FAILURES {
-            let e = change_password(pool, &auth, &ctx, change(&wrong)).await.unwrap_err();
+            let e = change_password(pool, &auth, &ctx, &HeaderMap::new(), change(&wrong)).await.unwrap_err();
             assert_eq!(e.code, ErrorCode::ValidationError);
         }
-        let e = change_password(pool, &auth, &ctx, change(right)).await.unwrap_err();
+        let e = change_password(pool, &auth, &ctx, &HeaderMap::new(), change(right)).await.unwrap_err();
         assert_eq!(e.code, ErrorCode::RateLimited, "locked: not even the right password is checked");
         assert_eq!(e.retry_after, Some(1));
         let hash = data::password_hash(&mut pool.acquire().await.unwrap(), user_id).await.unwrap().flatten();

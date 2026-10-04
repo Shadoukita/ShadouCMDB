@@ -5,7 +5,7 @@
 //! The sign-in step itself (POST /api/v1/auth/login/mfa) lives with the rest
 //! of sign-in in [`super::auth`]; it uses [`verify_second_factor`] from here.
 
-use axum::http::{Method, StatusCode};
+use axum::http::{HeaderMap, Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::{PgConnection, PgPool, Postgres, Transaction};
@@ -13,10 +13,12 @@ use utoipa::ToSchema;
 use utoipa::openapi::schema::{ObjectBuilder, Schema, Type};
 use uuid::Uuid;
 
-use super::auth::{confirm_current_password, confirm_current_password_attempt, password_field_schema, password_gate};
+use super::auth::{
+    self, confirm_current_password, confirm_current_password_attempt, password_field_schema, password_gate,
+};
 use super::users;
 use crate::api::context::{RequestContext, unauthenticated};
-use crate::api::route::{Body, Check, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, Route, route};
+use crate::api::route::{Body, Check, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, Route, WithCookies, route};
 use crate::auth::events::{self, LoginMethod, RevokeReason};
 use crate::auth::permissions::GlobalPermission;
 use crate::auth::secret::Secret;
@@ -288,8 +290,9 @@ async fn confirm(
     pool: &PgPool,
     auth: &AuthState,
     ctx: &RequestContext,
+    headers: &HeaderMap,
     b: TotpConfirmation,
-) -> Result<RecoveryCodes, AppError> {
+) -> Result<WithCookies<Json<RecoveryCodes>>, AppError> {
     let me = me(ctx)?;
     let attempt = password_gate(auth, me).await?;
     let mut tx = pool.begin().await?;
@@ -330,10 +333,12 @@ async fn confirm(
     };
     data::confirm_totp(&mut tx, me.user_id, step).await?;
     // This request proved the new authenticator: the session counts as
-    // signed in with a second factor (e.g. for creating API tokens, GH#200).
-    if let Some(session_id) = me.session_id() {
-        auth_data::mark_session_mfa_verified(&mut tx, session_id).await?;
-    }
+    // signed in with a second factor (e.g. for creating API tokens, GH#200),
+    // under a new id, so a copy of its old cookie does not gain that (GH#510).
+    let rotated = match me.session_id() {
+        Some(session_id) => Some(auth::rotate_own_session(&mut tx, ctx, session_id, true).await?),
+        None => None,
+    };
     let codes = new_recovery_codes(&mut tx, me.user_id).await?;
     let extra = json!({ "method": "totp", "recoveryCodes": codes.codes.len() });
     events::mfa(&mut tx, ctx, AuditAction::MfaEnrol, me.user_id, &me.username, extra).await?;
@@ -345,7 +350,7 @@ async fn confirm(
     tx.commit().await?;
     attempt.success();
     tracing::info!(user = %me.username, "two-factor authentication set up");
-    Ok(codes)
+    Ok(WithCookies(Json(codes), rotated.map(|r| r.cookies(auth, headers)).unwrap_or_default()))
 }
 
 /// After the password (its `attempt`), a current second factor. A wrong code
@@ -527,13 +532,13 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("Confirm the new authenticator with a code from it; returns 10 recovery codes (shown once)")
             .description(
-                "From now on sign-in asks for a code after the password. This session counts as having proven the second factor; your other sessions that did not prove one end (audited as `session.revoke`, reason mfa_enrolled) and sign in again with a code. 400 (field `code`) when the code does not match (audited as `mfa.failure`, stage enrol_confirm); 409 without a started set-up, when one is already confirmed, or when it was started more than 15 minutes ago (start it again). Wrong codes count together with wrong current passwords on the MFA routes: the first 4 cost nothing; from the 5th on, each one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After). A right code clears the count.",
+                "From now on sign-in asks for a code after the password. This session counts as having proven the second factor and continues under a new session and CSRF token: the response sets both cookies again, the old session cookie stops working (audited as `session.revoke`, reason rotated, with `replacedBy`), and GET /api/v1/auth/me returns the new CSRF token. Your other sessions that did not prove one end (audited as `session.revoke`, reason mfa_enrolled) and sign in again with a code. 400 (field `code`) when the code does not match (audited as `mfa.failure`, stage enrol_confirm); 409 without a started set-up, when one is already confirmed, or when it was started more than 15 minutes ago (start it again). Wrong codes count together with wrong current passwords on the MFA routes: the first 4 cost nothing; from the 5th on, each one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After). A right code clears the count.",
             )
             .session_only()
             .before_mfa_enrolment()
             .errors(&[ErrorCode::Conflict, ErrorCode::RateLimited])
             .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<TotpConfirmation>>| async move {
-                Ok(Json(confirm(&api.pool, &api.auth, &api.ctx, b).await?))
+                confirm(&api.pool, &api.auth, &api.ctx, &api.headers, b).await
             }),
         route(Method::POST, "/api/v1/auth/reauthenticate", "reauthenticate")
             .tag(TAG)
@@ -595,7 +600,7 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::db::scratch;
-    use crate::modules::api_tokens::tests::{Creds, app, call, code};
+    use crate::modules::api_tokens::tests::{Creds, app, call, code, renewed};
 
     const PASSWORD: &str = "correct horse battery";
 
@@ -658,8 +663,9 @@ pub(crate) mod tests {
     /// step before it, so codes for the returned step and the next one are
     /// still unused. The step is taken after the password check (argon2id),
     /// right before the confirm: one taken earlier can pass out of the
-    /// window on a busy host (GH#603).
-    async fn enrol(app: &Router, pool: &PgPool, session: &Creds) -> (Vec<u8>, Vec<String>, i64) {
+    /// window on a busy host (GH#603). `session` continues under the
+    /// cookies the confirm renewed; the old cookie no longer works (GH#510).
+    async fn enrol(app: &Router, pool: &PgPool, session: &mut Creds) -> (Vec<u8>, Vec<String>, i64) {
         let (status, v, _) =
             call(app, "POST", "/api/v1/auth/mfa/totp", session, Some(json!({ "currentPassword": PASSWORD }))).await;
         assert_eq!(status, 201, "{v}");
@@ -667,10 +673,23 @@ pub(crate) mod tests {
         assert_eq!(v["secret"].as_str(), Some(totp::base32(&secret).as_str()));
         let step = settled_step().await;
         let body = json!({ "code": totp::code_at(&secret, step - 1) });
-        let (status, v, _) = call(app, "POST", "/api/v1/auth/mfa/totp/confirm", session, Some(body)).await;
+        let (status, v, headers) = call(app, "POST", "/api/v1/auth/mfa/totp/confirm", session, Some(body)).await;
         assert_eq!(status, 200, "{v}");
+        *session = renewed_after_confirm(app, session, &headers).await;
         let codes = v["codes"].as_array().unwrap().iter().map(|c| c.as_str().unwrap().to_owned()).collect();
         (secret, codes, step)
+    }
+
+    /// The session a confirm renewed: it works under its new cookies, and
+    /// `old` gets 401 (GH#510).
+    async fn renewed_after_confirm(app: &Router, old: &Creds, headers: &HeaderMap) -> Creds {
+        let new = renewed(headers);
+        let (status, me, _) = call(app, "GET", "/api/v1/auth/me", &new, None).await;
+        assert_eq!(status, 200, "the session continues under its new cookie: {me}");
+        assert_eq!(me["csrfToken"].as_str(), new.csrf.as_deref(), "/auth/me returns the new CSRF token");
+        let (status, _, _) = call(app, "GET", "/api/v1/auth/me", old, None).await;
+        assert_eq!(status, 401, "the cookie used before the confirm no longer works");
+        new
     }
 
     /// Password step: returns the challenge cookie.
@@ -708,9 +727,9 @@ pub(crate) mod tests {
         assert_eq!(status, 201, "{v}");
         let seed = seed_of(pool, "second").await;
         let body = json!({ "code": totp::code_at(&seed, totp::current_step()) });
-        let (status, v, _) = call(app, "POST", "/api/v1/auth/mfa/totp/confirm", &second, Some(body)).await;
+        let (status, v, headers) = call(app, "POST", "/api/v1/auth/mfa/totp/confirm", &second, Some(body)).await;
         assert_eq!(status, 200, "{v}");
-        second
+        renewed_after_confirm(app, &second, &headers).await
     }
 
     /// Signs the owner in with the password alone.
@@ -734,7 +753,7 @@ pub(crate) mod tests {
     async fn totp_sign_in_takes_a_second_step() {
         let Some(db) = scratch::database("totp_sign_in_takes_a_second_step").await else { return };
         let (app, pool) = (app(db.pool.clone()), &db.pool);
-        let (session, _) = setup(&app).await;
+        let (mut session, _) = setup(&app).await;
         let step = settled_step().await;
 
         let (status, v, _) = call(&app, "GET", "/api/v1/auth/mfa", &session, None).await;
@@ -753,7 +772,7 @@ pub(crate) mod tests {
         assert_eq!((status, v["error"]["details"][0]["code"].as_str()), (400, Some("invalid_code")));
         let first = mfa_rows(pool).await;
         assert_eq!((first[0].0.as_str(), first[0].1["stage"].as_str()), ("mfa.failure", Some("enrol_confirm")));
-        let (secret, recovery, step) = enrol(&app, pool, &session).await;
+        let (secret, recovery, step) = enrol(&app, pool, &mut session).await;
         assert_eq!(recovery.len(), 10);
         let (status, _, _) =
             call(&app, "POST", "/api/v1/auth/mfa/totp", &session, Some(json!({ "currentPassword": PASSWORD }))).await;
@@ -846,8 +865,8 @@ pub(crate) mod tests {
     async fn wrong_codes_lock_the_username_like_wrong_passwords() {
         let Some(db) = scratch::database("wrong_codes_lock_the_username_like_wrong_passwords").await else { return };
         let (app, pool) = (app(db.pool.clone()), &db.pool);
-        let (session, _) = setup(&app).await;
-        let (secret, _, step) = enrol(&app, pool, &session).await;
+        let (mut session, _) = setup(&app).await;
+        let (secret, _, step) = enrol(&app, pool, &mut session).await;
 
         // Three wrong codes on one challenge, two on the next: the fifth locks the username.
         let first = password_step(&app).await;
@@ -893,8 +912,8 @@ pub(crate) mod tests {
     async fn a_reset_or_disable_drops_pending_second_factor_steps() {
         let Some(db) = scratch::database("a_reset_or_disable_drops_pending_second_factor_steps").await else { return };
         let (app, pool) = (app(db.pool.clone()), &db.pool);
-        let (session, _) = setup(&app).await;
-        let (secret, _, step) = enrol(&app, pool, &session).await;
+        let (mut session, _) = setup(&app).await;
+        let (secret, _, step) = enrol(&app, pool, &mut session).await;
         let administrators: Uuid =
             sqlx::query_scalar("SELECT id FROM permission_profiles WHERE name = 'Administrator'")
                 .fetch_one(pool)
@@ -951,9 +970,9 @@ pub(crate) mod tests {
     async fn the_admin_resets_refuse_the_callers_own_account() {
         let Some(db) = scratch::database("the_admin_resets_refuse_the_callers_own_account").await else { return };
         let (app, pool) = (app(db.pool.clone()), &db.pool);
-        let (session, me) = setup(&app).await;
+        let (mut session, me) = setup(&app).await;
         let owner = me["user"]["id"].as_str().unwrap().to_owned();
-        let (secret, _, step) = enrol(&app, pool, &session).await;
+        let (secret, _, step) = enrol(&app, pool, &mut session).await;
         let challenge = password_step(&app).await;
         let (status, me_b, headers) = second_step(&app, &challenge, &totp::code_at(&secret, step)).await;
         assert_eq!(status, 200, "{me_b}");
@@ -1095,8 +1114,8 @@ pub(crate) mod tests {
             return;
         };
         let (app, pool) = (app(db.pool.clone()), &db.pool);
-        let (session, _) = setup(&app).await;
-        let (_, codes, _) = enrol(&app, pool, &session).await;
+        let (mut session, _) = setup(&app).await;
+        let (_, codes, _) = enrol(&app, pool, &mut session).await;
         stale(pool, "owner").await;
         let path = "/api/v1/auth/reauthenticate";
 
@@ -1130,8 +1149,8 @@ pub(crate) mod tests {
     async fn right_password_wrong_code_locks_reauthentication() {
         let Some(db) = scratch::database("right_password_wrong_code_locks_reauthentication").await else { return };
         let (app, pool) = (app(db.pool.clone()), &db.pool);
-        let (session, _) = setup(&app).await;
-        let (secret, _, step) = enrol(&app, pool, &session).await;
+        let (mut session, _) = setup(&app).await;
+        let (secret, _, step) = enrol(&app, pool, &mut session).await;
         let with = |c: &str| json!({ "currentPassword": PASSWORD, "code": c });
         let password_only = json!({ "currentPassword": PASSWORD });
 
@@ -1165,7 +1184,7 @@ pub(crate) mod tests {
     async fn wrong_enrolment_codes_lock_the_confirm() {
         let Some(db) = scratch::database("wrong_enrolment_codes_lock_the_confirm").await else { return };
         let (app, pool) = (app(db.pool.clone()), &db.pool);
-        let (session, _) = setup(&app).await;
+        let (mut session, _) = setup(&app).await;
         let step = settled_step().await;
         let start = json!({ "currentPassword": PASSWORD });
         let (status, _, _) = call(&app, "POST", "/api/v1/auth/mfa/totp", &session, Some(start.clone())).await;
@@ -1194,8 +1213,9 @@ pub(crate) mod tests {
 
         // Once the lock has passed the right code confirms and clears the count.
         tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
-        let (status, v, _) = call(&app, "POST", confirm, &session, Some(right)).await;
+        let (status, v, headers) = call(&app, "POST", confirm, &session, Some(right)).await;
         assert_eq!(status, 200, "{v}");
+        session = renewed_after_confirm(&app, &session, &headers).await;
         let recovery = v["codes"][0].as_str().unwrap().to_owned();
         let off = json!({ "currentPassword": PASSWORD, "code": recovery });
         let (status, v, _) = call(&app, "DELETE", "/api/v1/auth/mfa/totp", &session, Some(off)).await;
@@ -1223,7 +1243,7 @@ pub(crate) mod tests {
     async fn a_profile_can_require_mfa() {
         let Some(db) = scratch::database("a_profile_can_require_mfa").await else { return };
         let (app, pool) = (app(db.pool.clone()), &db.pool);
-        let (session, me) = setup(&app).await;
+        let (mut session, me) = setup(&app).await;
         let owner = me["user"]["id"].as_str().unwrap().to_owned();
         let admin_profile = me["user"]["profiles"][0]["id"].as_str().unwrap().to_owned();
         let path = format!("/api/v1/admin/profiles/{admin_profile}");
@@ -1237,7 +1257,7 @@ pub(crate) mod tests {
         assert_eq!((status, code(&v)), (403, "MFA_ENROLMENT_REQUIRED"));
         let (status, v, _) = call(&app, "GET", "/api/v1/auth/me", &session, None).await;
         assert_eq!((status, &v["mfa"]["enrolmentRequired"]), (200, &json!(true)));
-        enrol(&app, pool, &session).await;
+        enrol(&app, pool, &mut session).await;
         let (status, v, _) = call(&app, "GET", "/api/v1/admin/users", &session, None).await;
         assert_eq!((status, &v["data"][0]["mfaEnabled"]), (200, &json!(true)));
 
@@ -1309,7 +1329,7 @@ pub(crate) mod tests {
             return;
         };
         let (app, pool) = (app(db.pool.clone()), &db.pool);
-        let (session, me) = setup(&app).await;
+        let (mut session, me) = setup(&app).await;
         let owner: Uuid = me["user"]["id"].as_str().unwrap().parse().unwrap();
         let own: Uuid = sqlx::query_scalar("SELECT id FROM sessions").fetch_one(pool).await.unwrap();
         let unverified = async || -> i64 {
@@ -1326,7 +1346,7 @@ pub(crate) mod tests {
         let mut signing_in = pool.begin().await.unwrap();
         auth_data::record_login(&mut signing_in, owner).await.unwrap().expect("the owner");
         let body = json!({ "code": totp::code_at(&secret, step) });
-        let ((status, v, _), ()) =
+        let ((status, v, headers), ()) =
             tokio::join!(call(&app, "POST", "/api/v1/auth/mfa/totp/confirm", &session, Some(body)), async move {
                 let awaited = crate::modules::auth::tests::a_lock_is_awaited(pool).await;
                 assert!(awaited, "the confirm waits for the sign-in's lock on the user's row");
@@ -1339,6 +1359,7 @@ pub(crate) mod tests {
             });
         assert_eq!(status, 200, "{v}");
         assert_eq!(unverified().await, 0, "the password-only session committed first is ended");
+        session = renewed_after_confirm(&app, &session, &headers).await;
         let recovery = v["codes"][0].as_str().unwrap().to_owned();
 
         // The confirm locks the row first: a sign-in that found no
@@ -1383,7 +1404,7 @@ pub(crate) mod tests {
     async fn require_mfa_gates_by_what_the_session_proved() {
         let Some(db) = scratch::database("require_mfa_gates_by_what_the_session_proved").await else { return };
         let (app, pool) = (app(db.pool.clone()), &db.pool);
-        let (session, me) = setup(&app).await;
+        let (mut session, me) = setup(&app).await;
         let owner = me["user"]["id"].as_str().unwrap().to_owned();
         let admin_profile = me["user"]["profiles"][0]["id"].as_str().unwrap().to_owned();
         let path = format!("/api/v1/admin/profiles/{admin_profile}");
@@ -1409,7 +1430,7 @@ pub(crate) mod tests {
         assert_eq!(gated(a.clone()).await, enrolment_required);
 
         // The real user enrols in their own session, which gets full access ...
-        let (secret, _, step) = enrol(&app, pool, &session).await;
+        let (secret, _, step) = enrol(&app, pool, &mut session).await;
         assert_eq!(gated(session.clone()).await.0, 200, "the enrolling session");
         let (status, v, _) = call(&app, "GET", "/api/v1/auth/me", &session, None).await;
         assert_eq!((status, &v["mfa"]["enrolmentRequired"]), (200, &json!(false)));
@@ -1454,10 +1475,10 @@ pub(crate) mod tests {
         assert_eq!((status, code(&v)), (401, "UNAUTHENTICATED"), "session C after the reset");
         let (status, v, _) = call(&app, "GET", "/api/v1/auth/me", &session, None).await;
         assert_eq!((status, code(&v)), (401, "UNAUTHENTICATED"), "the owner's session after the reset");
-        let session = owner_session(&app).await;
+        let mut session = owner_session(&app).await;
         assert_eq!(gated(session.clone()).await, enrolment_required, "a new session after the reset");
         // Setting it up again brings no ended session back.
-        let (secret, _, step) = enrol(&app, pool, &session).await;
+        let (secret, _, step) = enrol(&app, pool, &mut session).await;
         assert_eq!(gated(session.clone()).await.0, 200);
         let (status, _, _) = call(&app, "GET", "/api/v1/auth/me", &c, None).await;
         assert_eq!(status, 401, "session C after re-enrolment");
@@ -1710,7 +1731,7 @@ pub(crate) mod tests {
     async fn api_tokens_follow_their_owners_require_mfa() {
         let Some(db) = scratch::database("api_tokens_follow_their_owners_require_mfa").await else { return };
         let (app, pool) = (app(db.pool.clone()), &db.pool);
-        let (session, me) = setup(&app).await;
+        let (mut session, me) = setup(&app).await;
         let owner = me["user"]["id"].as_str().unwrap().to_owned();
         let readers = readers_profile(pool).await;
 
@@ -1755,7 +1776,7 @@ pub(crate) mod tests {
 
         // Enrolling does not revive the old token; confirming it in this
         // session proves the second factor, so a new token works.
-        let (secret, _, step) = enrol(&app, pool, &session).await;
+        let (secret, _, step) = enrol(&app, pool, &mut session).await;
         assert_eq!(use_token(&app, &old).await.0, 401);
         let (status, c) = mint(&app, &session, None, readers, "after enrolment").await;
         assert_eq!(status, 201, "{c}");
@@ -1813,7 +1834,7 @@ pub(crate) mod tests {
             return;
         };
         let (app, pool) = (app(db.pool.clone()), &db.pool);
-        let (admin, _) = setup(&app).await;
+        let (mut admin, _) = setup(&app).await;
         let readers = readers_profile(pool).await;
         let strict = strict_profile(pool).await;
         let svc = json!({ "username": "svc-backup", "email": "svc-backup@example.test", "displayName": "Backup", "password": "service account password",
@@ -1828,7 +1849,7 @@ pub(crate) mod tests {
         let count: i64 = sqlx::query_scalar("SELECT count(*) FROM api_tokens").fetch_one(pool).await.unwrap();
         assert_eq!(count, 0);
 
-        enrol(&app, pool, &admin).await;
+        enrol(&app, pool, &mut admin).await;
         let (status, v) = mint(&app, &admin, Some(&svc), readers, "backup").await;
         assert_eq!(status, 201, "{v}");
         assert_eq!((&v["token"]["mfaVerified"], &v["token"]["refusedForMfa"]), (&json!(true), &json!(false)));

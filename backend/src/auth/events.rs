@@ -65,6 +65,9 @@ pub enum RevokeReason {
     /// The user confirmed an authenticator; their other sessions that did not
     /// prove it end (GH#292).
     MfaEnrolled,
+    /// The user changed their own password or confirmed an authenticator in
+    /// this session; it continues under a new id, token and CSRF token (GH#510).
+    Rotated,
 }
 
 impl RevokeReason {
@@ -80,6 +83,7 @@ impl RevokeReason {
             RevokeReason::MfaDisabled => "mfa_disabled",
             RevokeReason::MfaReset => "mfa_reset",
             RevokeReason::MfaEnrolled => "mfa_enrolled",
+            RevokeReason::Rotated => "rotated",
         }
     }
 }
@@ -272,6 +276,20 @@ pub async fn revoked(
         write(conn, ctx, AuditAction::SessionRevoke, s.id, details(ctx, f)).await?;
     }
     Ok(())
+}
+
+/// The caller's session `old` was replaced by `new_session_id` (reason
+/// `rotated`, with `replacedBy`).
+pub async fn rotated(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    old: &EndedSession,
+    new_session_id: Uuid,
+) -> sqlx::Result<()> {
+    let mut f = session_fields(old);
+    f.insert("reason".into(), json!(RevokeReason::Rotated.as_str()));
+    f.insert("replacedBy".into(), json!(new_session_id));
+    write(conn, ctx, AuditAction::SessionRevoke, old.id, details(ctx, f)).await
 }
 
 /// A request was made with this API token; `refusal` is why it was turned away, if it was.
