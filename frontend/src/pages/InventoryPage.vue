@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { RouterLink, useRouter } from "vue-router";
 import { useAllLookupListValues, useAreas, useLookupLists } from "../api/datamodel";
 import { useCiClasses, useCiList, useClassAttributes, useCriticalityValues, type CiListQuery } from "../api/queries";
@@ -18,6 +18,8 @@ import PaginationBar from "../components/PaginationBar.vue";
 import { useAppSettings } from "../lib/appSettings";
 import { useDocumentTitle, useMediaQuery } from "../lib/composables";
 import ChangeHistogram from "../components/ChangeHistogram.vue";
+import FacetPanel from "../components/FacetPanel.vue";
+import { readFacetPref, writeFacetPref } from "../lib/facets";
 import { viewableClasses } from "../lib/permissions";
 import { ATTRIBUTE_PREFIX, BUILTIN_FIELDS, fieldLabel, isSortableAttribute, listViewFor, lookupValueIds } from "../lib/uiSettings";
 import { useInventoryQueryState } from "../lib/useInventoryQueryState";
@@ -131,13 +133,25 @@ const catalogue = computed(() =>
 /** The total once the list for this URL has loaded (not the previous list's, kept while it loads). */
 const settledTotal = computed(() => (list.data.value && !list.isPlaceholderData.value && !list.isFetching.value ? total.value : undefined));
 
-// The change histogram counts the audit log (audit.view) for the list's filters; wide screens only.
+// The change histogram and the facet panel count the list's filters.
 const wide = useMediaQuery("(min-width: 821px)");
-const histogramFilters = computed(() => {
+const listFilters = computed(() => {
   const { sort: _sort, limit: _limit, offset: _offset, ...filters } = state.listQuery.value as CiListQuery;
   return filters;
 });
+// The histogram counts the audit log (audit.view); wide screens only.
 const showHistogram = computed(() => wide.value && session.can("audit.view") && !classDenied.value && rows.value.length > 0);
+
+// The facet panel: open on wide screens until the operator chooses (remembered per browser), with
+// nothing to narrow on an empty inventory.
+const facetPref = ref(readFacetPref());
+watch(facetPref, (p) => writeFacetPref(p), { deep: true });
+const facetsOpen = computed(() => facetPref.value.open ?? wide.value);
+const showFacets = computed(() => !classDenied.value && !(list.data.value && total.value === 0 && activeFilters.value.length === 0));
+function toggleFacetGroup(key: string) {
+  const c = facetPref.value.collapsed;
+  facetPref.value.collapsed = c.includes(key) ? c.filter((k) => k !== key) : [...c, key];
+}
 
 // Keyboard rows (lib/rowKeyboard): ↑/↓ between rows, Enter opens, `e` edits, `c` opens Columns.
 const router = useRouter();
@@ -174,6 +188,16 @@ function clearFilters() {
 
   <section class="panel explorer" :aria-label="t('inventory.region')">
     <form class="toolbar" role="search" @submit.prevent>
+      <button
+        v-if="showFacets"
+        type="button"
+        class="btn btn-ghost facets-toggle"
+        :aria-expanded="facetsOpen"
+        aria-controls="facets"
+        @click="facetPref.open = !facetsOpen"
+      >
+        <Icon :name="facetsOpen ? 'panel-left-close' : 'panel-left-open'" />{{ facetsOpen ? t("facets.hide") : t("facets.show") }}
+      </button>
       <SavedViewMenu context="inventory" :state="state" :selection="selection" :classes="classes.data.value" :catalogue="catalogue" :total="settledTotal" />
       <QueryBar :state="state" :catalogue="barCatalogue" />
       <InventoryFilters :state="state" id-prefix="f" />
@@ -193,57 +217,69 @@ function clearFilters() {
     </form>
     <InventoryFilterChips :state="state" />
 
-    <div v-if="list.isError.value" class="panel-body">
-      <ErrorAlert :error="list.error.value" :on-retry="() => list.refetch()" />
-    </div>
-    <SkeletonRows v-if="list.isPending.value" :label="t('inventory.loading')" />
+    <div class="explorer-body">
+      <FacetPanel
+        v-if="showFacets && facetsOpen"
+        :state="state"
+        :filters="listFilters"
+        :enabled="state.settled.value"
+        :collapsed="facetPref.collapsed"
+        @toggle-group="toggleFacetGroup"
+      />
+      <div class="explorer-main">
+        <div v-if="list.isError.value" class="panel-body">
+          <ErrorAlert :error="list.error.value" :on-retry="() => list.refetch()" />
+        </div>
+        <SkeletonRows v-if="list.isPending.value" :label="t('inventory.loading')" />
 
-    <EmptyState v-if="classDenied" icon="lock" :title="t('inventory.denied.title')">
-      {{ t("inventory.denied.body", { name: currentClass?.name ?? "" }) }}
-      <template #actions><RouterLink class="btn" to="/cis">{{ t("inventory.denied.back") }}</RouterLink></template>
-    </EmptyState>
-    <DataModelEmpty v-else-if="list.data.value && total === 0 && activeFilters.length === 0 && classes.data.value && dataModelEmpty(classes.data.value)" />
-    <EmptyState v-else-if="list.data.value && total === 0 && activeFilters.length === 0" :title="t('inventory.empty.title')">
-      {{ t("inventory.empty.body") }}
-      <template v-if="canCreate || importAccess.available.value" #actions>
-        <RouterLink v-if="canCreate" class="btn btn-primary" to="/cis/new"><Icon name="plus" />{{ t("inventory.empty.create") }}</RouterLink>
-        <RouterLink v-if="importAccess.available.value" class="btn" :to="importTo"><Icon name="upload" />{{ t("inventory.empty.import") }}</RouterLink>
-      </template>
-    </EmptyState>
-    <EmptyState v-else-if="list.data.value && total === 0 && activeFilters.length > 0" icon="search" :title="t('inventory.noMatch.title')">
-      {{ t("inventory.noMatch.body") }}
-    </EmptyState>
-    <EmptyState v-if="list.data.value && total > 0 && rows.length === 0" :title="t('common.pastEnd')">
-      <template #actions><button class="btn" @click="state.update({}, true)">{{ t("common.firstPage") }}</button></template>
-    </EmptyState>
+        <EmptyState v-if="classDenied" icon="lock" :title="t('inventory.denied.title')">
+          {{ t("inventory.denied.body", { name: currentClass?.name ?? "" }) }}
+          <template #actions><RouterLink class="btn" to="/cis">{{ t("inventory.denied.back") }}</RouterLink></template>
+        </EmptyState>
+        <DataModelEmpty v-else-if="list.data.value && total === 0 && activeFilters.length === 0 && classes.data.value && dataModelEmpty(classes.data.value)" />
+        <EmptyState v-else-if="list.data.value && total === 0 && activeFilters.length === 0" :title="t('inventory.empty.title')">
+          {{ t("inventory.empty.body") }}
+          <template v-if="canCreate || importAccess.available.value" #actions>
+            <RouterLink v-if="canCreate" class="btn btn-primary" to="/cis/new"><Icon name="plus" />{{ t("inventory.empty.create") }}</RouterLink>
+            <RouterLink v-if="importAccess.available.value" class="btn" :to="importTo"><Icon name="upload" />{{ t("inventory.empty.import") }}</RouterLink>
+          </template>
+        </EmptyState>
+        <EmptyState v-else-if="list.data.value && total === 0 && activeFilters.length > 0" icon="search" :title="t('inventory.noMatch.title')">
+          {{ t("inventory.noMatch.body") }}
+        </EmptyState>
+        <EmptyState v-if="list.data.value && total > 0 && rows.length === 0" :title="t('common.pastEnd')">
+          <template #actions><button class="btn" @click="state.update({}, true)">{{ t("common.firstPage") }}</button></template>
+        </EmptyState>
 
-    <template v-if="rows.length > 0">
-      <ChangeHistogram v-if="showHistogram" :filters="histogramFilters" />
-      <div class="table-wrap table-scroll">
-        <table :class="['data', { loading: list.isPlaceholderData.value }]" aria-describedby="inventory-keys">
-          <thead>
-            <tr>
-              <th v-for="c in columns" :key="c" scope="col" :aria-sort="columnSort(c) ? state.ariaSort(columnSort(c)!) : undefined">
-                <button v-if="columnSort(c)" type="button" class="sort" @click="state.toggleSort(columnSort(c)!)">
-                  {{ columnLabel(c) }} <SortIcon :dir="state.ariaSort(columnSort(c)!)" />
-                </button>
-                <template v-else>{{ columnLabel(c) }}</template>
-              </th>
-              <th scope="col" class="row-actions"><span class="sr-only">{{ t("inventory.actions") }}</span></th>
-            </tr>
-          </thead>
-          <tbody @keydown="onRowKeydown($event, rowKeys)">
-            <tr v-for="ci in rows" :key="ci.id" :data-id="ci.id" :class="{ deleted: ci.deletedAt }">
-              <td v-for="c in columns" :key="c"><CiCell :ci="ci" :field="c" :defs="attrDefs" :class-of="classById" /></td>
-              <td class="row-actions">
-                <RowMenu :label="t('inventory.rowMenu', { name: ci.label })" :items="ciRowMenu(ci)" />
-              </td>
-            </tr>
-          </tbody>
-        </table>
+        <template v-if="rows.length > 0">
+          <ChangeHistogram v-if="showHistogram" :filters="listFilters" />
+          <div class="table-wrap table-scroll">
+            <table :class="['data', { loading: list.isPlaceholderData.value }]" aria-describedby="inventory-keys">
+              <thead>
+                <tr>
+                  <th v-for="c in columns" :key="c" scope="col" :aria-sort="columnSort(c) ? state.ariaSort(columnSort(c)!) : undefined">
+                    <button v-if="columnSort(c)" type="button" class="sort" @click="state.toggleSort(columnSort(c)!)">
+                      {{ columnLabel(c) }} <SortIcon :dir="state.ariaSort(columnSort(c)!)" />
+                    </button>
+                    <template v-else>{{ columnLabel(c) }}</template>
+                  </th>
+                  <th scope="col" class="row-actions"><span class="sr-only">{{ t("inventory.actions") }}</span></th>
+                </tr>
+              </thead>
+              <tbody @keydown="onRowKeydown($event, rowKeys)">
+                <tr v-for="ci in rows" :key="ci.id" :data-id="ci.id" :class="{ deleted: ci.deletedAt }">
+                  <td v-for="c in columns" :key="c"><CiCell :ci="ci" :field="c" :defs="attrDefs" :class-of="classById" /></td>
+                  <td class="row-actions">
+                    <RowMenu :label="t('inventory.rowMenu', { name: ci.label })" :items="ciRowMenu(ci)" />
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <PaginationBar :total="total" :limit="limit" :offset="offset" @change="state.onPage" />
+          <KeyboardHints id="inventory-keys" :edit="anyEditable" columns />
+        </template>
       </div>
-      <PaginationBar :total="total" :limit="limit" :offset="offset" @change="state.onPage" />
-      <KeyboardHints id="inventory-keys" :edit="anyEditable" columns />
-    </template>
+    </div>
   </section>
 </template>

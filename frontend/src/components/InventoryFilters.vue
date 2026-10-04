@@ -27,6 +27,9 @@ const selected = computed(() => classes.data.value?.find((c) => c.id === s.value
 const selectedDenied = computed(() => !!selected.value && !classOptions.value.some((c) => c.id === selected.value!.id));
 const classGroups = computed(() => groupByArea(flattenTree(classOptions.value), (n) => n.item.areaId, areas.data.value ?? []));
 
+// Several classes, ticked in the facet panel or set by the query bar (classId=a,b).
+const classMany = computed(() => s.value.classId.value.includes(","));
+
 const value = (e: Event) => (e.target as HTMLSelectElement).value || undefined;
 
 // Criticality (a core field of every CI): one value, or a set from a link (criticalityValueId=a,b).
@@ -41,6 +44,7 @@ const criticalityMany = computed(() => criticalityValue.value.includes(","));
     <select :id="`${idPrefix}-class`" :value="s.classId.value" @change="s.update({ classId: value($event) })">
       <option value="">{{ t("filters.class.all") }}</option>
       <option v-if="selectedDenied && selected" :value="selected.id">{{ selected.name }}</option>
+      <option v-if="classMany" :value="s.classId.value">{{ t("filters.severalValues") }}</option>
       <optgroup v-for="g in classGroups" :key="g.area?.id ?? '-'" :label="g.area?.name ?? t('filters.class.otherArea')">
         <option v-for="n in g.items" :key="n.item.id" :value="n.item.id">
           {{ "\u00a0\u00a0".repeat(n.depth) }}{{ n.item.name }}{{ n.item.isAbstract ? ` ${t("filters.class.withSubclasses")}` : "" }}{{ n.item.isActive ? "" : ` ${t("filters.class.archived")}` }}
