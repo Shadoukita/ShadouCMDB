@@ -178,6 +178,9 @@ reports (unknown classes, a required attribute hidden by a layout) are listed ab
   (`GET …/{id}/usage`) and lists it. Classes and attributes are archived, and purged only after that (see above). A row still in use cannot be deleted: the dialog offers to archive it instead.
 - Related CIs are links. Walking from CI to CI builds a trail in the breadcrumb, for example
   `Inventory › CRM › crm-app-01 › fra1-esx-01 › FRA1 Rack A01`.
+- Confirmations ("Saved crm-app-01.") are toasts in the bottom-right corner that close after 6 s. **F8** moves
+  focus to the newest one (its clock stops while it has focus) and **F8** again goes back; **Esc** closes the
+  focused toast. Focus then moves to the next toast, or back to where it was before, never to the top of the page.
 
 ## Code layout
 
