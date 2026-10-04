@@ -861,22 +861,39 @@ pub async fn list(
     ctx: &RequestContext,
     q: &WorkflowInstanceList,
 ) -> Result<Page<WorkflowInstance>, AppError> {
+    // Every filter is a condition on `workflow_instances` alone, so the page and the count are found on
+    // that table (and its sort indexes) and only the page's rows are joined.
     let scope = ctx.class_scope(ClassOp::View);
     let filter = |w: &mut Where<'_>| {
         if let Some(classes) = &scope {
-            w.and().push("ci.class_id = ANY(").push_bind(classes.clone()).push(")");
+            w.and()
+                .push("wi.ci_id IN (SELECT id FROM cmdb.configuration_items WHERE class_id = ANY(")
+                .push_bind(classes.clone())
+                .push("))");
         }
         if let Some(k) = &q.definition_key {
-            w.and().push("lower(d.key) = lower(").push_bind(k.clone()).push(")");
+            w.and()
+                .push("wi.definition_id IN (SELECT id FROM cmdb.workflow_definitions WHERE lower(key) = lower(")
+                .push_bind(k.clone())
+                .push("))");
         }
         if let Some(k) = &q.state_key {
-            w.and().push("s.key = ").push_bind(k.clone());
+            w.and()
+                .push("wi.current_state_id IN (SELECT id FROM cmdb.workflow_states WHERE key = ")
+                .push_bind(k.clone())
+                .push(")");
         }
         if let Some(st) = q.status {
             w.and().push("wi.status = ").push_bind(st);
         }
         if let Some(k) = &q.class_key {
-            w.and().push("c.key = ").push_bind(k.clone());
+            w.and()
+                .push(
+                    "wi.ci_id IN (SELECT ci.id FROM cmdb.configuration_items ci \
+                     JOIN cmdb.ci_classes c ON c.id = ci.class_id WHERE c.key = ",
+                )
+                .push_bind(k.clone())
+                .push(")");
         }
         if let Some(ci) = q.ci_id {
             w.and().push("wi.ci_id = ").push_bind(ci);
@@ -887,16 +904,24 @@ pub async fn list(
         _ => "wi.last_transition_at",
     };
     let order = format!("{column} {dir}, wi.id {dir}", dir = q.sort.dir());
-    let (rows, total) = crud::select_page_counted::<InstanceRow>(
-        &mut *pool.acquire().await?,
-        FROM,
-        FROM,
-        COLUMNS,
+    let mut conn = pool.acquire().await?;
+    let (ids, total) = crud::select_page_counted::<(Uuid,)>(
+        &mut conn,
+        "cmdb.workflow_instances wi",
+        "cmdb.workflow_instances wi",
+        "wi.id",
         &filter,
         &order,
         q.limit,
         q.offset,
     )
+    .await?;
+    let ids: Vec<Uuid> = ids.into_iter().map(|(id,)| id).collect();
+    let rows = sqlx::query_as::<_, InstanceRow>(sqlx::AssertSqlSafe(format!(
+        "SELECT {COLUMNS} FROM {FROM} WHERE wi.id = ANY($1) ORDER BY {order}"
+    )))
+    .bind(&ids)
+    .fetch_all(&mut *conn)
     .await?;
     Ok(Page { data: rows.iter().map(InstanceRow::dto).collect(), page: q.page_meta(total) })
 }
@@ -906,19 +931,26 @@ pub async fn summary(
     ctx: &RequestContext,
     q: &WorkflowInstanceSummaryQuery,
 ) -> Result<WorkflowInstanceSummary, AppError> {
+    // Counted per state id on the instances first (the CI join only for a restricted caller), then the few
+    // states are named and merged across versions.
     let data = sqlx::query_as::<_, WorkflowStateCount>(
-        "SELECT d.id AS definition_id, d.key AS definition_key, s.key AS state_key,
+        "WITH per_state AS (
+           SELECT wi.current_state_id, count(*) AS n
+           FROM cmdb.workflow_instances wi
+           WHERE wi.status = 'active'
+             AND ($1::uuid[] IS NULL
+                  OR wi.ci_id IN (SELECT id FROM cmdb.configuration_items WHERE class_id = ANY($1)))
+             AND ($2::text IS NULL
+                  OR wi.definition_id IN (SELECT id FROM cmdb.workflow_definitions WHERE lower(key) = lower($2)))
+           GROUP BY wi.current_state_id)
+         SELECT d.id AS definition_id, d.key AS definition_key, s.key AS state_key,
                 (array_agg(s.name ORDER BY v.version_no DESC))[1] AS state_name,
                 (array_agg(s.category ORDER BY v.version_no DESC))[1] AS category,
-                count(*) AS count
-         FROM cmdb.workflow_instances wi
-         JOIN cmdb.workflow_definitions d ON d.id = wi.definition_id
-         JOIN cmdb.workflow_versions v ON v.id = wi.version_id
-         JOIN cmdb.workflow_states s ON s.id = wi.current_state_id
-         JOIN cmdb.configuration_items ci ON ci.id = wi.ci_id
-         WHERE wi.status = 'active'
-           AND ($1::uuid[] IS NULL OR ci.class_id = ANY($1))
-           AND ($2::text IS NULL OR lower(d.key) = lower($2))
+                sum(p.n)::bigint AS count
+         FROM per_state p
+         JOIN cmdb.workflow_states s ON s.id = p.current_state_id
+         JOIN cmdb.workflow_versions v ON v.id = s.version_id
+         JOIN cmdb.workflow_definitions d ON d.id = v.definition_id
          GROUP BY d.id, d.key, s.key
          ORDER BY d.key, min(s.sort_order), s.key",
     )
