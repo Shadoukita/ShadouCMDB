@@ -126,8 +126,12 @@ The unit sets LimitNOFILE=65536. The server raises its soft open-files limit
 to the hard limit at start-up and logs the connection limit in effect
 ("connection limit", with max_connections and open_files). When you write
 your own unit or init script, set a hard limit of at least 4 open files per
-HTTP_MAX_CONCURRENT_REQUESTS plus a quarter on top (2,731 at the default of
-512), or fewer connections are accepted.
+HTTP_MAX_CONCURRENT_REQUESTS plus a reserve: a quarter of the limit, and never
+less than DATABASE_POOL_MAX + 64. That is the larger of 4/3 x 4 x
+HTTP_MAX_CONCURRENT_REQUESTS and 4 x HTTP_MAX_CONCURRENT_REQUESTS +
+DATABASE_POOL_MAX + 64, so 2,730 at the defaults (512 requests, a pool of up
+to 200). Below that, fewer connections are accepted, down to a single one, and
+the server logs a warning at start-up that gives the limit it needs.
 
 The server speaks plain HTTP only. Sign-in passwords, session cookies and API
 tokens cross the network unencrypted unless a TLS front end terminates HTTPS
