@@ -52,3 +52,60 @@ test("inventory: the query bar writes key:value tokens into the URL filters, and
   await page.locator("#f-deleted").selectOption("include");
   await expect(bar).toHaveValue("deleted:include");
 });
+
+test("inventory: the query bar's colouring lies exactly over the text, also once it scrolls", async ({ page }) => {
+  await page.goto("/cis");
+  const bar = page.locator("#f-q");
+  const overlay = page.locator(".query-overlay");
+  await expect(overlay).toHaveAttribute("aria-hidden", "true");
+
+  // Long enough to scroll the input sideways, with every kind of run and an error.
+  const text = `class:server,vm -deleted:include nosuchfilter:me "quoted text" ${"fra1-esx-01 ".repeat(20).trim()}`;
+  await bar.click();
+  await bar.fill(text);
+  await bar.press("End");
+  await expect(bar).toHaveAttribute("aria-invalid", "true");
+  await expect(overlay.locator(".qs-key").first()).toHaveText("class");
+  await expect(overlay.locator(".qs-negation")).toHaveText("-");
+  await expect(overlay.locator(".qs-error").first()).toHaveText("-");
+
+  const m = await page.evaluate(() => {
+    const input = document.querySelector<HTMLInputElement>("#f-q")!;
+    const over = document.querySelector<HTMLElement>(".query-overlay")!;
+    const props = ["font-family", "font-size", "font-weight", "font-style", "letter-spacing", "word-spacing", "font-kerning", "font-variant-ligatures", "padding-left", "border-left-width", "text-indent"];
+    const style = (el: Element) => Object.fromEntries(props.map((p) => [p, getComputedStyle(el).getPropertyValue(p)]));
+    const box = (el: Element) => {
+      const r = el.getBoundingClientRect();
+      return [r.left, r.top, r.width, r.height].map(Math.round);
+    };
+    const first = over.querySelector("span")!.getBoundingClientRect();
+    const cs = getComputedStyle(over);
+    return {
+      inputStyle: style(input),
+      overlayStyle: style(over),
+      inputBox: box(input),
+      overlayBox: box(over),
+      text: over.textContent,
+      value: input.value,
+      inputScroll: input.scrollLeft,
+      overlayScroll: over.scrollLeft,
+      // Where the first glyph starts, against the content edge both share.
+      firstLeft: first.left + over.scrollLeft - over.getBoundingClientRect().left,
+      contentLeft: parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft),
+      // The glyphs sit on the input's vertical centre.
+      firstMid: first.top + first.height / 2,
+      inputMid: input.getBoundingClientRect().top + input.getBoundingClientRect().height / 2,
+    };
+  });
+  expect(m.overlayStyle).toEqual(m.inputStyle);
+  expect(m.overlayBox).toEqual(m.inputBox);
+  expect(m.text).toBe(m.value);
+  expect(m.inputScroll).toBeGreaterThan(0);
+  expect(Math.abs(m.overlayScroll - m.inputScroll)).toBeLessThanOrEqual(1);
+  expect(Math.abs(m.firstLeft - m.contentLeft)).toBeLessThanOrEqual(0.5);
+  expect(Math.abs(m.firstMid - m.inputMid)).toBeLessThanOrEqual(2);
+
+  // Back to the start, the overlay follows.
+  await bar.press("Home");
+  await expect.poll(() => overlay.evaluate((el) => el.scrollLeft)).toBe(0);
+});
