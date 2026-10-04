@@ -62,7 +62,7 @@ pub(super) struct PinnedState {
     pub(super) id: Uuid,
     pub(super) key: String,
     pub(super) name: String,
-    category: WorkflowStateCategory,
+    pub(super) category: WorkflowStateCategory,
     pub(super) is_terminal: bool,
     pub(super) state_value_id: Option<Uuid>,
 }
@@ -99,7 +99,7 @@ impl Pinned {
         self.states.iter().find(|s| s.id == id)
     }
 
-    fn state_by_key(&self, key: &str) -> Option<&PinnedState> {
+    pub(super) fn state_by_key(&self, key: &str) -> Option<&PinnedState> {
         self.states.iter().find(|s| s.key == key)
     }
 
@@ -594,13 +594,13 @@ async fn detail(
 // ---------------------------------------------------------------------------
 
 /// Who the event names.
-struct EventActor {
-    actor_type: &'static str,
-    id: Option<String>,
-    name: Option<String>,
+pub(super) struct EventActor {
+    pub(super) actor_type: &'static str,
+    pub(super) id: Option<String>,
+    pub(super) name: Option<String>,
 }
 
-fn actor_of(ctx: &RequestContext) -> EventActor {
+pub(super) fn actor_of(ctx: &RequestContext) -> EventActor {
     EventActor { actor_type: ctx.actor.actor_type.as_str(), id: ctx.actor.id.clone(), name: ctx.actor.name.clone() }
 }
 
@@ -652,7 +652,7 @@ pub(super) async fn insert_event(
 
 /// The CI values a step sets on its CI, through the item write path; returns
 /// `{key: {old, new}}` of what changed (None when nothing did).
-async fn write_ci(
+pub(super) async fn write_ci(
     conn: &mut PgConnection,
     ctx: &RequestContext,
     ci: Uuid,
@@ -672,7 +672,7 @@ async fn write_ci(
 }
 
 /// `{stateFieldKey: valueId}` when the workflow drives a state field and `to` maps to one of its values.
-fn state_value(model: &Model, row_state_attribute: Option<Uuid>, to: &PinnedState) -> Map<String, Value> {
+pub(super) fn state_value(model: &Model, row_state_attribute: Option<Uuid>, to: &PinnedState) -> Map<String, Value> {
     let mut m = Map::new();
     if let (Some(field), Some(value)) = (row_state_attribute.and_then(|a| model.field(a)), to.state_value_id) {
         m.insert(field.key.clone(), Value::String(value.to_string()));
@@ -1055,11 +1055,23 @@ pub async fn transition(
     b: &WorkflowTransitionRun,
 ) -> Result<WorkflowInstance, AppError> {
     let mut tx = pool.begin().await?;
-    let row = lock(&mut tx, ctx, id).await?;
+    let after = transition_in(&mut tx, ctx, id, b).await?;
+    tx.commit().await?;
+    Ok(after.dto())
+}
+
+/// One transition in the caller's transaction (a single run, or one item of a bulk run).
+async fn transition_in(
+    tx: &mut PgConnection,
+    ctx: &RequestContext,
+    id: Uuid,
+    b: &WorkflowTransitionRun,
+) -> Result<InstanceRow, AppError> {
+    let row = lock(&mut *tx, ctx, id).await?;
     check_active(&row)?;
     check_version(&row, b.expected_version)?;
     ctx.require_class(row.class_id, ClassOp::Edit)?;
-    let p = pinned(&mut tx, row.version_id).await?;
+    let p = pinned(&mut *tx, row.version_id).await?;
     let Some(t) = p.transitions.iter().find(|t| t.key == b.transition_key) else {
         return Err(AppError::field(
             "transitionKey",
@@ -1078,7 +1090,7 @@ pub async fn transition(
             "not_from_current_state",
         ));
     }
-    if !granted(&mut tx, ctx, row.definition_id).await?.has(&t.key) {
+    if !granted(&mut *tx, ctx, row.definition_id).await?.has(&t.key) {
         return Err(AppError::new(
             ErrorCode::Forbidden,
             format!(
@@ -1088,7 +1100,7 @@ pub async fn transition(
         ));
     }
     let to = p.state(t.to_state_id).ok_or_else(AppError::internal)?;
-    let model = Model::load(&mut tx).await?;
+    let model = Model::load(&mut *tx).await?;
 
     // The fields sent: only the transition's, validated as a PATCH would.
     let allowed: HashMap<&str, &PinnedField> =
@@ -1107,12 +1119,12 @@ pub async fn transition(
     if !unknown.is_empty() {
         return Err(AppError::validation(unknown));
     }
-    items::update_for_workflow(&mut tx, ctx, row.ci_id, row.class_id, b.fields.clone(), false)
+    items::update_for_workflow(&mut *tx, ctx, row.ci_id, row.class_id, b.fields.clone(), false)
         .await
         .map_err(as_transition_fields)?;
 
     // Required fields, the comment and the conditions, on the CI's values with the ones sent.
-    let mut values = current_values(&mut tx, &model, row.ci_id).await?;
+    let mut values = current_values(&mut *tx, &model, row.ci_id).await?;
     for (k, v) in &b.fields {
         values.insert(k.clone(), v.clone());
     }
@@ -1140,7 +1152,7 @@ pub async fn transition(
             code: "comment_required".into(),
         });
     }
-    let by_id = condition_values(&mut tx, &model, row.class_id, &values).await?;
+    let by_id = condition_values(&mut *tx, &model, row.class_id, &values).await?;
     let cx = Context { model: &model, values: &values, by_id: &by_id };
     failed.extend(blocked_by(t, &cx).into_iter().map(|r| FieldError {
         location: FieldLocation::Body,
@@ -1165,10 +1177,10 @@ pub async fn transition(
     // Write: the fields sent and the state field, then the instance, its event and the audit row.
     let mut attributes = b.fields.clone();
     attributes.extend(state_value(&model, row.state_attribute_id, to));
-    let changes = write_ci(&mut tx, ctx, row.ci_id, row.class_id, attributes).await.map_err(as_transition_fields)?;
-    move_to(&mut tx, id, to).await?;
+    let changes = write_ci(&mut *tx, ctx, row.ci_id, row.class_id, attributes).await.map_err(as_transition_fields)?;
+    move_to(&mut *tx, id, to).await?;
     insert_event(
-        &mut tx,
+        &mut *tx,
         ctx,
         NewEvent {
             instance: id,
@@ -1191,10 +1203,77 @@ pub async fn transition(
         new_value: Some(json!({ "instanceId": id, "definitionKey": row.definition_key, "transitionKey": t.key,
             "stateKey": to.key, "version": row.version + 1, "comment": comment, "fields": changes })),
     };
-    crud::write_audit(&mut tx, ctx, vec![entry]).await?;
-    let after = reload(&mut tx, id).await?;
+    crud::write_audit(&mut *tx, ctx, vec![entry]).await?;
+    reload(&mut *tx, id).await
+}
+
+// ---------------------------------------------------------------------------
+// Bulk transitions
+// ---------------------------------------------------------------------------
+
+/// Runs up to 500 transitions in one transaction (§9). Each item runs
+/// exactly as `POST /workflow-instances/{id}/transitions` would, inside a
+/// savepoint: one that fails is rolled back alone and reported, the others
+/// commit together. Items are run in the order of their CIs, so two bulk runs
+/// over the same CIs lock them in the same order (CI first, then instance)
+/// and queue instead of deadlocking; the report keeps the request's order.
+pub async fn bulk_transitions(
+    pool: &PgPool,
+    ctx: &RequestContext,
+    b: &WorkflowBulkTransitions,
+) -> Result<WorkflowBulkTransitionReport, AppError> {
+    let mut tx = pool.begin().await?;
+    let ids: Vec<Uuid> = b.items.iter().map(|i| i.instance_id).collect();
+    let cis: HashMap<Uuid, Uuid> =
+        sqlx::query_as::<_, (Uuid, Uuid)>("SELECT id, ci_id FROM cmdb.workflow_instances WHERE id = ANY($1)")
+            .bind(&ids)
+            .fetch_all(&mut *tx)
+            .await?
+            .into_iter()
+            .collect();
+    let mut order: Vec<usize> = (0..b.items.len()).collect();
+    order.sort_by_key(|&i| (cis.get(&b.items[i].instance_id).copied().unwrap_or_default(), i));
+    let mut results: Vec<Option<WorkflowBulkTransitionResult>> = (0..b.items.len()).map(|_| None).collect();
+    for i in order {
+        let item = &b.items[i];
+        let run = WorkflowTransitionRun {
+            transition_key: item.transition_key.clone(),
+            expected_version: item.expected_version,
+            fields: item.fields.clone(),
+            comment: item.comment.clone(),
+        };
+        let mut sp = sqlx::Connection::begin(&mut *tx).await?;
+        let outcome = transition_in(&mut sp, ctx, item.instance_id, &run).await;
+        let result = match outcome {
+            Ok(row) => {
+                sp.commit().await?;
+                WorkflowBulkTransitionResult {
+                    index: i as i32,
+                    instance_id: item.instance_id,
+                    ok: true,
+                    instance: Some(row.dto()),
+                    error: None,
+                }
+            }
+            // A fault of the server, not of the item: nothing commits.
+            Err(e) if e.code.status().is_server_error() => return Err(e),
+            Err(e) => {
+                sp.rollback().await?;
+                WorkflowBulkTransitionResult {
+                    index: i as i32,
+                    instance_id: item.instance_id,
+                    ok: false,
+                    instance: None,
+                    error: Some(WorkflowBulkError::from(e)),
+                }
+            }
+        };
+        results[i] = Some(result);
+    }
     tx.commit().await?;
-    Ok(after.dto())
+    let results: Vec<WorkflowBulkTransitionResult> = results.into_iter().flatten().collect();
+    let succeeded = results.iter().filter(|r| r.ok).count() as i32;
+    Ok(WorkflowBulkTransitionReport { succeeded, failed: results.len() as i32 - succeeded, results })
 }
 
 // ---------------------------------------------------------------------------

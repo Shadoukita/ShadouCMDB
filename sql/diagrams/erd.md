@@ -16,7 +16,8 @@ Generated from [`../migrations/0001_core_schema.sql`](../migrations/0001_core_sc
 [`../migrations/0029_bulk_import.sql`](../migrations/0029_bulk_import.sql) and
 [`../migrations/0039_saved_views.sql`](../migrations/0039_saved_views.sql) and
 [`../migrations/0042_layout_templates.sql`](../migrations/0042_layout_templates.sql) and
-[`../migrations/0046_workflows.sql`](../migrations/0046_workflows.sql)
+[`../migrations/0046_workflows.sql`](../migrations/0046_workflows.sql) and
+[`../migrations/0050_workflow_archive.sql`](../migrations/0050_workflow_archive.sql)
 (`sessions.ip_address` from [`../migrations/0006_auth_audit.sql`](../migrations/0006_auth_audit.sql) and
 `sessions.credentials_confirmed_at` from [`../migrations/0043_session_reauthentication.sql`](../migrations/0043_session_reauthentication.sql); the columns
 added by [`0022`](../migrations/0022_api_token_creator.sql) to [`0026`](../migrations/0026_identity_provider_secret_encryption.sql)
@@ -535,6 +536,19 @@ erDiagram
         jsonb field_changes
         text request_id "joins audit_log"
     }
+    workflow_instance_archive {
+        uuid instance_id PK "no FK: the CI and instance are gone"
+        uuid ci_id
+        text ci_ident
+        text class_key
+        text definition_key
+        integer version_no
+        text state_key
+        text status
+        jsonb events "every event, oldest first"
+        timestamptz archived_at
+        text request_id "joins the CI's delete row"
+    }
 ```
 
 `schema_changes` is append-only like `audit_log` and, like it, has no foreign keys: it records what
@@ -556,4 +570,7 @@ and refuses deleting one except with its whole definition. The composite foreign
 transition's endpoints, a version's initial state and an instance's current state inside their own
 version. `workflow_instance_events` is append-only like `audit_log` (UPDATE, DELETE and TRUNCATE are
 rejected by a trigger, and the API role holds only SELECT and INSERT), and audit retention never
-touches it.
+touches it. Since 0050, deleting a `configuration_items` row (a type purge) first moves each of the CI's
+instances, with all of its events, into `workflow_instance_archive` (a SECURITY DEFINER trigger; the
+only path by which events are ever deleted). The archive has no foreign keys, is append-only for
+every role (the API role holds only SELECT), and audit retention never touches it.

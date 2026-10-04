@@ -3063,6 +3063,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/workflow-definitions/{id}/instance-migrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Move the running instances of one version to a newer version (or report what would move)
+         * @description Requires `workflows.manage`. Every running instance on `fromVersionNo` moves to `toVersionNo` (a newer, published version), into the state `stateMap` names for its current state; a state left out of `stateMap` moves to the state of the same key, when the target version has one that is not terminal. With `dryRun: true` nothing is written and the response tells how many instances each state holds and where they would go. 400 VALIDATION_ERROR: `unknown_version` or `not_newer` on the version numbers; `unknown_state`, `terminal_source`, `unknown_target_state` or `terminal_target` on `stateMap.<key>`; `unmapped` on `stateMap.<key>` for a state with running instances and nowhere to go (in a dry run too). 409 CONFLICT `not_published` when the target version is a draft or retired. 403 FORBIDDEN unless the caller may view and edit every type the workflow runs on. A real run moves up to 1,000 instances per transaction, locking each CI before its instance: a run cut short leaves the moved batches moved, and running it again moves the rest. Each moved instance keeps its CI and its history, gets a `migrate` event, and is audited on its CI as `workflow.migrate` (version and state before and after); when the workflow drives a state field and the new state maps to another value, the CI's field is written (a CI `update` audit row). Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        post: operations["migrateWorkflowInstances"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/workflow-archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The workflow history of CIs deleted for good, newest first (paginated)
+         * @description Requires `workflows.manage`. When a CI is deleted for good (its type is purged), its workflow instances move here with all of their events, in the same transaction; `requestId` joins the CI's `delete` audit row. The archive is never changed or deleted, and audit log retention does not touch it. Entries are listed only to a caller whose permission profile does not limit the types they may view (the CIs' types may no longer exist to judge by); to anyone else the list is empty.
+         */
+        get: operations["listArchivedWorkflowInstances"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workflow-instances": {
         parameters: {
             query?: never;
@@ -3098,6 +3138,26 @@ export interface paths {
         get: operations["getWorkflowInstanceSummary"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflow-instances/bulk-transitions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run up to 500 transitions in one request, with a result per item
+         * @description Each item is checked and run exactly as `POST /workflow-instances/{id}/transitions` would run it, with the same rights, grants, validation and audit rows. All items run in one transaction, each in a savepoint: an item that is refused is rolled back alone and reported with the error the single endpoint would have answered (`code`, `message`, `details`); the items that ran are committed together. Always 200 for a well-formed body: `succeeded` and `failed` count the items, `results` has one entry per item in the request's order. Items run in the order of their CIs, so concurrent bulk runs over the same CIs queue instead of deadlocking; items on the same instance run in the request's order, each against the `expectedVersion` it names. A server fault rolls back every item (500).
+         */
+        post: operations["runWorkflowTransitionsInBulk"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6675,6 +6735,45 @@ export interface components {
             /** @description Database migrations shipped with this build */
             migrations: number;
         };
+        /** @description A workflow instance whose CI was deleted for good (a type purge), with its whole history */
+        WorkflowArchivedInstance: {
+            /** Format: uuid */
+            instanceId: string;
+            /** Format: uuid */
+            ciId: string;
+            ciIdent: string;
+            ciLabel: string;
+            /** @description The CI's type when it was deleted */
+            classKey: string;
+            /** Format: uuid */
+            definitionId: string;
+            definitionKey: string;
+            /** Format: int32 */
+            versionNo: number;
+            stateKey: string;
+            /**
+             * @description The instance's status when its CI was deleted
+             * @enum {string}
+             */
+            status: "active" | "completed" | "cancelled";
+            /** Format: date-time */
+            startedAt: string;
+            startedByName: string;
+            /** Format: date-time */
+            lastTransitionAt: string;
+            /** Format: date-time */
+            endedAt: string | null;
+            /** @description Every event, oldest first, in the shape of `listWorkflowInstanceEvents` (plus `actorId`) */
+            events: Record<string, never>[];
+            /** Format: date-time */
+            archivedAt: string;
+            /** @description The request that deleted the CI: joins its `delete` audit row */
+            requestId: string | null;
+        };
+        WorkflowArchivedInstanceList: {
+            data: components["schemas"]["WorkflowArchivedInstance"][];
+            page: components["schemas"]["PageMeta"];
+        };
         /** @description A transition out of the instance's state that the caller may run */
         WorkflowAvailableTransition: {
             key: string;
@@ -6749,6 +6848,41 @@ export interface components {
             valueName?: string | null;
             /** Format: int64 */
             count: number;
+        };
+        /** @description Why an item was refused: what the single transition endpoint would have answered */
+        WorkflowBulkError: {
+            /** @enum {string} */
+            code: "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "CSRF_TOKEN_INVALID" | "NOT_FOUND" | "CONFLICT" | "IN_USE" | "VERSION_CONFLICT" | "GONE" | "INVALID_NAME" | "SCHEMA_CHANGE_REFUSED" | "SECRET_REQUIRED" | "IDEMPOTENCY_KEY_REUSED" | "WORKFLOW_CONDITION_FAILED" | "WORKFLOW_CONTROLLED_FIELD" | "LAST_ADMINISTRATOR" | "RATE_LIMITED" | "MFA_REQUIRED" | "MFA_ENROLMENT_REQUIRED" | "EMAIL_REQUIRED" | "MFA_REQUIRED_FOR_TOKEN" | "REAUTHENTICATION_REQUIRED" | "IDENTITY_PROVIDER_UNAVAILABLE" | "UNSUPPORTED_MEDIA_TYPE" | "PAYLOAD_TOO_LARGE" | "REQUEST_TIMEOUT" | "DATABASE_UNAVAILABLE" | "SERVER_BUSY" | "SCHEMA_NOT_MIGRATED" | "INTERNAL_ERROR";
+            message: string;
+            details: components["schemas"]["WorkflowBulkErrorDetail"][];
+        };
+        /** @description One problem of a refused item, as in the error envelope's `details` */
+        WorkflowBulkErrorDetail: {
+            /** @description Dotted path in the item, e.g. `fields.owner_team` or `expectedVersion` */
+            field: string;
+            message: string;
+            code: string;
+        };
+        WorkflowBulkTransitionReport: {
+            /** Format: int32 */
+            succeeded: number;
+            /** Format: int32 */
+            failed: number;
+            /** @description One result per item, in the request's order */
+            results: components["schemas"]["WorkflowBulkTransitionResult"][];
+        };
+        WorkflowBulkTransitionResult: {
+            /**
+             * Format: int32
+             * @description Position of the item in the request (0-based)
+             */
+            index: number;
+            /** Format: uuid */
+            instanceId: string;
+            /** @description The transition ran and is committed */
+            ok: boolean;
+            instance: components["schemas"]["WorkflowInstance"] | null;
+            error: components["schemas"]["WorkflowBulkError"] | null;
         };
         /** @description A workflow definition: the identity of a workflow and its mutable settings */
         WorkflowDefinition: {
@@ -6943,6 +7077,31 @@ export interface components {
             data: components["schemas"]["WorkflowInstance"][];
             page: components["schemas"]["PageMeta"];
         };
+        WorkflowInstanceMigrationReport: {
+            dryRun: boolean;
+            definitionKey: string;
+            /** Format: int32 */
+            fromVersionNo: number;
+            /** Format: int32 */
+            toVersionNo: number;
+            /**
+             * Format: int64
+             * @description Running instances on `fromVersionNo` when the request started
+             */
+            total: number;
+            /**
+             * Format: int64
+             * @description Instances moved (0 in a dry run). Lower than `total` when some ended or moved in between.
+             */
+            migrated: number;
+            /**
+             * Format: int32
+             * @description Transactions used (each moves up to 1,000 instances)
+             */
+            batches: number;
+            /** @description One entry per non-terminal state of `fromVersionNo` that has running instances or is named in `stateMap` */
+            states: components["schemas"]["WorkflowMigrationStateMove"][];
+        };
         /** @description Running instances per workflow and state, on the CIs the caller may view */
         WorkflowInstanceSummary: {
             data: components["schemas"]["WorkflowStateCount"][];
@@ -6957,6 +7116,21 @@ export interface components {
             availableTransitions: components["schemas"]["WorkflowAvailableTransition"][];
             /** @description Whether the caller may cancel it (`workflows.manage`, or the `_cancel` grant with the edit right) */
             canCancel: boolean;
+        };
+        /** @description Where the running instances of one state go */
+        WorkflowMigrationStateMove: {
+            fromState: string;
+            toState: string;
+            /**
+             * @description How a state's target was chosen
+             * @enum {string}
+             */
+            mappedBy: "explicit" | "same_key";
+            /**
+             * Format: int64
+             * @description Running instances in `fromState` when the request started
+             */
+            count: number;
         };
         /** @description The graph of the version an instance is pinned to (no grants) */
         WorkflowPinnedGraph: {
@@ -27896,6 +28070,222 @@ export interface operations {
             };
         };
     };
+    migrateWorkflowInstances: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * Format: int32
+                     * @description The version whose running instances move (published or retired)
+                     */
+                    fromVersionNo: number;
+                    /**
+                     * Format: int32
+                     * @description A newer, published version
+                     */
+                    toVersionNo: number;
+                    /** @description State key in `fromVersionNo` → state key in `toVersionNo`. A state left out moves to the state of the same key in the target version, if it has one. */
+                    stateMap?: {
+                        [key: string]: string;
+                    };
+                    /** @description Only report what would move; nothing is written */
+                    dryRun: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowInstanceMigrationReport"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listArchivedWorkflowInstances: {
+        parameters: {
+            query?: {
+                /** @description Page size (1-200) */
+                limit?: number;
+                /** @description Rows to skip */
+                offset?: number;
+                /** @description Only instances of this deleted CI */
+                ciId?: string;
+                /** @description Stable machine key, lower_snake_case */
+                definitionKey?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowArchivedInstanceList"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     listWorkflowInstances: {
         parameters: {
             query?: {
@@ -28161,6 +28551,120 @@ export interface operations {
             };
             /** @description Request not completed in time (code REQUEST_TIMEOUT) */
             408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    runWorkflowTransitionsInBulk: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description 1 to 500 transitions, run in one transaction (the audit chain is locked for the whole batch) */
+                    items: {
+                        /** Format: uuid */
+                        instanceId: string;
+                        /** @description Stable machine key, lower_snake_case */
+                        transitionKey: string;
+                        /**
+                         * Format: int32
+                         * @description The instance's `version` you loaded
+                         */
+                        expectedVersion: number;
+                        /** @description Values of the transition's fields by field key, in the form of PATCH /configuration-items/{id} (null clears one). Only the fields the transition lists. */
+                        fields?: {
+                            [key: string]: unknown;
+                        };
+                        comment?: string | null;
+                    }[];
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowBulkTransitionReport"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
                 headers: {
                     [name: string]: unknown;
                 };

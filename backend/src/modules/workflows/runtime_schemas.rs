@@ -10,7 +10,7 @@ use uuid::Uuid;
 use super::schemas::{WorkflowState, WorkflowStateCategory, WorkflowTransition};
 use crate::api::route::Check;
 use crate::api::schemas::{self, Sort, key_schema, ts};
-use crate::http::error::{FieldError, FieldLocation};
+use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
 use crate::modules::classes::AttributeDataType;
 use crate::paged;
 
@@ -403,6 +403,242 @@ pub struct WorkflowEvent {
     #[schema(value_type = Option<Object>, required = true)]
     pub field_changes: Option<sqlx::types::Json<Value>>,
     /// Joins to the audit log's `requestId`
+    #[schema(required = true)]
+    pub request_id: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Bulk transitions (§9)
+// ---------------------------------------------------------------------------
+
+/// One transition of a bulk run: the body of `POST /workflow-instances/{id}/transitions` plus the instance
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowBulkTransitionItem {
+    pub instance_id: Uuid,
+    #[schema(schema_with = key_schema)]
+    pub transition_key: String,
+    /// The instance's `version` you loaded
+    #[schema(minimum = 1)]
+    pub expected_version: i32,
+    #[schema(schema_with = fields_schema)]
+    #[serde(default)]
+    pub fields: Map<String, Value>,
+    #[schema(schema_with = comment_schema)]
+    #[serde(default)]
+    pub comment: Option<String>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowBulkTransitions {
+    /// 1 to 500 transitions, run in one transaction (the audit chain is locked for the whole batch)
+    #[schema(inline, min_items = 1, max_items = 500)]
+    pub items: Vec<WorkflowBulkTransitionItem>,
+}
+
+impl Check for WorkflowBulkTransitions {
+    fn check(&self) -> Vec<FieldError> {
+        self.items
+            .iter()
+            .enumerate()
+            .filter(|(_, i)| i.fields.len() > 50)
+            .map(|(n, _)| FieldError {
+                location: FieldLocation::Body,
+                field: format!("items[{n}].fields"),
+                message: "At most 50 fields".into(),
+                code: "too_big".into(),
+            })
+            .collect()
+    }
+}
+
+/// One problem of a refused item, as in the error envelope's `details`
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowBulkErrorDetail {
+    /// Dotted path in the item, e.g. `fields.owner_team` or `expectedVersion`
+    pub field: String,
+    pub message: String,
+    pub code: String,
+}
+
+/// Why an item was refused: what the single transition endpoint would have answered
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowBulkError {
+    #[schema(inline)]
+    pub code: ErrorCode,
+    pub message: String,
+    pub details: Vec<WorkflowBulkErrorDetail>,
+}
+
+impl From<AppError> for WorkflowBulkError {
+    fn from(e: AppError) -> Self {
+        let details = e
+            .details
+            .unwrap_or_default()
+            .into_iter()
+            .map(|d| WorkflowBulkErrorDetail { field: d.field, message: d.message, code: d.code })
+            .collect();
+        WorkflowBulkError { code: e.code, message: e.message, details }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowBulkTransitionResult {
+    /// Position of the item in the request (0-based)
+    pub index: i32,
+    pub instance_id: Uuid,
+    /// The transition ran and is committed
+    pub ok: bool,
+    /// The instance after the transition (ok items)
+    #[schema(required = true)]
+    pub instance: Option<WorkflowInstance>,
+    /// Why the item was refused (failed items); nothing of it was written
+    #[schema(required = true)]
+    pub error: Option<WorkflowBulkError>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowBulkTransitionReport {
+    pub succeeded: i32,
+    pub failed: i32,
+    /// One result per item, in the request's order
+    pub results: Vec<WorkflowBulkTransitionResult>,
+}
+
+// ---------------------------------------------------------------------------
+// Instance migration between versions (§6.1)
+// ---------------------------------------------------------------------------
+
+/// Running instances one migration transaction moves.
+pub const MIGRATION_BATCH: i64 = 1000;
+
+fn state_map_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::Object)
+        .additional_properties(Some(key_schema()))
+        .max_properties(Some(100))
+        .description(Some(
+            "State key in `fromVersionNo` → state key in `toVersionNo`. A state left out moves to the state of the \
+             same key in the target version, if it has one.",
+        ))
+        .into()
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowInstanceMigration {
+    /// The version whose running instances move (published or retired)
+    #[schema(minimum = 1)]
+    pub from_version_no: i32,
+    /// A newer, published version
+    #[schema(minimum = 1)]
+    pub to_version_no: i32,
+    #[schema(schema_with = state_map_schema)]
+    #[serde(default)]
+    pub state_map: std::collections::BTreeMap<String, String>,
+    /// Only report what would move; nothing is written
+    pub dry_run: bool,
+}
+
+impl Check for WorkflowInstanceMigration {}
+
+/// How a state's target was chosen
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowStateMapSource {
+    /// Named in `stateMap`
+    Explicit,
+    /// Not in `stateMap`: the target version's state of the same key
+    SameKey,
+}
+
+/// Where the running instances of one state go
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowMigrationStateMove {
+    pub from_state: String,
+    pub to_state: String,
+    #[schema(inline)]
+    pub mapped_by: WorkflowStateMapSource,
+    /// Running instances in `fromState` when the request started
+    pub count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowInstanceMigrationReport {
+    pub dry_run: bool,
+    pub definition_key: String,
+    pub from_version_no: i32,
+    pub to_version_no: i32,
+    /// Running instances on `fromVersionNo` when the request started
+    pub total: i64,
+    /// Instances moved (0 in a dry run). Lower than `total` when some ended or moved in between.
+    pub migrated: i64,
+    /// Transactions used (each moves up to 1,000 instances)
+    pub batches: i32,
+    /// One entry per non-terminal state of `fromVersionNo` that has running instances or is named in `stateMap`
+    pub states: Vec<WorkflowMigrationStateMove>,
+}
+
+// ---------------------------------------------------------------------------
+// Archive: the history of instances whose CI was deleted for good
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[serde(rename_all = "camelCase")]
+#[into_params(parameter_in = Query)]
+pub struct WorkflowArchiveList {
+    /// Page size (1-200)
+    #[param(required = false, default = 50, minimum = 1, maximum = 200)]
+    pub limit: i64,
+    /// Rows to skip
+    #[param(required = false, default = 0, minimum = 0, maximum = 1_000_000)]
+    pub offset: i64,
+    /// Only instances of this deleted CI
+    pub ci_id: Option<Uuid>,
+    /// Only instances of this workflow
+    #[param(schema_with = key_schema)]
+    pub definition_key: Option<String>,
+}
+paged!(WorkflowArchiveList);
+
+/// A workflow instance whose CI was deleted for good (a type purge), with its whole history
+#[derive(Debug, Clone, Serialize, ToSchema, sqlx::FromRow)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowArchivedInstance {
+    pub instance_id: Uuid,
+    pub ci_id: Uuid,
+    pub ci_ident: String,
+    pub ci_label: String,
+    /// The CI's type when it was deleted
+    pub class_key: String,
+    pub definition_id: Uuid,
+    pub definition_key: String,
+    pub version_no: i32,
+    pub state_key: String,
+    /// The instance's status when its CI was deleted
+    #[schema(inline)]
+    pub status: WorkflowInstanceStatus,
+    #[serde(serialize_with = "ts::serialize")]
+    pub started_at: DateTime<Utc>,
+    pub started_by_name: String,
+    #[serde(serialize_with = "ts::serialize")]
+    pub last_transition_at: DateTime<Utc>,
+    #[serde(serialize_with = "schemas::ts_opt::serialize")]
+    #[schema(required = true)]
+    pub ended_at: Option<DateTime<Utc>>,
+    /// Every event, oldest first, in the shape of `listWorkflowInstanceEvents` (plus `actorId`)
+    #[schema(value_type = Vec<Object>)]
+    pub events: sqlx::types::Json<Value>,
+    #[serde(serialize_with = "ts::serialize")]
+    pub archived_at: DateTime<Utc>,
+    /// The request that deleted the CI: joins its `delete` audit row
     #[schema(required = true)]
     pub request_id: Option<String>,
 }

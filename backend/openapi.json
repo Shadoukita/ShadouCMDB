@@ -31251,6 +31251,327 @@
         ]
       }
     },
+    "/api/v1/admin/workflow-definitions/{id}/instance-migrations": {
+      "post": {
+        "tags": [
+          "Workflow definitions"
+        ],
+        "summary": "Move the running instances of one version to a newer version (or report what would move)",
+        "description": "Requires `workflows.manage`. Every running instance on `fromVersionNo` moves to `toVersionNo` (a newer, published version), into the state `stateMap` names for its current state; a state left out of `stateMap` moves to the state of the same key, when the target version has one that is not terminal. With `dryRun: true` nothing is written and the response tells how many instances each state holds and where they would go. 400 VALIDATION_ERROR: `unknown_version` or `not_newer` on the version numbers; `unknown_state`, `terminal_source`, `unknown_target_state` or `terminal_target` on `stateMap.<key>`; `unmapped` on `stateMap.<key>` for a state with running instances and nowhere to go (in a dry run too). 409 CONFLICT `not_published` when the target version is a draft or retired. 403 FORBIDDEN unless the caller may view and edit every type the workflow runs on. A real run moves up to 1,000 instances per transaction, locking each CI before its instance: a run cut short leaves the moved batches moved, and running it again moves the rest. Each moved instance keeps its CI and its history, gets a `migrate` event, and is audited on its CI as `workflow.migrate` (version and state before and after); when the workflow drives a state field and the new state maps to another value, the CI's field is written (a CI `update` audit row). Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "migrateWorkflowInstances",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "fromVersionNo",
+                  "toVersionNo",
+                  "dryRun"
+                ],
+                "properties": {
+                  "fromVersionNo": {
+                    "type": "integer",
+                    "format": "int32",
+                    "description": "The version whose running instances move (published or retired)",
+                    "minimum": 1
+                  },
+                  "toVersionNo": {
+                    "type": "integer",
+                    "format": "int32",
+                    "description": "A newer, published version",
+                    "minimum": 1
+                  },
+                  "stateMap": {
+                    "type": "object",
+                    "description": "State key in `fromVersionNo` → state key in `toVersionNo`. A state left out moves to the state of the same key in the target version, if it has one.",
+                    "additionalProperties": {
+                      "type": "string",
+                      "description": "Stable machine key, lower_snake_case",
+                      "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                    },
+                    "maxProperties": 100
+                  },
+                  "dryRun": {
+                    "type": "boolean",
+                    "description": "Only report what would move; nothing is written"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowInstanceMigrationReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large (code PAYLOAD_TOO_LARGE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/workflow-archive": {
+      "get": {
+        "tags": [
+          "Workflow definitions"
+        ],
+        "summary": "The workflow history of CIs deleted for good, newest first (paginated)",
+        "description": "Requires `workflows.manage`. When a CI is deleted for good (its type is purged), its workflow instances move here with all of their events, in the same transaction; `requestId` joins the CI's `delete` audit row. The archive is never changed or deleted, and audit log retention does not touch it. Entries are listed only to a caller whose permission profile does not limit the types they may view (the CIs' types may no longer exist to judge by); to anyone else the list is empty.",
+        "operationId": "listArchivedWorkflowInstances",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size (1-200)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Rows to skip",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0,
+              "maximum": 1000000,
+              "minimum": 0
+            }
+          },
+          {
+            "name": "ciId",
+            "in": "query",
+            "description": "Only instances of this deleted CI",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "definitionKey",
+            "in": "query",
+            "description": "Stable machine key, lower_snake_case",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{0,62}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowArchivedInstanceList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
     "/api/v1/workflow-instances": {
       "get": {
         "tags": [
@@ -31706,6 +32027,184 @@
         },
         "security": [
           {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/workflow-instances/bulk-transitions": {
+      "post": {
+        "tags": [
+          "Workflow instances"
+        ],
+        "summary": "Run up to 500 transitions in one request, with a result per item",
+        "description": "Each item is checked and run exactly as `POST /workflow-instances/{id}/transitions` would run it, with the same rights, grants, validation and audit rows. All items run in one transaction, each in a savepoint: an item that is refused is rolled back alone and reported with the error the single endpoint would have answered (`code`, `message`, `details`); the items that ran are committed together. Always 200 for a well-formed body: `succeeded` and `failed` count the items, `results` has one entry per item in the request's order. Items run in the order of their CIs, so concurrent bulk runs over the same CIs queue instead of deadlocking; items on the same instance run in the request's order, each against the `expectedVersion` it names. A server fault rolls back every item (500).",
+        "operationId": "runWorkflowTransitionsInBulk",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "items"
+                ],
+                "properties": {
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "description": "One transition of a bulk run: the body of `POST /workflow-instances/{id}/transitions` plus the instance",
+                      "required": [
+                        "instanceId",
+                        "transitionKey",
+                        "expectedVersion"
+                      ],
+                      "properties": {
+                        "instanceId": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "transitionKey": {
+                          "type": "string",
+                          "description": "Stable machine key, lower_snake_case",
+                          "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                        },
+                        "expectedVersion": {
+                          "type": "integer",
+                          "format": "int32",
+                          "description": "The instance's `version` you loaded",
+                          "minimum": 1
+                        },
+                        "fields": {
+                          "type": "object",
+                          "description": "Values of the transition's fields by field key, in the form of PATCH /configuration-items/{id} (null clears one). Only the fields the transition lists.",
+                          "additionalProperties": true
+                        },
+                        "comment": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "maxLength": 4000
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "x-multiline": true
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "description": "1 to 500 transitions, run in one transaction (the audit chain is locked for the whole batch)",
+                    "maxItems": 500,
+                    "minItems": 1
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowBulkTransitionReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large (code PAYLOAD_TOO_LARGE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
             "sessionCookie": []
           },
           {
@@ -43057,6 +43556,128 @@
         },
         "additionalProperties": false
       },
+      "WorkflowArchivedInstance": {
+        "type": "object",
+        "description": "A workflow instance whose CI was deleted for good (a type purge), with its whole history",
+        "required": [
+          "instanceId",
+          "ciId",
+          "ciIdent",
+          "ciLabel",
+          "classKey",
+          "definitionId",
+          "definitionKey",
+          "versionNo",
+          "stateKey",
+          "status",
+          "startedAt",
+          "startedByName",
+          "lastTransitionAt",
+          "endedAt",
+          "events",
+          "archivedAt",
+          "requestId"
+        ],
+        "properties": {
+          "instanceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "ciId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "ciIdent": {
+            "type": "string"
+          },
+          "ciLabel": {
+            "type": "string"
+          },
+          "classKey": {
+            "type": "string",
+            "description": "The CI's type when it was deleted"
+          },
+          "definitionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "definitionKey": {
+            "type": "string"
+          },
+          "versionNo": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "stateKey": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "description": "The instance's status when its CI was deleted",
+            "enum": [
+              "active",
+              "completed",
+              "cancelled"
+            ]
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "startedByName": {
+            "type": "string"
+          },
+          "lastTransitionAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "endedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Every event, oldest first, in the shape of `listWorkflowInstanceEvents` (plus `actorId`)"
+          },
+          "archivedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "requestId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The request that deleted the CI: joins its `delete` audit row"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowArchivedInstanceList": {
+        "type": "object",
+        "required": [
+          "data",
+          "page"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowArchivedInstance"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageMeta"
+          }
+        },
+        "additionalProperties": false
+      },
       "WorkflowAvailableTransition": {
         "type": "object",
         "description": "A transition out of the instance's state that the caller may run",
@@ -43244,6 +43865,158 @@
           "count": {
             "type": "integer",
             "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowBulkError": {
+        "type": "object",
+        "description": "Why an item was refused: what the single transition endpoint would have answered",
+        "required": [
+          "code",
+          "message",
+          "details"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "VALIDATION_ERROR",
+              "UNAUTHENTICATED",
+              "FORBIDDEN",
+              "CSRF_TOKEN_INVALID",
+              "NOT_FOUND",
+              "CONFLICT",
+              "IN_USE",
+              "VERSION_CONFLICT",
+              "GONE",
+              "INVALID_NAME",
+              "SCHEMA_CHANGE_REFUSED",
+              "SECRET_REQUIRED",
+              "IDEMPOTENCY_KEY_REUSED",
+              "WORKFLOW_CONDITION_FAILED",
+              "WORKFLOW_CONTROLLED_FIELD",
+              "LAST_ADMINISTRATOR",
+              "RATE_LIMITED",
+              "MFA_REQUIRED",
+              "MFA_ENROLMENT_REQUIRED",
+              "EMAIL_REQUIRED",
+              "MFA_REQUIRED_FOR_TOKEN",
+              "REAUTHENTICATION_REQUIRED",
+              "IDENTITY_PROVIDER_UNAVAILABLE",
+              "UNSUPPORTED_MEDIA_TYPE",
+              "PAYLOAD_TOO_LARGE",
+              "REQUEST_TIMEOUT",
+              "DATABASE_UNAVAILABLE",
+              "SERVER_BUSY",
+              "SCHEMA_NOT_MIGRATED",
+              "INTERNAL_ERROR"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "details": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowBulkErrorDetail"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowBulkErrorDetail": {
+        "type": "object",
+        "description": "One problem of a refused item, as in the error envelope's `details`",
+        "required": [
+          "field",
+          "message",
+          "code"
+        ],
+        "properties": {
+          "field": {
+            "type": "string",
+            "description": "Dotted path in the item, e.g. `fields.owner_team` or `expectedVersion`"
+          },
+          "message": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowBulkTransitionReport": {
+        "type": "object",
+        "required": [
+          "succeeded",
+          "failed",
+          "results"
+        ],
+        "properties": {
+          "succeeded": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowBulkTransitionResult"
+            },
+            "description": "One result per item, in the request's order"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowBulkTransitionResult": {
+        "type": "object",
+        "required": [
+          "index",
+          "instanceId",
+          "ok",
+          "instance",
+          "error"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Position of the item in the request (0-based)"
+          },
+          "instanceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "ok": {
+            "type": "boolean",
+            "description": "The transition ran and is committed"
+          },
+          "instance": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowInstance",
+                "description": "The instance after the transition (ok items)"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowBulkError",
+                "description": "Why the item was refused (failed items); nothing of it was written"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false
@@ -43826,6 +44599,58 @@
         },
         "additionalProperties": false
       },
+      "WorkflowInstanceMigrationReport": {
+        "type": "object",
+        "required": [
+          "dryRun",
+          "definitionKey",
+          "fromVersionNo",
+          "toVersionNo",
+          "total",
+          "migrated",
+          "batches",
+          "states"
+        ],
+        "properties": {
+          "dryRun": {
+            "type": "boolean"
+          },
+          "definitionKey": {
+            "type": "string"
+          },
+          "fromVersionNo": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "toVersionNo": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Running instances on `fromVersionNo` when the request started"
+          },
+          "migrated": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Instances moved (0 in a dry run). Lower than `total` when some ended or moved in between."
+          },
+          "batches": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Transactions used (each moves up to 1,000 instances)"
+          },
+          "states": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowMigrationStateMove"
+            },
+            "description": "One entry per non-terminal state of `fromVersionNo` that has running instances or is named in `stateMap`"
+          }
+        },
+        "additionalProperties": false
+      },
       "WorkflowInstanceSummary": {
         "type": "object",
         "description": "Running instances per workflow and state, on the CIs the caller may view",
@@ -43864,6 +44689,38 @@
           "canCancel": {
             "type": "boolean",
             "description": "Whether the caller may cancel it (`workflows.manage`, or the `_cancel` grant with the edit right)"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowMigrationStateMove": {
+        "type": "object",
+        "description": "Where the running instances of one state go",
+        "required": [
+          "fromState",
+          "toState",
+          "mappedBy",
+          "count"
+        ],
+        "properties": {
+          "fromState": {
+            "type": "string"
+          },
+          "toState": {
+            "type": "string"
+          },
+          "mappedBy": {
+            "type": "string",
+            "description": "How a state's target was chosen",
+            "enum": [
+              "explicit",
+              "same_key"
+            ]
+          },
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Running instances in `fromState` when the request started"
           }
         },
         "additionalProperties": false
