@@ -7,7 +7,7 @@
 // script signs in to the running server as the scan's administrator, reads one id per resource from
 // its list endpoint (demo data from `seed --demo`), creates the objects the scan may damage (a user,
 // a profile, a group, an identity provider, an API token, an import job, a saved mapping, a saved view,
-// a workflow definition), and writes the spec with those ids
+// a workflow definition, a running workflow instance), and writes the spec with those ids
 // as examples.
 //
 //   DAST_USERNAME=... DAST_PASSWORD=... node tools/dast/path-examples.mjs <openapi.json> <out.json> [<examples.json>]
@@ -45,7 +45,7 @@ export const LISTED = [
  * Objects created for the scan. The scan changes, disables and deletes what it is given, so it gets
  * objects of its own: never its own account (a password change would end its session) or token.
  */
-export const CREATED = ["admin/profiles", "admin/groups", "admin/users", "admin/identity-providers", "admin/api-tokens", "imports", "import-mappings", "saved-views", "admin/workflow-definitions"];
+export const CREATED = ["admin/profiles", "admin/groups", "admin/users", "admin/identity-providers", "admin/api-tokens", "imports", "import-mappings", "saved-views", "admin/workflow-definitions", "workflow-instances"];
 
 /**
  * Resources that may have no row yet; any well-formed value still reaches the handler (404). The
@@ -198,6 +198,19 @@ async function collect(request) {
     await request("POST", "admin/workflow-definitions", { key: "dast_scan_target", name, classId: serverClass.id })
   ).id;
   examples["admin/workflow-definitions/versions"] = 1;
+  // A running instance of a second, published workflow on a demo server: the scan may run its
+  // transition, force its state and cancel it.
+  const flow = await request("POST", "admin/workflow-definitions", { key: "dast_scan_instance", name: `${name} (running)`, classId: serverClass.id });
+  const draft = await request("PUT", `admin/workflow-definitions/${flow.id}/draft`, {
+    initialState: "open",
+    states: [{ key: "open", name: "Open", category: "open" }, { key: "closed", name: "Closed", category: "done", terminal: true }],
+    transitions: [{ key: "close", name: "Close", from: "open", to: "closed" }],
+  });
+  await request("POST", `admin/workflow-definitions/${flow.id}/draft/publish`, { expectedDraftChecksum: draft.checksum });
+  const published = await request("GET", `admin/workflow-definitions/${flow.id}`);
+  await request("PATCH", `admin/workflow-definitions/${flow.id}`, { version: published.version, isActive: true });
+  const server = (await request("GET", `configuration-items?classId=${serverClass.id}&limit=1`)).data[0];
+  examples["workflow-instances"] = (await request("POST", "workflow-instances", { definitionId: flow.id, ciId: server.id })).instance.id;
   return examples;
 }
 
