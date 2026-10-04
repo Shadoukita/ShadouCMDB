@@ -283,7 +283,9 @@ pub fn routes() -> Vec<Route> {
             .description(
                 "`grants` is the complete new set; profiles are given by id or by name. Send the workflow's \
                  `version`: 409 VERSION_CONFLICT if it changed in between. An unknown profile is 400 \
-                 VALIDATION_ERROR `not_found` on `grants[i].profiles[j]`. A change bumps the workflow's version and \
+                 VALIDATION_ERROR `not_found` on `grants[i].profiles[j]`, and a transition key that is neither `_cancel` \
+                 nor a transition of any version or the draft is 400 `unknown_transition` on \
+                 `grants[i].transitionKey`. A change bumps the workflow's version and \
                  is audited with the grants before and after, by profile name.",
             )
             .requires(manage)
