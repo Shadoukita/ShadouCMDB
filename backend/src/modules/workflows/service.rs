@@ -579,7 +579,12 @@ pub async fn draft(pool: &PgPool, id: Uuid) -> Result<WorkflowVersion, AppError>
     render(&mut conn, &d, row).await
 }
 
-pub async fn replace_draft(pool: &PgPool, id: Uuid, b: &WorkflowDraftReplace) -> Result<WorkflowVersion, AppError> {
+pub async fn replace_draft(
+    pool: &PgPool,
+    ctx: &RequestContext,
+    id: Uuid,
+    b: &WorkflowDraftReplace,
+) -> Result<WorkflowVersion, AppError> {
     let mut tx = pool.begin().await?;
     let d = load(&mut tx, id, true).await?;
     let current = draft_row(&mut tx, id, true).await?;
@@ -620,15 +625,17 @@ pub async fn replace_draft(pool: &PgPool, id: Uuid, b: &WorkflowDraftReplace) ->
         .await?;
     let mut out = stored.render(&fields.model, false);
     out.checksum = Some(sum);
+    prune_grants(&mut tx, ctx, id).await?;
     tx.commit().await?;
     Ok(out)
 }
 
-pub async fn delete_draft(pool: &PgPool, id: Uuid) -> Result<(), AppError> {
+pub async fn delete_draft(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<(), AppError> {
     let mut tx = pool.begin().await?;
     load(&mut tx, id, true).await?;
     let row = draft_row(&mut tx, id, true).await?.ok_or_else(|| no_draft(id))?;
     sqlx::query("DELETE FROM cmdb.workflow_versions WHERE id = $1").bind(row.id).execute(&mut *tx).await?;
+    prune_grants(&mut tx, ctx, id).await?;
     tx.commit().await?;
     Ok(())
 }
@@ -950,6 +957,26 @@ pub(crate) async fn transition_keys(conn: &mut PgConnection, id: Uuid) -> Result
     .collect();
     keys.insert(CANCEL_KEY.to_owned());
     Ok(keys)
+}
+
+/// Drops, audited, the grants of definition `id` whose transition is in no
+/// version and not in the draft any more (the draft that alone had it was
+/// deleted, or the transition was renamed or removed in it), so the stored
+/// grants always pass `replace_grants` and the config import again.
+async fn prune_grants(tx: &mut PgConnection, ctx: &RequestContext, id: Uuid) -> Result<(), AppError> {
+    let known = transition_keys(&mut *tx, id).await?;
+    let old = grant_rows(&mut *tx, id).await?;
+    if old.iter().all(|g| known.contains(&g.transition_key)) {
+        return Ok(());
+    }
+    let rows: Vec<(String, Uuid)> = old
+        .iter()
+        .filter(|g| known.contains(&g.transition_key))
+        .flat_map(|g| g.profiles.iter().map(|p| (g.transition_key.clone(), p.id)))
+        .collect();
+    let before = load(&mut *tx, id, true).await?;
+    set_grants_in(tx, ctx, &before, &rows).await?;
+    Ok(())
 }
 
 pub(crate) fn unknown_transition(workflow: &str, key: &str) -> String {

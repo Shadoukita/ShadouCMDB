@@ -30216,7 +30216,7 @@
           "Workflow definitions"
         ],
         "summary": "Replace the whole draft graph (creating the draft as the next version when there is none)",
-        "description": "Requires `workflows.manage`. States, transitions and their fields are named by key; fields are fields of the workflow's type (own or inherited) and `stateValue` is the key of a value of the state field's list. Anything that cannot be resolved, duplicate keys, transitions to unknown states or to their own state, and malformed or ill-typed conditions are 400 VALIDATION_ERROR with the path of each problem. Whether the graph can be published is the lint's question (`draft/validate`). With `expectedChecksum`, 409 VERSION_CONFLICT if the draft changed (or was published or deleted) since it was loaded. The response carries the new `checksum`. Drafts are not audited; publishing is. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "description": "Requires `workflows.manage`. States, transitions and their fields are named by key; fields are fields of the workflow's type (own or inherited) and `stateValue` is the key of a value of the state field's list. Anything that cannot be resolved, duplicate keys, transitions to unknown states or to their own state, and malformed or ill-typed conditions are 400 VALIDATION_ERROR with the path of each problem. Whether the graph can be published is the lint's question (`draft/validate`). With `expectedChecksum`, 409 VERSION_CONFLICT if the draft changed (or was published or deleted) since it was loaded. The response carries the new `checksum`. Drafts are not audited; publishing is. Grants on a transition that is now in no version and not in the draft are dropped: that bumps the workflow's version and is audited as a grant change. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
         "operationId": "replaceWorkflowDraft",
         "parameters": [
           {
@@ -30406,7 +30406,7 @@
           "Workflow definitions"
         ],
         "summary": "Discard the draft",
-        "description": "Requires `workflows.manage`. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "description": "Requires `workflows.manage`. Grants on a transition only the draft had are dropped with it: that bumps the workflow's version and is audited as a grant change. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
         "operationId": "deleteWorkflowDraft",
         "parameters": [
           {
@@ -31065,7 +31065,7 @@
           "Workflow definitions"
         ],
         "summary": "Replace who may run which transition of a workflow",
-        "description": "Requires `workflows.manage`. `grants` is the complete new set; profiles are given by id or by name. Send the workflow's `version`: 409 VERSION_CONFLICT if it changed in between. An unknown profile is 400 VALIDATION_ERROR `not_found` on `grants[i].profiles[j]`, and a transition key that is neither `_cancel` nor a transition of any version or the draft is 400 `unknown_transition` on `grants[i].transitionKey`. A change bumps the workflow's version and is audited with the grants before and after, by profile name. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "description": "Requires `workflows.manage`. `grants` is the complete new set; profiles are given by id or by name. Send the workflow's `version`: 409 VERSION_CONFLICT if it changed in between. An unknown profile is 400 VALIDATION_ERROR `not_found` on `grants[i].profiles[j]`, and a transition key that is neither `_cancel` nor a transition of any version or the draft is 400 `unknown_transition` on `grants[i].transitionKey`. A change bumps the workflow's version and is audited with the grants before and after, by profile name. A grant on a transition only the draft has is dropped (audited the same way) when the draft is deleted or saved without it. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
         "operationId": "replaceWorkflowGrants",
         "parameters": [
           {
