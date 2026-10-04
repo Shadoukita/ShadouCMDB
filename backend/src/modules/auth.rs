@@ -2441,11 +2441,13 @@ pub(crate) mod tests {
         tx.commit().await.unwrap();
         auth.throttle.freeze();
         let floor = auth.config.sign_in_failure_floor;
+        let wrong = OWNER_PASSWORD.to_uppercase();
 
         // One name: every 503 is held and audited, and the name locks like a wrong password's.
         for i in 1..=FREE_FAILURES {
             let start = tokio::time::Instant::now();
-            let e = login(pool, &auth, &headers, &from("198.51.100.7"), login_body("erin", "x")).await.err().unwrap();
+            let e =
+                login(pool, &auth, &headers, &from("198.51.100.7"), login_body("erin", &wrong)).await.err().unwrap();
             assert_eq!(e.code, ErrorCode::IdentityProviderUnavailable, "attempt {i}");
             assert!(e.hold_until.expect("held") >= start + floor, "attempt {i}: held to the floor");
         }
@@ -2455,13 +2457,13 @@ pub(crate) mod tests {
             failures.iter().all(|f| f.3["reason"] == "directory_unavailable" && f.3["attemptedUsername"] == "erin")
         );
         assert_eq!(auth_rows(pool, "login.locked").await.len(), 1, "the last free failure set the lock");
-        let e = login(pool, &auth, &headers, &from("198.51.100.7"), login_body("erin", "x")).await.err().unwrap();
+        let e = login(pool, &auth, &headers, &from("198.51.100.7"), login_body("erin", &wrong)).await.err().unwrap();
         assert_eq!((e.code, e.hold_until), (ErrorCode::RateLimited, None), "locked: 429, not another 503");
 
         // Many names, one probe each: the budget for all names runs out, and
         // sign-in is slowed to the slow lane rather than listing names at will.
         for name in &names {
-            let e = login(pool, &auth, &headers, &from("203.0.113.9"), login_body(name, "x")).await.err().unwrap();
+            let e = login(pool, &auth, &headers, &from("203.0.113.9"), login_body(name, &wrong)).await.err().unwrap();
             assert_eq!(e.code, ErrorCode::IdentityProviderUnavailable, "{name}");
         }
         assert_eq!(auth_rows(pool, "login.failure").await.len(), GLOBAL_BUDGET, "every probe audited");
