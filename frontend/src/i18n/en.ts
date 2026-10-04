@@ -474,6 +474,7 @@ export const en = {
   "shell.nav.expand": "Expand sidebar",
   "shell.breadcrumb": "Breadcrumb",
   "shell.toast.dismiss": "Dismiss notification",
+  "shell.toast.dismissHint": "Dismiss notification (Esc)",
   "nav.page.dashboard": "Dashboard",
   "nav.page.inventory": "All configuration items",
   "nav.page.search": "Search",
