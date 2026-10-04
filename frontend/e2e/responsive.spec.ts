@@ -9,7 +9,7 @@ async function expectHeaderFits(page: Page) {
   const search = await page.locator("#global-search").boundingBox();
   expect(search?.width ?? 0).toBeGreaterThanOrEqual(150);
   const viewport = page.viewportSize()!;
-  const newCi = await page.getByRole("link", { name: "New CI", exact: true }).boundingBox();
+  const newCi = await page.getByRole("banner").getByRole("link", { name: "New CI", exact: true }).boundingBox();
   expect(newCi).not.toBeNull();
   expect(newCi!.x).toBeGreaterThanOrEqual(0);
   expect(newCi!.y).toBeGreaterThanOrEqual(0);
@@ -62,7 +62,7 @@ test("768 px: header fits, sidebar is a drawer, theme and sign-out sit in the us
   await expect(who).toBeFocused();
 
   // "New CI" is an icon button that keeps its accessible name and still opens the form.
-  await page.getByRole("link", { name: "New CI", exact: true }).click();
+  await page.getByRole("banner").getByRole("link", { name: "New CI", exact: true }).click();
   await expect(page).toHaveURL(/\/cis\/new/);
 });
 
