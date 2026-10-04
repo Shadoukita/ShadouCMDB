@@ -88,7 +88,8 @@ test("inventory: search and class filter live in the URL and survive a reload", 
   await expect(page.getByRole("link", { name, exact: true })).toBeVisible();
 
   await page.reload();
-  await expect(page.locator("#f-q")).toHaveValue(name);
+  // The query bar shows the class filter as a token ahead of the search term.
+  await expect(page.locator("#f-q")).toHaveValue(new RegExp(`^class:\\S+ ${name}$`));
   await expect(page.locator("#f-class")).toHaveValue(serverId);
   await expect(page.getByRole("link", { name, exact: true })).toBeVisible();
   await snap(page, "06-inventory-filtered");

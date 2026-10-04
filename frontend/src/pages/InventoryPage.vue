@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, ref } from "vue";
 import { RouterLink, useRouter } from "vue-router";
 import { useAllLookupListValues, useAreas, useLookupLists } from "../api/datamodel";
-import { useCiClasses, useCiList, useClassAttributes, type CiListQuery } from "../api/queries";
+import { useCiClasses, useCiList, useClassAttributes, useCriticalityValues, type CiListQuery } from "../api/queries";
 import { dataModelEmpty } from "../lib/dataModel";
 import Breadcrumbs from "../components/Breadcrumbs.vue";
 import CiCell from "../components/CiCell.vue";
@@ -11,10 +11,12 @@ import DataModelEmpty from "../components/DataModelEmpty.vue";
 import EmptyState from "../components/EmptyState.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
 import InventoryFilters from "../components/InventoryFilters.vue";
+import QueryBar from "../components/QueryBar.vue";
+import type { BarCatalogue } from "../lib/queryBar";
 import SavedViewMenu from "../components/savedViews/SavedViewMenu.vue";
 import PaginationBar from "../components/PaginationBar.vue";
 import { useAppSettings } from "../lib/appSettings";
-import { useDebounced, useDocumentTitle } from "../lib/composables";
+import { useDocumentTitle } from "../lib/composables";
 import { viewableClasses } from "../lib/permissions";
 import { ATTRIBUTE_PREFIX, BUILTIN_FIELDS, fieldLabel, isSortableAttribute, listViewFor, lookupValueIds } from "../lib/uiSettings";
 import { useInventoryQueryState } from "../lib/useInventoryQueryState";
@@ -63,7 +65,7 @@ const state = useInventoryQueryState({
     lookupLists.data.value && lookupValues.data.value ? (lookupValueIds(lookups, lookupLists.data.value, lookupValues.data.value) ?? undefined) : null,
   attributeKeys: attrKeys,
 });
-const { get, limit, offset, columns, activeFilters } = state;
+const { limit, offset, columns, activeFilters } = state;
 const classById = (id: string) => classes.data.value?.find((c) => c.id === id);
 const currentClass = computed(() => (state.currentClass.value ? classById(state.currentClass.value.id) : undefined));
 
@@ -91,16 +93,14 @@ const attributeChoices = computed(() =>
 
 useDocumentTitle(() => currentClass.value?.name ?? t("inventory.crumb"));
 
-// Search box: local state for typing, debounced into the URL.
-const qText = ref(get("q"));
-const debouncedQ = useDebounced(qText, 300);
-watch(debouncedQ, (v) => {
-  if (v !== get("q")) state.update({ q: v || undefined });
-});
-watch(
-  () => get("q"),
-  (v) => (qText.value = v), // back/forward
-);
+// The query bar resolves class, lookup and criticality keys against these (each undefined while it loads).
+const criticality = useCriticalityValues();
+const barCatalogue = computed<BarCatalogue>(() => ({
+  classes: classes.data.value,
+  criticality: criticality.data.value,
+  lists: lookupLists.data.value,
+  values: lookupValues.data.value,
+}));
 
 const total = computed(() => list.data.value?.page.total ?? 0);
 const rows = computed(() => list.data.value?.data ?? []);
@@ -144,7 +144,6 @@ const rowKeys = {
 };
 
 function clearFilters() {
-  qText.value = "";
   selection.skipNextDefault();
   state.clearFilters();
 }
@@ -167,13 +166,7 @@ function clearFilters() {
   <section class="panel explorer" :aria-label="t('inventory.region')">
     <form class="toolbar" role="search" @submit.prevent>
       <SavedViewMenu context="inventory" :state="state" :selection="selection" :classes="classes.data.value" :catalogue="catalogue" :total="settledTotal" />
-      <div class="field search">
-        <label for="f-q">{{ t("inventory.search") }}</label>
-        <span class="input-icon">
-          <Icon name="search" />
-          <input id="f-q" v-model="qText" type="search" :placeholder="t('inventory.search.placeholder')" />
-        </span>
-      </div>
+      <QueryBar :state="state" :catalogue="barCatalogue" />
       <InventoryFilters :state="state" id-prefix="f" />
       <button v-if="activeFilters.length > 0" type="button" class="btn btn-ghost" @click="clearFilters"><Icon name="x" />{{ t("inventory.clearFilters") }}</button>
       <ColumnsPopover

@@ -59,6 +59,39 @@
   padding-left: calc(var(--space-2) + 16px + var(--space-1_5));
 }
 
+/* ---------- Query bar: the search term and filters as key:value tokens (§2.7) ---------- */
+/* It takes the toolbar's free width; the filters wrap onto the next line when it runs out. */
+.toolbar .field.query-bar {
+  flex: 1 1 360px;
+  min-width: min(100%, 280px);
+}
+.toolbar .field.query-bar input {
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: var(--fs-md);
+}
+.toolbar .field.query-bar input::placeholder {
+  font-family: var(--font-sans);
+}
+.query-suggestions {
+  min-width: 280px;
+}
+.query-suggestions .mono {
+  color: var(--c-link);
+}
+.query-suggestion-detail {
+  margin-left: auto;
+  padding-left: var(--space-4);
+  color: var(--c-text-secondary);
+}
+.query-errors {
+  display: grid;
+  gap: var(--space-0_5);
+  margin: var(--space-1) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
 /* ---------- Filter chips: filters set by a link or a list view, removable one by one (audit I6) ---------- */
 .filter-chips {
   display: flex;
