@@ -456,7 +456,7 @@ test("windows dragged, resized, overlapped and layered, saved, and shown as plac
   await resetUiSettings(request);
   await origin.goto(`/cis/${ci.id}`);
   const page = await openEditor(origin);
-  await page.setViewportSize({ width: 1440, height: 1600 });
+  await page.setViewportSize({ width: 1440, height: 2400 });
   const area = page.locator("[data-le-area]");
   const win = (key: string) => page.locator(`[data-window="${key}"]`);
   const num = async (key: string, attr: "x" | "y" | "w" | "h" | "z") => Number(await win(key).getAttribute(`data-${attr}`));
