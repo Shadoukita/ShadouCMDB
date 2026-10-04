@@ -651,17 +651,17 @@ pub async fn remove(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<(),
     let before = must_detail(&mut tx, &model, id, None).await?;
     let edges = data::soft_delete_edges_of(&mut tx, id).await?;
     data::soft_delete(&mut tx, id).await?;
+    // Its running workflows end with it (the CI row is locked first, as on every workflow path).
+    let cancelled = crate::modules::workflows::runtime::cancel_for_deleted_ci(&mut tx, ctx, id).await?;
 
-    let mut entries: Vec<AuditEntry> = edges
-        .iter()
-        .map(|e| AuditEntry {
-            action: AuditAction::Delete,
-            entity_type: "ci_relationships",
-            entity_id: e.id,
-            old_value: Some(crud::json(e)),
-            new_value: None,
-        })
-        .collect();
+    let mut entries: Vec<AuditEntry> = cancelled;
+    entries.extend(edges.iter().map(|e| AuditEntry {
+        action: AuditAction::Delete,
+        entity_type: "ci_relationships",
+        entity_id: e.id,
+        old_value: Some(crud::json(e)),
+        new_value: None,
+    }));
     entries.push(AuditEntry {
         action: AuditAction::Delete,
         entity_type: "configuration_items",
@@ -760,6 +760,67 @@ pub(crate) async fn update_on_behalf(
         crud::write_audit(conn, ctx, vec![entry]).await?;
     }
     Ok(())
+}
+
+/// What a workflow step wrote on its CI.
+pub(crate) struct WorkflowWrite {
+    /// The CI before and after; equal when nothing changed.
+    pub before: ConfigurationItem,
+    pub after: ConfigurationItem,
+}
+
+/// Sets the fields a workflow step writes (its transition fields and the
+/// state field) on a live CI the caller already locked, with the rules of
+/// `PATCH /configuration-items/{id}`: the caller's edit right on the class,
+/// the same value validation, and references only to CIs the caller may view.
+/// Writes the CI's `update` audit row unless nothing changed. Validation
+/// errors name the fields `attributes.<key>`, as a PATCH does. Without
+/// `apply` it only validates (the CI is left as it is).
+pub(crate) async fn update_for_workflow(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    id: Uuid,
+    class_id: Uuid,
+    attributes: Map<String, Value>,
+    apply: bool,
+) -> Result<WorkflowWrite, AppError> {
+    let model = Model::load(conn).await?;
+    let before = must_detail(conn, &model, id, None).await?;
+    if attributes.is_empty() {
+        return Ok(WorkflowWrite { after: before.clone(), before });
+    }
+    let defs = class_data::effective_attributes(conn, class_id).await?;
+    let input = UpdateItemBody {
+        class_id: None,
+        ident: None,
+        valid_from: None,
+        valid_until: None,
+        attributes: Some(attributes),
+        criticality_value_id: None,
+        version: None,
+    };
+    let visible = ctx.class_scope(ClassOp::View);
+    let needs = Needs::for_update(&defs, input.attributes.as_ref(), &before.attributes);
+    let resolver = DbResolver::load(conn, visible.as_deref(), &needs).await?;
+    let plan = plan::plan_update(ctx, &model, &defs, before.clone(), &input, &resolver, None)?;
+    if !apply {
+        return Ok(WorkflowWrite { after: before.clone(), before });
+    }
+    plan::apply(conn, &model, &plan).await?;
+    let after = must_detail(conn, &model, id, None).await?;
+    let old = plan.before.as_ref().map(crud::json);
+    let new = crud::json(&after);
+    if old.as_ref() != Some(&new) {
+        let entry = AuditEntry {
+            action: AuditAction::Update,
+            entity_type: "configuration_items",
+            entity_id: id,
+            old_value: old,
+            new_value: Some(new),
+        };
+        crud::write_audit(conn, ctx, vec![entry]).await?;
+    }
+    Ok(WorkflowWrite { before, after })
 }
 
 /// Brings a soft-deleted CI back (its relationships stay deleted), in the
@@ -1039,7 +1100,7 @@ mod tests {
         let principal = crate::auth::Principal {
             user_id: Uuid::new_v4(),
             username: if administrator { "admin" } else { "editor" }.into(),
-            credential: crate::auth::Credential::Token,
+            credential: crate::auth::Credential::Token { profile_id: None },
             permissions,
         };
         RequestContext::user(std::sync::Arc::new(principal), "test".into())
@@ -1277,7 +1338,7 @@ mod tests {
         let principal = crate::auth::Principal {
             user_id: Uuid::new_v4(),
             username: "restricted".into(),
-            credential: crate::auth::Credential::Token,
+            credential: crate::auth::Credential::Token { profile_id: None },
             permissions,
         };
         let ctx = RequestContext::user(std::sync::Arc::new(principal), "test".into());

@@ -103,7 +103,7 @@ const TAG_DESCRIPTIONS: &[(&str, &str)] = &[
 // `{public}` is replaced with the operations that need no session.
 const DESCRIPTION: &str = "REST API for ShadouCMDB. This API is the only database client; the web UI uses nothing else.
 
-- Collections are paginated with `limit`/`offset` and return `{ data, page: { limit, offset, total } }`, except `listIdentityProviders` (a plain array), `listCiClassEffectiveAttributes`, `listTemplates` and `listImportMappings` (`{ data }` with every item), `listSavedViews` (`{ data, limits }` with every item), `searchPrincipals` (`{ data }`, at most 20 matches), `listConfigurationItemServices` (`{ data, truncated, visibility }`, at most 200 services) and the `.../usage` operations (`{ inUse, data }`).
+- Collections are paginated with `limit`/`offset` and return `{ data, page: { limit, offset, total } }`, except `listIdentityProviders` (a plain array), `listCiClassEffectiveAttributes`, `listTemplates` and `listImportMappings` (`{ data }` with every item), `listSavedViews` (`{ data, limits }` with every item), `searchPrincipals` (`{ data }`, at most 20 matches), `listConfigurationItemServices` (`{ data, truncated, visibility }`, at most 200 services), `getWorkflowInstanceSummary` (`{ data }`, one count per workflow and state), `getConfigurationItemWorkflows` (`{ data, startable }`, running instances and the 20 that ended last) and the `.../usage` operations (`{ inUse, data }`).
 - `sort=field` ascending, `sort=-field` descending. `q` searches. Filters that take ids accept comma-separated lists.
 - Every error uses the `ErrorEnvelope` shape; invalid input is always 400 `VALIDATION_ERROR` with per-field `details`.
 - Sign in with `POST /api/v1/auth/login`; the session travels in the `shadoucmdb_session` cookie (`__Host-shadoucmdb_session` behind HTTPS). Without a live session every operation answers 401 `UNAUTHENTICATED`, except these public ones: {public}.
@@ -213,6 +213,12 @@ fn error_status(code: ErrorCode) -> (u16, &'static str) {
             422,
             "The Idempotency-Key was already used for another operation or target (code IDEMPOTENCY_KEY_REUSED, \
              details[0].code idempotency_key_reused). Nothing was changed",
+        ),
+        ErrorCode::WorkflowConditionFailed => (
+            422,
+            "The transition cannot run yet (code WORKFLOW_CONDITION_FAILED): one detail per condition, required \
+             field or comment that is not satisfied (details[].code condition, required or comment_required; \
+             details[].field names the field as `fields.<key>`, or `comment`). Nothing was changed",
         ),
         ErrorCode::RateLimited => (
             429,

@@ -48,7 +48,7 @@ pub enum Op {
 pub const OPS: &[&str] = &["eq", "ne", "in", "notIn", "isSet", "isNotSet", "gt", "gte", "lt", "lte", "contains"];
 
 impl Op {
-    fn parse(s: &str) -> Option<Op> {
+    pub fn parse(s: &str) -> Option<Op> {
         Some(match s {
             "eq" => Op::Eq,
             "ne" => Op::Ne,

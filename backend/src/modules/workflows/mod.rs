@@ -5,11 +5,19 @@
 //! the transition grants. Its graph lives in versions: one draft, edited as a
 //! whole, then published as an immutable version (the database refuses any
 //! change to a published graph). Everything here needs `workflows.manage`.
-//! Running workflows on CIs is the runtime API (S3).
+//! Running workflows on CIs is the runtime API ([`runtime`], S3), whose
+//! routes are [`runtime_routes`].
 
 pub mod condition;
+pub mod eval;
 pub mod graph;
+#[cfg(test)]
+mod perf;
 pub mod refs;
+pub mod runtime;
+pub mod runtime_schemas;
+#[cfg(test)]
+mod runtime_tests;
 pub mod schemas;
 pub mod service;
 #[cfg(test)]
@@ -22,6 +30,7 @@ use utoipa::openapi::path::{Parameter, ParameterBuilder, ParameterIn};
 use utoipa::openapi::schema::{ObjectBuilder, Type};
 use uuid::Uuid;
 
+use self::runtime_schemas::*;
 use self::schemas::*;
 use crate::api::route::{Body, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, PathInput, Query, Route, route};
 use crate::api::{schemas as api_schemas, validate};
@@ -296,5 +305,154 @@ pub fn routes() -> Vec<Route> {
                     Ok(Json(service::replace_grants(&api.pool, &api.ctx, id, &b).await?))
                 },
             ),
+    ]
+}
+
+const RUN_TAG: &str = "Workflow instances";
+const INSTANCES: &str = "/api/v1/workflow-instances";
+const INSTANCE: &str = "/api/v1/workflow-instances/{id}";
+
+/// The runtime API: workflow instances on CIs. Open to API tokens; every
+/// operation answers 404 for a CI the caller may not view.
+pub fn runtime_routes() -> Vec<Route> {
+    vec![
+        route(Method::GET, INSTANCES, "listWorkflowInstances")
+            .tag(RUN_TAG)
+            .summary("List workflow instances on the CIs you may view (paginated, filterable)")
+            .description(
+                "Instances on CIs of types the caller may not view are left out of the page and of `page.total`. \
+                 Sorted by `lastTransitionAt`, newest first, unless `sort` says otherwise.",
+            )
+            .handle(
+                |api, In(NoPath, Query(q), NoBody): In<NoPath, Query<WorkflowInstanceList>, NoBody>| async move {
+                    Ok(Json(runtime::list(&api.pool, &api.ctx, &q).await?))
+                },
+            ),
+        route(Method::GET, "/api/v1/workflow-instances/summary", "getWorkflowInstanceSummary")
+            .tag(RUN_TAG)
+            .summary("Count running instances per workflow and state, on the CIs you may view (for dashboards)")
+            .handle(
+                |api,
+                 In(NoPath, Query(q), NoBody): In<NoPath, Query<WorkflowInstanceSummaryQuery>, NoBody>| async move {
+                    Ok(Json(runtime::summary(&api.pool, &api.ctx, &q).await?))
+                },
+            ),
+        route(Method::POST, INSTANCES, "startWorkflowInstance")
+            .tag(RUN_TAG)
+            .summary("Start a workflow on a CI")
+            .description(
+                "Needs the edit right on the CI's type. The instance starts in the initial state of the workflow's \
+                 current version and stays on that version. When the workflow drives a state field and the initial \
+                 state maps to one of its values, the CI's field is set (a CI `update` audit row). 404 when the CI \
+                 or the workflow does not exist or is of a type the caller may not view. 400 VALIDATION_ERROR \
+                 `not_covered` when the workflow does not run on the CI's type. 409 CONFLICT `deleted` (the CI is \
+                 deleted), `unpublished`, `inactive` or `already_running` (one running instance per workflow and \
+                 CI). Audited on the CI as `workflow.start`.",
+            )
+            .status(StatusCode::CREATED)
+            .class_checked()
+            .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])
+            .handle(
+                |api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<WorkflowInstanceStart>>| async move {
+                    Ok(Json(runtime::start(&api.pool, &api.ctx, &b).await?))
+                },
+            ),
+        route(Method::GET, INSTANCE, "getWorkflowInstance")
+            .tag(RUN_TAG)
+            .summary("Get a workflow instance with the graph of its version and the transitions you may run")
+            .description(
+                "`availableTransitions` lists the transitions out of the current state that the caller is granted \
+                 and may run (the edit right on the CI's type), each with its fields and the conditions that fail on \
+                 the CI's current values (`blockedBy`). Transitions the caller is not granted are left out. 404 for \
+                 an instance on a CI of a type the caller may not view.",
+            )
+            .errors(&[ErrorCode::NotFound])
+            .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
+                Ok(Json(runtime::get(&api.pool, &api.ctx, id).await?))
+            }),
+        route(Method::GET, "/api/v1/workflow-instances/{id}/events", "listWorkflowInstanceEvents")
+            .tag(RUN_TAG)
+            .summary("The history of a workflow instance, oldest step first (paginated)")
+            .description(
+                "Events are kept for the life of the CI; audit log retention does not remove them. `requestId` joins \
+                 an event to the audit rows of the same request.",
+            )
+            .errors(&[ErrorCode::NotFound])
+            .handle(
+                |api, In(IdPath(id), Query(q), NoBody): In<IdPath, Query<WorkflowEventList>, NoBody>| async move {
+                    Ok(Json(runtime::events(&api.pool, &api.ctx, id, &q).await?))
+                },
+            ),
+        route(Method::POST, "/api/v1/workflow-instances/{id}/transitions", "runWorkflowTransition")
+            .tag(RUN_TAG)
+            .summary("Move a workflow instance along a transition")
+            .description(
+                "One transaction: the fields sent are validated as PATCH /configuration-items/{id} validates them \
+                 (400 VALIDATION_ERROR on `fields.<key>`, and `not_a_transition_field` for a field the transition \
+                 does not list); required fields, the comment and the conditions are then checked on the CI's \
+                 values with the ones sent (422 WORKFLOW_CONDITION_FAILED, one detail each: `required`, \
+                 `comment_required`, `condition`). The fields and the state field are written to the CI (a CI \
+                 `update` audit row), the instance moves on (and completes on a terminal state), and the step is \
+                 audited on the CI as `workflow.transition`. Needs the edit right on the CI's type and a grant of \
+                 the transition to one of the caller's profiles; with an API token, to the token's profile as \
+                 well (403 FORBIDDEN). 400 `unknown_transition` for a key the version does not have; 409 CONFLICT \
+                 `not_from_current_state` or `not_active`; 409 VERSION_CONFLICT on a stale `expectedVersion`.",
+            )
+            .class_checked()
+            .errors(&[
+                ErrorCode::NotFound,
+                ErrorCode::Conflict,
+                ErrorCode::VersionConflict,
+                ErrorCode::WorkflowConditionFailed,
+            ])
+            .handle(
+                |api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<WorkflowTransitionRun>>| async move {
+                    Ok(Json(runtime::transition(&api.pool, &api.ctx, id, &b).await?))
+                },
+            ),
+        route(Method::POST, "/api/v1/workflow-instances/{id}/cancel", "cancelWorkflowInstance")
+            .tag(RUN_TAG)
+            .summary("Cancel a running workflow instance")
+            .description(
+                "Needs `workflows.manage`, or the edit right on the CI's type and the workflow's `_cancel` grant. \
+                 The CI's fields stay as they are. Audited on the CI as `workflow.cancel` with the reason. 409 \
+                 CONFLICT `not_active`; 409 VERSION_CONFLICT on a stale `expectedVersion`.",
+            )
+            .class_checked()
+            .errors(&[ErrorCode::NotFound, ErrorCode::Conflict, ErrorCode::VersionConflict])
+            .handle(
+                |api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<WorkflowInstanceCancel>>| async move {
+                    Ok(Json(runtime::cancel(&api.pool, &api.ctx, id, &b).await?))
+                },
+            ),
+        route(Method::POST, "/api/v1/workflow-instances/{id}/force", "forceWorkflowInstanceState")
+            .tag(RUN_TAG)
+            .summary("Put a running workflow instance into another state of its version, bypassing transitions")
+            .description(
+                "For administrators repairing an instance: needs `workflows.manage` and the edit right on the CI's \
+                 type. No condition, field or grant is checked; the state field is written as a transition would. \
+                 A terminal state completes the instance. Audited on the CI as `workflow.force` with the mandatory \
+                 reason. 400 `unknown_state`; 409 CONFLICT `same_state` or `not_active`; 409 VERSION_CONFLICT on a \
+                 stale `expectedVersion`.",
+            )
+            .requires(GlobalPermission::WorkflowsManage)
+            .class_checked()
+            .errors(&[ErrorCode::NotFound, ErrorCode::Conflict, ErrorCode::VersionConflict])
+            .handle(
+                |api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<WorkflowInstanceForce>>| async move {
+                    Ok(Json(runtime::force(&api.pool, &api.ctx, id, &b).await?))
+                },
+            ),
+        route(Method::GET, "/api/v1/configuration-items/{id}/workflows", "getConfigurationItemWorkflows")
+            .tag(RUN_TAG)
+            .summary("The workflows of one CI: running and recent instances, and the workflows you may start")
+            .description(
+                "Running instances first, then the 20 that ended last, each with the transitions the caller may \
+                 run. 404 for a CI of a type the caller may not view.",
+            )
+            .errors(&[ErrorCode::NotFound])
+            .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
+                Ok(Json(runtime::of_ci(&api.pool, &api.ctx, id).await?))
+            }),
     ]
 }

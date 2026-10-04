@@ -365,8 +365,12 @@ pub async fn authenticate(
             }
         }
     }
-    let principal =
-        Principal { user_id: t.user_id, username: t.username.clone(), credential: Credential::Token, permissions };
+    let principal = Principal {
+        user_id: t.user_id,
+        username: t.username.clone(),
+        credential: Credential::Token { profile_id: t.profile_id },
+        permissions,
+    };
     let ctx = RequestContext::token(Arc::new(principal), request_id).with_client(client);
     let Some(r) = refusal else {
         // With the request span's `user_id`, so its refusals and timeouts name the token (GH#571).

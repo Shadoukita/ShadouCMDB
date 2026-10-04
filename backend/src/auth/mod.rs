@@ -68,14 +68,17 @@ pub enum Credential {
         recently_confirmed: bool,
     },
     /// `Authorization: Bearer`; not sent by browsers on their own, so no CSRF token.
-    Token,
+    /// `profile_id` is the token's narrowing profile: a workflow transition
+    /// must be granted to it as well as to one of the owner's profiles (Q6 of
+    /// SHAA-1411). None for principals built outside token authentication.
+    Token { profile_id: Option<Uuid> },
 }
 
 impl Principal {
     pub fn session_id(&self) -> Option<Uuid> {
         match &self.credential {
             Credential::Session { id, .. } => Some(*id),
-            Credential::Token => None,
+            Credential::Token { .. } => None,
         }
     }
 
@@ -96,7 +99,7 @@ impl Principal {
     pub fn csrf_token(&self) -> Option<&str> {
         match &self.credential {
             Credential::Session { csrf_token, .. } => Some(csrf_token),
-            Credential::Token => None,
+            Credential::Token { .. } => None,
         }
     }
 }
