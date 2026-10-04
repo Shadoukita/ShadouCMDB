@@ -51,6 +51,8 @@ async function closeEditor(page: Page) {
   await closed;
 }
 
+/** A section of the detail page by its heading. */
+const pagePanel = (page: Page, heading: string) => page.locator(".layout-container details").filter({ has: page.locator("summary h2", { hasText: new RegExp(`^${heading}$`) }) });
 const bar = (page: Page) => page.getByRole("region", { name: "Layout editing" });
 const tabBar = (page: Page) => page.getByRole("group", { name: "Tabs of the layout" });
 const section = (page: Page, label: string) => page.getByRole("region", { name: `Section ${label}`, exact: true });
@@ -382,11 +384,15 @@ test("content blocks: a note and built-in panels placed in the editor, on the de
   await page.keyboard.press("Enter");
   await expect(section(page, "Before you edit")).toBeVisible();
 
-  // + Panel: the relationships and the audit trail on a tab of their own; each panel once per layout.
+  // The relationships (placed from the start) moved to a tab of their own, + Panel adds the audit trail there;
+  // each panel once per layout.
   await tabBar(page).getByRole("button", { name: "+ Tab" }).click();
   await tabBar(page).getByLabel("Tab name").fill("Links");
   await page.keyboard.press("Enter");
-  await page.getByLabel("Add a panel to Links").selectOption("relations");
+  await tabBar(page).getByRole("button", { name: "General", exact: true }).click();
+  await section(page, "Relationships").hover();
+  await section(page, "Relationships").getByLabel("Tab of Relationships").selectOption({ label: "Links" });
+  await expect(tabBar(page).getByRole("button", { name: "Links", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(section(page, "Relationships")).toContainText("Relationships panel");
   await page.getByLabel("Add a panel to Links").selectOption("audit");
   await expect(section(page, "Audit trail").getByRole("columnheader", { name: "Request id" })).toBeVisible();
@@ -425,12 +431,12 @@ test("content blocks: a note and built-in panels placed in the editor, on the de
   await saveLayout(page);
   await expect(section(page, "Audit trail").getByRole("alert")).toHaveCount(0);
 
-  // The detail page: the note on General, the panels on Links instead of their usual places; History keeps its tab.
+  // The detail page: the note and the record details on General, the panels on Links; History keeps its tab.
   await page.goto(`/cis/${ci.id}`);
   const tabs = page.getByRole("tablist", { name: "CI sections" }).getByRole("tab");
   await expect(tabs).toHaveText(["General", "Links", "Relationship map", "Impact", "History"]);
   const heads = page.locator(".layout-container details > summary h2");
-  await expect(heads).toContainText(["General", "Before you edit", "Record"]);
+  await expect(heads).toContainText(["General", "Record", "Before you edit"]);
   await expect(page.locator(".lg-free .note-text strong")).toHaveText("Ops");
   await expect(page.locator("#rel-title")).toHaveCount(0);
   await tabs.filter({ hasText: "Links" }).click();
@@ -450,7 +456,7 @@ test("windows dragged, resized, overlapped and layered, saved, and shown as plac
   await resetUiSettings(request);
   await origin.goto(`/cis/${ci.id}`);
   const page = await openEditor(origin);
-  await page.setViewportSize({ width: 1440, height: 1600 });
+  await page.setViewportSize({ width: 1440, height: 2400 });
   const area = page.locator("[data-le-area]");
   const win = (key: string) => page.locator(`[data-window="${key}"]`);
   const num = async (key: string, attr: "x" | "y" | "w" | "h" | "z") => Number(await win(key).getAttribute(`data-${attr}`));
@@ -525,7 +531,8 @@ test("windows dragged, resized, overlapped and layered, saved, and shown as plac
   // Pressing on General brings it to the front.
   await page.mouse.click(g.x + 12, g.y + 12);
   await expect.poll(onTop).toBe("general");
-  await expect(bar(page).getByTestId("le-layer")).toHaveText("Layer 7 of 7");
+  // The built-in sections, the Record and Relationships panels, and Floating.
+  await expect(bar(page).getByTestId("le-layer")).toHaveText("Layer 9 of 9");
   // The context menu sends it to the back again.
   await page.mouse.click(g.x + 12, g.y + 12, { button: "right" });
   const menu = page.getByRole("menu", { name: "Layers of General" });
@@ -533,7 +540,7 @@ test("windows dragged, resized, overlapped and layered, saved, and shown as plac
   await menu.getByRole("menuitem", { name: /Send to back/ }).click();
   await expect(menu).toHaveCount(0);
   await expect.poll(onTop).toBe(key);
-  await expect(say).toHaveText("Send to back: General is layer 1 of 7.");
+  await expect(say).toHaveText("Send to back: General is layer 1 of 9.");
   // …and the bar's toolbar works on the selected window: General to the front, then one step back.
   await bar(page).getByRole("button", { name: "Bring to front" }).click();
   await expect.poll(onTop).toBe("general");
@@ -607,6 +614,113 @@ test("windows dragged, resized, overlapped and layered, saved, and shown as plac
   }).toPass();
   await snap(origin, "layout-free-phone");
   await origin.setViewportSize({ width: 1440, height: 900 });
+
+  await resetUiSettings(request);
+});
+
+test("record details and relationships are panels: moved, removed and added back; separators between fields", async ({ page, request }) => {
+  await resetUiSettings(request);
+  await page.goto(`/cis/${ci.id}/layout-editor`);
+  await expect(bar(page)).toBeVisible();
+  await page.setViewportSize({ width: 1440, height: 2400 });
+  const say = page.locator(".le-canvas [aria-live=assertive]");
+  const panelOptions = page.getByLabel("Add a panel to General").locator("option");
+
+  // The built-in layout shows both as windows of the first tab; nothing is pinned, and no hint says otherwise.
+  await expect(section(page, "Record")).toContainText(ci.id);
+  await expect(section(page, "Relationships")).toContainText("Relationships panel");
+  await expect(page.getByText(/record details come last/i)).toHaveCount(0);
+  await expect(panelOptions).toHaveText(["+ Panel", "History", "Audit trail"]);
+
+  // Removed: off the detail page, and offered by + Panel again.
+  await section(page, "Relationships").hover();
+  await section(page, "Relationships").getByRole("button", { name: "Remove section Relationships" }).click();
+  await expect(page.getByRole("dialog")).toContainText("The Relationships panel is no longer shown on the detail page.");
+  await page.getByRole("dialog").getByRole("button", { name: "Remove" }).click();
+  await expect(section(page, "Relationships")).toHaveCount(0);
+  await expect(panelOptions).toHaveText(["+ Panel", "Relationships", "History", "Audit trail"]);
+
+  // The record details moved to a tab of their own (its empty field section removed).
+  await tabBar(page).getByRole("button", { name: "+ Tab" }).click();
+  await tabBar(page).getByLabel("Tab name").fill("Meta");
+  await page.keyboard.press("Enter");
+  await section(page, "Meta").hover();
+  await section(page, "Meta").getByRole("button", { name: "Remove section Meta" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Remove" }).click();
+  await tabBar(page).getByRole("button", { name: "General", exact: true }).click();
+  await section(page, "Record").hover();
+  await section(page, "Record").getByLabel("Tab of Record").selectOption({ label: "Meta" });
+  await expect(tabBar(page).getByRole("button", { name: "Meta", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(section(page, "Record")).toBeVisible();
+
+  // Separators in General: added with its label, moved by keyboard and by drag, removed.
+  await tabBar(page).getByRole("button", { name: "General", exact: true }).click();
+  const general = section(page, "General");
+  const order = () => general.locator(".le-grid > .le-field, .le-grid > .le-sep").evaluateAll((els) => els.map((e) => e.getAttribute("data-field") ?? "|"));
+  await general.hover();
+  await general.getByRole("button", { name: "Add a separator to General" }).click();
+  await expect(page.getByLabel("Separator label (empty: a plain line)")).toBeFocused();
+  await page.getByLabel("Separator label (empty: a plain line)").fill("Lifecycle");
+  await page.keyboard.press("Enter");
+  const sep = general.locator(".le-sep").filter({ hasText: "Lifecycle" });
+  await expect(sep).toBeVisible();
+  expect((await order()).at(-1)).toBe("|");
+  await expect(page.getByRole("button", { name: "Separator Lifecycle, line across General" })).toBeFocused();
+  await page.keyboard.press("Alt+ArrowUp");
+  await expect(say).toHaveText(/^Separator moved to position \d+ of \d+ in General\.$/);
+  expect((await order()).at(-2)).toBe("|");
+  // A plain line, removed again with its toolbar.
+  await general.hover();
+  await general.getByRole("button", { name: "Add a separator to General" }).click();
+  await page.keyboard.press("Enter");
+  await expect(general.locator(".le-sep")).toHaveCount(2);
+  await general.locator(".le-sep").last().hover();
+  await general.getByRole("button", { name: "Remove Separator", exact: true }).click();
+  await expect(general.locator(".le-sep")).toHaveCount(1);
+  // Dragged before the field ahead of it (both in view: General's window scrolls, and a drag across that scroll is flaky).
+  const ahead = (await order()).at(-3)!;
+  await sep.dragTo(general.locator(`.le-grid > .le-field[data-field="${ahead}"]`), { targetPosition: { x: 4, y: 4 } });
+  await expect.poll(async () => (await order()).at(-3)).toBe("|");
+  expect((await order()).at(-2)).toBe(ahead);
+  await snap(page, "layout-separators-editor");
+
+  await saveLayout(page);
+  type Section = { key: string; kind?: string; fields?: { field?: string; separator?: boolean; label?: string; width: number }[] };
+  const stored = await apiGet<{ settings: { layoutTemplates: { key: string; layout: { tabs: { label: string; sections: Section[] }[] } }[] } }>(request, "/ui-settings");
+  const tabs = stored.settings.layoutTemplates.find((t) => t.key === "standard")!.layout.tabs;
+  expect(tabs.map((t) => [t.label, t.sections.filter((x) => x.kind && x.kind !== "fields").map((x) => x.kind)])).toEqual([
+    ["General", []],
+    ["Meta", ["record"]],
+  ]);
+  const generalFields = tabs[0].sections.find((x) => x.key === "general")!.fields!;
+  const sepAt = generalFields.findIndex((f) => f.separator);
+  expect(generalFields[sepAt]).toEqual({ separator: true, label: "Lifecycle", width: 3 });
+  expect(generalFields[sepAt + 1].field).toBe(ahead);
+
+  // The detail page: no relationships, the record details on Meta, the separator a line across General.
+  await page.goto(`/cis/${ci.id}`);
+  const ciTabs = page.getByRole("tablist", { name: "CI sections" }).getByRole("tab");
+  await expect(ciTabs).toHaveText(["General", "Meta", "Relationship map", "Impact", "History"]);
+  await expect(page.getByRole("separator", { name: "Lifecycle" })).toBeVisible();
+  await expect(page.locator('details[data-section="general"] [data-separator]')).toHaveText("Lifecycle");
+  await expect(page.locator("#rel-title")).toHaveCount(0);
+  await expect(page.locator(".layout-container details > summary h2", { hasText: "Record" })).toHaveCount(0);
+  await ciTabs.filter({ hasText: "Meta" }).click();
+  await expect(page.locator(".layout-container details > summary h2")).toHaveText(["Record"]);
+  await expect(pagePanel(page, "Record")).toContainText(ci.id);
+  await snap(page, "layout-separators-detail");
+  // The form shows the separator too.
+  await page.goto(`/cis/${ci.id}/edit`);
+  await expect(page.locator("form").getByRole("separator", { name: "Lifecycle" })).toBeVisible();
+
+  // + Panel brings the relationships back.
+  await page.goto(`/cis/${ci.id}/layout-editor`);
+  await expect(bar(page)).toBeVisible();
+  await page.getByLabel("Add a panel to General").selectOption("relations");
+  await expect(section(page, "Relationships")).toBeVisible();
+  await saveLayout(page);
+  await page.goto(`/cis/${ci.id}`);
+  await expect(pagePanel(page, "Relationships")).toContainText("Add relationship");
 
   await resetUiSettings(request);
 });

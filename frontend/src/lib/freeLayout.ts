@@ -27,6 +27,7 @@ const ROW_PX = 48;
 export const FRAME_GAP_PX = 16;
 const NOTE_PX = 144;
 const PANEL_PX = 320;
+const RECORD_PX = 144;
 /** Below this tab width (and in print) a free tab stacks its windows in reading order, as the grid does. */
 export const STACK_BELOW_PX = 820;
 /** The editor's fine guide grid, in px. */
@@ -58,12 +59,13 @@ export function clampFrame(f: Frame): Frame {
 export function estimatedHeight(s: LayoutSection): number {
   const kind = sectionKind(s);
   if (kind === "note") return NOTE_PX;
+  if (kind === "record") return RECORD_PX;
   if (kind !== "fields") return PANEL_PX;
   const columns = s.columns ?? GRID_COLUMNS;
   let rows = 0;
   let col = columns;
   for (const f of s.fields ?? []) {
-    const w = clamp(f.width ?? 1, 1, Math.max(columns, 1));
+    const w = f.separator ? Math.max(columns, 1) : clamp(f.width ?? 1, 1, Math.max(columns, 1));
     if (col + w > columns) {
       rows += 1;
       col = 0;
