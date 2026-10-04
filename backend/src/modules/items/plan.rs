@@ -29,6 +29,7 @@ use crate::data::classes::EffectiveAttributeRow;
 use crate::data::items::{self as data, StoredValue};
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
 use crate::modules::classes::{AttributeDataType, AttributeSystemRole};
+use crate::modules::workflows::state_field::StateFields;
 use crate::schema::model::{Field, Model};
 
 // ---------------------------------------------------------------------------
@@ -526,13 +527,15 @@ impl Plan<'_> {
 
 /// Plans a new CI of `input.class_id`. `defs` are that class's effective
 /// attribute definitions. Needs create on the class, and the Administrator
-/// profile to set the ident.
+/// profile to set the ident. `state` says which workflow-driven state fields
+/// the input may set (409 WORKFLOW_CONTROLLED_FIELD).
 pub fn plan_create<'d>(
     ctx: &RequestContext,
     model: &Model,
     defs: &'d [EffectiveAttributeRow],
     input: &CreateItemBody,
     resolver: &dyn Resolver,
+    state: &StateFields,
 ) -> Result<Plan<'d>, AppError> {
     ctx.require_class(input.class_id, ClassOp::Create)?;
     if input.ident.is_some() {
@@ -540,6 +543,7 @@ pub fn plan_create<'d>(
     }
     let key = class_key(model, input.class_id)?;
     let prepared = prepare_new(model, defs, input.attributes.as_ref(), key, resolver)?;
+    state.check_create(model, input.class_id, defs, input.attributes.as_ref())?;
     Ok(Plan {
         registry: Registry::Create {
             id: None,
@@ -560,7 +564,9 @@ pub fn plan_create<'d>(
 /// the class it has after the write. Needs view and edit on its class, create
 /// on the class it moves to, and the Administrator profile to change the ident.
 /// `service_class` is the business service class, which no CI enters or leaves
-/// (None where the caller never changes a CI's class).
+/// (None where the caller never changes a CI's class). `state` says which
+/// workflow-driven state fields the write may change (409 WORKFLOW_CONTROLLED_FIELD).
+#[allow(clippy::too_many_arguments)]
 pub fn plan_update<'d>(
     ctx: &RequestContext,
     model: &Model,
@@ -569,6 +575,7 @@ pub fn plan_update<'d>(
     input: &UpdateItemBody,
     resolver: &dyn Resolver,
     service_class: Option<Uuid>,
+    state: &StateFields,
 ) -> Result<Plan<'d>, AppError> {
     let id = before.summary.id;
     let old_class_id = before.summary.class_id;
@@ -627,6 +634,7 @@ pub fn plan_update<'d>(
 
     let class_id = new_class_id.unwrap_or(old_class_id);
     let prepared = prepare_changed(model, defs, &before, class_id, input.attributes.as_ref(), resolver)?;
+    state.check_update(model, class_id, defs, &before.attributes, &prepared.set, &prepared.clear)?;
 
     if new_class_id.is_some() {
         // Values the new class does not define must be cleared in the same request.

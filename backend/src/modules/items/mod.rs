@@ -64,10 +64,10 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("Create a CI, including its attribute values")
             .description(
-                "Needs create on the class. The ident is generated unless an administrator sends one (403 for anyone else, 409 when another CI has it). The label follows from the class's title attribute.",
+                "Needs create on the class. The ident is generated unless an administrator sends one (403 for anyone else, 409 when another CI has it). The label follows from the class's title attribute. A state field that an active workflow drives takes no value of its own: leave it out, or send the workflow's initial value or the field's default (else 409 WORKFLOW_CONTROLLED_FIELD on `attributes.<key>`); a workflow with `autoStart` starts on the new CI in the same transaction and sets it.",
             )
             .status(StatusCode::CREATED)
-            .errors(&[ErrorCode::Conflict])
+            .errors(&[ErrorCode::WorkflowControlledField, ErrorCode::Conflict])
             .class_checked()
             .handle(|api, In(NoPath, NoQuery, CheckedBody(b)): In<NoPath, NoQuery, CheckedBody<CreateItemBody>>| async move {
                 match b {
@@ -79,9 +79,9 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("Update a CI (partial); attributes are merged, null clears one")
             .description(
-                "Needs edit on the CI's class (and create on the new class when `classId` changes). A business service keeps its class and no CI moves into the business service class (400 `business_service_class` on `classId`, the same for every service). `validUntil` must be after `validFrom`, each taken from the body or else the stored value (400 on the field sent). Changing `ident` is for administrators only (403 for anyone else; resending the current value is allowed) and is recorded in the audit log like every change. Resending the value a reference attribute already holds is no change: it is accepted whether the referenced CI is live, deleted or in a class the caller may not view. A new reference must be a live CI the caller may view (else `not_found`, as for a missing CI) of the attribute's reference class.",
+                "Needs edit on the CI's class (and create on the new class when `classId` changes). A business service keeps its class and no CI moves into the business service class (400 `business_service_class` on `classId`, the same for every service). `validUntil` must be after `validFrom`, each taken from the body or else the stored value (400 on the field sent). Changing `ident` is for administrators only (403 for anyone else; resending the current value is allowed) and is recorded in the audit log like every change. Resending the value a reference attribute already holds is no change: it is accepted whether the referenced CI is live, deleted or in a class the caller may not view. A new reference must be a live CI the caller may view (else `not_found`, as for a missing CI) of the attribute's reference class. A state field that an active workflow drives changes only through the workflow: sending another value, or clearing it, is 409 WORKFLOW_CONTROLLED_FIELD on `attributes.<key>` (code `workflow_controlled`), with or without an instance on the CI; resending its current value is no change.",
             )
-            .errors(&[ErrorCode::NotFound, ErrorCode::Conflict, ErrorCode::VersionConflict])
+            .errors(&[ErrorCode::NotFound, ErrorCode::WorkflowControlledField, ErrorCode::Conflict, ErrorCode::VersionConflict])
             .class_checked()
             .handle(|api, In(IdPath(id), NoQuery, CheckedBody(b)): In<IdPath, NoQuery, CheckedBody<UpdateItemBody>>| async move {
                 match b {

@@ -2418,3 +2418,156 @@ async fn a_saved_mapping_cannot_name_the_member_type_and_an_old_one_says_what_to
     let (status, m, _) = call(&e.app, "PATCH", &one, &alice, Some(json!({ "version": 2, "definition": fixed }))).await;
     assert_eq!((status, &m["problems"]), (200, &json!([])), "{m}");
 }
+
+// ---------------------------------------------------------------------------
+// Workflows (SHAA-1698): the driven state field, auto-start
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_import_refuses_driven_state_values_and_auto_starts_workflows_on_created_cis() {
+    let Some(db) = scratch::database("import_workflow_state_field").await else { return };
+    let e = env(&db.pool, ImportConfig::default()).await;
+    let class = server_class(&e).await;
+    let ok = |status: u16, v: &Value| assert!(status == 200 || status == 201, "{status} {v}");
+    let (status, list, _) =
+        call(&e.app, "POST", "/api/v1/lookup-lists", &e.admin, Some(json!({ "key": "srv_state", "name": "State" })))
+            .await;
+    ok(status, &list);
+    for key in ["planned", "approved"] {
+        let body = json!({ "listId": list["id"], "key": key, "name": key });
+        let (status, v, _) = call(&e.app, "POST", "/api/v1/lookup-list-values", &e.admin, Some(body)).await;
+        ok(status, &v);
+    }
+    let body = json!({ "classId": class, "key": "lifecycle", "label": "Lifecycle", "dataType": "lookup",
+        "lookupListId": list["id"] });
+    let (status, field, _) = call(&e.app, "POST", "/api/v1/attribute-definitions", &e.admin, Some(body)).await;
+    ok(status, &field);
+    // web01 is approved before any workflow drives the field.
+    let web01 = server(&e, &class, "web01", 8).await;
+    let approved: String = sqlx::query_scalar("SELECT id::text FROM lookup_list_values WHERE key = 'approved'")
+        .fetch_one(&e.pool)
+        .await
+        .unwrap();
+    let (status, v, _) = call(
+        &e.app,
+        "PATCH",
+        &format!("/api/v1/configuration-items/{web01}"),
+        &e.admin,
+        Some(json!({ "attributes": { "lifecycle": approved } })),
+    )
+    .await;
+    ok(status, &v);
+
+    let defs = "/api/v1/admin/workflow-definitions";
+    let body = json!({ "key": "srv_lifecycle", "name": "Server lifecycle", "classId": class,
+        "stateAttributeId": field["id"], "autoStart": true });
+    let (status, d, _) = call(&e.app, "POST", defs, &e.admin, Some(body)).await;
+    ok(status, &d);
+    let def = d["id"].as_str().unwrap().to_owned();
+    let graph = json!({ "initialState": "planned",
+        "states": [ { "key": "planned", "name": "Planned", "category": "open", "stateValue": "planned" },
+                    { "key": "approved", "name": "Approved", "category": "done", "terminal": true, "stateValue": "approved" } ],
+        "transitions": [ { "key": "approve", "name": "Approve", "from": "planned", "to": "approved" } ] });
+    let (status, draft, _) = call(&e.app, "PUT", &format!("{defs}/{def}/draft"), &e.admin, Some(graph)).await;
+    ok(status, &draft);
+    let body = json!({ "expectedDraftChecksum": draft["checksum"], "changeNote": "v1" });
+    let (status, v, _) = call(&e.app, "POST", &format!("{defs}/{def}/draft/publish"), &e.admin, Some(body)).await;
+    ok(status, &v);
+    let (_, d, _) = call(&e.app, "GET", &format!("{defs}/{def}"), &e.admin, None).await;
+    let body = json!({ "version": d["version"], "isActive": true });
+    let (status, v, _) = call(&e.app, "PATCH", &format!("{defs}/{def}"), &e.admin, Some(body)).await;
+    ok(status, &v);
+
+    // Row 2 changes web01's state (an update, as a bulk edit makes), row 4 creates one in another state:
+    // both refused. Rows 3 and 5 create CIs in no state or the initial one, and the workflow starts on them.
+    let file = "Hostname;Cores;Lifecycle\nweb01;8;planned\nweb02;4;\nweb03;2;approved\nweb04;1;planned\n";
+    let (status, v, _) = upload(&e.app, &e.admin, CSV_TYPE, Some("srv.csv"), &[], file.as_bytes().to_vec()).await;
+    assert_eq!(status, 202, "{v}");
+    let id = v["id"].as_str().unwrap().to_owned();
+    drain(&e.pool).await;
+    let mut mapping = server_mapping();
+    mapping["columns"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({ "index": 2, "target": { "kind": "attribute", "key": "lifecycle" } }));
+    let (status, v, _) = call(&e.app, "PUT", &format!("/api/v1/imports/{id}/mapping"), &e.admin, Some(mapping)).await;
+    assert_eq!(status, 200, "{v}");
+    let (status, v, _) = call(&e.app, "POST", &format!("/api/v1/imports/{id}/dry-run"), &e.admin, None).await;
+    assert_eq!(status, 202, "{v}");
+    drain(&e.pool).await;
+    let j = job(&e, &e.admin, &id).await;
+    assert_eq!((j["status"].as_str(), j["summary"]["errorRows"].as_u64()), (Some("validated"), Some(2)), "{j}");
+    let (_, v, _) = call(&e.app, "GET", &format!("/api/v1/imports/{id}/issues?severity=error"), &e.admin, None).await;
+    let got: Vec<(u64, &str, &str)> = v["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| (i["row"].as_u64().unwrap(), i["field"].as_str().unwrap_or(""), i["code"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        got,
+        [(2, "attributes.lifecycle", "workflow_controlled"), (4, "attributes.lifecycle", "workflow_controlled")],
+        "{v}"
+    );
+
+    let (status, v) = commit(&e, &e.admin, &id, true, None).await;
+    assert_eq!(status, 202, "{v}");
+    drain(&e.pool).await;
+    let j = job(&e, &e.admin, &id).await;
+    assert_eq!(committed(&j), (2, 0, 0, 2, 0), "{j}");
+    assert_eq!(j["summary"]["committed"]["workflowsStarted"], 2, "{j}");
+
+    // web02 and web04 run the workflow in its initial state, with their state field set; web01 keeps its value.
+    let rows: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT ci.label, s.key, v.key FROM workflow_instances wi
+         JOIN configuration_items ci ON ci.id = wi.ci_id
+         JOIN workflow_states s ON s.id = wi.current_state_id
+         JOIN lookup_list_values v ON v.id = s.state_value_id ORDER BY ci.label",
+    )
+    .fetch_all(&e.pool)
+    .await
+    .unwrap();
+    let want = |l: &str| (l.to_owned(), "planned".to_owned(), "planned".to_owned());
+    assert_eq!(rows, [want("web02"), want("web04")]);
+    for (host, value) in [("web01", "approved"), ("web02", "planned"), ("web04", "planned")] {
+        let (_, list, _) = call(&e.app, "GET", &format!("/api/v1/configuration-items?q={host}"), &e.admin, None).await;
+        let ci = list["data"][0]["id"].as_str().unwrap().to_owned();
+        let (_, ci, _) = call(&e.app, "GET", &format!("/api/v1/configuration-items/{ci}"), &e.admin, None).await;
+        let key: String = sqlx::query_scalar("SELECT key FROM lookup_list_values WHERE id = $1::uuid")
+            .bind(ci["attributes"]["lifecycle"].as_str().unwrap())
+            .fetch_one(&e.pool)
+            .await
+            .unwrap();
+        assert_eq!(key, value, "{host}");
+        if host != "web01" {
+            // The create audit row already shows the state the workflow set.
+            let created: Value =
+                sqlx::query_scalar("SELECT new_value FROM audit_log WHERE action = 'create' AND entity_id = $1::uuid")
+                    .bind(ci["id"].as_str().unwrap())
+                    .fetch_one(&e.pool)
+                    .await
+                    .unwrap();
+            assert_eq!(created["attributes"]["lifecycle"], ci["attributes"]["lifecycle"]);
+        }
+    }
+
+    // One start event per instance, and one workflow.start audit row for the whole import (Q2b).
+    let events = count(
+        &e.pool,
+        "SELECT count(*) FROM workflow_instance_events WHERE request_id = $1 AND kind = 'start' AND actor_type = 'import'",
+        &id,
+    )
+    .await;
+    assert_eq!(events, 2);
+    let starts: Vec<(String, Uuid, Value)> =
+        sqlx::query_as("SELECT entity_type, entity_id, new_value FROM audit_log WHERE action = 'workflow.start'")
+            .fetch_all(&e.pool)
+            .await
+            .unwrap();
+    assert_eq!(starts.len(), 1, "{starts:?}");
+    assert_eq!((starts[0].0.as_str(), starts[0].1.to_string()), ("import_jobs", id.clone()));
+    assert_eq!((starts[0].2["instances"].as_u64(), starts[0].2["classKey"].as_str()), (Some(2), Some("srv")));
+    let problems: Vec<(i64, String)> =
+        sqlx::query_as("SELECT chain_seq, problem FROM audit_log_verify()").fetch_all(&e.pool).await.unwrap();
+    assert!(problems.is_empty(), "{problems:?}");
+}

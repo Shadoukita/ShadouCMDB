@@ -34,6 +34,7 @@ use crate::auth::permissions::GlobalPermission;
 use crate::auth::{Credential, Principal};
 use crate::config::ImportConfig;
 use crate::data::auth as auth_data;
+use crate::modules::workflows::state_field::StateFields;
 
 /// Rows planned together (the commit's chunk size, §2.6).
 pub const CHUNK_ROWS: usize = 500;
@@ -247,6 +248,7 @@ async fn validate(pool: &PgPool, cfg: &ImportConfig, lease: &Lease, lost: &Arc<A
     let (mut rx, reader) = stream_rows(file(), job.format(), job.options(), limits(), lost.clone());
     while let Some(rows) = rx.recv().await {
         let ctx = owner_context(&mut conn, cfg, job.created_by_id, job.id).await?;
+        let state = StateFields::load(&mut conn).await.map_err(|_| internal())?;
         let mut c = Context {
             job: &data,
             ctx: &ctx,
@@ -256,6 +258,7 @@ async fn validate(pool: &PgPool, cfg: &ImportConfig, lease: &Lease, lost: &Arc<A
             new_ids: Some(&new_ids),
             lock: false,
             grow_pending: false,
+            state: &state,
         };
         let plan = planner::plan_chunk(&mut conn, &mut c, &rows).await.map_err(|e| {
             tracing::warn!(job = %job.id, error = %e.message, "import dry run: planning failed");

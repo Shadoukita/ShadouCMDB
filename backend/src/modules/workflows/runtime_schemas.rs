@@ -177,6 +177,9 @@ pub struct CiWorkflows {
     /// Active workflows of the CI's type that are not running on it and that the caller may start (the edit right
     /// on the type); empty for a deleted CI
     pub startable: Vec<WorkflowStartable>,
+    /// Keys of the CI's fields an active workflow drives (its state fields): they change only through the
+    /// workflow, so a form shows them read-only (a direct write is 409 WORKFLOW_CONTROLLED_FIELD)
+    pub controlled_fields: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -220,6 +223,8 @@ fn fields_schema() -> Schema {
             "Values of the transition's fields by field key, in the form of PATCH /configuration-items/{id} \
              (null clears one). Only the fields the transition lists.",
         ))
+        // Any value shape (the field's type decides); generated clients then type it as a record of unknown.
+        .additional_properties(Some(utoipa::openapi::schema::AdditionalProperties::FreeForm(true)))
         .into()
 }
 

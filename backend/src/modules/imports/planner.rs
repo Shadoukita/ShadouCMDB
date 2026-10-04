@@ -35,6 +35,7 @@ use crate::modules::classes::AttributeDataType;
 use crate::modules::items::plan::{self, Plan, Registry, Resolver};
 use crate::modules::items::schemas::{ConfigurationItem, CreateItemBody, UpdateItemBody};
 use crate::modules::items::service::details;
+use crate::modules::workflows::state_field::StateFields;
 use crate::schema::model::{Field, Model};
 
 /// Values looked up in one query.
@@ -530,6 +531,9 @@ pub struct Context<'a> {
     /// Add each created CI to `pending` as it is planned (commit); the dry
     /// run filled it for the whole file first ([`collect`]).
     pub grow_pending: bool,
+    /// The state fields active workflows drive, which rows may not set (409
+    /// WORKFLOW_CONTROLLED_FIELD as a row error); read per chunk.
+    pub state: &'a StateFields,
 }
 
 /// A planned row.
@@ -1107,7 +1111,7 @@ fn plan_row(
                 criticality_value_id: None,
             };
             let class_defs = defs.get(&r.class_id).map(Vec::as_slice).unwrap_or_default();
-            match plan::plan_create(c.ctx, model, class_defs, &body, &*resolver) {
+            match plan::plan_create(c.ctx, model, class_defs, &body, &*resolver, c.state) {
                 Ok(planned) => {
                     p.changes = planned
                         .set
@@ -1198,7 +1202,7 @@ fn plan_row(
                 }
                 p.outcome = RowOutcome::Unchanged;
             } else {
-                match plan::plan_update(c.ctx, model, class_defs, before.clone(), &body, &*resolver, None) {
+                match plan::plan_update(c.ctx, model, class_defs, before.clone(), &body, &*resolver, None, c.state) {
                     Ok(planned) => {
                         p.changes = changes(&planned, &before);
                         if !planned.clear.is_empty() {
@@ -1374,7 +1378,8 @@ pub fn column_of_field<'r>(r: &'r Resolved, field: &str) -> Option<&'r Column> {
 fn plan_errors(p: &mut Planned, row: &Row, r: &Resolved, e: AppError) {
     let column_of = |field: &str| column_of_field(r, field);
     match (e.code, e.details) {
-        (ErrorCode::ValidationError, Some(details)) if !details.is_empty() => {
+        // A workflow-driven state field (409) is a row error on its column, like a validation error.
+        (ErrorCode::ValidationError | ErrorCode::WorkflowControlledField, Some(details)) if !details.is_empty() => {
             for f in details {
                 p.issues.push(issue(
                     row,

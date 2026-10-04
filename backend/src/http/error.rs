@@ -49,6 +49,8 @@ pub enum ErrorCode {
     /// A workflow transition's conditions, required fields or comment are not satisfied; the details list each
     /// one (422)
     WorkflowConditionFailed,
+    /// A direct write to a state field that an active workflow drives; the details name the field (409)
+    WorkflowControlledField,
     /// The change would leave no active user holding the Administrator profile
     LastAdministrator,
     /// Too many failed password attempts, or too many impact analyses of one user in progress; retry after the
@@ -94,9 +96,11 @@ impl ErrorCode {
             | ErrorCode::ReauthenticationRequired => StatusCode::FORBIDDEN,
             ErrorCode::NotFound => StatusCode::NOT_FOUND,
             ErrorCode::Gone => StatusCode::GONE,
-            ErrorCode::Conflict | ErrorCode::InUse | ErrorCode::VersionConflict | ErrorCode::LastAdministrator => {
-                StatusCode::CONFLICT
-            }
+            ErrorCode::Conflict
+            | ErrorCode::InUse
+            | ErrorCode::VersionConflict
+            | ErrorCode::LastAdministrator
+            | ErrorCode::WorkflowControlledField => StatusCode::CONFLICT,
             ErrorCode::InvalidName
             | ErrorCode::SchemaChangeRefused
             | ErrorCode::SecretRequired

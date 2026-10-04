@@ -686,3 +686,74 @@ impl Check for WorkflowGrantsReplace {
             .collect()
     }
 }
+
+/// Start the workflow on the live CIs it covers that have no running instance of it
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowBootstrap {
+    /// Must be true: each CI starts in the state whose state field value is the CI's current one
+    pub state_from_attribute: bool,
+    /// Count only; nothing is written
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+impl Check for WorkflowBootstrap {
+    fn check(&self) -> Vec<FieldError> {
+        if self.state_from_attribute {
+            return Vec::new();
+        }
+        vec![FieldError {
+            location: FieldLocation::Body,
+            field: "stateFromAttribute".into(),
+            message: "Only stateFromAttribute: true is supported: each CI starts in the state of its current value"
+                .into(),
+            code: "invalid_value".into(),
+        }]
+    }
+}
+
+/// The CIs of one state a bootstrap starts (or, for a terminal state, leaves alone)
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowBootstrapState {
+    pub state_key: String,
+    pub state_name: String,
+    /// Key of the state field value that maps to this state
+    pub value_key: String,
+    /// A terminal state: these CIs are skipped (their lifecycle is over)
+    pub terminal: bool,
+    pub count: i64,
+}
+
+/// CIs a bootstrap skips because no state maps their state field value
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowBootstrapUnmapped {
+    /// Null: the CIs have no value
+    pub value_id: Option<Uuid>,
+    pub value_key: Option<String>,
+    pub value_name: Option<String>,
+    pub count: i64,
+}
+
+/// What a bootstrap started (or, on a dry run, would start)
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowBootstrapResult {
+    pub dry_run: bool,
+    pub definition_key: String,
+    /// The published version the instances run
+    pub version_no: i32,
+    /// Instances started; on a dry run, the instances a run would start now
+    pub started: i64,
+    /// Covered live CIs that already have a running instance (left alone)
+    pub already_running: i64,
+    /// Started and terminal CIs per state, in the version's state order
+    pub states: Vec<WorkflowBootstrapState>,
+    /// CIs in a terminal state, skipped
+    pub skipped_terminal: i64,
+    /// CIs whose value no state maps, skipped; most frequent first
+    pub unmapped: Vec<WorkflowBootstrapUnmapped>,
+    pub skipped_unmapped: i64,
+}

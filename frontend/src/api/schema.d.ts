@@ -398,7 +398,7 @@ export interface paths {
         put?: never;
         /**
          * Create a CI, including its attribute values
-         * @description Needs create on the class. The ident is generated unless an administrator sends one (403 for anyone else, 409 when another CI has it). The label follows from the class's title attribute.
+         * @description Needs create on the class. The ident is generated unless an administrator sends one (403 for anyone else, 409 when another CI has it). The label follows from the class's title attribute. A state field that an active workflow drives takes no value of its own: leave it out, or send the workflow's initial value or the field's default (else 409 WORKFLOW_CONTROLLED_FIELD on `attributes.<key>`); a workflow with `autoStart` starts on the new CI in the same transaction and sets it.
          */
         post: operations["createConfigurationItem"];
         delete?: never;
@@ -470,7 +470,7 @@ export interface paths {
         head?: never;
         /**
          * Update a CI (partial); attributes are merged, null clears one
-         * @description Needs edit on the CI's class (and create on the new class when `classId` changes). A business service keeps its class and no CI moves into the business service class (400 `business_service_class` on `classId`, the same for every service). `validUntil` must be after `validFrom`, each taken from the body or else the stored value (400 on the field sent). Changing `ident` is for administrators only (403 for anyone else; resending the current value is allowed) and is recorded in the audit log like every change. Resending the value a reference attribute already holds is no change: it is accepted whether the referenced CI is live, deleted or in a class the caller may not view. A new reference must be a live CI the caller may view (else `not_found`, as for a missing CI) of the attribute's reference class.
+         * @description Needs edit on the CI's class (and create on the new class when `classId` changes). A business service keeps its class and no CI moves into the business service class (400 `business_service_class` on `classId`, the same for every service). `validUntil` must be after `validFrom`, each taken from the body or else the stored value (400 on the field sent). Changing `ident` is for administrators only (403 for anyone else; resending the current value is allowed) and is recorded in the audit log like every change. Resending the value a reference attribute already holds is no change: it is accepted whether the referenced CI is live, deleted or in a class the caller may not view. A new reference must be a live CI the caller may view (else `not_found`, as for a missing CI) of the attribute's reference class. A state field that an active workflow drives changes only through the workflow: sending another value, or clearing it, is 409 WORKFLOW_CONTROLLED_FIELD on `attributes.<key>` (code `workflow_controlled`), with or without an instance on the CI; resending its current value is no change.
          */
         patch: operations["updateConfigurationItem"];
         trace?: never;
@@ -3019,6 +3019,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/workflow-definitions/{id}/bootstrap": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start the workflow on the existing CIs it covers, each in the state of its state field value
+         * @description Requires `workflows.manage`. For adopting a workflow on an inventory that already exists (an active workflow makes its state field read-only on every CI it covers, Q3). Every live CI of the covered types without a running instance of the workflow gets one, on the current published version, in the state whose state field value is the CI's current one (a value several states map is the first non-terminal one's). CIs whose value no state maps, or none, are reported in `unmapped` and skipped; CIs in a terminal state are reported and skipped. Runs in batches of 1,000 CIs, each committed on its own; a run that stops part way is finished by running it again, since CIs that run the workflow are left alone (a second run starts nothing). Each start is a `start` event and a `workflow.start` audit row on the CI with `actor_type = system`, naming the caller in `requestedBy`. `dryRun: true` only counts. `stateFromAttribute` must be true. 409 CONFLICT `no_state_field`, `unpublished`, `inactive`, or `changed_during_bootstrap` when the workflow is deactivated or published again while it runs. 403 when the workflow covers types the caller may not view. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        post: operations["bootstrapWorkflowInstances"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/workflow-definitions/{id}/grants": {
         parameters: {
             query?: never;
@@ -3193,7 +3213,7 @@ export interface paths {
         };
         /**
          * The workflows of one CI: running and recent instances, and the workflows you may start
-         * @description Running instances first, then the 20 that ended last, each with the transitions the caller may run. 404 for a CI of a type the caller may not view.
+         * @description Running instances first, then the 20 that ended last, each with the transitions the caller may run. `controlledFields` lists the CI's fields an active workflow drives: they change only through the workflow (409 WORKFLOW_CONTROLLED_FIELD on a direct write). 404 for a CI of a type the caller may not view.
          */
         get: operations["getConfigurationItemWorkflows"];
         put?: never;
@@ -3688,6 +3708,11 @@ export interface components {
              *     on the type); empty for a deleted CI
              */
             startable: components["schemas"]["WorkflowStartable"][];
+            /**
+             * @description Keys of the CI's fields an active workflow drives (its state fields): they change only through the
+             *     workflow, so a form shows them read-only (a direct write is 409 WORKFLOW_CONTROLLED_FIELD)
+             */
+            controlledFields: string[];
         };
         /** @description Rights on one CI class, or on every class when `classId` is null. */
         ClassPermission: {
@@ -4161,7 +4186,7 @@ export interface components {
         ErrorEnvelope: {
             error: {
                 /** @enum {string} */
-                code: "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "CSRF_TOKEN_INVALID" | "NOT_FOUND" | "CONFLICT" | "IN_USE" | "VERSION_CONFLICT" | "GONE" | "INVALID_NAME" | "SCHEMA_CHANGE_REFUSED" | "SECRET_REQUIRED" | "IDEMPOTENCY_KEY_REUSED" | "WORKFLOW_CONDITION_FAILED" | "LAST_ADMINISTRATOR" | "RATE_LIMITED" | "MFA_REQUIRED" | "MFA_ENROLMENT_REQUIRED" | "EMAIL_REQUIRED" | "MFA_REQUIRED_FOR_TOKEN" | "REAUTHENTICATION_REQUIRED" | "IDENTITY_PROVIDER_UNAVAILABLE" | "UNSUPPORTED_MEDIA_TYPE" | "PAYLOAD_TOO_LARGE" | "REQUEST_TIMEOUT" | "DATABASE_UNAVAILABLE" | "SERVER_BUSY" | "SCHEMA_NOT_MIGRATED" | "INTERNAL_ERROR";
+                code: "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "CSRF_TOKEN_INVALID" | "NOT_FOUND" | "CONFLICT" | "IN_USE" | "VERSION_CONFLICT" | "GONE" | "INVALID_NAME" | "SCHEMA_CHANGE_REFUSED" | "SECRET_REQUIRED" | "IDEMPOTENCY_KEY_REUSED" | "WORKFLOW_CONDITION_FAILED" | "WORKFLOW_CONTROLLED_FIELD" | "LAST_ADMINISTRATOR" | "RATE_LIMITED" | "MFA_REQUIRED" | "MFA_ENROLMENT_REQUIRED" | "EMAIL_REQUIRED" | "MFA_REQUIRED_FOR_TOKEN" | "REAUTHENTICATION_REQUIRED" | "IDENTITY_PROVIDER_UNAVAILABLE" | "UNSUPPORTED_MEDIA_TYPE" | "PAYLOAD_TOO_LARGE" | "REQUEST_TIMEOUT" | "DATABASE_UNAVAILABLE" | "SERVER_BUSY" | "SCHEMA_NOT_MIGRATED" | "INTERNAL_ERROR";
                 message: string;
                 /** @description At most 100 problems; when there are more, a last entry with code `truncated` counts the rest */
                 details?: {
@@ -4546,6 +4571,11 @@ export interface components {
             failed: number;
             /** Format: int32 */
             relationshipsAdded: number;
+            /**
+             * Format: int32
+             * @description Workflow instances started on the created CIs by workflows that start on their own
+             */
+            workflowsStarted?: number;
         };
         /** @enum {string} */
         ImportDateFormat: "YYYY-MM-DD" | "DD.MM.YYYY" | "MM/DD/YYYY";
@@ -6665,6 +6695,60 @@ export interface components {
             /** @description `condition` */
             code: string;
             message: string;
+        };
+        /** @description What a bootstrap started (or, on a dry run, would start) */
+        WorkflowBootstrapResult: {
+            dryRun: boolean;
+            definitionKey: string;
+            /**
+             * Format: int32
+             * @description The published version the instances run
+             */
+            versionNo: number;
+            /**
+             * Format: int64
+             * @description Instances started; on a dry run, the instances a run would start now
+             */
+            started: number;
+            /**
+             * Format: int64
+             * @description Covered live CIs that already have a running instance (left alone)
+             */
+            alreadyRunning: number;
+            /** @description Started and terminal CIs per state, in the version's state order */
+            states: components["schemas"]["WorkflowBootstrapState"][];
+            /**
+             * Format: int64
+             * @description CIs in a terminal state, skipped
+             */
+            skippedTerminal: number;
+            /** @description CIs whose value no state maps, skipped; most frequent first */
+            unmapped: components["schemas"]["WorkflowBootstrapUnmapped"][];
+            /** Format: int64 */
+            skippedUnmapped: number;
+        };
+        /** @description The CIs of one state a bootstrap starts (or, for a terminal state, leaves alone) */
+        WorkflowBootstrapState: {
+            stateKey: string;
+            stateName: string;
+            /** @description Key of the state field value that maps to this state */
+            valueKey: string;
+            /** @description A terminal state: these CIs are skipped (their lifecycle is over) */
+            terminal: boolean;
+            /** Format: int64 */
+            count: number;
+        };
+        /** @description CIs a bootstrap skips because no state maps their state field value */
+        WorkflowBootstrapUnmapped: {
+            /**
+             * Format: uuid
+             * @description Null: the CIs have no value
+             */
+            valueId?: string | null;
+            valueKey?: string | null;
+            valueName?: string | null;
+            /** Format: int64 */
+            count: number;
         };
         /** @description A workflow definition: the identity of a workflow and its mutable settings */
         WorkflowDefinition: {
@@ -9001,7 +9085,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), VERSION_CONFLICT, or WORKFLOW_CONTROLLED_FIELD (a state field an active workflow drives was given another value; details[].field names it as `attributes.<key>`, details[].code workflow_controlled). Nothing was changed */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -9512,7 +9596,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), VERSION_CONFLICT, or WORKFLOW_CONTROLLED_FIELD (a state field an active workflow drives was given another value; details[].field names it as `attributes.<key>`, details[].code workflow_controlled). Nothing was changed */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -27477,6 +27561,127 @@ export interface operations {
             };
         };
     };
+    bootstrapWorkflowInstances: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Must be true: each CI starts in the state whose state field value is the CI's current one */
+                    stateFromAttribute: boolean;
+                    /** @description Count only; nothing is written */
+                    dryRun?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowBootstrapResult"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     getWorkflowGrants: {
         parameters: {
             query?: never;
@@ -28178,7 +28383,9 @@ export interface operations {
                      */
                     expectedVersion: number;
                     /** @description Values of the transition's fields by field key, in the form of PATCH /configuration-items/{id} (null clears one). Only the fields the transition lists. */
-                    fields?: Record<string, never>;
+                    fields?: {
+                        [key: string]: unknown;
+                    };
                     comment?: string | null;
                 };
             };

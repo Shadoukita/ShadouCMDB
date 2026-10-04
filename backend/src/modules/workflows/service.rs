@@ -102,7 +102,7 @@ fn no_draft(id: Uuid) -> AppError {
 }
 
 /// The classes a definition covers: its type, and the types below it when it includes subtypes.
-fn covered(model: &Model, d: &WorkflowDefinition) -> Vec<Uuid> {
+pub(crate) fn covered(model: &Model, d: &WorkflowDefinition) -> Vec<Uuid> {
     if d.include_subclasses { model.subtree(d.class_id) } else { vec![d.class_id] }
 }
 

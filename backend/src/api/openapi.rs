@@ -199,6 +199,12 @@ fn error_status(code: ErrorCode) -> (u16, &'static str) {
             409,
             "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
         ),
+        ErrorCode::WorkflowControlledField => (
+            409,
+            "Conflict: CONFLICT (duplicate or not allowed in this state), VERSION_CONFLICT, or \
+             WORKFLOW_CONTROLLED_FIELD (a state field an active workflow drives was given another value; \
+             details[].field names it as `attributes.<key>`, details[].code workflow_controlled). Nothing was changed",
+        ),
         ErrorCode::InvalidName | ErrorCode::SchemaChangeRefused => (
             422,
             "Refused: INVALID_NAME (technical name malformed, reserved or taken) or SCHEMA_CHANGE_REFUSED (the \
