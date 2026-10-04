@@ -20,8 +20,15 @@
 .record-heading h1 {
   overflow-wrap: anywhere;
 }
+/* A hostname-like name in the data font, at the heading's size (.mono alone would set the table's). */
 .record-heading h1.mono {
   font-family: var(--font-mono);
+  font-size: var(--fs-h1);
+  font-weight: var(--fw-medium);
+}
+.record-heading h1 .mono {
+  font-family: var(--font-mono);
+  font-size: inherit;
   font-weight: var(--fw-medium);
 }
 .record-heading .class-icon {

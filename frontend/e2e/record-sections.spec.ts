@@ -7,29 +7,36 @@ import { classIdByName, createCi, expect, test } from "./support";
 const stamp = Date.now().toString(36);
 const NAME = `sections-${stamp}`;
 
-type Section = { key: string; label: string; kind?: string; collapsed?: boolean };
-type Layout = { tabs: { sections: Section[] }[] };
+const SECTION = "Network";
 
-/** Serves the CI's layout with its last field section of the first tab collapsed; returns that section's label. */
-async function collapseLastSection(page: Page): Promise<() => string> {
-  let label = "";
+/** Serves the CI a layout of two sections: General, open, and Network, which the layout collapses. */
+async function withCollapsedSection(page: Page) {
   await page.route("**/api/v1/configuration-items/*/layout", async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
     const res = await route.fetch();
-    const body = (await res.json()) as { layout: Layout } | { data: { layout: Layout } };
-    const layout = "layout" in body ? body.layout : body.data.layout;
-    const fields = layout.tabs[0].sections.filter((s) => !s.kind || s.kind === "fields");
-    const last = fields[fields.length - 1];
-    last.collapsed = true;
-    label = last.label;
+    const body = await res.json();
+    const field = (f: string) => ({ field: f, width: 1 });
+    body.layout = {
+      tabs: [
+        {
+          key: "general",
+          label: "General",
+          sections: [
+            { key: "general", label: "General", columns: 3, width: 12, collapsed: false, fields: ["attributes.name", "attributes.status", "validUntil"].map(field) },
+            { key: "network", label: SECTION, columns: 3, width: 12, collapsed: true, fields: ["attributes.hostname", "attributes.ip_address"].map(field) },
+          ],
+        },
+      ],
+      hiddenFields: [],
+      readOnlyFields: [],
+    };
     await route.fulfill({ response: res, json: body });
   });
-  return () => label;
 }
 
 test("only a collapsed section has a toggle; the save bar counts the changed fields", async ({ page, request }) => {
   const ci = await createCi(request, await classIdByName(request, "Server"), NAME);
-  const collapsed = await collapseLastSection(page);
+  await withCollapsedSection(page);
   await page.goto(`/cis/${ci.id}`);
 
   const sections = page.locator(".layout-container .layout-panel");
@@ -38,7 +45,7 @@ test("only a collapsed section has a toggle; the save bar counts the changed fie
   await expect(sections.first().locator(".panel-header button")).toHaveCount(0);
   await expect(page.locator(".layout-container details")).toHaveCount(0);
 
-  const toggle = page.getByRole("button", { name: collapsed(), exact: true });
+  const toggle = page.getByRole("button", { name: SECTION, exact: true });
   await expect(toggle).toHaveAttribute("aria-expanded", "false");
   const body = page.locator(`#${await toggle.getAttribute("aria-controls")}`);
   await expect(body).toBeHidden();
