@@ -103,17 +103,23 @@ test("users and permission profiles", async ({ page }, testInfo) => {
 });
 
 test("dismissing a toast by keyboard keeps focus in the page (WCAG 2.4.3)", async ({ page }) => {
-  // Two creations leave two toasts. Focus enters the stack from the Name field, as it would by Tab.
-  for (const n of [1, 2]) {
-    await page.goto("/admin/groups/new");
-    await page.getByLabel("Name").fill(`e2e-toast-${stamp}-${n}`);
-    await page.getByRole("button", { name: "Create group" }).click();
-    await expect(page).toHaveURL(/\/admin\/groups\/[^/]+$/);
-    await expect(page).not.toHaveURL(/\/new$/);
-  }
+  // Create a group and delete it again: two toasts in one page session ("Created", then "Deleted").
+  // A second page.goto would reload the app and drop the first toast with it.
+  const name = `e2e-toast-${stamp}`;
+  await page.goto("/admin/groups/new");
+  await page.getByLabel("Name").fill(name);
+  await page.getByRole("button", { name: "Create group" }).click();
+  await expect(page).toHaveURL(/\/admin\/groups\/[^/]+$/);
+  await expect(page).not.toHaveURL(/\/new$/);
+  await page.getByRole("button", { name: "Delete group" }).click();
+  await page.getByRole("dialog", { name: `Delete group ${name}?` }).getByRole("button", { name: "Delete group" }).click();
+  await expect(page).toHaveURL(/\/admin\/groups$/);
+
+  // Focus enters the stack from the search field, as it would by Tab; focus in the stack stops the clocks.
   const dismiss = page.getByRole("button", { name: "Dismiss notification" });
   await expect(dismiss).toHaveCount(2);
-  await page.locator("#group-name").focus();
+  const search = page.locator("#g-q");
+  await search.focus();
   await dismiss.first().focus();
 
   // The first toast goes; focus moves to the close button of the one that is left.
@@ -124,7 +130,7 @@ test("dismissing a toast by keyboard keeps focus in the page (WCAG 2.4.3)", asyn
   // The last toast goes; focus returns to where it was before the stack.
   await page.keyboard.press("Enter");
   await expect(dismiss).toHaveCount(0);
-  await expect(page.locator("#group-name")).toBeFocused();
+  await expect(search).toBeFocused();
 });
 
 test.describe("an operator's own account", () => {
