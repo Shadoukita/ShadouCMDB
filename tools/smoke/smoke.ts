@@ -989,6 +989,33 @@ async function workflows(x: Json) {
   await post(`${instances}/${started.id}/cancel`, { expectedVersion: cancelled.version, reason: 'Again' }, 409);
   await del(`/api/v1/configuration-items/${ci.id}`);
 
+  // S6 (SHAA-1427): a bulk run with mixed results, then the running instances move to version 2.
+  console.log('\n# Workflow bulk transitions, instance migration, archive');
+  const pair = [];
+  for (let i = 0; i < 2; i++) {
+    const c = (await post('/api/v1/configuration-items', { classId: cls.id, attributes: {} })).json;
+    pair.push((await post(instances, { definitionId: def.id, ciId: c.id })).json.instance);
+  }
+  const bulk = (await post(`${instances}/bulk-transitions`, { items: [
+    { instanceId: pair[0].id, transitionKey: 'approve', expectedVersion: pair[0].version, fields: { ticket: 'CHG-2' }, comment: 'Smoke bulk' },
+    { instanceId: pair[1].id, transitionKey: 'approve', expectedVersion: pair[1].version + 1, fields: { ticket: 'CHG-3' }, comment: 'Stale' },
+    { instanceId: '00000000-0000-4000-8000-000000000000', transitionKey: 'approve', expectedVersion: 1 },
+  ] }, 200)).json;
+  check(bulk.succeeded === 1 && bulk.failed === 2 && bulk.results[0].instance?.state.key === 'approved'
+    && bulk.results[1].error?.code === 'VERSION_CONFLICT' && bulk.results[2].error?.code === 'NOT_FOUND', 'a bulk run reports each item on its own');
+  await post(`${instances}/bulk-transitions`, { items: [] }, 400);
+  const v2 = (await put(`${base}/${def.id}/draft`, { ...graph, states: graph.states.slice(0, 3) })).json;
+  await post(`${base}/${def.id}/draft/publish`, { expectedDraftChecksum: v2.checksum, changeNote: 'Smoke v2' });
+  const migrations = `${base}/${def.id}/instance-migrations`;
+  const dry = (await post(migrations, { fromVersionNo: 1, toVersionNo: 2, dryRun: true }, 200)).json;
+  check(dry.dryRun && dry.total === 2 && dry.migrated === 0, 'a dry run reports the move and writes nothing');
+  await post(migrations, { fromVersionNo: 2, toVersionNo: 1, dryRun: true }, 400);
+  const moved = (await post(migrations, { fromVersionNo: 1, toVersionNo: 2, stateMap: { approved: 'approved' }, dryRun: false }, 200)).json;
+  check(moved.migrated === 2 && moved.states.some((s: Json) => s.fromState === 'approved' && s.mappedBy === 'explicit'), 'the running instances move to version 2');
+  check((await get(`${instances}/${pair[0].id}`)).json.instance.versionNo === 2, 'the instance runs on version 2');
+  check(Array.isArray((await get(`/api/v1/admin/workflow-archive?definitionKey=${def.key}&limit=10`)).json.data), 'the workflow archive is listed');
+  await get(`/api/v1/admin/workflow-archive?ciId=not-a-uuid`, 400);
+
   // A second draft, discarded; then the published version is retired.
   await put(`${base}/${def.id}/draft`, graph);
   await del(`${base}/${def.id}/draft`);
@@ -996,7 +1023,7 @@ async function workflows(x: Json) {
   const retired = (await post(`${base}/${def.id}/versions/1/retire`, undefined, 200)).json;
   check(retired.status === 'retired', 'the version is retired');
   await post(`${base}/${def.id}/versions/1/retire`, undefined, 409);
-  check((await get(`${base}/${def.id}/versions?limit=10`)).json.data.length === 1, 'the versions are listed');
+  check((await get(`${base}/${def.id}/versions?limit=10`)).json.data.length === 2, 'the versions are listed');
 
   const password = `wf-${RUN}-password`;
   const nobody = (await post('/api/v1/admin/users', { username: `smoke-wf-${RUN}`, displayName: 'No workflow rights', email: `wf-${RUN}@example.com`, password })).json;
