@@ -887,7 +887,7 @@ pub struct FacetValue {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Facet {
-    /// "class", "criticality", "businessService", or "lookup.<list key>"
+    /// `class`, `criticality`, `businessService`, or `lookup.<list key>`
     pub key: String,
     pub kind: FacetKind,
     /// Display name: "Class", "Criticality", "Business service" or the lookup list's name

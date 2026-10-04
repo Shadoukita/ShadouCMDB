@@ -4775,7 +4775,7 @@ export interface components {
              */
             total: number;
             facets: {
-                /** @description "class", "criticality", "businessService", or "lookup.<list key>" */
+                /** @description `class`, `criticality`, `businessService`, or `lookup.<list key>` */
                 key: string;
                 kind: components["schemas"]["FacetKind"];
                 /** @description Display name: "Class", "Criticality", "Business service" or the lookup list's name */

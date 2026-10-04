@@ -36543,7 +36543,7 @@
               "properties": {
                 "key": {
                   "type": "string",
-                  "description": "\"class\", \"criticality\", \"businessService\", or \"lookup.<list key>\""
+                  "description": "`class`, `criticality`, `businessService`, or `lookup.<list key>`"
                 },
                 "kind": {
                   "$ref": "#/components/schemas/FacetKind"
