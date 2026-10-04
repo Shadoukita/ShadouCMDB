@@ -102,6 +102,31 @@ test("users and permission profiles", async ({ page }, testInfo) => {
   await checkA11y(page, testInfo, "profile-edit");
 });
 
+test("dismissing a toast by keyboard keeps focus in the page (WCAG 2.4.3)", async ({ page }) => {
+  // Two creations leave two toasts. Focus enters the stack from the Name field, as it would by Tab.
+  for (const n of [1, 2]) {
+    await page.goto("/admin/groups/new");
+    await page.getByLabel("Name").fill(`e2e-toast-${stamp}-${n}`);
+    await page.getByRole("button", { name: "Create group" }).click();
+    await expect(page).toHaveURL(/\/admin\/groups\/[^/]+$/);
+    await expect(page).not.toHaveURL(/\/new$/);
+  }
+  const dismiss = page.getByRole("button", { name: "Dismiss notification" });
+  await expect(dismiss).toHaveCount(2);
+  await page.locator("#group-name").focus();
+  await dismiss.first().focus();
+
+  // The first toast goes; focus moves to the close button of the one that is left.
+  await page.keyboard.press("Enter");
+  await expect(dismiss).toHaveCount(1);
+  await expect(dismiss).toBeFocused();
+
+  // The last toast goes; focus returns to where it was before the stack.
+  await page.keyboard.press("Enter");
+  await expect(dismiss).toHaveCount(0);
+  await expect(page.locator("#group-name")).toBeFocused();
+});
+
 test.describe("an operator's own account", () => {
   const USERNAME = `e2e-a11y-${stamp}`;
   const PASSWORD = `a11y-e2e-password-${stamp}`;
