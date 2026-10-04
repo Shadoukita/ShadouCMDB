@@ -960,6 +960,11 @@ async function workflows(x: Json) {
   const ci = (await post('/api/v1/configuration-items', { classId: cls.id, attributes: {} })).json;
   const startable = (await get(`/api/v1/configuration-items/${ci.id}/workflows`)).json;
   check(startable.startable.some((s: Json) => s.definitionId === def.id), 'the published workflow can be started on the CI');
+  // Bootstrap (SHAA-1698): the CI has no phase yet, so it is reported as unmapped and left without an instance.
+  const adopt = (dryRun: boolean) => post(`${base}/${def.id}/bootstrap`, { stateFromAttribute: true, dryRun }, 200);
+  const preview = (await adopt(true)).json;
+  check(preview.dryRun === true && preview.started === 0 && preview.skippedUnmapped >= 1, 'the bootstrap dry run reports the CI without a phase as unmapped');
+  check((await adopt(false)).json.started === 0, 'the bootstrap starts no instance on an unmapped CI');
   const instances = '/api/v1/workflow-instances';
   const started = (await post(instances, { definitionKey: def.key, ciId: ci.id, comment: 'Smoke start' })).json.instance;
   check(started.status === 'active' && started.state.key === 'planned', 'a started instance is in the initial state');
