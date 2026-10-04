@@ -27,6 +27,8 @@ test.afterAll(async ({ request }) => {
   await resetUiSettings(request);
 });
 
+/** A section of the detail page by its heading. */
+const pagePanel = (page: Page, heading: string) => page.locator(".layout-container details").filter({ has: page.locator("summary h2", { hasText: new RegExp(`^${heading}$`) }) });
 const bar = (page: Page) => page.getByRole("region", { name: "Layout editing" });
 const tabBar = (page: Page) => page.getByRole("group", { name: "Tabs of the layout" });
 const templates = (page: Page) => page.getByTestId("layout-templates");
@@ -95,6 +97,10 @@ test("a new template, laid out in the editor and made the class default, is what
   const editor = await openEditor(page, row.getByRole("button", { name: `Edit the template ${TEMPLATE}` }));
   await expect(editor).toHaveURL(/\/layout-editor\?template=e2e_hosts_/);
   await expect(bar(editor).getByTestId("le-target")).toHaveText(`Template: ${TEMPLATE} (used by 0 classes, 0 CIs)`);
+  // A blank template has the record details and the relationships from the start, as windows to move or remove.
+  await expect(editor.getByRole("region", { name: "Section Record", exact: true })).toBeVisible();
+  await expect(editor.getByRole("region", { name: "Section Relationships", exact: true })).toBeVisible();
+  await expect(editor.getByLabel("Add a panel to General").locator("option")).toHaveText(["+ Panel", "History", "Audit trail"]);
   await tabBar(editor).getByRole("button", { name: "+ Tab" }).click();
   await tabBar(editor).getByLabel("Tab name").fill(TAB);
   await editor.keyboard.press("Enter");
@@ -133,6 +139,10 @@ test("a new template, laid out in the editor and made the class default, is what
   await ciTabs(page).filter({ hasText: TAB }).click();
   await expect(page.getByText("Restart order: app, then database.")).toBeVisible();
   await expect(page.getByTestId("ci-own-layout")).toHaveCount(0);
+  // The template's General tab: the record details and the relationships, as placed.
+  await ciTabs(page).filter({ hasText: "General" }).click();
+  await expect(pagePanel(page, "Record")).toContainText(ci.id);
+  await expect(pagePanel(page, "Relationships")).toContainText("No relationships yet");
   expect(await ciLayout(request, ci.id)).toMatchObject({ source: "class_default", templateName: TEMPLATE });
 });
 

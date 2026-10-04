@@ -10,8 +10,11 @@ import { CORE_FIELDS, GRID_COLUMNS, LOCKED_FIELDS, MAX_COLUMNS, SECTION_GRID, pa
  * keeps the rules the API checks: tab keys unique, section keys unique across
  * the layout, a field placed once, widths within the section's columns, and the
  * core fields (ident, valid from, valid until) never hidden or dropped.
- * Content blocks (notes and the built-in panels) are sections without fields:
- * fields never go into one, and each panel is placed at most once.
+ * Content blocks (notes and the built-in panels: record details,
+ * relationships, history, audit trail) are sections without fields: fields
+ * never go into one, and each panel is placed at most once. A field section
+ * can hold separators between its fields: entries without a field, a line
+ * across the section with an optional label, moved like a field.
  *
  * Every section is a window of its tab (lib/freeLayout): its `frame` places
  * it; a new section gets one below the other windows.
@@ -22,6 +25,10 @@ export type LayoutSection = NonNullable<LayoutTab["sections"]>[number];
 export type LayoutField = NonNullable<LayoutSection["fields"]>[number];
 
 export const isCore = (field: string) => LOCKED_FIELDS.includes(field);
+/** Whether an entry of a section's fields is a separator (no field). */
+export const isSeparatorEntry = (f: LayoutField) => !!f.separator;
+/** Longest separator label, in characters (the API's limit). */
+export const SEPARATOR_MAX_CHARS = 100;
 
 export interface FieldPlace {
   tab: LayoutTab;
@@ -125,10 +132,81 @@ export function setWidth(l: UiClassLayout, field: string, width: number): number
   return f.width;
 }
 
-/** Changes a section's grid; fields wider than the new grid get narrower. */
+/** Changes a section's grid; fields wider than the new grid get narrower, separators keep the full width. */
 export function setColumns(section: LayoutSection, columns: number): void {
   section.columns = Math.max(1, Math.min(columns, MAX_COLUMNS));
-  for (const f of fieldsOf(section)) f.width = Math.min(f.width ?? 1, section.columns);
+  for (const f of fieldsOf(section)) f.width = f.separator ? section.columns : Math.min(f.width ?? 1, section.columns);
+}
+
+/** A separator of a field section: the section's key and the entry's index among its fields. */
+export interface SeparatorPlace {
+  section: string;
+  index: number;
+}
+const separatorAt = (l: UiClassLayout, at: SeparatorPlace) => {
+  const section = findSection(l, at.section)?.section;
+  const f = section && fieldsOf(section)[at.index];
+  return section && f?.separator ? { section, entry: f } : undefined;
+};
+
+/** Adds a separator to section `sectionKey` at `index` (the end when omitted); returns where it is, or undefined. */
+export function addSeparator(l: UiClassLayout, sectionKey: string, label?: string, index?: number): SeparatorPlace | undefined {
+  const section = findSection(l, sectionKey)?.section;
+  if (!section || !isFieldSection(section)) return undefined;
+  const list = fieldsOf(section);
+  const at = Math.max(0, Math.min(index ?? list.length, list.length));
+  const text = label?.trim().slice(0, SEPARATOR_MAX_CHARS);
+  list.splice(at, 0, { separator: true, ...(text ? { label: text } : {}), width: columnsOf(section) });
+  return { section: sectionKey, index: at };
+}
+
+/** Changes a separator's label (blank: a plain line). */
+export function setSeparatorLabel(l: UiClassLayout, at: SeparatorPlace, label: string): void {
+  const s = separatorAt(l, at);
+  if (!s) return;
+  const text = label.trim().slice(0, SEPARATOR_MAX_CHARS);
+  if (text) s.entry.label = text;
+  else delete s.entry.label;
+}
+
+export function removeSeparator(l: UiClassLayout, at: SeparatorPlace): boolean {
+  const s = separatorAt(l, at);
+  if (!s) return false;
+  fieldsOf(s.section).splice(at.index, 1);
+  return true;
+}
+
+/**
+ * Puts the separator at `from` into section `sectionKey` at `index` (among that
+ * section's entries as they are before the move); returns where it ends up.
+ */
+export function placeSeparator(l: UiClassLayout, from: SeparatorPlace, sectionKey: string, index?: number): SeparatorPlace | undefined {
+  const s = separatorAt(l, from);
+  const target = findSection(l, sectionKey)?.section;
+  if (!s || !target || !isFieldSection(target)) return undefined;
+  let at = index ?? fieldsOf(target).length;
+  fieldsOf(s.section).splice(from.index, 1);
+  if (s.section === target && from.index < at) at -= 1;
+  const list = fieldsOf(target);
+  at = Math.max(0, Math.min(at, list.length));
+  list.splice(at, 0, { ...s.entry, width: columnsOf(target) });
+  return { section: sectionKey, index: at };
+}
+
+/**
+ * Moves the separator at `from` one place earlier (-1) or later (+1): within its
+ * section, or into the neighbouring field section at the edges. Returns where it
+ * ends up, or undefined if it could not move.
+ */
+export function moveSeparatorBy(l: UiClassLayout, from: SeparatorPlace, delta: -1 | 1): SeparatorPlace | undefined {
+  const s = separatorAt(l, from);
+  if (!s) return undefined;
+  const to = from.index + delta;
+  if (to >= 0 && to < fieldsOf(s.section).length) return placeSeparator(l, from, from.section, delta < 0 ? to : to + 1);
+  const sections = fieldSections(l).map((x) => x.section);
+  const next = sections[sections.indexOf(s.section) + delta];
+  if (!next) return undefined;
+  return placeSeparator(l, from, next.key, delta < 0 ? fieldsOf(next).length : 0);
 }
 
 export interface SectionPlace {
@@ -229,6 +307,9 @@ export function sectionFallback(l: UiClassLayout, section: LayoutSection): Layou
   return i < 0 ? undefined : (sections[i - 1] ?? sections[i + 1]);
 }
 
+/** A field (or separator) moved into section `into`: no wider than its grid (a separator: as wide). */
+const moved = (f: LayoutField, into: LayoutSection): LayoutField => ({ ...f, width: f.separator ? columnsOf(into) : Math.min(f.width ?? 1, columnsOf(into)) });
+
 /**
  * Removes a tab; its fields move to the end of `tabFallback`. The last tab
  * holding sections cannot go (there would be nowhere for the core fields).
@@ -236,8 +317,8 @@ export function sectionFallback(l: UiClassLayout, section: LayoutSection): Layou
 export function removeTab(l: UiClassLayout, tab: LayoutTab): boolean {
   const into = tabFallback(l, tab);
   const fields = sectionsOf(tab).flatMap((s) => fieldsOf(s));
-  if (!into && fields.length > 0) return false;
-  if (into) fieldsOf(into).push(...fields.map((f) => ({ ...f, width: Math.min(f.width ?? 1, columnsOf(into)) })));
+  if (!into && fields.some((f) => !f.separator)) return false;
+  if (into) fieldsOf(into).push(...fields.map((f) => moved(f, into)));
   l.tabs = tabsOf(l).filter((t) => t !== tab);
   return true;
 }
@@ -246,14 +327,14 @@ export function removeTab(l: UiClassLayout, tab: LayoutTab): boolean {
 export function removeSection(l: UiClassLayout, section: LayoutSection): boolean {
   const into = sectionFallback(l, section);
   if (!into && isFieldSection(section)) return false;
-  if (into) fieldsOf(into).push(...fieldsOf(section).map((f) => ({ ...f, width: Math.min(f.width ?? 1, columnsOf(into)) })));
+  if (into) fieldsOf(into).push(...fieldsOf(section).map((f) => moved(f, into)));
   for (const t of tabsOf(l)) t.sections = sectionsOf(t).filter((s) => s !== section);
   return true;
 }
 
 /** Whether `tab` can be removed: not the only tab, and its fields have somewhere to go. */
 export const canRemoveTab = (l: UiClassLayout, tab: LayoutTab) =>
-  tabsOf(l).length > 1 && (!!tabFallback(l, tab) || sectionsOf(tab).every((s) => fieldsOf(s).length === 0));
+  tabsOf(l).length > 1 && (!!tabFallback(l, tab) || sectionsOf(tab).every((s) => fieldsOf(s).every((f) => f.separator)));
 /** Whether `section` can be removed: a note or a panel, or not the only field section of the layout. */
 export const canRemoveSection = (l: UiClassLayout, section: LayoutSection) => !isFieldSection(section) || !!sectionFallback(l, section);
 
@@ -261,12 +342,14 @@ export const canRemoveSection = (l: UiClassLayout, section: LayoutSection) => !i
 export function removalSummary(l: UiClassLayout, target: { tab: LayoutTab } | { section: LayoutSection }): string {
   if ("section" in target && !isFieldSection(target.section)) {
     const kind = sectionKind(target.section);
-    return kind === "note"
-      ? "The note and its text are removed."
-      : `The ${panelLabel(kind as PanelKind)} panel is no longer placed by this layout: the detail page shows it at its usual position.`;
+    if (kind === "note") return "The note and its text are removed.";
+    // The history has a tab of its own when no section places it; the other panels are then not shown.
+    return kind === "history"
+      ? "The History panel is no longer placed by this layout: the detail page shows the history in a tab of its own."
+      : `The ${panelLabel(kind as PanelKind)} panel is no longer shown on the detail page. + Panel adds it again.`;
   }
   const noun = "tab" in target ? "tab" : "section";
-  const fields = "tab" in target ? sectionsOf(target.tab).flatMap((s) => fieldsOf(s)) : fieldsOf(target.section);
+  const fields = ("tab" in target ? sectionsOf(target.tab).flatMap((s) => fieldsOf(s)) : fieldsOf(target.section)).filter((f) => !f.separator);
   const into = "tab" in target ? tabFallback(l, target.tab) : sectionFallback(l, target.section);
   const n = fields.length;
   const moved = n === 0 ? `The ${noun} has no fields.` : `Its ${n} field${n === 1 ? "" : "s"} move to the end of the section ${into?.label}.`;
@@ -293,7 +376,8 @@ export function moveSectionToTab(l: UiClassLayout, section: LayoutSection, tab: 
 /**
  * The built-in layout of a class with everything placed explicitly: what
  * "Customize" starts from. The General tab with its General section and the
- * attribute groups becomes real tabs and sections the administrator can change.
+ * attribute groups becomes real tabs and sections the administrator can change,
+ * followed by the Record and Relationships panels, as the page shows them.
  */
 export function materialize(classKey: string, attrs: readonly AttributeLike[]): UiClassLayout {
   const l: UiClassLayout = { classKey, tabs: [], hiddenFields: [], readOnlyFields: [] };
@@ -301,10 +385,13 @@ export function materialize(classKey: string, attrs: readonly AttributeLike[]): 
     const tab: LayoutTab = { key: uniqueKey(t.label, tabsOf(l).map((x) => x.key), "tab"), label: t.label, placement: "free", sections: [] };
     tabsOf(l).push(tab);
     for (const s of t.sections) {
+      if (s.kind !== "fields") continue;
       const section = addSection(l, tab, s.label);
       section.fields = s.fields.map((f) => ({ field: f.field, width: f.width }));
     }
   }
+  const first = tabsOf(l)[0];
+  if (first) for (const kind of ["record", "relations"] as const) addPanel(l, first, kind);
   // The built-in sections stacked as windows, as the page shows them.
   tabsOf(l).forEach(makeFree);
   return l;

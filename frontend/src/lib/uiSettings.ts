@@ -423,6 +423,7 @@ export type SectionKind = NonNullable<NonNullable<NonNullable<UiClassLayout["tab
 export type PanelKind = Exclude<SectionKind, "fields" | "note">;
 /** The detail page's built-in panels, each placeable once per layout. */
 export const PANELS: { kind: PanelKind; label: string; hint: string }[] = [
+  { kind: "record", label: "Record", hint: "The CI's ID, class, and when it was created and last changed" },
   { kind: "relations", label: "Relationships", hint: "The CI's relationships, with adding and removing them" },
   { kind: "history", label: "History", hint: "Changes to the CI, field by field" },
   { kind: "audit", label: "Audit trail", hint: "Who changed the CI when, with the request id" },
@@ -466,7 +467,9 @@ export function normalizeLayout(l: UiClassLayout): UiClassLayout {
             columns: s.columns ?? GRID_COLUMNS,
             width: s.width ?? SECTION_GRID,
             collapsed: !!s.collapsed,
-            fields: (s.fields ?? []).map((f) => ({ field: f.field, width: f.width ?? 1 })),
+            fields: (s.fields ?? []).map((f) =>
+              f.separator ? { separator: true, ...(f.label ? { label: f.label } : {}), width: s.columns ?? GRID_COLUMNS } : { field: f.field, width: f.width ?? 1 },
+            ),
           },
     ),
   }));
@@ -486,6 +489,13 @@ export interface ResolvedField {
   /** Columns spanned, at most the section's columns. */
   width: number;
 }
+/** A line across a section's grid between its fields, with an optional heading. */
+export interface ResolvedSeparator {
+  separator: true;
+  label?: string;
+}
+export type ResolvedItem = ResolvedField | ResolvedSeparator;
+export const isSeparator = (i: ResolvedItem): i is ResolvedSeparator => "separator" in i;
 export interface ResolvedSection {
   key: string;
   label: string;
@@ -498,9 +508,14 @@ export interface ResolvedSection {
   /** At least this many field rows tall, when set. */
   minHeight?: number;
   fields: ResolvedField[];
+  /** The fields with the separators between them, in order: what the section's grid shows. */
+  items: ResolvedItem[];
   /** Placed by the built-in rules, not by the administrator: fields no section of the layout holds. */
   auto: boolean;
-  /** A grid of `fields`, or a content block (a note's `text`, a built-in panel) without fields. */
+  /**
+   * A grid of `fields`, a content block (a note's `text`, a built-in panel) without fields, or the record
+   * details: a grid of the `record` fields no other section places (plus the CI's ID).
+   */
   kind: SectionKind;
   text?: string;
   /** Where the section sits as a window of its tab (lib/freeLayout); absent for the automatic sections. */
@@ -520,14 +535,15 @@ export const builtInLayout = (classKey: string): UiClassLayout => ({ classKey, t
 const COMPANIONS: Record<string, string> = { validUntil: "active" };
 
 /**
- * A class layout as tabs of sections: the administrator's tabs, sections and
- * field widths in order; then, at the end of the first tab, everything they do
- * not place — a "General" section with the unplaced `core` fields and the
- * attributes without a group, the other attribute groups, and finally a
- * "Record" section with the unplaced `record` fields (class, timestamps).
- * Hidden fields, built-in fields in neither list, and empty sections and tabs
- * are left out. Without a layout of its own a class gets `builtInLayout`: one
- * General tab with General, then its attribute groups.
+ * A class layout as tabs of sections: the administrator's tabs, sections,
+ * field widths and separators in order; then, at the end of the first tab,
+ * every field they do not place — a "General" section with the unplaced `core`
+ * fields and the attributes without a group, then the other attribute groups.
+ * A `record` section shows the unplaced `record` fields (class, timestamps)
+ * wherever the layout puts it; a layout without tabs (the built-in
+ * arrangement, `builtInLayout`: one General tab with General, then the
+ * attribute groups) gets a "Record" section last instead. Hidden fields,
+ * built-in fields in neither list, and empty sections and tabs are left out.
  */
 export function resolveLayout(
   layout: UiClassLayout,
@@ -551,6 +567,7 @@ export function resolveLayout(
   };
   const taken = new Set<string>();
   // Every tab free: one stored on the earlier grid shows its sections as windows where they were on the grid.
+  const builtIn = (layout.tabs ?? []).length === 0;
   const tabs: ResolvedTab[] = (layout.tabs ?? []).map(freeCopy).map((t) => ({
     key: t.key,
     label: t.label,
@@ -558,12 +575,17 @@ export function resolveLayout(
     sections: readingOrder(t.sections ?? []).map((s): ResolvedSection => {
       const kind = sectionKind(s);
       const place = { width: sectionWidth(s), newRow: !!s.newRow, minHeight: s.minHeight ?? undefined, ...(s.frame ? { frame: s.frame } : {}) };
-      if (kind !== "fields") return { key: s.key, label: s.label, collapsed: !!s.collapsed, columns: GRID_COLUMNS, ...place, fields: [], auto: false, kind, text: s.text };
+      if (kind !== "fields") return { key: s.key, label: s.label, collapsed: !!s.collapsed, columns: GRID_COLUMNS, ...place, fields: [], items: [], auto: false, kind, text: s.text };
       const columns = Math.min(Math.max(s.columns ?? GRID_COLUMNS, 1), MAX_COLUMNS);
       const fields: ResolvedField[] = [];
+      const items: ResolvedItem[] = [];
       for (const f of s.fields ?? []) {
-        // Separators (no field) are not shown yet.
+        if (f.separator) {
+          items.push({ separator: true, ...(f.label ? { label: f.label } : {}) });
+          continue;
+        }
         if (!f.field || !usable(f.field) || taken.has(f.field)) continue;
+        const from = fields.length;
         taken.add(f.field);
         fields.push({ field: f.field, width: Math.min(Math.max(f.width ?? 1, 1), columns) });
         const c = companion(f.field);
@@ -571,6 +593,7 @@ export function resolveLayout(
           taken.add(c);
           fields.push({ field: c, width: 1 });
         }
+        items.push(...fields.slice(from));
       }
       return {
         key: s.key,
@@ -579,6 +602,8 @@ export function resolveLayout(
         columns,
         ...place,
         fields,
+        // A section of separators only shows nothing.
+        items: fields.length > 0 ? items : [],
         auto: false,
         kind,
       };
@@ -593,6 +618,7 @@ export function resolveLayout(
     width: SECTION_GRID,
     newRow: false,
     fields: fields.map(one),
+    items: fields.map(one),
     auto: true,
     kind: "fields",
   });
@@ -600,14 +626,18 @@ export function resolveLayout(
   const rest = attrs.filter((a) => usable(`${ATTRIBUTE_PREFIX}${a.key}`) && !taken.has(`${ATTRIBUTE_PREFIX}${a.key}`));
   const groups = groupAttributes(rest).map(([group, items]) => ({ group, fields: items.map((a) => `${ATTRIBUTE_PREFIX}${a.key}`) }));
   const ungrouped = groups[0]?.group === GENERAL_SECTION ? groups.shift()!.fields : [];
-  const trailing = [
-    auto("_general", GENERAL_SECTION, [...general, ...ungrouped]),
-    ...groups.map((g) => auto(`_group:${g.group}`, g.group, g.fields)),
-    auto("_record", "Record", record.filter((f) => usable(f) && !taken.has(f))),
-  ];
+  // The record details: what no field section places, wherever the layout puts them (else last, built in).
+  const recordFields = record.filter((f) => usable(f) && !taken.has(f)).map(one);
+  for (const t of tabs) for (const s of t.sections) if (s.kind === "record") Object.assign(s, { fields: recordFields, items: recordFields });
+  const trailing = [auto("_general", GENERAL_SECTION, [...general, ...ungrouped]), ...groups.map((g) => auto(`_group:${g.group}`, g.group, g.fields))];
+  // Without tabs, the built-in arrangement: the record details last (on the detail page, which has them).
+  if (builtIn && record.length > 0) {
+    trailing.push({ ...auto("_record", "Record", []), fields: recordFields, items: recordFields, kind: "record" });
+  }
   if (tabs.length === 0) tabs.push({ key: "general", label: GENERAL_SECTION, sections: [] });
   tabs[0].sections.push(...trailing);
   if (keepEmpty) return tabs.map((t) => ({ ...t, sections: t.sections.filter((s) => !s.auto || s.fields.length > 0) }));
+  // A record section always shows (the ID at least); an empty field section does not.
   const shown = tabs.map((t) => ({ ...t, sections: t.sections.filter((s) => s.kind !== "fields" || s.fields.length > 0) })).filter((t) => t.sections.length > 0);
   return shown.length > 0 ? shown : [{ ...tabs[0], sections: [] }];
 }

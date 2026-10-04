@@ -80,6 +80,24 @@
 .lg-w-10 { --lg-w: 10; }
 .lg-w-11 { --lg-w: 11; }
 .lg-w-12 { --lg-w: 12; }
+/* A separator between a section's fields: a line across the whole grid, with an optional heading. */
+.lg-sep {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: var(--sp-4);
+}
+.lg-sep::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--c-border-strong);
+}
+.lg-sep-label {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--c-text-secondary);
+}
 .lg-sec {
   grid-column: span var(--lg-s, 12);
   min-width: 0;

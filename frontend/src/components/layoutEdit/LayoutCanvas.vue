@@ -6,6 +6,7 @@ import {
   addNote,
   addPanel,
   addSection,
+  addSeparator,
   addTab,
   adoptFields,
   allSections,
@@ -18,16 +19,23 @@ import {
   lastFieldSection,
   locate,
   moveFieldBy,
+  moveSeparatorBy,
   moveSectionToTab,
   moveTab,
   placeField,
+  placeSeparator,
   removalSummary,
   removeSection,
+  removeSeparator,
   removeTab,
+  SEPARATOR_MAX_CHARS,
   setColumns,
+  setSeparatorLabel,
   setWidth,
+  type LayoutField,
   type LayoutSection,
   type LayoutTab,
+  type SeparatorPlace,
 } from "../../lib/layoutDesign";
 import { PRESENTATION_ONLY, type LayoutEditor } from "../../lib/layoutEditor";
 import {
@@ -61,11 +69,14 @@ import Icon from "../Icon.vue";
  * right edge to resize it. Every section is a window (FreeWindow): moved and
  * resized anywhere, overlapping, stacked in layers. Every drag has a keyboard
  * or toolbar equivalent, and a drag is one undo step. Fields the layout does
- * not place show below the windows of the first tab, as on the real page. Below
- * the windows, + Note adds static text (limited Markdown, edited in place) and
- * + Panel places one of the detail page's built-in panels (relationships,
- * history, audit trail), each once per layout; the page draws a placed panel
- * through the `panel` slot. Notes and panels are windows like any section.
+ * not place show below the windows of the first tab, as on the real page. A
+ * field section's + Separator adds a line across it (with an optional label),
+ * moved like a field and removed with its toolbar. Below the windows, + Note
+ * adds static text (limited Markdown, edited in place) and + Panel places one
+ * of the detail page's built-in panels (record details, relationships, history,
+ * audit trail), each once per layout; the page draws a placed panel through the
+ * `panel` slot. Notes and panels are windows like any section, and removing
+ * one takes it off the detail page until + Panel adds it again.
  * When the API refuses a save, its messages about a section are listed in that
  * section. Every change goes through the editor (undo, save).
  */
@@ -78,8 +89,6 @@ const props = defineProps<{
 }>();
 defineSlots<{
   field(p: { field: string }): unknown;
-  /** After the first tab's sections (the detail page's record details). */
-  "first-tab-end"(): unknown;
   /** A built-in panel placed by the layout, as the page shows it (none on the form). */
   panel?(p: { kind: PanelKind }): unknown;
 }>();
@@ -88,8 +97,11 @@ const layout = computed(() => props.editor.layout);
 const defFor = (f: string) => props.attrs.find((d) => d.key === attributeKey(f));
 const labelOf = (f: string) => fieldLabel(f, props.attrs);
 const known = (f: string) => !f.startsWith(ATTRIBUTE_PREFIX) || !!defFor(f);
-// Separators (no field) are not edited here yet.
-const shownFields = (s: LayoutSection) => (s.fields ?? []).filter((f): f is typeof f & { field: string } => !!f.field && known(f.field));
+/** A section's entries the editor shows: its fields of known attributes and its separators, with their index among `fields`. */
+type Entry = { f: LayoutField & { field: string }; at: number; sep: false } | { f: LayoutField; at: number; sep: true };
+const entriesOf = (s: LayoutSection): Entry[] =>
+  (s.fields ?? []).flatMap((f, at): Entry[] => (f.separator ? [{ f, at, sep: true }] : f.field && known(f.field) ? [{ f: f as LayoutField & { field: string }, at, sep: false }] : []));
+const hasFields = (s: LayoutSection) => entriesOf(s).some((e) => !e.sep);
 const isReadOnly = (f: string) => !!layout.value?.readOnlyFields?.includes(f);
 
 const tabs = computed<LayoutTab[]>(() => layout.value?.tabs ?? []);
@@ -172,6 +184,75 @@ function makeSection(label: string, fields: string[]) {
   props.editor.apply((l) => (key = adoptFields(l, label, fields).key));
   say(`Section ${label} added with ${fields.length} field${fields.length === 1 ? "" : "s"}.`);
   focus(`le-section-${key}`);
+}
+
+// ---------- Separators ----------
+
+/** The separator whose label is being edited, and the label so far. */
+const sepEdit = ref<SeparatorPlace | null>(null);
+const sepLabel = ref("");
+const sepId = (at: SeparatorPlace) => `le-sep-${at.section}-${at.index}`;
+const sepName = (f: LayoutField) => (f.label ? `Separator ${f.label}` : "Separator");
+function insertSeparator(s: LayoutSection) {
+  let at: SeparatorPlace | undefined;
+  props.editor.apply((l) => (at = addSeparator(l, s.key)));
+  if (!at) return;
+  say(`Separator added at the end of ${s.label}. Type its label, or leave it empty for a plain line.`);
+  startSeparatorLabel(at, "");
+}
+function startSeparatorLabel(at: SeparatorPlace, label: string) {
+  sepEdit.value = at;
+  sepLabel.value = label;
+  void nextTick(() => {
+    const input = document.getElementById("le-sep-label") as HTMLInputElement | null;
+    input?.focus();
+    input?.select();
+  });
+}
+function commitSeparatorLabel() {
+  const at = sepEdit.value;
+  if (!at) return;
+  sepEdit.value = null;
+  const label = sepLabel.value;
+  props.editor.apply((l) => setSeparatorLabel(l, at, label));
+  say(label.trim() ? `Separator labelled ${label.trim()}.` : "Separator without a label.");
+  focus(sepId(at));
+}
+function onSeparatorLabelKey(e: KeyboardEvent) {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    commitSeparatorLabel();
+  } else if (e.key === "Escape") {
+    e.preventDefault();
+    const at = sepEdit.value;
+    sepEdit.value = null;
+    if (at) focus(sepId(at));
+  }
+}
+function moveSeparator(from: SeparatorPlace, delta: -1 | 1) {
+  let to: SeparatorPlace | undefined;
+  props.editor.apply((l) => (to = moveSeparatorBy(l, from, delta)));
+  if (!to || !layout.value) return say(`The separator is already ${delta < 0 ? "first" : "last"}.`);
+  const at = findSection(layout.value, to.section);
+  if (at) activeTabKey.value = at.tab.key;
+  say(`Separator moved to position ${to.index + 1} of ${at?.section.fields?.length} in ${at?.section.label}.`);
+  focus(sepId(to));
+}
+function dropSeparator(from: SeparatorPlace) {
+  props.editor.apply((l) => removeSeparator(l, from));
+  say("Separator removed.");
+}
+function onSeparatorKey(at: SeparatorPlace, f: LayoutField, e: KeyboardEvent) {
+  if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+    e.preventDefault();
+    moveSeparator(at, e.key === "ArrowUp" ? -1 : 1);
+  } else if (e.key === "Delete") {
+    e.preventDefault();
+    dropSeparator(at);
+  } else if (e.key === "Enter" || e.key === "F2") {
+    e.preventDefault();
+    startSeparatorLabel(at, f.label ?? "");
+  }
 }
 
 // ---------- Tabs and sections ----------
@@ -432,6 +513,9 @@ function onLayer(s: LayoutSection, move: LayerMove) {
 // ---------- Drag and drop ----------
 
 const dragField = ref<string | null>(null);
+/** The separator being dragged (it moves within and between field sections only). */
+const dragSep = ref<SeparatorPlace | null>(null);
+/** Where a drop lands: before the entry shown at `index` of the section (its entries' count: at the end). */
 const dropAt = ref<{ section: string; index: number } | null>(null);
 const dropTab = ref<string | null>(null);
 function onDragStart(field: string, e: DragEvent) {
@@ -441,21 +525,31 @@ function onDragStart(field: string, e: DragEvent) {
     e.dataTransfer.setData("text/plain", field);
   }
 }
+function onSeparatorDragStart(at: SeparatorPlace, e: DragEvent) {
+  dragSep.value = at;
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", "separator");
+  }
+}
 function onDragEnd() {
   dragField.value = null;
+  dragSep.value = null;
   dropAt.value = null;
   dropTab.value = null;
 }
-/** Where in a section's grid a drop lands: before the first field the pointer is above or left of, else at the end. */
+/** Where in a section's grid a drop lands: before the first entry the pointer is above or left of, else at the end. */
 function onGridOver(section: LayoutSection, e: DragEvent) {
-  if (!dragField.value) return;
+  if (!dragField.value && !dragSep.value) return;
   e.preventDefault();
   if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-  const cells = [...(e.currentTarget as HTMLElement).querySelectorAll<HTMLElement>(":scope > .le-field")];
+  const cells = [...(e.currentTarget as HTMLElement).querySelectorAll<HTMLElement>(":scope > .le-field, :scope > .le-sep")];
   let index = cells.length;
   for (let i = 0; i < cells.length; i++) {
     const r = cells[i].getBoundingClientRect();
-    if (e.clientY < r.top || (e.clientY <= r.bottom && e.clientX < r.left + r.width / 2)) {
+    // A separator spans the row: the drop goes before it in its upper half.
+    const before = cells[i].classList.contains("le-sep") ? e.clientY < r.top + r.height / 2 : e.clientY < r.top || (e.clientY <= r.bottom && e.clientX < r.left + r.width / 2);
+    if (before) {
       index = i;
       break;
     }
@@ -465,9 +559,20 @@ function onGridOver(section: LayoutSection, e: DragEvent) {
 function onGridDrop(section: LayoutSection, e: DragEvent) {
   e.preventDefault();
   const field = dragField.value;
+  const sep = dragSep.value;
   const at = dropAt.value;
   onDragEnd();
-  if (field) place(field, section.key, at?.section === section.key ? at.index : undefined);
+  // The shown index, as an index among the section's stored entries (some may not be shown).
+  const entries = entriesOf(section);
+  const index = at?.section === section.key ? (entries[at.index]?.at ?? section.fields?.length ?? 0) : undefined;
+  if (field) place(field, section.key, index);
+  else if (sep) {
+    let to: SeparatorPlace | undefined;
+    props.editor.apply((l) => (to = placeSeparator(l, sep, section.key, index)));
+    if (!to) return;
+    say(`Separator moved to position ${to.index + 1} in ${section.label}.`);
+    focus(sepId(to));
+  }
 }
 function onTabOver(t: LayoutTab, e: DragEvent) {
   if (!dragField.value) return;
@@ -615,6 +720,9 @@ function onHiddenDrop(e: DragEvent) {
                     Collapsed
                   </button>
                   <button v-if="kindOf(s) === 'note'" type="button" class="btn btn-sm" :aria-label="`Edit the text of ${s.label}`" @click="startNote(s)">Edit text</button>
+                  <button v-if="kindOf(s) === 'fields'" type="button" class="btn btn-sm" :aria-label="`Add a separator to ${s.label}`" title="A line across the section between its fields, with an optional label" @click="insertSeparator(s)">
+                    + Separator
+                  </button>
                   <select v-if="kindOf(s) === 'fields'" :aria-label="`Columns of ${s.label}`" title="Columns of the section's field grid" :value="s.columns ?? 3" @change="onSection(s.key, (_, own) => setColumns(own, Number(($event.target as HTMLSelectElement).value)))">
                     <option v-for="n in MAX_COLUMNS" :key="n" :value="n">{{ n }} column{{ n === 1 ? "" : "s" }}</option>
                   </select>
@@ -660,39 +768,82 @@ function onHiddenDrop(e: DragEvent) {
               </div>
               <div v-else class="panel-body">
                 <div
-                  :class="[gridClass(s.columns ?? 3), 'le-grid', { 'drop-end': dropAt?.section === s.key && dropAt.index === shownFields(s).length }]"
+                  :class="[gridClass(s.columns ?? 3), 'le-grid', { 'drop-end': dropAt?.section === s.key && dropAt.index === entriesOf(s).length }]"
                   :data-section="s.key"
                   @dragover="onGridOver(s, $event)"
                   @drop="onGridDrop(s, $event)"
                 >
-                  <EditableField
-                    v-for="(f, i) in shownFields(s)"
-                    :key="f.field"
-                    :field="f.field"
-                    :label="labelOf(f.field)"
-                    :width="f.width ?? 1"
-                    :columns="s.columns ?? 3"
-                    :core="isCore(f.field)"
-                    :required="defFor(f.field)?.isRequired"
-                    :read-only="isReadOnly(f.field)"
-                    :can-read-only="form"
-                    :show-label="!form"
-                    :section="s.key"
-                    :sections="sectionOptions"
-                    :drop-before="dropAt?.section === s.key && dropAt.index === i && dragField !== f.field"
-                    :dragging="dragField === f.field"
-                    @move="(d) => moveField(f.field, d)"
-                    @resize="(w, drag) => resizeField(f.field, w, drag)"
-                    @resize-end="editor.endGesture()"
-                    @hide="hide(f.field)"
-                    @place="(k) => place(f.field, k)"
-                    @read-only="(on) => setReadOnly(f.field, on)"
-                    @dragstart="(e) => onDragStart(f.field, e)"
-                    @dragend="onDragEnd"
-                  >
-                    <slot name="field" :field="f.field" />
-                  </EditableField>
-                  <p v-if="shownFields(s).length === 0" :class="['le-empty', 'lg-cell', `lg-w-${s.columns ?? 3}`]">Drop fields here</p>
+                  <template v-for="(e, i) in entriesOf(s)" :key="e.sep ? `sep-${e.at}` : e.f.field">
+                    <div
+                      v-if="e.sep"
+                      :class="['le-sep', { 'drop-before': dropAt?.section === s.key && dropAt.index === i && !(dragSep?.section === s.key && dragSep.index === e.at), dragging: dragSep?.section === s.key && dragSep.index === e.at }]"
+                      data-separator
+                      draggable="true"
+                      @dragstart="onSeparatorDragStart({ section: s.key, index: e.at }, $event)"
+                      @dragend="onDragEnd"
+                    >
+                      <button
+                        :id="sepId({ section: s.key, index: e.at })"
+                        type="button"
+                        class="le-grip"
+                        :aria-label="`${sepName(e.f)}, line across ${s.label}`"
+                        aria-describedby="le-keys"
+                        title="Drag to move"
+                        @keydown="onSeparatorKey({ section: s.key, index: e.at }, e.f, $event)"
+                      >
+                        <Icon name="grip-vertical" />
+                      </button>
+                      <input
+                        v-if="sepEdit?.section === s.key && sepEdit.index === e.at"
+                        id="le-sep-label"
+                        v-model="sepLabel"
+                        class="le-rename"
+                        type="text"
+                        :maxlength="SEPARATOR_MAX_CHARS"
+                        aria-label="Separator label (empty: a plain line)"
+                        placeholder="No label"
+                        @keydown="onSeparatorLabelKey"
+                        @blur="commitSeparatorLabel"
+                      />
+                      <button v-else type="button" class="le-sep-label" title="Click to edit the label" @click="startSeparatorLabel({ section: s.key, index: e.at }, e.f.label ?? '')">
+                        <span v-if="e.f.label" dir="auto">{{ e.f.label }}</span><span v-else class="muted">Separator</span>
+                      </button>
+                      <span class="le-sep-line" aria-hidden="true" />
+                      <span class="le-toolbar" role="toolbar" :aria-label="`${sepName(e.f)}: layout`">
+                        <button type="button" class="btn btn-sm btn-icon" :aria-label="`Move ${sepName(e.f)} earlier`" title="Move earlier" @click="moveSeparator({ section: s.key, index: e.at }, -1)"><Icon name="arrow-up" /></button>
+                        <button type="button" class="btn btn-sm btn-icon" :aria-label="`Move ${sepName(e.f)} later`" title="Move later" @click="moveSeparator({ section: s.key, index: e.at }, 1)"><Icon name="arrow-down" /></button>
+                        <button type="button" class="btn btn-sm btn-icon" :aria-label="`Edit the label of ${sepName(e.f)}`" title="Edit label" @click="startSeparatorLabel({ section: s.key, index: e.at }, e.f.label ?? '')"><Icon name="pencil" /></button>
+                        <button type="button" class="btn btn-sm" :aria-label="`Remove ${sepName(e.f)}`" @click="dropSeparator({ section: s.key, index: e.at })">Remove</button>
+                      </span>
+                    </div>
+                    <EditableField
+                      v-else
+                      :field="e.f.field"
+                      :label="labelOf(e.f.field)"
+                      :width="e.f.width ?? 1"
+                      :columns="s.columns ?? 3"
+                      :core="isCore(e.f.field)"
+                      :required="defFor(e.f.field)?.isRequired"
+                      :read-only="isReadOnly(e.f.field)"
+                      :can-read-only="form"
+                      :show-label="!form"
+                      :section="s.key"
+                      :sections="sectionOptions"
+                      :drop-before="dropAt?.section === s.key && dropAt.index === i && dragField !== e.f.field"
+                      :dragging="dragField === e.f.field"
+                      @move="(d) => moveField(e.f.field, d)"
+                      @resize="(w, drag) => resizeField(e.f.field, w, drag)"
+                      @resize-end="editor.endGesture()"
+                      @hide="hide(e.f.field)"
+                      @place="(k) => place(e.f.field, k)"
+                      @read-only="(on) => setReadOnly(e.f.field, on)"
+                      @dragstart="(ev) => onDragStart(e.f.field, ev)"
+                      @dragend="onDragEnd"
+                    >
+                      <slot name="field" :field="e.f.field" />
+                    </EditableField>
+                  </template>
+                  <p v-if="!hasFields(s)" :class="['le-empty', 'lg-cell', `lg-w-${s.columns ?? 3}`]">Drop fields here</p>
                 </div>
               </div>
             </section>
@@ -750,7 +901,6 @@ function onHiddenDrop(e: DragEvent) {
                   </div>
                 </div>
               </section>
-              <slot name="first-tab-end" />
             </template>
           </div>
         </div>
@@ -758,7 +908,8 @@ function onHiddenDrop(e: DragEvent) {
     </div>
     <p id="le-keys" class="hint le-keys">
       Drag a field by its grip to move it, onto a tab to move it there, or drag its right edge to resize it. Keyboard, on a
-      field's grip: Alt+↑ / Alt+↓ move it, Alt+← / Alt+→ make it narrower or wider, Delete hides it. Drag a section's window
+      field's grip: Alt+↑ / Alt+↓ move it, Alt+← / Alt+→ make it narrower or wider, Delete hides it. A separator moves the
+      same way; on its grip Enter edits its label and Delete removes it. Drag a section's window
       by its title bar anywhere, and its edges or corners to resize it; windows may overlap. Pressing on a window brings it to
       the front; right-click it for the layers. Edges snap to other windows and an 8 px grid: hold Alt, or turn Snap off in
       the bar, to place freely. Keyboard, on a window's grip: arrows move it (Shift: further, Alt: 1 px), Ctrl+arrows resize
@@ -774,6 +925,87 @@ function onHiddenDrop(e: DragEvent) {
 </template>
 
 <style scoped>
+/* A separator in the editor: grip, label, the line, and a toolbar as on a field. */
+.le-sep {
+  position: relative;
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px dashed var(--c-border-strong);
+  border-radius: var(--radius);
+  background: var(--c-surface);
+  cursor: grab;
+}
+.le-sep:hover,
+.le-sep:focus-within {
+  border-color: var(--c-primary);
+}
+.le-sep.dragging {
+  opacity: 0.45;
+}
+.le-sep.drop-before::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -9px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--c-primary);
+}
+.le-sep-label {
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--c-text-secondary);
+  cursor: text;
+  padding: 0;
+  white-space: nowrap;
+}
+.le-sep-label:focus-visible {
+  outline: 2px solid var(--c-focus);
+}
+.le-sep-line {
+  flex: 1;
+  border-top: 1px solid var(--c-border-strong);
+}
+.le-sep .le-grip {
+  border: 0;
+  background: none;
+  padding: 0 2px;
+  color: var(--c-text-muted);
+  cursor: grab;
+}
+.le-sep .le-grip:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: 1px;
+}
+.le-sep > .le-toolbar {
+  position: absolute;
+  right: 4px;
+  bottom: 100%;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--c-primary);
+  border-radius: var(--radius);
+  background: var(--c-surface);
+  box-shadow: var(--shadow-md);
+  opacity: 0;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.le-sep:hover > .le-toolbar,
+.le-sep:focus-within > .le-toolbar {
+  opacity: 1;
+  pointer-events: auto;
+}
 /* A free tab: the windows sit in the room above its tail (+ Section, the unplaced fields). */
 .le-free {
   position: relative;

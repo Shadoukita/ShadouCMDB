@@ -18,7 +18,6 @@ defineProps<{
 }>();
 defineSlots<{
   field(p: { field: string }): unknown;
-  "first-tab-end"(): unknown;
   panel?(p: { kind: PanelKind }): unknown;
 }>();
 </script>
@@ -32,7 +31,6 @@ defineSlots<{
     <LayoutEditBar :editor="editor" :class-name="className" />
     <LayoutCanvas :editor="editor" :attrs="attrs" :form="form">
       <template #field="{ field }"><slot name="field" :field="field" /></template>
-      <template #first-tab-end><slot name="first-tab-end" /></template>
       <template v-if="$slots.panel" #panel="{ kind }"><slot name="panel" :kind="kind" /></template>
     </LayoutCanvas>
   </template>
