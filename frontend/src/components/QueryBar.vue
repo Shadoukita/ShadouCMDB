@@ -178,6 +178,8 @@ const describedBy = computed(() => ["f-q-help", errors.value.length ? "f-q-error
         @focus="onFocus"
         @blur="onBlur"
       />
+      <!-- Hover only highlights (CSS): if it moved `active`, a list opening under a resting pointer
+           would choose what Enter takes instead of applying the text. -->
       <ul v-show="expanded" id="f-q-list" class="combo-list query-suggestions" role="listbox" :aria-label="t('queryBar.suggestions')">
         <li
           v-for="(s, i) in suggestions?.items ?? []"
@@ -186,7 +188,6 @@ const describedBy = computed(() => ["f-q-help", errors.value.length ? "f-q-error
           role="option"
           :aria-selected="i === active"
           @mousedown.prevent="take(s)"
-          @mouseenter="active = i"
         >
           <span class="mono">{{ s.label }}</span>
           <span class="query-suggestion-detail" dir="auto">{{ s.detail }}</span>
