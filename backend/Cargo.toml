@@ -108,6 +108,10 @@ webpki-roots = "1"
 [target.'cfg(target_env = "musl")'.dependencies]
 mimalloc = { version = "0.1", default-features = false }
 
+# Raises the soft open-files limit to the hard one at start-up (GH#562); already in the tree.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
 [target.'cfg(windows)'.dependencies]
 windows-service = "0.8"
 

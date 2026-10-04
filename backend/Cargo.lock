@@ -2136,6 +2136,7 @@ dependencies = [
  "hyper-util",
  "ipnetwork",
  "ldap3",
+ "libc",
  "mimalloc",
  "mime_guess",
  "percent-encoding",
