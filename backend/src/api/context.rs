@@ -290,7 +290,7 @@ pub fn datamodel_manager(view: &[Uuid]) -> RequestContext {
     let principal = Principal {
         user_id: Uuid::new_v4(),
         username: "modeller".into(),
-        credential: crate::auth::Credential::Token { profile_id: None },
+        credential: crate::auth::Credential::Token { profile_id: None, creator_id: None },
         permissions,
     };
     RequestContext::user(Arc::new(principal), "restricted-manager".into())

@@ -197,8 +197,9 @@ impl Granted {
 
 /// What the caller is granted on `definition`: through one of their profiles
 /// (the Administrator profile is granted everything) and, for an API token,
-/// through its narrowing profile as well (Q6). Read live from the profiles,
-/// as the token's permissions are.
+/// through its narrowing profile as well (Q6) and, for a token minted by
+/// someone else, through one of its active creator's profiles too (GH#607).
+/// Read live from the profiles, as the token's permissions are.
 async fn granted(conn: &mut PgConnection, ctx: &RequestContext, definition: Uuid) -> Result<Granted, AppError> {
     let p = match &ctx.caller {
         Caller::System => return Ok(Granted::All),
@@ -208,9 +209,9 @@ async fn granted(conn: &mut PgConnection, ctx: &RequestContext, definition: Uuid
     if p.permissions.administrator {
         return Ok(Granted::All);
     }
-    let token_profile = match p.credential {
-        Credential::Token { profile_id } => profile_id,
-        Credential::Session { .. } => None,
+    let (token_profile, creator) = match p.credential {
+        Credential::Token { profile_id, creator_id } => (profile_id, creator_id),
+        Credential::Session { .. } => (None, None),
     };
     let rows: Vec<(String, Option<String>)> = sqlx::query_as(
         "SELECT 'owner_admin', NULL::text FROM cmdb.user_permission_profiles up
@@ -223,11 +224,21 @@ async fn granted(conn: &mut PgConnection, ctx: &RequestContext, definition: Uuid
          SELECT 'token_admin', NULL FROM cmdb.permission_profiles p WHERE p.id = $3 AND p.is_builtin
          UNION ALL
          SELECT 'token', g.transition_key FROM cmdb.workflow_transition_grants g
-         WHERE g.definition_id = $1 AND g.profile_id = $3",
+         WHERE g.definition_id = $1 AND g.profile_id = $3
+         UNION ALL
+         SELECT 'creator_admin', NULL FROM cmdb.user_permission_profiles up
+           JOIN cmdb.permission_profiles p ON p.id = up.profile_id JOIN cmdb.users u ON u.id = up.user_id
+         WHERE up.user_id = $4 AND p.is_builtin AND u.is_active
+         UNION ALL
+         SELECT 'creator', g.transition_key FROM cmdb.workflow_transition_grants g
+           JOIN cmdb.user_permission_profiles up ON up.profile_id = g.profile_id
+           JOIN cmdb.users u ON u.id = up.user_id
+         WHERE g.definition_id = $1 AND up.user_id = $4 AND u.is_active",
     )
     .bind(definition)
     .bind(p.user_id)
     .bind(token_profile)
+    .bind(creator)
     .fetch_all(&mut *conn)
     .await?;
     let side = |admin: &str, keys: &str| {
@@ -237,11 +248,15 @@ async fn granted(conn: &mut PgConnection, ctx: &RequestContext, definition: Uuid
             Granted::Keys(rows.iter().filter(|(k, _)| k == keys).filter_map(|(_, t)| t.clone()).collect())
         }
     };
-    let owner = side("owner_admin", "owner");
-    Ok(match token_profile {
-        None => owner,
-        Some(_) => owner.and(side("token_admin", "token")),
-    })
+    let mut g = side("owner_admin", "owner");
+    if token_profile.is_some() {
+        g = g.and(side("token_admin", "token"));
+    }
+    // An inactive creator has no rows, so grants nothing.
+    if creator.is_some() {
+        g = g.and(side("creator_admin", "creator"));
+    }
+    Ok(g)
 }
 
 fn may_manage(ctx: &RequestContext) -> bool {
@@ -992,10 +1007,13 @@ pub async fn of_ci(pool: &PgPool, ctx: &RequestContext, ci: Uuid) -> Result<CiWo
         Vec::new()
     } else {
         let lineage: Vec<Uuid> = model.lineage(class_id).iter().map(|c| c.id).collect();
+        // A workflow of a parent type the caller may not view is missing to
+        // `start`, so it is not offered here either (GH#608).
         sqlx::query_as::<_, WorkflowStartable>(
             "SELECT d.id AS definition_id, d.key AS definition_key, d.name AS definition_name, v.version_no
              FROM cmdb.workflow_definitions d JOIN cmdb.workflow_versions v ON v.id = d.current_version_id
              WHERE d.is_active AND d.class_id = ANY($1) AND (d.include_subclasses OR d.class_id = $2)
+               AND ($4::uuid[] IS NULL OR d.class_id = ANY($4))
                AND NOT EXISTS (SELECT 1 FROM cmdb.workflow_instances wi
                                WHERE wi.definition_id = d.id AND wi.ci_id = $3 AND wi.status = 'active')
              ORDER BY lower(d.name), d.key",
@@ -1003,6 +1021,7 @@ pub async fn of_ci(pool: &PgPool, ctx: &RequestContext, ci: Uuid) -> Result<CiWo
         .bind(&lineage)
         .bind(class_id)
         .bind(ci)
+        .bind(ctx.class_scope(ClassOp::View))
         .fetch_all(&mut *conn)
         .await?
     };

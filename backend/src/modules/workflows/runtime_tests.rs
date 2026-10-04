@@ -555,6 +555,7 @@ async fn tokens_run_a_transition_only_when_their_profile_is_granted_too() {
         ("approver's token narrowed to Approvers", w.token(approver, w.approvers).await, 200),
         ("approver's token narrowed to Editors", w.token(approver, w.editors).await, 403),
         ("editor's token narrowed to Editors", w.token(editor, w.editors).await, 403),
+        ("editor's token narrowed to Approvers", w.token(editor, w.approvers).await, 403),
         ("administrator's token narrowed to Editors", w.token(admin_id, w.editors).await, 403),
         ("administrator's token narrowed to Approvers", w.token(admin_id, w.approvers).await, 200),
         ("administrator's token with the Administrator profile", w.token(admin_id, admin_profile).await, 200),
@@ -580,6 +581,91 @@ async fn tokens_run_a_transition_only_when_their_profile_is_granted_too() {
                 .unwrap();
         assert_eq!(actor.as_deref(), Some("api_client"), "{what}");
     }
+    db.drop().await;
+}
+
+/// GH#607: a token minted for someone else runs a transition only when its
+/// creator is granted it as well, as its other permissions are capped at the
+/// creator's (GH#178).
+#[tokio::test]
+async fn tokens_minted_for_someone_else_need_their_creators_grant() {
+    let Some(db) = scratch::database("workflow_tokens_need_their_creator").await else { return };
+    let w = world(&db).await;
+    let (_, approver) = w.user("approver", &[w.approvers, w.editors]).await;
+    let managers = w.profile("Managers", &[(w.server, true)]).await;
+    sqlx::query(
+        "INSERT INTO permission_profile_global_permissions (profile_id, permission) VALUES ($1, 'users.manage')",
+    )
+    .bind(managers)
+    .execute(&w.pool)
+    .await
+    .unwrap();
+    let (minter, _) = w.user("minter", &[managers]).await;
+    let (granted_minter, _) = w.user("granted_minter", &[managers, w.approvers]).await;
+    let wr = &w;
+    let mint = |creds: Creds| async move {
+        let expires = (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339();
+        let body = json!({ "name": format!("t-{}", Uuid::new_v4().simple()), "userId": approver,
+            "profileId": wr.approvers, "expiresAt": expires });
+        let (status, v) = wr.call(&creds, "POST", "/api/v1/admin/api-tokens", Some(body)).await;
+        assert_eq!(status, 201, "{v}");
+        Creds { bearer: Some(v["secret"].as_str().unwrap().to_owned()), ..Default::default() }
+    };
+    let approve = json!({ "transitionKey": "approve", "expectedVersion": 1, "fields": { "owner_team": "ops" },
+        "comment": "ok" });
+
+    // The minter is refused in their own session ...
+    let ci = w.ci(w.server).await;
+    w.ok("PATCH", &format!("/api/v1/configuration-items/{ci}"), json!({ "attributes": { "environment": "prod" } }))
+        .await;
+    let (status, v) = w.start(&minter, ci).await;
+    assert_eq!(status, 201, "{v}");
+    let instance = id(&v["instance"]);
+    let (status, v) = w.transition(&minter, instance, approve.clone()).await;
+    assert_eq!(status, 403, "{v}");
+
+    // ... and through the approver's token they minted; a granted creator's token works.
+    for (what, token, expected) in [
+        ("minter's token", mint(minter.clone()).await, 403),
+        ("granted minter's token", mint(granted_minter).await, 200),
+    ] {
+        let ci = w.ci(w.server).await;
+        w.ok("PATCH", &format!("/api/v1/configuration-items/{ci}"), json!({ "attributes": { "environment": "prod" } }))
+            .await;
+        let (status, v) = w.start(&token, ci).await;
+        assert_eq!(status, 201, "{what}: {v}");
+        let instance = id(&v["instance"]);
+        let offered = v["availableTransitions"].as_array().unwrap().iter().any(|t| t["key"] == "approve");
+        assert_eq!(offered, expected == 200, "{what}: {v}");
+        let (status, v) = w.transition(&token, instance, approve.clone()).await;
+        assert_eq!(status, expected, "{what}: {v}");
+    }
+    db.drop().await;
+}
+
+/// GH#608: a workflow of a parent type the caller may not view is not offered
+/// on a subtype CI, as `start` answers 404 for it.
+#[tokio::test]
+async fn workflows_of_a_hidden_parent_type_are_not_startable() {
+    let Some(db) = scratch::database("workflow_hidden_parent_not_startable").await else { return };
+    let w = world(&db).await;
+    let blade =
+        id(&w.ok("POST", "/api/v1/ci-classes", json!({ "key": "blade", "name": "Blade", "parentId": w.server })).await);
+    let blades = w.profile("Blades", &[(blade, true)]).await;
+    let (only_blades, _) = w.user("only_blades", &[blades]).await;
+    let ci = id(&w
+        .ok("POST", "/api/v1/configuration-items", json!({ "classId": blade, "attributes": { "environment": "test" } }))
+        .await);
+    let startable =
+        |v: &Value| v["startable"].as_array().unwrap().iter().any(|s| s["definitionKey"] == "server_lifecycle");
+
+    let path = format!("/api/v1/configuration-items/{ci}/workflows");
+    let (status, v) = w.call(&w.admin, "GET", &path, None).await;
+    assert!(status == 200 && startable(&v), "the administrator sees it: {v}");
+    let (status, v) = w.call(&only_blades, "GET", &path, None).await;
+    assert!(status == 200 && !startable(&v), "{v}");
+    let (status, v) = w.start(&only_blades, ci).await;
+    assert_eq!(status, 404, "{v}");
     db.drop().await;
 }
 

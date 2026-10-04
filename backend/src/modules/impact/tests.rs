@@ -163,7 +163,7 @@ fn viewer(classes: &[Uuid]) -> RequestContext {
     let principal = Principal {
         user_id: Uuid::new_v4(),
         username: "viewer".into(),
-        credential: Credential::Token { profile_id: None },
+        credential: Credential::Token { profile_id: None, creator_id: None },
         permissions,
     };
     RequestContext::user(Arc::new(principal), "impact-viewer".into())

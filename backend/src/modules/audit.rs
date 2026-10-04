@@ -1071,7 +1071,7 @@ pub(crate) mod tests {
         let principal = crate::auth::Principal {
             user_id: Uuid::new_v4(),
             username: "auditor".into(),
-            credential: crate::auth::Credential::Token { profile_id: None },
+            credential: crate::auth::Credential::Token { profile_id: None, creator_id: None },
             permissions,
         };
         RequestContext::user(std::sync::Arc::new(principal), "test".into())

@@ -70,8 +70,11 @@ pub enum Credential {
     /// `Authorization: Bearer`; not sent by browsers on their own, so no CSRF token.
     /// `profile_id` is the token's narrowing profile: a workflow transition
     /// must be granted to it as well as to one of the owner's profiles (Q6 of
-    /// SHAA-1411). None for principals built outside token authentication.
-    Token { profile_id: Option<Uuid> },
+    /// SHAA-1411). `creator_id` is the user who minted it, set only when that
+    /// is not the owner: the transition must be granted to the creator too, as
+    /// the token's other permissions are capped at the creator's (GH#178,
+    /// GH#607). Both None for principals built outside token authentication.
+    Token { profile_id: Option<Uuid>, creator_id: Option<Uuid> },
 }
 
 impl Principal {
