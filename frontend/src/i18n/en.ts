@@ -3,6 +3,7 @@
 // through Intl.PluralRules (`=0` style exact matches work too) and `#` is the formatted number.
 export const en = {
   "services.nav": "Business services",
+  "workflows.nav": "Workflows",
   "services.title": "Business services",
   "services.badge": "Business service",
   "services.create": "Create business service",
