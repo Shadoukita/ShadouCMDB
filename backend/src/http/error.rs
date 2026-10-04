@@ -46,6 +46,9 @@ pub enum ErrorCode {
     SecretRequired,
     /// An `Idempotency-Key` sent again for another operation or another target (422)
     IdempotencyKeyReused,
+    /// A workflow transition's conditions, required fields or comment are not satisfied; the details list each
+    /// one (422)
+    WorkflowConditionFailed,
     /// The change would leave no active user holding the Administrator profile
     LastAdministrator,
     /// Too many failed password attempts, or too many impact analyses of one user in progress; retry after the
@@ -97,7 +100,8 @@ impl ErrorCode {
             ErrorCode::InvalidName
             | ErrorCode::SchemaChangeRefused
             | ErrorCode::SecretRequired
-            | ErrorCode::IdempotencyKeyReused => StatusCode::UNPROCESSABLE_ENTITY,
+            | ErrorCode::IdempotencyKeyReused
+            | ErrorCode::WorkflowConditionFailed => StatusCode::UNPROCESSABLE_ENTITY,
             ErrorCode::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             ErrorCode::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             ErrorCode::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,

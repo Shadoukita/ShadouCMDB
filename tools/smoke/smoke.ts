@@ -924,7 +924,7 @@ async function workflows(x: Json) {
     initialState: 'planned',
     states: [state('planned', 'open'), state('approved', 'active'), state('live', 'done', { terminal: true }), state('limbo', 'active')],
     transitions: [
-      { key: 'approve', name: 'Approve', from: 'planned', to: 'approved', requiresComment: true, conditions: { all: [{ field: 'ticket', op: 'isSet' }] } },
+      { key: 'approve', name: 'Approve', from: 'planned', to: 'approved', requiresComment: true, fields: [{ attribute: 'ticket' }], conditions: { all: [{ field: 'ticket', op: 'isSet' }] } },
       { key: 'go_live', name: 'Go live', from: 'approved', to: 'live' },
     ],
     layout: { planned: { x: 0, y: 0 }, approved: { x: 200, y: 0 }, live: { x: 400, y: 0 } },
@@ -953,6 +953,37 @@ async function workflows(x: Json) {
   const archive = await del(`/api/v1/attribute-definitions/${phase.id}`, 409);
   check(archive.json?.error?.code === 'IN_USE', 'a field a published workflow depends on cannot be archived');
 
+  // Runtime (SHAA-1424): an instance on a CI is started, run, forced and cancelled.
+  console.log('\n# Workflow instances');
+  const current = (await get(`${base}/${def.id}`)).json;
+  await patch(`${base}/${def.id}`, { version: current.version, isActive: true });
+  const ci = (await post('/api/v1/configuration-items', { classId: cls.id, attributes: {} })).json;
+  const startable = (await get(`/api/v1/configuration-items/${ci.id}/workflows`)).json;
+  check(startable.startable.some((s: Json) => s.definitionId === def.id), 'the published workflow can be started on the CI');
+  const instances = '/api/v1/workflow-instances';
+  const started = (await post(instances, { definitionKey: def.key, ciId: ci.id, comment: 'Smoke start' })).json.instance;
+  check(started.status === 'active' && started.state.key === 'planned', 'a started instance is in the initial state');
+  await post(instances, { definitionId: def.id, ciId: ci.id }, 409);
+  await post(instances, { definitionId: def.id, ciId: '00000000-0000-4000-8000-000000000000' }, 404);
+  const loaded = (await get(`${instances}/${started.id}`)).json;
+  check(loaded.availableTransitions.some((t: Json) => t.key === 'approve'), 'the instance lists the transition it can run');
+  await get(`${instances}/00000000-0000-4000-8000-000000000000`, 404);
+  const run = (body: Json, expect = 200) => post(`${instances}/${started.id}/transitions`, body, expect);
+  const failed = await run({ transitionKey: 'approve', expectedVersion: started.version }, 422);
+  check(failed.json?.error?.code === 'WORKFLOW_CONDITION_FAILED', 'a transition whose conditions fail is refused');
+  const approved = (await run({ transitionKey: 'approve', expectedVersion: started.version, fields: { ticket: 'CHG-1' }, comment: 'Smoke approval' })).json;
+  check(approved.state.key === 'approved', 'the transition moves the instance on');
+  await run({ transitionKey: 'go_live', expectedVersion: started.version }, 409);
+  const forced = (await post(`${instances}/${started.id}/force`, { expectedVersion: approved.version, stateKey: 'planned', reason: 'Smoke reset' }, 200)).json;
+  check(forced.state.key === 'planned', 'an administrator can force the state');
+  check((await get(`${instances}/${started.id}/events?limit=10`)).json.data.length === 3, 'start, transition and force are in the history');
+  check((await get(`${instances}?ciId=${ci.id}&status=active`)).json.data.some((i: Json) => i.id === started.id), 'the instance is listed');
+  check((await get(`${instances}/summary?definitionKey=${def.key}`)).json.data.length > 0, 'the instance is counted per state');
+  const cancelled = (await post(`${instances}/${started.id}/cancel`, { expectedVersion: forced.version, reason: 'Smoke done' }, 200)).json;
+  check(cancelled.status === 'cancelled', 'the instance is cancelled');
+  await post(`${instances}/${started.id}/cancel`, { expectedVersion: cancelled.version, reason: 'Again' }, 409);
+  await del(`/api/v1/configuration-items/${ci.id}`);
+
   // A second draft, discarded; then the published version is retired.
   await put(`${base}/${def.id}/draft`, graph);
   await del(`${base}/${def.id}/draft`);
@@ -968,8 +999,9 @@ async function workflows(x: Json) {
     await get(base, 403);
     await post(`${base}/${def.id}/draft/validate`, undefined, 403);
   });
-  await del(`${base}/${def.id}`); // never had an instance
-  await get(`${base}/${def.id}`, 404);
+  await del(`${base}/${def.id}`, 409); // it has run on a CI: deactivate it instead
+  const active = (await get(`${base}/${def.id}`)).json;
+  check((await patch(`${base}/${def.id}`, { version: active.version, isActive: false })).json.isActive === false, 'a workflow that has run is deactivated');
 }
 
 /** Saved views (SHAA-578): every operation, resolution into list parameters, defaults and the shared-copy audit. */

@@ -73,7 +73,12 @@ pub async fn owner_context(
     if !(cfg.allowed && settings::stored_enabled(conn).await.map_err(|_| internal())?) {
         return Err(("import_disabled", "Bulk import was turned off for this instance.".into()));
     }
-    let principal = Principal { user_id: owner, username, credential: Credential::Token, permissions };
+    let principal = Principal {
+        user_id: owner,
+        username,
+        credential: Credential::Token { profile_id: None, creator_id: None },
+        permissions,
+    };
     Ok(RequestContext::import_for_user(Arc::new(principal), job))
 }
 

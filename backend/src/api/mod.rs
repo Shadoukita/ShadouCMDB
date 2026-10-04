@@ -50,6 +50,7 @@ pub fn routes() -> Vec<Route> {
         modules::identity_providers::routes(),
         modules::config_transfer::routes(),
         modules::workflows::routes(),
+        modules::workflows::runtime_routes(),
     ]
     .into_iter()
     .flatten()

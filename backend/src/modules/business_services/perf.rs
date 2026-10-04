@@ -46,8 +46,12 @@ fn restricted(visible: &[Uuid], service_class: Uuid) -> RequestContext {
         visible.iter().map(|id| (*id, ClassRights { view: true, ..Default::default() })).collect();
     classes.insert(service_class, ClassRights { view: true, edit: true, ..Default::default() });
     let permissions = Permissions { classes, ..Default::default() };
-    let principal =
-        Principal { user_id: Uuid::new_v4(), username: "perf".into(), credential: Credential::Token, permissions };
+    let principal = Principal {
+        user_id: Uuid::new_v4(),
+        username: "perf".into(),
+        credential: Credential::Token { profile_id: None, creator_id: None },
+        permissions,
+    };
     RequestContext::user(Arc::new(principal), "services-perf".into())
 }
 
