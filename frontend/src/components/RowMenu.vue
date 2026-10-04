@@ -23,11 +23,16 @@ const menu = ref<HTMLElement>();
 const menuId = `row-menu-${useId()}`;
 /** The menu sits under <body> at the button's place: a table cell clips what overflows it. */
 const place = ref<{ top: string; left: string }>({ top: "0", left: "0" });
+/** Where the button was when the menu opened. */
+let anchor = { top: 0, right: 0 };
 
 const entries = () => [...(menu.value?.querySelectorAll<HTMLElement>("[role=menuitem]") ?? [])];
 async function show(at: "first" | "last" = "first") {
   const r = button.value?.getBoundingClientRect();
-  if (r) place.value = { top: `${r.bottom + 4}px`, left: `${Math.max(8, r.right - 200)}px` };
+  if (r) {
+    anchor = { top: r.top, right: r.right };
+    place.value = { top: `${r.bottom + 4}px`, left: `${Math.max(8, r.right - 200)}px` };
+  }
   open.value = true;
   document.addEventListener("pointerdown", onOutside, true);
   window.addEventListener("scroll", onScroll, true);
@@ -45,9 +50,14 @@ function onOutside(e: Event) {
   const target = e.target as Node;
   if (!menu.value?.contains(target) && !button.value?.contains(target)) hide(false);
 }
-/** A fixed menu would drift from its row when the page scrolls under it. */
+/**
+ * A fixed menu would drift from its row when the page scrolls under it. A scroll that left the button in place
+ * is ignored: the scroll event of the scroll that brought the button into view can arrive after the click.
+ */
 const onScroll = (e: Event) => {
-  if (!menu.value?.contains(e.target as Node)) hide(false);
+  if (menu.value?.contains(e.target as Node)) return;
+  const r = button.value?.getBoundingClientRect();
+  if (!r || Math.abs(r.top - anchor.top) > 1 || Math.abs(r.right - anchor.right) > 1) hide(false);
 };
 onBeforeUnmount(() => hide(false));
 
