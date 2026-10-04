@@ -402,16 +402,33 @@ fn layout_field_schema() -> Schema {
     string().pattern(Some(FIELD_PATTERN)).description(Some("A built-in field or attributes.<key>")).into()
 }
 
-/// A field on a section's grid. Fields fill the grid row by row in the order given.
+/// An entry of a section's grid: a field, or a separator (`separator: true`) that divides the fields
+/// into groups. Entries fill the grid row by row in the order given.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UiLayoutField {
+    /// The field (required, except for a separator, which holds none)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(schema_with = layout_field_schema)]
-    pub field: String,
-    /// Grid columns the field spans, at most the section's `columns`
+    pub field: Option<String>,
+    /// Grid columns the field spans, at most the section's `columns`. A separator always takes a row of
+    /// its own across the whole section: stored as the section's `columns`
     #[serde(default = "default_width")]
     #[schema(minimum = 1, maximum = 12, default = 1)]
     pub width: u8,
+    /// A separator: a line across the section, with an optional `label`, instead of a field
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub separator: bool,
+    /// separator: its heading (none: a plain line)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false, min_length = 1, max_length = 100, pattern = "\\S")]
+    pub label: Option<String>,
+}
+
+impl UiLayoutField {
+    pub fn field(field: impl Into<String>, width: u8) -> Self {
+        Self { field: Some(field.into()), width, separator: false, label: None }
+    }
 }
 
 /// Longest note text, in characters.
@@ -426,6 +443,9 @@ pub enum UiSectionKind {
     Fields,
     /// Static text written by an administrator (`text`): plain text or limited Markdown, never raw HTML
     Note,
+    /// The detail page's record details: the CI's class, when it was created and last changed, and the
+    /// other bookkeeping fields no field section places
+    Record,
     /// The detail page's relationships panel
     Relations,
     /// The detail page's version history panel
@@ -435,16 +455,18 @@ pub enum UiSectionKind {
 }
 
 impl UiSectionKind {
-    /// Built-in panels of the detail page: each at most once per layout; where a layout does not place
-    /// one, the page shows it at its usual position.
+    /// Built-in panels of the detail page: each at most once per layout. A layout with tabs shows the
+    /// record details, the relationships and the audit trail only where it places them; the history has
+    /// a tab of its own when the layout does not place it.
     pub fn is_panel(self) -> bool {
-        matches!(self, Self::Relations | Self::History | Self::Audit)
+        matches!(self, Self::Record | Self::Relations | Self::History | Self::Audit)
     }
 
     fn as_str(self) -> &'static str {
         match self {
             Self::Fields => "fields",
             Self::Note => "note",
+            Self::Record => "record",
             Self::Relations => "relations",
             Self::History => "history",
             Self::Audit => "audit",
@@ -458,11 +480,15 @@ fn is_fields(k: &UiSectionKind) -> bool {
 
 fn section_kind_schema() -> Schema {
     string()
-        .enum_values(Some(["fields", "note", "relations", "history", "audit"]))
+        .enum_values(Some(["fields", "note", "record", "relations", "history", "audit"]))
         .description(Some(
             "What the section shows (absent: fields): fields (a grid of `fields`), note (static `text`), or a built-in panel of the \
-             detail page (relations, history, audit). Each panel can be placed once per layout; one that is not \
-             placed keeps its usual position on the detail page.",
+             detail page: record (the CI's class, created and last changed, and the other bookkeeping fields no \
+             field section places), relations, history or audit. Each panel can be placed once per layout. A \
+             layout with tabs shows the record details, the relationships and the audit trail only where it \
+             places them, so removing one of these sections hides it; the history has a tab of its own when it \
+             is not placed. A layout without tabs shows the built-in arrangement: the fields by attribute \
+             group, then the record details and the relationships.",
         ))
         .into()
 }
@@ -534,11 +560,12 @@ pub const FRAME_MIN_H: u32 = 48;
 pub const FRAME_MAX_H: u32 = 4000;
 pub const FRAME_MAX_Y: u32 = 100_000;
 /// Heights used to turn grid positions into frames: a section's title bar, one row of its field grid (the
-/// `minHeight` unit, 3em), the gap between grid rows, a note and a built-in panel.
+/// `minHeight` unit, 3em), the gap between grid rows, a note, the record details and the other built-in panels.
 pub const FRAME_HEADER_PX: u32 = 48;
 pub const FRAME_ROW_PX: u32 = 48;
 pub const FRAME_GAP_PX: u32 = 16;
 pub const FRAME_NOTE_PX: u32 = 144;
+pub const FRAME_RECORD_PX: u32 = 144;
 pub const FRAME_PANEL_PX: u32 = 320;
 /// Tolerance for `x + w <= 1`, so that e.g. 11/12 + 1/12 passes.
 const FRAME_EPSILON: f64 = 1e-6;
@@ -632,7 +659,7 @@ pub fn estimated_height(s: &UiLayoutSection) -> u32 {
         UiSectionKind::Fields => {
             let (mut rows, mut col) = (0u32, s.columns);
             for f in &s.fields {
-                let w = f.width.clamp(1, s.columns.max(1));
+                let w = if f.separator { s.columns.max(1) } else { f.width.clamp(1, s.columns.max(1)) };
                 if col + w > s.columns {
                     rows += 1;
                     col = 0;
@@ -642,6 +669,7 @@ pub fn estimated_height(s: &UiLayoutSection) -> u32 {
             FRAME_HEADER_PX + rows.max(u32::from(s.min_height.unwrap_or(1))).max(1) * FRAME_ROW_PX
         }
         UiSectionKind::Note => FRAME_NOTE_PX,
+        UiSectionKind::Record => FRAME_RECORD_PX,
         _ => FRAME_PANEL_PX,
     };
     h.clamp(FRAME_MIN_H, FRAME_MAX_H)
@@ -683,6 +711,11 @@ impl UiLayoutTab {
     /// where it was on the grid.
     pub fn normalize(&mut self) {
         self.placement = UiTabPlacement::Free;
+        for s in &mut self.sections {
+            for f in s.fields.iter_mut().filter(|f| f.separator) {
+                f.width = s.columns;
+            }
+        }
         let bottom = self.sections.iter().filter_map(|s| s.frame).map(|f| f.y + f.h).max();
         let top = bottom.map_or(0, |b| b + FRAME_GAP_PX);
         let top_z = self.sections.iter().filter_map(|s| s.frame).map(|f| f.z).max().unwrap_or(0);
@@ -815,7 +848,7 @@ pub fn convert_panels(panels: Vec<UiLayoutPanel>) -> Vec<UiLayoutTab> {
             width: GRID_COLUMNS,
             new_row: false,
             min_height: None,
-            fields: p.fields.into_iter().map(|field| UiLayoutField { field, width: 1 }).collect(),
+            fields: p.fields.into_iter().map(|field| UiLayoutField::field(field, 1)).collect(),
             text: None,
             collapsed: p.collapsed,
             frame: None,
@@ -939,7 +972,20 @@ pub struct UiSettingsDocument {
     /// (key "standard"); settings without templates (older exports and versions) are converted on save.
     #[schema(max_items = 1000)]
     pub layout_templates: Vec<UiLayoutTemplate>,
+    /// Layout format of the document; always 3 when returned. Send back what was returned. A document
+    /// without it (an older configuration export, an older settings version being restored, an API client
+    /// written before format 3) is from before layouts placed the record details and the relationships
+    /// explicitly: when it is saved, every layout that has tabs and does not place them gets a "Record" and
+    /// a "Relationships" section at the end of its first tab, as migration 0048 did with the stored
+    /// settings, so the detail page shows what it showed before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false, minimum = 2, maximum = 3)]
+    pub layout_format: Option<u8>,
 }
+
+/// Layout format of the documents the API stores and returns (`layoutFormat`): layouts with tabs show the
+/// record and relations panels only where they place them.
+pub const LAYOUT_FORMAT: u8 = 3;
 
 // ---------------------------------------------------------------------------
 // Structural rules (independent of the data model)
@@ -952,6 +998,19 @@ impl Check for UiSettingsDocument {
 }
 
 impl UiSettingsDocument {
+    /// In the current layout format: a document from before format 3 gets the record and relations panels
+    /// placed where the detail page showed them (see [`place_implicit_panels`]).
+    pub fn upgraded(mut self) -> Self {
+        if self.layout_format.is_none_or(|f| f < LAYOUT_FORMAT) {
+            let templates = self.layout_templates.iter_mut().map(|t| &mut t.layout.tabs);
+            for tabs in self.layouts.iter_mut().map(|l| &mut l.tabs).chain(templates) {
+                place_implicit_panels(tabs);
+            }
+        }
+        self.layout_format = Some(LAYOUT_FORMAT);
+        self
+    }
+
     /// The form in which a valid document is stored: every layout tab normalised (see
     /// [`UiLayoutTab::normalize`]).
     pub fn normalized(mut self) -> Self {
@@ -966,6 +1025,9 @@ impl UiSettingsDocument {
     pub fn problems(&self, prefix: &str) -> Vec<FieldError> {
         let mut e = Vec::new();
         let at = |p: String| format!("{prefix}{p}");
+        if self.layout_format.is_some_and(|f| !(2..=LAYOUT_FORMAT).contains(&f)) {
+            e.push(custom(at("layoutFormat".into()), format!("2 or {LAYOUT_FORMAT}")));
+        }
 
         let mut pages = HashSet::new();
         let mut classes = HashSet::new();
@@ -1148,6 +1210,38 @@ impl UiSettingsDocument {
     }
 }
 
+/// Adds what a layout with tabs showed before layout format 3 without placing it: a "Record" section
+/// (kind record) and then a "Relationships" section (kind relations) at the end of the first tab, each
+/// unless the layout places that panel already. They have no frame, so they go below the tab's windows.
+/// A layout without tabs is left alone: it shows the built-in arrangement, which has both. Migration 0048
+/// does the same to the stored layouts.
+pub fn place_implicit_panels(tabs: &mut [UiLayoutTab]) {
+    let sections = || tabs.iter().flat_map(|t| &t.sections);
+    let kinds: HashSet<UiSectionKind> = sections().map(|s| s.kind).collect();
+    let mut keys: HashSet<String> = sections().map(|s| s.key.clone()).collect();
+    let Some(first) = tabs.first_mut() else { return };
+    for (kind, label) in [(UiSectionKind::Record, "Record"), (UiSectionKind::Relations, "Relationships")] {
+        if kinds.contains(&kind) {
+            continue;
+        }
+        let key = free_key(kind.as_str(), &keys);
+        keys.insert(key.clone());
+        first.sections.push(UiLayoutSection {
+            key,
+            label: label.into(),
+            kind,
+            columns: DEFAULT_COLUMNS,
+            width: GRID_COLUMNS,
+            new_row: false,
+            min_height: None,
+            fields: Vec::new(),
+            text: None,
+            collapsed: false,
+            frame: None,
+        });
+    }
+}
+
 /// Structural problems of a layout's tabs and hidden fields, with field paths below `base` (e.g.
 /// "settings.layouts.0"; the tabs are at `{base}.tabs`).
 fn layout_problems(base: &str, tabs: &[UiLayoutTab], hidden_fields: &[String]) -> Vec<FieldError> {
@@ -1206,10 +1300,22 @@ fn layout_problems(base: &str, tabs: &[UiLayoutTab], hidden_fields: &[String]) -
                 }
             }
             for (k, f) in s.fields.iter().enumerate() {
-                if !placed.insert(f.field.as_str()) {
-                    e.push(custom(format!("{ps}.fields.{k}.field"), "A field can be placed once only"));
+                let pf = format!("{ps}.fields.{k}");
+                match (&f.field, f.separator) {
+                    (Some(_), true) => e.push(custom(format!("{pf}.field"), "A separator holds no field")),
+                    (None, false) => e.push(custom(format!("{pf}.field"), "Required, except for separators")),
+                    (Some(field), false) if !placed.insert(field.as_str()) => {
+                        e.push(custom(format!("{pf}.field"), "A field can be placed once only"))
+                    }
+                    _ => {}
                 }
-                if f.width > s.columns {
+                if !f.separator && f.label.is_some() {
+                    e.push(custom(format!("{pf}.label"), "Only allowed for separators"));
+                }
+                if f.label.as_deref().is_some_and(|l| l.trim().is_empty() || l.chars().count() > 100) {
+                    e.push(custom(format!("{pf}.label"), "1 to 100 characters, not blank"));
+                }
+                if !f.separator && f.width > s.columns {
                     e.push(custom(
                         format!("{ps}.fields.{k}.width"),
                         format!("At most the section's {} column(s)", s.columns),
@@ -1486,21 +1592,27 @@ impl Resolver<'_> {
         }
     }
 
-    /// Keeps built-in fields and attributes of the class.
-    fn fields(&mut self, path: &str, class: &str, fields: &[String]) -> Vec<String> {
-        let attrs = &self.model.classes[class];
-        let mut out = Vec::new();
-        for (i, f) in fields.iter().enumerate() {
-            match f.strip_prefix(ATTRIBUTE_PREFIX) {
-                Some(a) if !attrs.contains_key(a) => self.flag(
-                    format!("{path}.{i}"),
+    /// Whether `f` is a built-in field or an attribute of the class.
+    fn field_ok(&mut self, path: String, class: &str, f: &str) -> bool {
+        match f.strip_prefix(ATTRIBUTE_PREFIX) {
+            Some(a) if !self.model.classes[class].contains_key(a) => {
+                self.flag(
+                    path,
                     IssueCode::UnknownAttribute,
                     format!("Attribute \"{a}\" is not defined on class \"{class}\""),
-                ),
-                _ => out.push(f.clone()),
+                );
+                false
             }
+            _ => true,
         }
-        out
+    }
+
+    /// Keeps built-in fields and attributes of the class.
+    fn fields(&mut self, path: &str, class: &str, fields: &[String]) -> Vec<String> {
+        (fields.iter().enumerate())
+            .filter(|(i, f)| self.field_ok(format!("{path}.{i}"), class, f))
+            .map(|(_, f)| f.clone())
+            .collect()
     }
 }
 
@@ -1576,9 +1688,14 @@ pub fn resolve(doc: &UiSettingsDocument, model: &Model) -> (UiSettingsDocument, 
         for (t, tab) in l.tabs.iter_mut().enumerate() {
             for (j, s) in tab.sections.iter_mut().enumerate() {
                 let ps = format!("{p}.tabs.{t}.sections.{j}.fields");
-                let names: Vec<String> = s.fields.iter().map(|f| f.field.clone()).collect();
-                let kept: HashSet<String> = r.fields(&ps, &l.class_key, &names).into_iter().collect();
-                s.fields.retain(|f| kept.contains(&f.field));
+                // Separators are kept; paths count every entry, as stored.
+                let kept: Vec<bool> = (s.fields.iter().enumerate())
+                    .map(|(k, f)| {
+                        f.field.as_ref().is_none_or(|name| r.field_ok(format!("{ps}.{k}"), &l.class_key, name))
+                    })
+                    .collect();
+                let mut keep = kept.into_iter();
+                s.fields.retain(|_| keep.next().unwrap_or(true));
             }
         }
         for (k, f) in l.hidden_fields.iter().enumerate() {
@@ -1851,7 +1968,7 @@ mod tests {
             ]
         );
         let l = &effective.layouts[0];
-        assert_eq!(l.tabs[0].sections[0].fields, [UiLayoutField { field: "attributes.cpu_cores".into(), width: 2 }]);
+        assert_eq!(l.tabs[0].sections[0].fields, [UiLayoutField::field("attributes.cpu_cores", 2)]);
         assert!(l.hidden_fields.is_empty());
     }
 
@@ -2217,5 +2334,115 @@ mod tests {
             assert!(re.is_match(f), "{f}");
         }
         assert!(re.is_match("attributes.cpu_cores"));
+    }
+
+    fn sections_doc(sections: serde_json::Value) -> UiSettingsDocument {
+        doc(json!({"layoutFormat": 3, "layouts": [{"classKey": "server", "tabs": [
+            {"key": "main", "label": "Main", "sections": sections}]}]}))
+    }
+
+    #[test]
+    fn separators_hold_no_field_and_span_the_section() {
+        let d = sections_doc(json!([{"key": "s", "label": "S", "columns": 2, "fields": [
+            {"field": "label"},
+            {"separator": true, "label": "Hardware", "width": 4},
+            {"separator": true},
+            {"field": "attributes.cpu_cores", "width": 2},
+            {"separator": true, "field": "ident"},
+            {"width": 1},
+            {"field": "attributes.serial", "label": "Serial"},
+            {"separator": true, "label": "  "},
+        ]}]));
+        let fields: Vec<String> = d.check().into_iter().map(|e| e.field).collect();
+        assert_eq!(
+            fields,
+            [
+                "layouts.0.tabs.0.sections.0.fields.4.field",
+                "layouts.0.tabs.0.sections.0.fields.5.field",
+                "layouts.0.tabs.0.sections.0.fields.6.label",
+                "layouts.0.tabs.0.sections.0.fields.7.label",
+            ],
+            "a separator's width is not checked, any number of them is fine"
+        );
+
+        let d = sections_doc(json!([{"key": "s", "label": "S", "columns": 2, "fields": [
+            {"field": "label"},
+            {"separator": true, "label": "Hardware", "width": 1},
+            {"field": "attributes.nope"},
+            {"separator": true},
+        ]}]));
+        assert!(d.check().is_empty(), "{:?}", d.check());
+        let stored = d.normalized();
+        let section = &stored.layouts[0].tabs[0].sections[0];
+        assert_eq!(section.fields[1].width, 2, "stored as the section's columns");
+        // Label, separator (a row of its own), separator: three rows.
+        let frame = section.frame.unwrap();
+        assert_eq!(frame.h, FRAME_HEADER_PX + 4 * FRAME_ROW_PX);
+        let json = serde_json::to_value(&section.fields).unwrap();
+        assert_eq!(json[1], json!({"separator": true, "label": "Hardware", "width": 2}));
+        assert_eq!(json[0], json!({"field": "label", "width": 1}), "fields are stored as before");
+
+        // Separators stay when unknown attributes are left out; the issue points at the stored entry.
+        let (out, issues) = resolve(&stored, &model());
+        let kept: Vec<Option<&str>> =
+            out.layouts[0].tabs[0].sections[0].fields.iter().map(|f| f.field.as_deref()).collect();
+        assert_eq!(kept, [Some("label"), None, None]);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].path, "layouts.0.tabs.0.sections.0.fields.2");
+    }
+
+    #[test]
+    fn the_record_panel_is_placed_once_and_holds_nothing() {
+        let d = sections_doc(json!([
+            {"key": "a", "label": "Record", "kind": "record"},
+            {"key": "b", "label": "Again", "kind": "record", "fields": [{"field": "label"}]},
+        ]));
+        let fields: Vec<String> = d.check().into_iter().map(|e| e.field).collect();
+        assert_eq!(fields, ["layouts.0.tabs.0.sections.1.kind", "layouts.0.tabs.0.sections.1.fields"]);
+        let d = sections_doc(json!([{"key": "a", "label": "Record", "kind": "record", "text": "x"}]));
+        assert_eq!(d.check()[0].field, "layouts.0.tabs.0.sections.0.text");
+        let d = sections_doc(json!([{"key": "a", "label": "Record", "kind": "record"}]));
+        assert_eq!(d.normalized().layouts[0].tabs[0].sections[0].frame.unwrap().h, FRAME_RECORD_PX);
+    }
+
+    #[test]
+    fn older_documents_get_the_panels_they_showed() {
+        let tabs = json!([
+            {"key": "main", "label": "Main", "sections": [{"key": "relations", "label": "Notes", "fields": []}]},
+            {"key": "more", "label": "More", "sections": [{"key": "log", "label": "Log", "kind": "audit"}]},
+        ]);
+        let old = doc(json!({
+            "layouts": [{"classKey": "server", "tabs": tabs}, {"classKey": "vm", "hiddenFields": ["label"]}],
+            "layoutTemplates": [
+                {"key": "standard", "name": "Standard"},
+                {"key": "placed", "name": "Placed", "layout": {"tabs": [{"key": "t", "label": "T", "sections": [
+                    {"key": "x", "label": "Links", "kind": "relations"},
+                    {"key": "y", "label": "Details", "kind": "record"}]}]}},
+            ],
+        }));
+        let new = old.clone().upgraded();
+        assert_eq!(new.layout_format, Some(LAYOUT_FORMAT));
+        let first: Vec<(&str, UiSectionKind)> =
+            new.layouts[0].tabs[0].sections.iter().map(|s| (s.key.as_str(), s.kind)).collect();
+        assert_eq!(
+            first,
+            [
+                ("relations", UiSectionKind::Fields),
+                ("record", UiSectionKind::Record),
+                ("relations_2", UiSectionKind::Relations)
+            ],
+            "last on the first tab, keys kept unique"
+        );
+        assert_eq!(new.layouts[0].tabs[1], old.layouts[0].tabs[1]);
+        assert_eq!(new.layouts[1], old.layouts[1], "no tabs: the built-in arrangement");
+        assert_eq!(new.layout_templates, old.layout_templates, "nothing to add");
+        assert!(new.problems("").is_empty(), "{:?}", new.problems(""));
+
+        // In the current format the layout is taken as sent: a removed panel stays removed.
+        let current = sections_doc(json!([{"key": "a", "label": "A", "fields": [{"field": "label"}]}]));
+        assert_eq!(current.clone().upgraded(), current);
+        let mut future = current.clone();
+        future.layout_format = Some(4);
+        assert_eq!(future.check()[0].field, "layoutFormat");
     }
 }

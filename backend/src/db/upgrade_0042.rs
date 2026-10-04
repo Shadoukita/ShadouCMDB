@@ -67,7 +67,7 @@ async fn class_layouts_become_the_templates_their_classes_use() {
     store(pool, &settings_before()).await;
     let (before_version, _) = current(pool).await;
 
-    MIGRATOR.run(pool).await.expect("migration 0042");
+    MIGRATOR.run_to(42, pool).await.expect("migration 0042");
 
     let (version, s) = current(pool).await;
     assert_eq!(version, before_version + 1, "saved as a new version");
@@ -164,7 +164,7 @@ async fn settings_without_layouts_get_no_new_version() {
     let pool = &db.pool;
     MIGRATOR.run_to(41, pool).await.expect("migrations up to 0041");
     let before = current(pool).await;
-    MIGRATOR.run(pool).await.expect("migration 0042");
+    MIGRATOR.run_to(42, pool).await.expect("migration 0042");
     assert_eq!(current(pool).await, before);
     db.drop().await;
 }

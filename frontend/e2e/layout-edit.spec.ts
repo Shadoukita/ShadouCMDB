@@ -315,7 +315,8 @@ test("a layout sent on the grid (an older export or API client) opens as windows
   };
   const res = await request.put("/api/v1/ui-settings", { data: { version: current.version, settings: { layouts: [grid] } }, headers: { "X-CSRF-Token": await csrf(request) } });
   expect(res.ok(), await res.text()).toBeTruthy();
-  // Stored free, each section a window where it was on the grid.
+  // Stored free, each section a window where it was on the grid. Sent without layoutFormat, the layout also gets
+  // the Record and Relationships sections at the end of its first tab, where the detail page showed them.
   type Frame = { x: number; y: number; w: number; h: number; z: number };
   const stored = await apiGet<{ settings: { layouts: { classKey: string; tabs: { placement?: string; sections: { key: string; frame?: Frame }[] }[] }[] } }>(request, "/ui-settings");
   const tab = stored.settings.layouts.find((l) => l.classKey === "server")!.tabs[0];
@@ -324,6 +325,8 @@ test("a layout sent on the grid (an older export or API client) opens as windows
     ["general", 0, 0.5],
     ["side", 0.5, 0.5],
     ["below", 0, 1],
+    ["record", 0, 1],
+    ["relations", 0, 1],
   ]);
 
   // The page: windows side by side, then the one below; every field there.
