@@ -712,6 +712,9 @@ fn docs(state: &AppState, mode: ApiDocs) -> Router<AppState> {
         ApiDocs::Off => Router::new()
             .route("/openapi.json", axum::routing::any(docs_disabled))
             .route("/docs", axum::routing::any(docs_disabled))
+            // `{*rest}` does not match an empty tail, so `/docs/` needs its own
+            // route or it falls through to the embedded UI (GH#602).
+            .route("/docs/", axum::routing::any(docs_disabled))
             .route("/docs/{*rest}", axum::routing::any(docs_disabled)),
     }
 }
