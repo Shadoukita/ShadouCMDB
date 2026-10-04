@@ -114,6 +114,13 @@ export function useCiDraft(opts: CiDraftOptions) {
   );
   /** Something was changed (edit mode). */
   const dirty = computed(() => patch.value !== null);
+  /** How many fields were changed, for the save bar. */
+  const changeCount = computed(() => {
+    const p = patch.value as Record<string, unknown> | null;
+    if (!p) return 0;
+    const { attributes, ...core } = p;
+    return Object.keys(core).length + Object.keys((attributes as Record<string, unknown> | undefined) ?? {}).length;
+  });
 
   if (create) reset();
   else {
@@ -240,6 +247,7 @@ export function useCiDraft(opts: CiDraftOptions) {
     unplaced,
     patch,
     dirty,
+    changeCount,
     pending: update.isPending,
     locked,
     readOnly,

@@ -21,7 +21,7 @@ test("a new CI class works end to end without a frontend change", async ({ page,
 
   await page.goto(`/cis/new?classId=${cls.id}`);
   // General (ident, validity) first, then the attribute groups; there is no "Other" section.
-  await expect(page.locator("form .layout-panel > summary h2")).toHaveText(["General", "Traffic", "Security", "Backends"]);
+  await expect(page.locator("form .layout-panel > .panel-header h2")).toHaveText(["General", "Traffic", "Security", "Backends"]);
   await expect(page.locator("#attr-max_connections-hint")).toHaveText("1 – 100000");
   await expect(page.locator("#attr-vip_network-hint")).toContainText("CIDR");
 

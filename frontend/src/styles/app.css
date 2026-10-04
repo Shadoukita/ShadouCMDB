@@ -143,31 +143,6 @@
   .lg-grid { --lg-cols: 1; }
   .lg-cell { --lg-w: 1; }
 }
-/* The detail page: each field a label/value row inside its grid cell. */
-dl.lg-grid {
-  margin: 0;
-  font-size: var(--fs-md);
-  gap: 0 var(--sp-5);
-}
-dl.lg-grid .prop {
-  display: grid;
-  grid-template-columns: 150px minmax(0, 1fr);
-  align-content: start;
-}
-dl.lg-grid dt,
-dl.lg-grid dd {
-  margin: 0;
-  padding: 4px 0;
-  border-bottom: 1px solid var(--c-divider);
-  min-height: 26px;
-}
-dl.lg-grid dt {
-  color: var(--c-text-muted);
-  padding-right: var(--sp-2);
-}
-dl.lg-grid dd {
-  word-break: break-word;
-}
 /* A layout tab holding a field with an error. */
 .tabs .tab-errors {
   margin-left: var(--sp-1);
@@ -511,7 +486,7 @@ table.attributes tr.section-row td {
   z-index: 2;
   background: inherit;
 }
-.lg-free > details.lg-win:not([open]) {
+.lg-free > .lg-win.is-collapsed {
   height: auto;
   overflow: hidden;
 }
@@ -561,29 +536,6 @@ table.attributes tr.section-row td {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   pointer-events: none;
-}
-details.layout-panel > summary {
-  cursor: pointer;
-  list-style: none;
-}
-details.layout-panel > summary::-webkit-details-marker {
-  display: none;
-}
-details.layout-panel > summary h2::before {
-  content: "";
-  display: inline-block;
-  width: 14px;
-  height: 14px;
-  margin-right: var(--sp-2);
-  vertical-align: -2px;
-  background: var(--c-text-muted);
-  mask: var(--icon-chevron-down) center / contain no-repeat;
-}
-details.layout-panel:not([open]) > summary h2::before {
-  mask-image: var(--icon-chevron-right);
-}
-details.layout-panel:not([open]) > summary {
-  border-bottom: 0;
 }
 fieldset.ro-wrap {
   display: contents;
@@ -1775,18 +1727,7 @@ table.data.wf-grants .wf-grant-cell {
   align-items: center;
   gap: var(--sp-1) var(--sp-2);
   min-height: var(--control-h);
-  padding: var(--sp-1) var(--sp-3);
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius);
-  background: var(--c-surface-alt);
   overflow-wrap: anywhere;
-}
-.ci-save-bar {
-  position: sticky;
-  top: auto;
-  bottom: 0;
-  margin: var(--sp-4) 0 0;
-  box-shadow: 0 -2px 8px rgb(0 0 0 / 8%);
 }
 
 /* Workflow runtime: the transitions of an instance, the per-state summary and an instance's states. */

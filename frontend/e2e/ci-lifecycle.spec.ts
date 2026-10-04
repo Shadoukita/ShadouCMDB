@@ -19,7 +19,7 @@ test("create a Server from its class attributes, with field-level validation", a
 
   // General comes first: ident, validity, then the attributes without a group (name, hostname…).
   // The attribute groups follow as sections, from the API (groupName, in sortOrder).
-  const sections = page.locator("form .layout-panel > summary h2");
+  const sections = page.locator("form .layout-panel > .panel-header h2");
   await expect(sections.first()).toHaveText("General");
   expect(await sections.allTextContents()).toEqual(expect.arrayContaining(["Hardware", "Compute", "Software", "Network"]));
   expect(await sections.allTextContents()).not.toContain("Other");
@@ -66,12 +66,12 @@ test("create a Server from its class attributes, with field-level validation", a
   ciId = page.url().split("/").pop()!;
   // General panel first: ident, validity and the ungrouped attributes; class and timestamps last.
   // The page opens with the fields as inputs (SHAA-1644).
-  const generalPanel = page.locator(".layout-panels > details").first();
-  await expect(generalPanel.locator("summary h2")).toHaveText("General");
+  const generalPanel = page.locator(".layout-panels > .layout-panel").first();
+  await expect(generalPanel.locator(".panel-header h2")).toHaveText("General");
   await expect(generalPanel.locator(".field").first().locator("label, .label")).toHaveText("Ident");
   await expect(generalPanel.locator("#f-ident")).toHaveValue(/CI-/);
   await expect(generalPanel.locator("#attr-hostname")).toHaveValue(`${name}.example.internal`);
-  await expect(page.locator(".layout-panels > details > summary h2").last()).toHaveText("Record");
+  await expect(page.locator(".layout-panels > .layout-panel > .panel-header h2").last()).toHaveText("Record");
   await snap(page, "05-created-detail");
 });
 

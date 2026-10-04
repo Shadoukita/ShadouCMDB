@@ -4,11 +4,14 @@ import { RouterLink, useRoute } from "vue-router";
 import { ApiError } from "../api/client";
 import { useCi, useCiClasses, useClassAttributes } from "../api/queries";
 import Breadcrumbs from "../components/Breadcrumbs.vue";
+import ClassBadge from "../components/ClassBadge.vue";
 import EmptyState from "../components/EmptyState.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
 import LoadingState from "../components/LoadingState.vue";
 import EditLayoutButton from "../components/layoutEdit/EditLayoutButton.vue";
+import { t } from "../i18n";
 import { useDocumentTitle } from "../lib/composables";
+import { formatDateTime, formatRelative, isHostLike } from "../lib/format";
 import { useLayoutEditor } from "../lib/layoutEditor";
 import { useSessionStore } from "../stores/session";
 import CiForm from "./form/CiForm.vue";
@@ -20,9 +23,10 @@ const c = computed(() => ci.data.value);
 const session = useSessionStore();
 // Edit layout (the layout-editor route, in its own window): the form's layout edited, with this CI's values.
 const classes = useCiClasses();
+const cls = computed(() => classes.data.value?.find((k) => k.id === c.value?.classId));
 const attrs = useClassAttributes(() => c.value?.classId);
 const editor = useLayoutEditor({
-  classKey: () => classes.data.value?.find((k) => k.id === c.value?.classId)?.key,
+  classKey: () => cls.value?.key,
   attrs: () => attrs.data.value?.filter((d) => d.isActive),
   ciId: () => String(route.params.id),
 });
@@ -53,10 +57,21 @@ const forbidden = computed(() => ci.error.value instanceof ApiError && ci.error.
         { label: 'Edit' },
       ]"
     />
-    <div class="page-header">
-      <div class="title">
-        <h1>Edit {{ c.label }}</h1>
-        <span class="muted">{{ c.class.name }} · <span class="mono">{{ c.ident }}</span> · version {{ c.version }}</span>
+    <div class="page-header record-header">
+      <div class="record-heading">
+        <div class="title">
+          <ClassBadge :icon="cls?.icon" :color="cls?.color" />
+          <h1 dir="auto">Edit <span :class="{ mono: isHostLike(c.label) }">{{ c.label }}</span></h1>
+        </div>
+        <p class="record-meta" data-testid="record-meta">
+          <RouterLink :to="`/cis?classId=${c.classId}`" dir="auto">{{ c.class.name }}</RouterLink>
+          <span class="sep" aria-hidden="true">·</span>
+          <span class="ident" :title="t('record.meta.ident')">{{ c.ident }}</span>
+          <span class="sep" aria-hidden="true">·</span>
+          <span>{{ t("record.meta.version", { n: c.version }) }}</span>
+          <span class="sep" aria-hidden="true">·</span>
+          <time :datetime="c.updatedAt" :title="formatDateTime(c.updatedAt)">{{ t("record.meta.updated", { when: formatRelative(c.updatedAt) }) }}</time>
+        </p>
       </div>
       <div v-if="editor.allowed && !editor.active" class="actions">
         <EditLayoutButton :editor="editor" />

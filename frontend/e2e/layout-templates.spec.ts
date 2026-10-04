@@ -28,7 +28,7 @@ test.afterAll(async ({ request }) => {
 });
 
 /** A section of the detail page by its heading. */
-const pagePanel = (page: Page, heading: string) => page.locator(".layout-container details").filter({ has: page.locator("summary h2", { hasText: new RegExp(`^${heading}$`) }) });
+const pagePanel = (page: Page, heading: string) => page.locator(".layout-container .layout-panel").filter({ has: page.locator(".panel-header h2", { hasText: new RegExp(`^${heading}$`) }) });
 const bar = (page: Page) => page.getByRole("region", { name: "Layout editing" });
 const tabBar = (page: Page) => page.getByRole("group", { name: "Tabs of the layout" });
 const templates = (page: Page) => page.getByTestId("layout-templates");

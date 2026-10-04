@@ -81,7 +81,12 @@
   font-variant-numeric: tabular-nums;
   color: var(--c-text);
 }
+/* The tile's note, not the warning callout that .note is elsewhere (app.css). */
 .stat .note {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
   font-size: var(--fs-sm);
   color: var(--c-text-tertiary);
 }

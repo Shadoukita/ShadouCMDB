@@ -30,6 +30,9 @@ import {
 } from "../../lib/uiSettings";
 import { useFlashStore } from "../../stores/flash";
 import NoteText from "../../components/NoteText.vue";
+import RecordSection from "../../components/RecordSection.vue";
+import SaveBar from "../../components/SaveBar.vue";
+import { t } from "../../i18n";
 import CiFieldInput from "./CiFieldInput.vue";
 import { fieldIdFor, useCiDraft } from "./ciDraft";
 import FormErrorBanner from "./FormErrorBanner.vue";
@@ -191,17 +194,16 @@ async function onSubmit() {
         :aria-labelledby="tabs.length > 1 ? `form-tab-${t.key}` : undefined"
       >
         <div v-for="g in sectionGroups(t.sections)" :key="String(g.free)" :class="g.free ? 'lg-free' : 'layout-panels'" :style="g.free ? freeAreaStyle(g.items) : undefined">
-          <details
+          <RecordSection
             v-for="sec in g.items"
             :key="sec.key"
-            :class="['panel', 'layout-panel', ...(sec.frame ? [windowClass] : sectionClass(sec))]"
+            :label="sec.label"
+            :collapsed="sec.collapsed"
+            :force-open="sec.fields.some((f) => !!draft.fieldErrors[f.field])"
+            :class="sec.frame ? [windowClass] : sectionClass(sec)"
             :style="sec.frame ? windowStyle(sec.frame) : sectionStyle(sec)"
             :data-section="sec.key"
-            :open="!sec.collapsed"
           >
-            <summary class="panel-header">
-              <h2>{{ sec.label }}</h2>
-            </summary>
             <div v-if="sec.kind === 'note'" class="panel-body"><NoteText :text="sec.text ?? ''" /></div>
             <div v-else class="panel-body">
               <template v-if="i === 0 && sec.key === firstGrid">
@@ -222,15 +224,15 @@ async function onSubmit() {
                 </template>
               </div>
             </div>
-          </details>
+          </RecordSection>
         </div>
       </div>
     </div>
-    <div class="panel form-footer">
+    <SaveBar :label="t('record.save.region')" :dirty="mode === 'edit' && draft.dirty" :changes="draft.changeCount">
+      <RouterLink class="btn" :to="ci ? `/cis/${ci.id}` : fromServices ? '/services' : '/cis'">{{ t("common.cancel") }}</RouterLink>
       <button type="submit" class="btn btn-primary" :disabled="pending || attrs.isLoading.value || attrs.isError.value">
-        {{ pending ? "Saving…" : mode === "create" ? `Create ${className}` : "Save changes" }}
+        {{ pending ? t("common.saving") : mode === "create" ? `Create ${className}` : "Save changes" }}
       </button>
-      <RouterLink class="btn" :to="ci ? `/cis/${ci.id}` : fromServices ? '/services' : '/cis'">Cancel</RouterLink>
-    </div>
+    </SaveBar>
   </form>
 </template>
