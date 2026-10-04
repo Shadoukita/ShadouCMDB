@@ -74,16 +74,37 @@
 /*
  * .table-wrap scrolls sideways, which makes it the sticky header's scroll container; so on wide screens the
  * table area also scrolls vertically within the window, and the column names stay in view on a 500-row page.
- * Under 820 px the page scrolls as a whole, as before.
+ * Under 820 px the page scrolls as a whole, as before. The 200 px leave room for the toolbar, pagination and key hints.
  */
 @media (min-width: 821px) {
   .table-scroll {
-    max-height: max(320px, calc(100dvh - var(--header-h) - 176px));
+    max-height: max(320px, calc(100dvh - var(--header-h) - 200px));
     overflow: auto;
   }
 }
 table.data th.row-actions {
   width: 1%;
+}
+/* Keyboard rows (lib/rowKeyboard): the row holding keyboard focus reads as selected, with a primary bar at its start. */
+table.data tbody tr:has(:focus-visible) {
+  background: var(--c-row-selected);
+}
+table.data tbody tr:has(:focus-visible) > :first-child {
+  box-shadow: inset 2px 0 0 var(--c-primary);
+}
+/* The keyboard hints under the table: wide screens only, where a keyboard is the likely input. */
+.kbd-hints {
+  display: none;
+  justify-content: flex-end;
+  padding: 0 var(--panel-p) var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--c-text-tertiary);
+}
+@media (min-width: 821px) {
+  .kbd-hints {
+    display: flex;
+  }
 }
 /* Search: the matched text in each result (audit Q2). */
 table.data td.matches mark {

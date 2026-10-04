@@ -29,6 +29,7 @@ const ICONS = [
   "arrow-left-right",
   "arrow-right",
   "arrow-up",
+  "arrow-up-down",
   "arrow-up-to-line",
   "box",
   "check",
