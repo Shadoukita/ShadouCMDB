@@ -29,8 +29,12 @@ test("inventory: the query bar writes key:value tokens into the URL filters, and
   await expect(page.locator("#f-class")).toHaveValue(server!.id);
 
   // A key the API cannot filter on is reported under the bar, and the list keeps its filters.
-  await bar.fill(`class:${server!.key} owner:me`);
-  await expect(page.getByText("“owner” is not a filter.")).toBeVisible();
+  // Lookup lists are keys too, and other specs create them (an "owner" list among them),
+  // so the key is checked against the lists first.
+  const lists = await apiGet<{ data: { key: string }[] }>(request, "/lookup-lists?limit=200");
+  expect(lists.data.map((l) => l.key.toLowerCase())).not.toContain("nosuchfilter");
+  await bar.fill(`class:${server!.key} nosuchfilter:me`);
+  await expect(page.getByText("“nosuchfilter” is not a filter.")).toBeVisible();
   await expect(bar).toHaveAttribute("aria-invalid", "true");
   await expect(page).toHaveURL(new RegExp(`classId=${server!.id}`));
 
