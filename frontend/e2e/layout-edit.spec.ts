@@ -52,7 +52,7 @@ async function closeEditor(page: Page) {
 }
 
 /** A section of the detail page by its heading. */
-const pagePanel = (page: Page, heading: string) => page.locator(".layout-container details").filter({ has: page.locator("summary h2", { hasText: new RegExp(`^${heading}$`) }) });
+const pagePanel = (page: Page, heading: string) => page.locator(".layout-container .layout-panel").filter({ has: page.locator(".panel-header h2", { hasText: new RegExp(`^${heading}$`) }) });
 const bar = (page: Page) => page.getByRole("region", { name: "Layout editing" });
 const tabBar = (page: Page) => page.getByRole("group", { name: "Tabs of the layout" });
 const section = (page: Page, label: string) => page.getByRole("region", { name: `Section ${label}`, exact: true });
@@ -167,11 +167,11 @@ test("the editor window: add a tab and a section, move fields, save, and a viewe
   await viewer.goto(`/cis/${ci.id}`);
   const vtabs = viewer.getByRole("tablist", { name: "CI sections" }).getByRole("tab");
   await expect(vtabs).toHaveText(["General", "Hardware", "Relationship map", "Impact"]);
-  await expect(viewer.locator(".lg-free > details > summary h2")).toContainText(["Lifecycle"]);
+  await expect(viewer.locator(".lg-free > .layout-panel > .panel-header h2")).toContainText(["Lifecycle"]);
   await expect(viewer.locator(".layout-container").getByText("Asset tag", { exact: true })).toHaveCount(0);
   await expect(viewer.getByRole("button", { name: "Edit layout" })).toHaveCount(0);
   await vtabs.filter({ hasText: "Hardware" }).click();
-  await expect(viewer.locator(".lg-free > details > summary h2")).toHaveText(["Hardware facts"]);
+  await expect(viewer.locator(".lg-free > .layout-panel > .panel-header h2")).toHaveText(["Hardware facts"]);
   await expect(fieldLabels(viewer.locator(".lg-free"))).toHaveText(["Model", "CPU cores"]);
   // Read-only for them, in the same place.
   await expect(viewer.locator(".lg-free .field-ro")).toHaveCount(2);
@@ -333,7 +333,7 @@ test("a layout sent on the grid (an older export or API client) opens as windows
 
   // The page: windows side by side, then the one below; every field there.
   await origin.goto(`/cis/${ci.id}`);
-  const onPage = (key: string) => origin.locator(`.lg-free > details[data-section="${key}"]`);
+  const onPage = (key: string) => origin.locator(`.lg-free > .layout-panel[data-section="${key}"]`);
   await expect(onPage("side")).toContainText("Serial number");
   const a = (await onPage("general").boundingBox())!;
   const b = (await onPage("side").boundingBox())!;
@@ -435,7 +435,7 @@ test("content blocks: a note and built-in panels placed in the editor, on the de
   await page.goto(`/cis/${ci.id}`);
   const tabs = page.getByRole("tablist", { name: "CI sections" }).getByRole("tab");
   await expect(tabs).toHaveText(["General", "Links", "Relationship map", "Impact", "History"]);
-  const heads = page.locator(".layout-container details > summary h2");
+  const heads = page.locator(".layout-container .layout-panel > .panel-header h2");
   await expect(heads).toContainText(["General", "Record", "Before you edit"]);
   await expect(page.locator(".lg-free .note-text strong")).toHaveText("Ops");
   await expect(page.locator("#rel-title")).toHaveCount(0);
@@ -588,7 +588,7 @@ test("windows dragged, resized, overlapped and layered, saved, and shown as plac
   expect(ys).toEqual([...ys].sort((a, b) => a - b));
 
   // The page the editor was opened from shows the tab as placed after the save, and again after a reload.
-  const onPage = (k: string) => origin.locator(`.lg-free > details[data-section="${k}"]`);
+  const onPage = (k: string) => origin.locator(`.lg-free > .layout-panel[data-section="${k}"]`);
   for (const reload of [false, true]) {
     if (reload) await origin.reload();
     await expect(onPage(key)).toContainText("Floating");
@@ -601,7 +601,7 @@ test("windows dragged, resized, overlapped and layered, saved, and shown as plac
     const point = { x: Math.max(pg.x, pf.x) + 20, y: Math.max(pg.y, pf.y) + 60 };
     expect(await origin.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest("[data-section]")?.getAttribute("data-section"), point)).toBe(key);
     // In the document (and for the keyboard) the windows come in reading order.
-    expect(await origin.locator(".lg-free > details").evaluateAll((els) => els.map((e) => e.getAttribute("data-section")))).toEqual(tab.sections.map((s) => s.key));
+    expect(await origin.locator(".lg-free > .layout-panel").evaluateAll((els) => els.map((e) => e.getAttribute("data-section")))).toEqual(tab.sections.map((s) => s.key));
   }
   await snap(origin, "layout-free-detail");
   // On a phone the windows stack at the full width in reading order.
@@ -702,11 +702,11 @@ test("record details and relationships are panels: moved, removed and added back
   const ciTabs = page.getByRole("tablist", { name: "CI sections" }).getByRole("tab");
   await expect(ciTabs).toHaveText(["General", "Meta", "Relationship map", "Impact", "History"]);
   await expect(page.getByRole("separator", { name: "Lifecycle" })).toBeVisible();
-  await expect(page.locator('details[data-section="general"] [data-separator]')).toHaveText("Lifecycle");
+  await expect(page.locator('.layout-panel[data-section="general"] [data-separator]')).toHaveText("Lifecycle");
   await expect(page.locator("#rel-title")).toHaveCount(0);
-  await expect(page.locator(".layout-container details > summary h2", { hasText: "Record" })).toHaveCount(0);
+  await expect(page.locator(".layout-container .layout-panel > .panel-header h2", { hasText: "Record" })).toHaveCount(0);
   await ciTabs.filter({ hasText: "Meta" }).click();
-  await expect(page.locator(".layout-container details > summary h2")).toHaveText(["Record"]);
+  await expect(page.locator(".layout-container .layout-panel > .panel-header h2")).toHaveText(["Record"]);
   await expect(pagePanel(page, "Record")).toContainText(ci.id);
   await snap(page, "layout-separators-detail");
   // The form shows the separator too.

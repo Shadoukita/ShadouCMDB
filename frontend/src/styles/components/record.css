@@ -1,6 +1,7 @@
 /*
  * The record page (SHAA-1670 design document §2.7, "Record page"; audit R1, R2): a title row with the class icon,
  * the name and a meta line, the actions with Delete in the overflow menu, then the fact chips and the stat tiles.
+ * Below them the layout's sections and the save bar, shared with the edit and create pages (audit R3, R4, R11).
  */
 
 /* ---------- Title row ---------- */
@@ -90,4 +91,92 @@ a.fact-chip:focus-visible {
   margin-top: var(--space-1);
   border-radius: var(--radius-sm);
   background: var(--c-surface-alt);
+}
+
+/* ---------- Sections (audit R4): only a section the layout collapses has a toggle ---------- */
+.layout-panel.is-collapsed > .panel-header {
+  border-bottom: 0;
+}
+.section-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1_5);
+  margin: 0 calc(-1 * var(--space-1));
+  padding: var(--space-0_5) var(--space-1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.section-toggle .icon {
+  color: var(--c-text-secondary);
+}
+.section-toggle:hover {
+  background: var(--c-row-hover);
+}
+.section-toggle:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: 1px;
+}
+
+/* ---------- Attributes (audit R3): one label/value pattern for inputs and read-only values ----------
+ * Labels in secondary text above the value; a value the user cannot change is plain text where the
+ * input would be, not a box that looks like a disabled input. */
+.layout-panel .field > label,
+.layout-panel .field > .label {
+  color: var(--c-text-secondary);
+}
+.layout-panel .field-ro .ro-value {
+  color: var(--c-text);
+}
+
+/* ---------- Save bar (audit R11): docked to the bottom while the fields scroll ---------- */
+.record-save-bar {
+  position: sticky;
+  top: auto;
+  bottom: var(--space-3);
+  z-index: var(--z-sticky);
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  min-height: 52px;
+  margin: var(--space-4) 0 0;
+  padding: var(--space-2) var(--panel-p);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+}
+.save-bar-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+  margin: 0;
+  font-size: var(--fs-md);
+}
+.save-bar-status .icon {
+  flex: none;
+  color: var(--c-warning-text);
+}
+.save-bar-status strong {
+  font-weight: var(--fw-semibold);
+}
+.save-bar-count {
+  color: var(--c-text-secondary);
+}
+.save-bar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+/* ---------- Create page: the class picker ---------- */
+.record-class-picker .field {
+  max-width: 320px;
+}
+.record-class-picker .alert {
+  margin: var(--space-3) 0 0;
 }

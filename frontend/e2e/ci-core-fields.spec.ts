@@ -49,7 +49,7 @@ test("the class page picks the title attribute that labels its CIs", async ({ pa
 test("new CI: General first, valid from is now, double-click fills dates in", async ({ page, request }) => {
   await page.goto(`/cis/new?classId=${classId}`);
   // General (core fields and the ungrouped Code), then the class's group; no "Other".
-  await expect(page.locator("form .layout-panel > summary h2")).toHaveText(["General", "Lifecycle"]);
+  await expect(page.locator("form .layout-panel > .panel-header h2")).toHaveText(["General", "Lifecycle"]);
   const general = page.locator("form .layout-panel").first();
   await expect(general.locator("label")).toHaveText(["Ident", /^Valid from/, "Valid until", "Criticality", "Code"]);
 
@@ -83,12 +83,12 @@ test("new CI: General first, valid from is now, double-click fills dates in", as
   );
   expect(ci).toMatchObject({ label: code, validUntil: null, active: true });
   expect(ci.attributes.purchased).toBe((await localNow(page)).slice(0, 10));
-  const general2 = page.locator(".layout-panels > details").first();
+  const general2 = page.locator(".layout-panels > .layout-panel").first();
   await expect(fieldLabels(general2)).toHaveText(["Ident", /^Valid from/, "Valid until", "Active", "Criticality", /^Code/]);
   await expect(general2.locator("#f-valid-until")).toHaveValue("");
   await expect(general2.locator("#f-criticality")).toHaveValue("");
   await expect(roValue(general2, "active")).toHaveText("Active");
-  await expect(page.locator(".layout-panels > details > summary h2")).toHaveText(["General", "Lifecycle", "Record"]);
+  await expect(page.locator(".layout-panels > .layout-panel > .panel-header h2")).toHaveText(["General", "Lifecycle", "Record"]);
 });
 
 test("validity: lists hide inactive CIs by default and say when an active one deactivates", async ({ page, request }) => {

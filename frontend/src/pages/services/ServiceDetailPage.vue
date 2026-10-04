@@ -8,6 +8,7 @@ import Breadcrumbs, { type Crumb } from "../../components/Breadcrumbs.vue";
 import CriticalityBadge from "../../components/CriticalityBadge.vue";
 import EmptyState from "../../components/EmptyState.vue";
 import LoadingState from "../../components/LoadingState.vue";
+import SaveBar from "../../components/SaveBar.vue";
 import { t } from "../../i18n";
 import { useAppSettings } from "../../lib/appSettings";
 import { useDocumentTitle } from "../../lib/composables";
@@ -249,12 +250,11 @@ watch(
       <RelationshipGraphPanel v-else-if="current === 'graph'" :ci="c" :self="self" :trail="[]" />
       <HistoryPanel v-else :ci="c" />
     </div>
-    <div v-if="draft.dirty || draft.pending" class="save-bar ci-save-bar" role="region" :aria-label="t('services.detail.unsaved')">
-      <span class="badge warn">{{ t("services.detail.unsaved") }}</span>
+    <SaveBar v-if="draft.dirty || draft.pending" :label="t('services.detail.unsaved')" dirty :changes="draft.changeCount">
+      <button type="button" class="btn" :disabled="draft.pending" @click="draft.reset(c)">{{ t("services.detail.discard") }}</button>
       <button type="button" class="btn btn-primary" :disabled="draft.pending" @click="onSave">
         {{ draft.pending ? t("common.saving") : t("services.detail.save") }}
       </button>
-      <button type="button" class="btn" :disabled="draft.pending" @click="draft.reset(c)">{{ t("services.detail.discard") }}</button>
-    </div>
+    </SaveBar>
   </template>
 </template>

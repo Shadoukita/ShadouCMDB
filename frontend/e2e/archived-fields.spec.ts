@@ -15,8 +15,8 @@ test("an archived field's value is listed apart on the detail page, labelled as 
   await page.goto(`/cis/${ci.id}`);
   const archived = page.locator('[data-section="_archived"]');
   await expect(archived.getByRole("heading", { name: "Archived fields" })).toBeVisible();
-  await expect(archived.locator("dt")).toHaveText(`Retired ${stamp} (archived)`);
-  await expect(archived.locator("dd")).toHaveText("kept value");
+  await expect(archived.locator(".field-ro .label")).toHaveText(`Retired ${stamp} (archived)`);
+  await expect(archived.locator(".ro-value")).toHaveText("kept value");
   await expect(page.getByRole("heading", { name: "Not defined by this class" })).toHaveCount(0);
   // Not among the active fields of the layout either.
   await expect(page.locator(".layout-panel").getByText(`Retired ${stamp}`)).toHaveCount(0);

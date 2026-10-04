@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { useRoute, useRouter } from "vue-router";
+import { RouterLink, useRoute, useRouter } from "vue-router";
 import { useAreas } from "../api/datamodel";
 import { useCiClasses, useClassAttributes } from "../api/queries";
 import { t } from "../i18n";
 import { dataModelEmpty } from "../lib/dataModel";
 import Breadcrumbs, { type Crumb } from "../components/Breadcrumbs.vue";
+import ClassBadge from "../components/ClassBadge.vue";
 import DataModelEmpty from "../components/DataModelEmpty.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
 import EditLayoutButton from "../components/layoutEdit/EditLayoutButton.vue";
@@ -60,8 +61,18 @@ function pickClass(e: Event) {
 
 <template>
   <Breadcrumbs :items="crumbs" />
-  <div class="page-header">
-    <div class="title"><h1>New configuration item</h1></div>
+  <div class="page-header record-header">
+    <div class="record-heading">
+      <div class="title">
+        <ClassBadge v-if="cls" :icon="cls.icon" :color="cls.color" />
+        <h1 dir="auto">{{ cls && !closed && !denied ? `New ${cls.name}` : "New configuration item" }}</h1>
+      </div>
+      <p v-if="area || cls" class="record-meta">
+        <span v-if="area" dir="auto">{{ area.name }}</span>
+        <span v-if="area && cls" class="sep" aria-hidden="true">·</span>
+        <RouterLink v-if="cls" :to="`/cis?classId=${cls.id}`" dir="auto">{{ cls.name }}</RouterLink>
+      </p>
+    </div>
     <div v-if="editor.allowed && !editor.active && cls" class="actions">
       <EditLayoutButton :editor="editor" />
     </div>
@@ -70,9 +81,9 @@ function pickClass(e: Event) {
   <section v-if="!classId && classes.data.value && dataModelEmpty(classes.data.value)" class="panel callout">
     <DataModelEmpty />
   </section>
-  <section v-else class="panel">
+  <section v-else class="panel record-class-picker">
     <div class="panel-body">
-      <div class="field" style="max-width: 320px">
+      <div class="field">
         <label for="ci-class">Class<span class="req" aria-hidden="true">*</span></label>
         <ErrorAlert v-if="classes.isError.value" :error="classes.error.value" :on-retry="() => classes.refetch()" />
         <select v-else id="ci-class" v-autofocus="!classId" :value="classId" required @change="pickClass">
@@ -84,19 +95,19 @@ function pickClass(e: Event) {
         </select>
         <span class="hint">The class decides which attributes the CI carries.</span>
       </div>
+      <div v-if="closed" class="alert alert-warn" role="alert">
+        {{ cls?.name }} is {{ cls?.isAbstract ? "an abstract class: it groups other classes and holds no CIs itself" : "archived: its CIs are kept, but no new ones can be created" }}.
+        Choose another class.
+      </div>
+      <div v-else-if="denied" class="alert alert-error" role="alert">
+        None of your permission profiles allows creating {{ cls?.name }} configuration items. Choose another class.
+      </div>
+      <div v-else-if="classes.data.value?.length && concrete.length === 0" class="alert alert-warn" role="alert">
+        None of your permission profiles allows creating configuration items. Ask an administrator for a profile with the
+        create right.
+      </div>
     </div>
   </section>
-  <div v-if="closed" class="alert alert-warn" role="alert">
-    {{ cls?.name }} is {{ cls?.isAbstract ? "an abstract class: it groups other classes and holds no CIs itself" : "archived: its CIs are kept, but no new ones can be created" }}.
-    Choose another class.
-  </div>
-  <div v-else-if="denied" class="alert alert-error" role="alert">
-    None of your permission profiles allows creating {{ cls?.name }} configuration items. Choose another class.
-  </div>
-  <div v-else-if="classes.data.value?.length && concrete.length === 0" class="alert alert-warn" role="alert">
-    None of your permission profiles allows creating configuration items. Ask an administrator for a profile with the
-    create right.
-  </div>
   <CiForm v-if="classId && cls && ((!denied && !closed) || editor.active)" :key="classId" mode="create" :class-id="classId" :class-name="cls.name" :editor="editor" />
   <ErrorAlert v-if="classId && classes.data.value && !cls" :error="unknownClass" />
 </template>

@@ -76,7 +76,7 @@ test('every former fixed field shows on the detail page as a class field; no "Ot
     await page.goto(`/cis/${ci.id}`);
     await expect(page.getByRole("heading", { level: 1 })).toHaveText(ci.name!);
     // A layout saved before the upgrade may put its own sections first.
-    const sections = page.locator(".layout-container details > summary h2");
+    const sections = page.locator(".layout-container .layout-panel > .panel-header h2");
     await expect(sections.filter({ hasText: /^General$/ })).toHaveCount(1);
     await expect(sections.filter({ hasText: /^Other$/ })).toHaveCount(0);
     // The page opens with the values in their inputs (SHAA-1644); an empty valid until is open-ended.

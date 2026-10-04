@@ -15,6 +15,7 @@ import CiStateBadge from "../components/CiStateBadge.vue";
 import ClassBadge from "../components/ClassBadge.vue";
 import CriticalityBadge from "../components/CriticalityBadge.vue";
 import RowMenu, { type RowMenuItem } from "../components/RowMenu.vue";
+import SaveBar from "../components/SaveBar.vue";
 import LayoutEditView from "../components/layoutEdit/LayoutEditView.vue";
 import EditLayoutButton from "../components/layoutEdit/EditLayoutButton.vue";
 import { t } from "../i18n";
@@ -339,16 +340,16 @@ const crumbs = computed<Crumb[]>(() => {
       </template>
       <template #panel="{ kind }">
         <div v-if="kind === 'record'" class="panel-body">
-          <dl :class="gridClass(3)">
-            <div v-for="f in recordFields" :key="f.field" :class="['prop', cellClass(1, 3)]">
-              <dt>{{ fieldLabel(f.field, defs) }}</dt>
-              <dd><CoreFieldValue :ci="c" :field="f.field" /></dd>
+          <div :class="gridClass(3)">
+            <div v-for="f in recordFields" :key="f.field" :class="['field', 'field-ro', cellClass(1, 3)]">
+              <span class="label">{{ fieldLabel(f.field, defs) }}</span>
+              <div class="ro-value"><CoreFieldValue :ci="c" :field="f.field" /></div>
             </div>
-            <div :class="['prop', cellClass(1, 3)]">
-              <dt>ID</dt>
-              <dd class="mono">{{ c.id }}</dd>
+            <div :class="['field', 'field-ro', cellClass(1, 3)]">
+              <span class="label">ID</span>
+              <div class="ro-value mono">{{ c.id }}</div>
             </div>
-          </dl>
+          </div>
         </div>
         <BlockContent v-else-if="kind === 'relations' || session.can('audit.view')" :kind="kind" :ci="c" :self="self" :trail="trail" />
         <p v-else class="hint panel-body">Shown to users with the audit.view permission; you do not have it, so no preview.</p>
@@ -395,7 +396,6 @@ const crumbs = computed<Crumb[]>(() => {
         <SignInAccountPanel v-if="layoutIndex === 0" :ci="c" />
         <PartOfServicesPanel v-if="layoutIndex === 0" :ci="c" :self="self" :trail="trail" />
         <template v-if="layoutIndex === 0 && builtInArrangement">
-          <div style="height: var(--sp-4)" />
           <RelationshipsPanel :ci="c" :self="self" :trail="trail" />
         </template>
       </template>
@@ -404,10 +404,9 @@ const crumbs = computed<Crumb[]>(() => {
       <CiWorkflowsPanel v-else-if="current === 'workflows'" :ci="c" />
       <HistoryPanel v-else :ci="c" />
     </div>
-    <div v-if="!editor.active && (draft.dirty || draft.pending)" class="save-bar ci-save-bar" role="region" aria-label="Unsaved changes">
-      <span class="badge warn">Unsaved changes</span>
-      <button type="button" class="btn btn-primary" :disabled="draft.pending" @click="onSave">{{ draft.pending ? "Saving…" : "Save" }}</button>
-      <button type="button" class="btn" :disabled="draft.pending" @click="draft.reset(c)">Discard</button>
-    </div>
+    <SaveBar v-if="!editor.active && (draft.dirty || draft.pending)" :label="t('record.save.unsaved')" dirty :changes="draft.changeCount">
+      <button type="button" class="btn" :disabled="draft.pending" @click="draft.reset(c)">{{ t("record.save.discard") }}</button>
+      <button type="button" class="btn btn-primary" :disabled="draft.pending" @click="onSave">{{ draft.pending ? t("common.saving") : t("record.save.save") }}</button>
+    </SaveBar>
   </template>
 </template>

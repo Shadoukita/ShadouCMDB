@@ -345,7 +345,7 @@ test("layouts: Edit CI opens the layout editor on a Server, whose layout the det
   await expect(page.locator(".layout-container").getByText("CPU cores", { exact: true })).toHaveCount(0);
   await expect(page.locator(".layout-container").getByText("Asset tag", { exact: true })).toHaveCount(0);
   await tabs.filter({ hasText: "Hardware" }).click();
-  await expect(page.locator(".lg-free > details > summary h2")).toHaveText(["Hardware facts"]);
+  await expect(page.locator(".lg-free > .layout-panel > .panel-header h2")).toHaveText(["Hardware facts"]);
   await expect(fieldLabels(page.locator(".lg-free"))).toHaveText([/^CPU cores/, /^Manufacturer/, /^Model/]);
 
   // The page is the form: a field on the second tab is edited and saved there, and the page stays as it is.
