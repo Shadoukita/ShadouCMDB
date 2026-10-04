@@ -2538,14 +2538,26 @@ pub(crate) mod tests {
         assert_eq!(code, ErrorCode::IdentityProviderUnavailable, "a directory account");
         assert!(took >= floor && took < waited, "skipped, not asked: {took:?}");
 
-        // After the window, sign-ins sent at once: one asks the directory again
-        // and waits for the timeout, the others are still skipped.
+        // After the window, sign-ins sent at once (GH#595): none asks the
+        // directory, so none waits for the timeout; a background probe does.
         crate::modules::sso::expire_skip(ldap);
         let burst = ["owner", "nobody-3", "nobody-4", "nobody-5", "nobody-6", "nobody-7"];
         let answers = futures_util::future::join_all(burst.map(&answer_time)).await;
         let late: Vec<_> = burst.iter().zip(&answers).filter(|(_, (_, took))| *took >= waited).collect();
         assert!(answers.iter().all(|(code, _)| *code == ErrorCode::Unauthenticated), "{answers:?}");
-        assert!(late.len() <= 1, "at most the one trial is late: {late:?}");
+        assert!(late.is_empty(), "no sign-in waits for the directory: {late:?}");
+        assert_eq!(crate::modules::sso::skip_state(ldap), Some((false, true)), "the probe runs");
+        // The probe times out too: skipped for another window, still at the floor.
+        let deadline = tokio::time::Instant::now() + 2 * crate::auth::sso::ldap::TIMEOUT;
+        while crate::modules::sso::skip_state(ldap) != Some((true, false)) {
+            assert!(tokio::time::Instant::now() < deadline, "{:?}", crate::modules::sso::skip_state(ldap));
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        for name in ["owner", "nobody-8"] {
+            let (code, took) = answer_time(name).await;
+            assert_eq!(code, ErrorCode::Unauthenticated, "{name}");
+            assert!(took >= floor && took < waited, "{name}: held to the floor after the probe: {took:?}");
+        }
         db.drop().await;
     }
 
