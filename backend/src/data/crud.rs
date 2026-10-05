@@ -352,6 +352,22 @@ pub enum AuditAction {
     #[serde(rename = "workflow.force")]
     #[sqlx(rename = "workflow.force")]
     WorkflowForce,
+    /// An approval-gated transition was requested (entity type `configuration_items`, the CI's id).
+    #[serde(rename = "workflow.approval_request")]
+    #[sqlx(rename = "workflow.approval_request")]
+    WorkflowApprovalRequest,
+    /// An approver approved or rejected a step of an approval request, in person or for a principal.
+    #[serde(rename = "workflow.approval_decide")]
+    #[sqlx(rename = "workflow.approval_decide")]
+    WorkflowApprovalDecide,
+    /// An approval request was withdrawn, cancelled, or closed by another workflow action.
+    #[serde(rename = "workflow.approval_close")]
+    #[sqlx(rename = "workflow.approval_close")]
+    WorkflowApprovalClose,
+    /// A step of an approval request became overdue or understaffed (actor `system`).
+    #[serde(rename = "workflow.approval_overdue")]
+    #[sqlx(rename = "workflow.approval_overdue")]
+    WorkflowApprovalOverdue,
 }
 
 impl AuditAction {
@@ -385,6 +401,10 @@ impl AuditAction {
             AuditAction::WorkflowTransition => "workflow.transition",
             AuditAction::WorkflowMigrate => "workflow.migrate",
             AuditAction::WorkflowForce => "workflow.force",
+            AuditAction::WorkflowApprovalRequest => "workflow.approval_request",
+            AuditAction::WorkflowApprovalDecide => "workflow.approval_decide",
+            AuditAction::WorkflowApprovalClose => "workflow.approval_close",
+            AuditAction::WorkflowApprovalOverdue => "workflow.approval_overdue",
         }
     }
 }

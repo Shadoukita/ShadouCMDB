@@ -972,3 +972,5 @@ mod upgrade_0045;
 pub(crate) mod upgrade_0046;
 #[cfg(test)]
 mod upgrade_0048;
+#[cfg(test)]
+pub(crate) mod upgrade_0051;

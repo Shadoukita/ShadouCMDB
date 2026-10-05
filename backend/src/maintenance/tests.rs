@@ -637,3 +637,63 @@ async fn workflows_survive_backup_and_restore_and_go_with_a_factory_reset() {
     a.drop().await;
     b.drop().await;
 }
+
+/// The approval tables (SHAA-1871): a backup holds their rows, a restore
+/// brings them back value for value (published approval steps and
+/// append-only decisions included, as for the events, and the approval
+/// columns of the events), and a factory reset empties them.
+#[tokio::test]
+async fn approvals_survive_backup_and_restore_and_go_with_a_factory_reset() {
+    use crate::db::upgrade_0051::TABLES;
+    let Some(a) = scratch::database("approvals_backup_a").await else { return };
+    let Some(b) = scratch::database("approvals_backup_b").await else { return };
+    let class: uuid::Uuid = sqlx::query_scalar("SELECT id FROM ci_classes WHERE system_role = 'business_service'")
+        .fetch_one(&a.pool)
+        .await
+        .unwrap();
+    let ci: uuid::Uuid =
+        sqlx::query_scalar("INSERT INTO configuration_items (class_id, label) VALUES ($1, 'one') RETURNING id")
+            .bind(class)
+            .fetch_one(&a.pool)
+            .await
+            .unwrap();
+    let f = crate::db::upgrade_0046::workflow_fixture(&a.pool, "lifecycle", class, ci, None).await;
+    crate::db::upgrade_0051::approval_fixture(&a.pool, &f).await;
+    let mut ca = a.pool.acquire().await.unwrap();
+    let mut cb = b.pool.acquire().await.unwrap();
+
+    let (buf, header) = take_backup(&mut ca).await;
+    for name in TABLES {
+        let rows = header.tables.iter().find(|t| t.schema == "cmdb" && t.name == name).map(|t| t.rows);
+        assert_eq!(rows, Some(1), "{name}");
+    }
+    restore::restore(&mut cb, buf.as_slice(), &header, true, true).await.unwrap();
+    for name in TABLES.into_iter().chain(["workflow_instance_events"]) {
+        let table = Table::new("cmdb", name);
+        assert_eq!(fingerprint(&mut ca, &table).await, fingerprint(&mut cb, &table).await, "{name}");
+    }
+    let linked: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM cmdb.workflow_instance_events WHERE approval_request_id IS NOT NULL")
+            .fetch_one(&mut *cb)
+            .await
+            .unwrap();
+    assert_eq!(linked, 1);
+    // The restored rows are protected again: the triggers are back on.
+    let err =
+        sqlx::query("UPDATE cmdb.workflow_approval_decisions SET comment = 'x'").execute(&mut *cb).await.unwrap_err();
+    assert!(err.to_string().contains("append-only"), "{err}");
+    let err = sqlx::query("DELETE FROM cmdb.workflow_transition_approval_steps").execute(&mut *cb).await.unwrap_err();
+    assert!(err.to_string().contains("only a draft"), "{err}");
+
+    reset::factory_reset(&mut cb).await.unwrap();
+    for name in TABLES {
+        let n: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM cmdb.{name}")))
+            .fetch_one(&mut *cb)
+            .await
+            .unwrap();
+        assert_eq!(n, 0, "{name}");
+    }
+    drop((ca, cb));
+    a.drop().await;
+    b.drop().await;
+}
