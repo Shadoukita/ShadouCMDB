@@ -7,8 +7,8 @@
 // script signs in to the running server as the scan's administrator, reads one id per resource from
 // its list endpoint (demo data from `seed --demo`), creates the objects the scan may damage (a user,
 // a profile, a group, an identity provider, an API token, an import job, a saved mapping, a saved view,
-// a workflow definition, a running workflow instance), and writes the spec with those ids
-// as examples.
+// a workflow definition, a running workflow instance, a pending approval request), and writes the
+// spec with those ids as examples.
 //
 //   DAST_USERNAME=... DAST_PASSWORD=... node tools/dast/path-examples.mjs <openapi.json> <out.json> [<examples.json>]
 //
@@ -45,7 +45,7 @@ export const LISTED = [
  * Objects created for the scan. The scan changes, disables and deletes what it is given, so it gets
  * objects of its own: never its own account (a password change would end its session) or token.
  */
-export const CREATED = ["admin/profiles", "admin/groups", "admin/users", "admin/identity-providers", "admin/api-tokens", "imports", "import-mappings", "saved-views", "admin/workflow-definitions", "workflow-instances"];
+export const CREATED = ["admin/profiles", "admin/groups", "admin/users", "admin/identity-providers", "admin/api-tokens", "imports", "import-mappings", "saved-views", "admin/workflow-definitions", "workflow-instances", "workflow-approval-requests"];
 
 /**
  * Resources that may have no row yet; any well-formed value still reaches the handler (404). The
@@ -211,6 +211,24 @@ async function collect(request) {
   await request("PATCH", `admin/workflow-definitions/${flow.id}`, { version: published.version, isActive: true });
   const server = (await request("GET", `configuration-items?classId=${serverClass.id}&limit=1`)).data[0];
   examples["workflow-instances"] = (await request("POST", "workflow-instances", { definitionId: flow.id, ciId: server.id })).instance.id;
+  // A pending approval request on a third workflow whose transition needs approval: the scan may
+  // decide on it, withdraw it and cancel it.
+  const gated = await request("POST", "admin/workflow-definitions", { key: "dast_scan_approval", name: `${name} (approval)`, classId: serverClass.id });
+  const gatedDraft = await request("PUT", `admin/workflow-definitions/${gated.id}/draft`, {
+    initialState: "open",
+    states: [{ key: "open", name: "Open", category: "open" }, { key: "closed", name: "Closed", category: "done", terminal: true }],
+    transitions: [{ key: "close", name: "Close", from: "open", to: "closed", approval: { steps: [{ key: "check", name: "Check", requiredApprovals: 1 }] } }],
+  });
+  await request("POST", `admin/workflow-definitions/${gated.id}/draft/publish`, { expectedDraftChecksum: gatedDraft.checksum });
+  const gatedVersion = (await request("GET", `admin/workflow-definitions/${gated.id}`)).version;
+  const approvers = await request("PUT", `admin/workflow-definitions/${gated.id}/approvers`, {
+    version: gatedVersion,
+    approvers: [{ transitionKey: "close", stepKey: "check", source: "profile", profile: "Administrator" }],
+  });
+  await request("PATCH", `admin/workflow-definitions/${gated.id}`, { version: approvers.version, isActive: true });
+  const instance = (await request("POST", "workflow-instances", { definitionId: gated.id, ciId: server.id })).instance;
+  const pending = await request("POST", `workflow-instances/${instance.id}/transitions`, { transitionKey: "close", expectedVersion: instance.version });
+  examples["workflow-approval-requests"] = pending.pendingApproval.requestId;
   return examples;
 }
 
