@@ -31841,7 +31841,7 @@
           "Workflow definitions"
         ],
         "summary": "Move the running instances of one version to a newer version (or report what would move)",
-        "description": "Requires `workflows.manage`. Every running instance on `fromVersionNo` moves to `toVersionNo` (a newer, published version), into the state `stateMap` names for its current state; a state left out of `stateMap` moves to the state of the same key, when the target version has one that is not terminal. With `dryRun: true` nothing is written and the response tells how many instances each state holds and where they would go. 400 VALIDATION_ERROR: `unknown_version` or `not_newer` on the version numbers; `unknown_state`, `terminal_source`, `unknown_target_state` or `terminal_target` on `stateMap.<key>`; `unmapped` on `stateMap.<key>` for a state with running instances and nowhere to go (in a dry run too). 409 CONFLICT `not_published` when the target version is a draft or retired. 403 FORBIDDEN unless the caller may view and edit every type the workflow runs on. A real run moves up to 1,000 instances per transaction, locking each CI before its instance: a run cut short leaves the moved batches moved, and running it again moves the rest. Each moved instance keeps its CI and its history, gets a `migrate` event, and is audited on its CI as `workflow.migrate` (version and state before and after); when the workflow drives a state field and the new state maps to another value, the CI's field is written (a CI `update` audit row). Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "description": "Requires `workflows.manage`. Every running instance on `fromVersionNo` moves to `toVersionNo` (a newer, published version), into the state `stateMap` names for its current state; a state left out of `stateMap` moves to the state of the same key, when the target version has one that is not terminal. With `dryRun: true` nothing is written and the response tells how many instances each state holds and where they would go. 400 VALIDATION_ERROR: `unknown_version` or `not_newer` on the version numbers; `unknown_state`, `terminal_source`, `unknown_target_state` or `terminal_target` on `stateMap.<key>`; `unmapped` on `stateMap.<key>` for a state with running instances and nowhere to go (in a dry run too). 409 CONFLICT `not_published` when the target version is a draft or retired. 403 FORBIDDEN unless the caller may view and edit every type the workflow runs on. A real run moves up to 1,000 instances per transaction, locking each CI before its instance: a run cut short leaves the moved batches moved, and running it again moves the rest. Each moved instance keeps its CI and its history, gets a `migrate` event, and is audited on its CI as `workflow.migrate` (version and state before and after); when the workflow drives a state field and the new state maps to another value, the CI's field is written (a CI `update` audit row). Instances with a pending approval request are counted in `pendingApprovals`; with `pendingApprovals: skip` (the default) they stay on `fromVersionNo` with their request and are counted in `skipped`, with `cancel` their request is closed (reason `instance_migrated`, audited as `workflow.approval_close`) and they move. A request is never carried to another version. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
         "operationId": "migrateWorkflowInstances",
         "parameters": [
           {
@@ -31890,6 +31890,14 @@
                   "dryRun": {
                     "type": "boolean",
                     "description": "Only report what would move; nothing is written"
+                  },
+                  "pendingApprovals": {
+                    "type": "string",
+                    "description": "Instances with a pending approval request: `skip` (the default) leaves them on `fromVersionNo` with their\nrequest, `cancel` closes the request (reason `instance_migrated`) and moves them. A request is never carried to\nanother version.",
+                    "enum": [
+                      "skip",
+                      "cancel"
+                    ]
                   }
                 },
                 "additionalProperties": false
@@ -33050,8 +33058,8 @@
         "tags": [
           "Workflow instances"
         ],
-        "summary": "Move a workflow instance along a transition",
-        "description": "One transaction: the fields sent are validated as PATCH /configuration-items/{id} validates them (400 VALIDATION_ERROR on `fields.<key>`, and `not_a_transition_field` for a field the transition does not list); required fields, the comment and the conditions are then checked on the CI's values with the ones sent (422 WORKFLOW_CONDITION_FAILED, one detail each: `required`, `comment_required`, `condition`). The fields and the state field are written to the CI (a CI `update` audit row), the instance moves on (and completes on a terminal state), and the step is audited on the CI as `workflow.transition`. Needs the edit right on the CI's type and a grant of the transition to one of the caller's profiles; with an API token, to the token's profile as well (403 FORBIDDEN). 400 `unknown_transition` for a key the version does not have; 409 CONFLICT `not_from_current_state` or `not_active`; 409 VERSION_CONFLICT on a stale `expectedVersion`.",
+        "summary": "Move a workflow instance along a transition, or request approval for one that needs it",
+        "description": "One transaction: the fields sent are validated as PATCH /configuration-items/{id} validates them (400 VALIDATION_ERROR on `fields.<key>`, and `not_a_transition_field` for a field the transition does not list); required fields, the comment and the conditions are then checked on the CI's values with the ones sent (422 WORKFLOW_CONDITION_FAILED, one detail each: `required`, `comment_required`, `condition`). The fields and the state field are written to the CI (a CI `update` audit row), the instance moves on (and completes on a terminal state), and the step is audited on the CI as `workflow.transition`. Needs the edit right on the CI's type and a grant of the transition to one of the caller's profiles; with an API token, to the token's profile as well (403 FORBIDDEN). 400 `unknown_transition` for a key the version does not have; 409 CONFLICT `not_from_current_state` or `not_active`; 409 VERSION_CONFLICT on a stale `expectedVersion`. **Approval:** a transition with an approval policy (`requiresApproval` in `availableTransitions`) is checked the same way, but writes nothing to the CI: it creates an approval request that stages the fields and the comment, and answers 202 with the instance, still in its state, and its `pendingApproval`. The transition runs when the request's last step is approved. Audited on the CI as `workflow.approval_request`. While a request is pending, every transition of the instance is refused with 409 WORKFLOW_APPROVAL_PENDING.",
         "operationId": "runWorkflowTransition",
         "parameters": [
           {
@@ -33120,6 +33128,16 @@
               }
             }
           },
+          "202": {
+            "description": "The transition needs approval: an approval request was created (`pendingApproval`); the instance did not move",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowInstance"
+                }
+              }
+            }
+          },
           "400": {
             "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
             "content": {
@@ -33171,7 +33189,7 @@
             }
           },
           "409": {
-            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "description": "Conflict: CONFLICT (not allowed in this state), VERSION_CONFLICT, or WORKFLOW_APPROVAL_PENDING (the instance has a pending approval request, so no other transition runs; details[0].field is `approvalRequestId`, details[0].message names the request). Nothing was changed",
             "content": {
               "application/json": {
                 "schema": {
@@ -33248,7 +33266,7 @@
           "Workflow instances"
         ],
         "summary": "Cancel a running workflow instance",
-        "description": "Needs `workflows.manage`, or the edit right on the CI's type and the workflow's `_cancel` grant. The CI's fields stay as they are. Audited on the CI as `workflow.cancel` with the reason. 409 CONFLICT `not_active`; 409 VERSION_CONFLICT on a stale `expectedVersion`.",
+        "description": "Needs `workflows.manage`, or the edit right on the CI's type and the workflow's `_cancel` grant. The CI's fields stay as they are. Audited on the CI as `workflow.cancel` with the reason. A pending approval request is closed (status `cancelled`, reason `instance_cancelled`, audited as `workflow.approval_close`). 409 CONFLICT `not_active`; 409 VERSION_CONFLICT on a stale `expectedVersion`.",
         "operationId": "cancelWorkflowInstance",
         "parameters": [
           {
@@ -33419,7 +33437,7 @@
           "Workflow instances"
         ],
         "summary": "Put a running workflow instance into another state of its version, bypassing transitions",
-        "description": "Requires `workflows.manage`. For administrators repairing an instance: needs `workflows.manage` and the edit right on the CI's type. No condition, field or grant is checked; the state field is written as a transition would. A terminal state completes the instance. Audited on the CI as `workflow.force` with the mandatory reason. 400 `unknown_state`; 409 CONFLICT `same_state` or `not_active`; 409 VERSION_CONFLICT on a stale `expectedVersion`.",
+        "description": "Requires `workflows.manage`. For administrators repairing an instance: needs `workflows.manage` and the edit right on the CI's type. No condition, field or grant is checked; the state field is written as a transition would. A terminal state completes the instance. Audited on the CI as `workflow.force` with the mandatory reason. A pending approval request is closed (status `cancelled`, reason `instance_forced`, audited as `workflow.approval_close`) and named in the force row's `overriddenApprovalRequestId`: the administrator's override of four-eyes is visible. 400 `unknown_state`; 409 CONFLICT `same_state` or `not_active`; 409 VERSION_CONFLICT on a stale `expectedVersion`.",
         "operationId": "forceWorkflowInstanceState",
         "parameters": [
           {
@@ -33474,6 +33492,653 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/WorkflowInstance"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large (code PAYLOAD_TOO_LARGE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/workflow-approval-requests/{id}": {
+      "get": {
+        "tags": [
+          "Workflow approvals"
+        ],
+        "summary": "Get an approval request with its steps, decisions and requester, and whether you may decide it",
+        "description": "404 for a request on a CI of a type the caller may not view. `requester` is read now: `active` (the account is enabled) and `stillAuthorized` (it still holds the edit right on the CI's type and a grant of the transition). It is advisory and does not block a decision, so an approver can see that a change was staged by an account that has since been disabled or lost the right. `myEligibility` tells whether the caller may decide the active step now, with the reason a decision would be refused. `approvers` (who may decide the active step) is shown only to `workflows.manage` holders and to those who may decide it.",
+        "operationId": "getWorkflowApprovalRequest",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowApprovalRequest"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/workflow-approval-requests/{id}/decisions": {
+      "post": {
+        "tags": [
+          "Workflow approvals"
+        ],
+        "summary": "Approve or reject the active step of an approval request",
+        "description": "Needs no edit right: the view right on the CI's type and a place among the active step's approvers (a named user, a member of an assigned profile or group, the user a CI field names, or an owner of a business service the CI belongs to), read when the decision is made (403 FORBIDDEN `not_eligible`). **Four-eyes** (403 WORKFLOW_APPROVAL_SELF): the requester never decides their own request, whichever profile or credential they use (`requester`), nor does a token the requester minted (`token_creator`); a step can also refuse whoever approved an earlier step (`earlier_step`) and the actors of other transitions of the instance (`actor_of:<key>`). API tokens decide only on a step that allows them (403 FORBIDDEN `session_required`), and only a token its owner minted for themselves (403 FORBIDDEN `token_not_self_minted`). A comment is required to reject. Any rejection rejects the request and the instance stays where it is. When the step reaches its quorum the next step becomes active; the last one's final approval applies the transition in the same transaction: the staged fields (only those the transition takes) and the state field are written to the CI with the decider as actor (a CI `update` audit row naming `approvalRequestId` and `requestedBy`), and the step is audited as `workflow.transition` with the same. If a staged field changed since the request, the conditions no longer hold, or the request stages a field the transition does not take, the final approval is refused with 409 WORKFLOW_APPROVAL_STALE and nothing is recorded, not even the decision. Each decision is audited as `workflow.approval_decide`. 409 CONFLICT `not_pending`, `step_not_active` or `already_decided`; 409 VERSION_CONFLICT on a stale `expectedVersion` (the request's `version`).",
+        "operationId": "decideWorkflowApprovalRequest",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "stepKey",
+                  "decision",
+                  "expectedVersion"
+                ],
+                "properties": {
+                  "stepKey": {
+                    "type": "string",
+                    "description": "Stable machine key, lower_snake_case",
+                    "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                  },
+                  "decision": {
+                    "type": "string",
+                    "enum": [
+                      "approve",
+                      "reject"
+                    ]
+                  },
+                  "expectedVersion": {
+                    "type": "integer",
+                    "format": "int32",
+                    "description": "The request's `version` you loaded",
+                    "minimum": 1
+                  },
+                  "comment": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 4000
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "x-multiline": true
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowApprovalOutcome"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (the request is not pending, the step is no longer active, or you already decided it), VERSION_CONFLICT (stale `expectedVersion`), or WORKFLOW_APPROVAL_STALE (the final approval cannot apply the transition: details[].field `fields.<key>` with code changed, not_a_transition_field, required or condition). Nothing was changed, not even the decision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large (code PAYLOAD_TOO_LARGE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/workflow-approval-requests/{id}/withdraw": {
+      "post": {
+        "tags": [
+          "Workflow approvals"
+        ],
+        "summary": "Withdraw your own pending approval request",
+        "description": "Only the requester (403 FORBIDDEN `not_requester`). The instance stays in its state and can run any transition again, or request the same one anew. Audited on the CI as `workflow.approval_close`. 409 CONFLICT `not_pending`; 409 VERSION_CONFLICT on a stale `expectedVersion`.",
+        "operationId": "withdrawWorkflowApprovalRequest",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "expectedVersion"
+                ],
+                "properties": {
+                  "expectedVersion": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 1
+                  },
+                  "comment": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 4000
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "x-multiline": true
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowApprovalOutcome"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large (code PAYLOAD_TOO_LARGE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/workflow-approval-requests/{id}/cancel": {
+      "post": {
+        "tags": [
+          "Workflow approvals"
+        ],
+        "summary": "Cancel a pending approval request (managers), leaving the instance where it is",
+        "description": "Needs `workflows.manage`, or the workflow's `_cancel` grant and the edit right on the CI's type: the people who may cancel the instance. The comment is mandatory. Status `cancelled`, reason `withdrawn`; audited on the CI as `workflow.approval_close`. For example, the incident runbook cancels the pending requests of a requester whose account was disabled. 409 CONFLICT `not_pending`; 409 VERSION_CONFLICT on a stale `expectedVersion`.",
+        "operationId": "cancelWorkflowApprovalRequest",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "expectedVersion",
+                  "comment"
+                ],
+                "properties": {
+                  "expectedVersion": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 1
+                  },
+                  "comment": {
+                    "type": "string",
+                    "description": "Why; recorded in the instance's history and the audit log",
+                    "maxLength": 4000,
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowApprovalOutcome"
                 }
               }
             }
@@ -36847,6 +37512,9 @@
                   "IDEMPOTENCY_KEY_REUSED",
                   "WORKFLOW_CONDITION_FAILED",
                   "WORKFLOW_CONTROLLED_FIELD",
+                  "WORKFLOW_APPROVAL_SELF",
+                  "WORKFLOW_APPROVAL_PENDING",
+                  "WORKFLOW_APPROVAL_STALE",
                   "LAST_ADMINISTRATOR",
                   "RATE_LIMITED",
                   "MFA_REQUIRED",
@@ -44234,6 +44902,451 @@
         },
         "additionalProperties": false
       },
+      "WorkflowApprovalDecision": {
+        "type": "object",
+        "description": "One approve or reject",
+        "required": [
+          "id",
+          "decision",
+          "actorName",
+          "credential",
+          "onBehalfOfName",
+          "comment",
+          "decidedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject"
+            ]
+          },
+          "actorName": {
+            "type": "string"
+          },
+          "credential": {
+            "type": "string",
+            "enum": [
+              "session",
+              "token"
+            ]
+          },
+          "onBehalfOfName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The principal a delegate decided for"
+          },
+          "comment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "decidedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowApprovalEligibility": {
+        "type": "object",
+        "description": "Whether the caller may decide the active step now, and why not",
+        "required": [
+          "canDecide",
+          "reason",
+          "message"
+        ],
+        "properties": {
+          "canDecide": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why not: the `details[0].code` a decision would be refused with (`not_pending`, `not_eligible`,\n`requester`, `token_creator`, `earlier_step`, `actor_of:<key>`, `session_required`,\n`token_not_self_minted`); null when `canDecide`"
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowApprovalOutcome": {
+        "type": "object",
+        "description": "A request and its instance after a decision, withdrawal or cancellation",
+        "required": [
+          "request",
+          "instance"
+        ],
+        "properties": {
+          "request": {
+            "$ref": "#/components/schemas/WorkflowApprovalRequest"
+          },
+          "instance": {
+            "$ref": "#/components/schemas/WorkflowInstance",
+            "description": "Moved along the transition when the decision was the final approval"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowApprovalPrincipal": {
+        "type": "object",
+        "description": "A principal who may decide the active step",
+        "required": [
+          "role",
+          "kind",
+          "id",
+          "source",
+          "label"
+        ],
+        "properties": {
+          "role": {
+            "type": "string",
+            "description": "When an assignment applies",
+            "enum": [
+              "approver",
+              "escalation"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "user",
+              "profile",
+              "group"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "source": {
+            "type": "string",
+            "description": "Where the approvers of an assignment come from: the holders of a permission `profile`, the members of a user\n`group`, one named `user`, the user linked to the Person a reference field of the CI points at (`ci_attribute`,\nfor example the CI's owner), or the owners in one role of the business services the CI is a direct member of\n(`service_owner`)",
+            "enum": [
+              "profile",
+              "group",
+              "user",
+              "ci_attribute",
+              "service_owner"
+            ]
+          },
+          "label": {
+            "type": "string",
+            "description": "The assignment that made it eligible, e.g. \"group CAB\""
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowApprovalRequest": {
+        "type": "object",
+        "description": "An approval request with its steps and decisions",
+        "required": [
+          "id",
+          "instanceId",
+          "ciId",
+          "ciIdent",
+          "ciLabel",
+          "classKey",
+          "definitionKey",
+          "definitionName",
+          "versionNo",
+          "transitionKey",
+          "transitionName",
+          "fromState",
+          "toState",
+          "requestNo",
+          "status",
+          "closeReason",
+          "currentStepNo",
+          "requestedAt",
+          "requester",
+          "comment",
+          "stagedFields",
+          "steps",
+          "approvers",
+          "myEligibility",
+          "closedAt",
+          "closedByName",
+          "version"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "instanceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "ciId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "ciIdent": {
+            "type": "string"
+          },
+          "ciLabel": {
+            "type": "string"
+          },
+          "classKey": {
+            "type": "string"
+          },
+          "definitionKey": {
+            "type": "string"
+          },
+          "definitionName": {
+            "type": "string"
+          },
+          "versionNo": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The version of the workflow the instance is pinned to"
+          },
+          "transitionKey": {
+            "type": "string"
+          },
+          "transitionName": {
+            "type": "string"
+          },
+          "fromState": {
+            "type": "string"
+          },
+          "toState": {
+            "type": "string"
+          },
+          "requestNo": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "approved",
+              "rejected",
+              "withdrawn",
+              "cancelled"
+            ]
+          },
+          "closeReason": {
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "approved",
+                  "rejected",
+                  "overdue",
+                  "withdrawn",
+                  "instance_cancelled",
+                  "instance_forced",
+                  "instance_migrated",
+                  "ci_deleted"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "currentStepNo": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "requestedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "requester": {
+            "$ref": "#/components/schemas/WorkflowApprovalRequester"
+          },
+          "comment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stagedFields": {
+            "type": "object",
+            "description": "The transition's field values the request applies on final approval, by field key, in the form of the item\nendpoints"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowApprovalRequestStep"
+            }
+          },
+          "approvers": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/WorkflowApprovalPrincipal"
+            },
+            "description": "Who may decide the active step: shown to `workflows.manage` holders and to those who may decide it, null to\neveryone else (it would reveal profile and group membership)"
+          },
+          "myEligibility": {
+            "$ref": "#/components/schemas/WorkflowApprovalEligibility"
+          },
+          "closedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "closedByName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Send it as `expectedVersion`: 409 VERSION_CONFLICT if the request changed in between"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowApprovalRequestStep": {
+        "type": "object",
+        "description": "One step of a request",
+        "required": [
+          "stepNo",
+          "key",
+          "name",
+          "requiredApprovals",
+          "status",
+          "activatedAt",
+          "dueAt",
+          "overdue",
+          "completedAt",
+          "approvals",
+          "eligibleCount",
+          "understaffed",
+          "decisions"
+        ],
+        "properties": {
+          "stepNo": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "requiredApprovals": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "waiting",
+              "active",
+              "approved",
+              "rejected",
+              "closed"
+            ]
+          },
+          "activatedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "dueAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "overdue": {
+            "type": "boolean"
+          },
+          "completedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "approvals": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "eligibleCount": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Distinct active users who could decide it when it was last resolved (the requester never counts); null\nbefore the step is active"
+          },
+          "understaffed": {
+            "type": "boolean",
+            "description": "Active, and fewer users could decide it than approvals are still needed"
+          },
+          "decisions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowApprovalDecision"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowApprovalRequester": {
+        "type": "object",
+        "description": "Who made the request, as they stand now (advisory: it does not block a decision)",
+        "required": [
+          "id",
+          "name",
+          "active",
+          "stillAuthorized"
+        ],
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Null once the account was deleted"
+          },
+          "name": {
+            "type": "string"
+          },
+          "active": {
+            "type": "boolean",
+            "description": "The account exists and is enabled"
+          },
+          "stillAuthorized": {
+            "type": "boolean",
+            "description": "Active, and still holds the edit right on the CI's type and a grant of the transition: false means the change\nwas staged by someone who could no longer make it"
+          }
+        },
+        "additionalProperties": false
+      },
       "WorkflowApprovalStep": {
         "type": "object",
         "description": "One step of an approval policy",
@@ -44291,6 +45404,28 @@
           "allowApiTokens": {
             "type": "boolean",
             "description": "Decisions may come through an API token the approver minted for themselves (default false: a signed-in\nsession only)"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowApprovalStepSummary": {
+        "type": "object",
+        "description": "One step of a transition's approval policy, as a transition offers it",
+        "required": [
+          "key",
+          "name",
+          "requiredApprovals"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "requiredApprovals": {
+            "type": "integer",
+            "format": "int32"
           }
         },
         "additionalProperties": false
@@ -44747,6 +45882,8 @@
           "name",
           "toState",
           "requiresComment",
+          "requiresApproval",
+          "approvalSteps",
           "fields",
           "blockedBy"
         ],
@@ -44762,6 +45899,17 @@
           },
           "requiresComment": {
             "type": "boolean"
+          },
+          "requiresApproval": {
+            "type": "boolean",
+            "description": "Running it creates an approval request (202): the instance moves only once the request is approved"
+          },
+          "approvalSteps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowApprovalStepSummary"
+            },
+            "description": "The steps of its approval policy, in order; empty when it needs no approval"
           },
           "fields": {
             "type": "array",
@@ -44790,11 +45938,11 @@
         "properties": {
           "field": {
             "type": "string",
-            "description": "`fields.<key>` of the field the condition reads"
+            "description": "`fields.<key>` of the field the condition reads, or `approvalRequestId`"
           },
           "code": {
             "type": "string",
-            "description": "`condition`"
+            "description": "`condition`, or `approval_pending` while the instance waits for an approval request (no transition runs)"
           },
           "message": {
             "type": "string"
@@ -44957,6 +46105,9 @@
               "IDEMPOTENCY_KEY_REUSED",
               "WORKFLOW_CONDITION_FAILED",
               "WORKFLOW_CONTROLLED_FIELD",
+              "WORKFLOW_APPROVAL_SELF",
+              "WORKFLOW_APPROVAL_PENDING",
+              "WORKFLOW_APPROVAL_STALE",
               "LAST_ADMINISTRATOR",
               "RATE_LIMITED",
               "MFA_REQUIRED",
@@ -45041,6 +46192,7 @@
           "instanceId",
           "ok",
           "instance",
+          "approvalRequestId",
           "error"
         ],
         "properties": {
@@ -45067,6 +46219,14 @@
                 "type": "null"
               }
             ]
+          },
+          "approvalRequestId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "For a transition that needs approval: the request it created (the instance did not move)"
           },
           "error": {
             "oneOf": [
@@ -45351,7 +46511,9 @@
           "actorName",
           "comment",
           "fieldChanges",
-          "requestId"
+          "requestId",
+          "approvalRequestId",
+          "approvalStepNo"
         ],
         "properties": {
           "id": {
@@ -45365,7 +46527,12 @@
               "transition",
               "cancel",
               "migrate",
-              "force"
+              "force",
+              "approval_request",
+              "approval_decision",
+              "approval_withdraw",
+              "approval_close",
+              "approval_overdue"
             ]
           },
           "transitionKey": {
@@ -45430,6 +46597,22 @@
               "null"
             ],
             "description": "Joins to the audit log's `requestId`"
+          },
+          "approvalRequestId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The approval request of an `approval_*` event, or the one a `transition` event's final approval applied"
+          },
+          "approvalStepNo": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The step an `approval_request`, `approval_decision` or `approval_overdue` event is about"
           }
         },
         "additionalProperties": false
@@ -45534,7 +46717,8 @@
           "lastTransitionAt",
           "endedAt",
           "version",
-          "ciVersion"
+          "ciVersion",
+          "pendingApproval"
         ],
         "properties": {
           "id": {
@@ -45609,6 +46793,17 @@
             "type": "integer",
             "format": "int32",
             "description": "The CI's own `version` after the step (its fields and state field may have changed)"
+          },
+          "pendingApproval": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowPendingApproval",
+                "description": "The approval request the instance waits for; null when there is none"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false
@@ -45670,6 +46865,8 @@
           "total",
           "migrated",
           "batches",
+          "pendingApprovals",
+          "skipped",
           "states"
         ],
         "properties": {
@@ -45701,6 +46898,16 @@
             "type": "integer",
             "format": "int32",
             "description": "Transactions used (each moves up to 1,000 instances)"
+          },
+          "pendingApprovals": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Running instances on `fromVersionNo` with a pending approval request when the request started"
+          },
+          "skipped": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Instances left on `fromVersionNo` because of their pending approval request (`pendingApprovals: skip`)"
           },
           "states": {
             "type": "array",
@@ -45782,6 +46989,80 @@
             "type": "integer",
             "format": "int64",
             "description": "Running instances in `fromState` when the request started"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowPendingApproval": {
+        "type": "object",
+        "description": "The pending approval request of an instance: it stays in its state, runs no other transition, and moves along\nthe requested transition once the last step is approved",
+        "required": [
+          "requestId",
+          "requestNo",
+          "transitionKey",
+          "toState",
+          "stepNo",
+          "stepKey",
+          "stepCount",
+          "approvals",
+          "required",
+          "dueAt",
+          "overdue",
+          "version"
+        ],
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "requestNo": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1 for the instance's first request, 2 for the next one (after a rejection or withdrawal), …"
+          },
+          "transitionKey": {
+            "type": "string"
+          },
+          "toState": {
+            "type": "string",
+            "description": "The state the instance moves to once approved"
+          },
+          "stepNo": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The active step (1-based)"
+          },
+          "stepKey": {
+            "type": "string"
+          },
+          "stepCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "approvals": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Approvals the active step has"
+          },
+          "required": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Approvals the active step needs"
+          },
+          "dueAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "overdue": {
+            "type": "boolean"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The request's `version`: send it as `expectedVersion` with a decision, withdrawal or cancellation"
           }
         },
         "additionalProperties": false
@@ -46530,6 +47811,9 @@
     },
     {
       "name": "Workflow instances"
+    },
+    {
+      "name": "Workflow approvals"
     }
   ]
 }

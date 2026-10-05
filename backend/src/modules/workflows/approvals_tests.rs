@@ -211,8 +211,8 @@ fn gated_graph() -> Value {
 /// read back canonically, refused when malformed, linted at publish (errors
 /// and warnings of §6.2), and staffing is checked on PUT approvers. A field
 /// that names approvers cannot be archived (IN_USE); assignments of a step
-/// only the draft had go with the draft; a gated transition does not run
-/// before approval requests exist.
+/// only the draft had go with the draft; a gated transition creates an
+/// approval request instead of moving the instance.
 #[tokio::test]
 async fn approval_policies_are_drafted_linted_staffed_and_published() {
     let Some(db) = scratch::database("approvals_design_time").await else { return };
@@ -461,7 +461,7 @@ async fn approval_policies_are_drafted_linted_staffed_and_published() {
     assert_eq!((status, code(&v)), (409, "IN_USE"), "{v}");
     assert!(v["error"]["message"].as_str().unwrap().contains("change (approvers of approve.tech)"), "{v}");
 
-    // A gated transition does not run before approval requests exist (fail closed).
+    // A gated transition creates an approval request; the instance stays where it is.
     let (status, ci) = w.call("POST", "/api/v1/configuration-items", Some(json!({ "classId": w.server }))).await;
     assert_eq!(status, 201, "{ci}");
     let (status, inst) =
@@ -475,7 +475,7 @@ async fn approval_policies_are_drafted_linted_staffed_and_published() {
     let body = json!({ "transitionKey": "approve", "expectedVersion": instance.1 });
     let (status, v) =
         w.call("POST", &format!("/api/v1/workflow-instances/{}/transitions", instance.0), Some(body)).await;
-    assert_eq!((status, details(&v)), (409, pairs(&[("transitionKey", "approval_required")])), "{v}");
+    assert_eq!((status, v["pendingApproval"]["stepKey"].as_str()), (202, Some("tech")), "{v}");
     let state: String = sqlx::query_scalar(
         "SELECT s.key FROM workflow_instances i JOIN workflow_states s ON s.id = i.current_state_id WHERE i.id = $1",
     )

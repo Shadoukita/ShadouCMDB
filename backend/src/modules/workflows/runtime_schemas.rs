@@ -570,14 +570,14 @@ pub struct WorkflowInstanceMigration {
     pub state_map: std::collections::BTreeMap<String, String>,
     /// Only report what would move; nothing is written
     pub dry_run: bool,
-    /// Instances with a pending approval request: `skip` leaves them on `fromVersionNo` with their request (the
-    /// default), `cancel` closes the request (reason `instance_migrated`) and moves them. A request is never carried
-    /// to another version.
     #[schema(inline)]
     #[serde(default)]
     pub pending_approvals: WorkflowMigrationPendingApprovals,
 }
 
+/// Instances with a pending approval request: `skip` (the default) leaves them on `fromVersionNo` with their
+/// request, `cancel` closes the request (reason `instance_migrated`) and moves them. A request is never carried to
+/// another version.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowMigrationPendingApprovals {

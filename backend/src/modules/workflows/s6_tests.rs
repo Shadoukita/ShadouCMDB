@@ -130,7 +130,7 @@ async fn instances_migrate_to_a_newer_version_after_a_dry_run() {
     assert_eq!(
         dry,
         json!({ "dryRun": true, "definitionKey": "server_lifecycle", "fromVersionNo": 1, "toVersionNo": 2,
-            "total": 2, "migrated": 0, "batches": 0, "states": [
+            "total": 2, "migrated": 0, "batches": 0, "pendingApprovals": 0, "skipped": 0, "states": [
                 { "fromState": "planned", "toState": "approved", "mappedBy": "explicit", "count": 1 },
                 { "fromState": "approved", "toState": "approved", "mappedBy": "same_key", "count": 1 }
             ] })

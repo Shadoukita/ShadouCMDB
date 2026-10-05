@@ -13,6 +13,8 @@ pub mod adopt;
 mod adopt_tests;
 pub mod approval_schemas;
 #[cfg(test)]
+mod approvals_runtime_tests;
+#[cfg(test)]
 mod approvals_tests;
 pub mod approvers;
 pub mod archive;

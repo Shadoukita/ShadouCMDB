@@ -845,14 +845,27 @@ fn problem(field: String, message: String, code: &str) -> FieldError {
     FieldError { location: FieldLocation::Body, field, message, code: code.into() }
 }
 
-/// The identity of the decider with the edit right on the CI's type only,
-/// for the final apply's write (A-Q7, SHAA-1872): the staged references were
-/// checked against the requester's view right when the request was made, so
-/// every type is viewable here; nothing else is granted, and the item write
-/// path validates every value as a PATCH does.
+/// The identity the final apply writes with (A-Q7, SHAA-1872): the decider,
+/// with the edit right on the CI's type only, and no view right beyond the
+/// decider's own (a staged reference to a CI the decider may not view is
+/// refused, as a PATCH would refuse it). Never the system scope: the item
+/// write path validates every value and applies every write rule.
 fn narrowed(ctx: &RequestContext, decider: &Decider, class_id: Uuid) -> RequestContext {
-    let mut permissions =
-        Permissions { all_classes: ClassRights { view: true, ..ClassRights::default() }, ..Permissions::default() };
+    let own = ctx.principal().map(|p| &p.permissions);
+    let view = ClassRights { view: true, ..ClassRights::default() };
+    let mut permissions = Permissions {
+        all_classes: if own.is_some_and(|p| p.administrator || p.all_classes.view) {
+            view
+        } else {
+            ClassRights::default()
+        },
+        ..Permissions::default()
+    };
+    for (class, rights) in own.map(|p| &p.classes).into_iter().flatten() {
+        if rights.view {
+            permissions.classes.insert(*class, view);
+        }
+    }
     permissions.classes.insert(class_id, ClassRights { view: true, edit: true, ..ClassRights::default() });
     let credential = ctx.principal().map(|p| p.credential.clone()).unwrap_or(Credential::Token {
         profile_id: None,

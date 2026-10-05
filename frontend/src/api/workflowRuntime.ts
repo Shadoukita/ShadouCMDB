@@ -155,4 +155,9 @@ export const EVENT_LABELS: Record<WorkflowEvent["kind"], string> = {
   cancel: "Cancelled",
   migrate: "Moved to a new version",
   force: "State forced",
+  approval_request: "Approval requested",
+  approval_decision: "Approval decision",
+  approval_withdraw: "Approval request withdrawn",
+  approval_close: "Approval request closed",
+  approval_overdue: "Approval overdue",
 };
