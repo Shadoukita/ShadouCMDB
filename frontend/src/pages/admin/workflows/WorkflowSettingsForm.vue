@@ -20,6 +20,7 @@ import { useFlashStore } from "../../../stores/flash";
 import FormErrorBanner from "../../form/FormErrorBanner.vue";
 import FormField from "../../form/FormField.vue";
 import UninstancedWarning from "./UninstancedWarning.vue";
+import WorkflowBootstrap from "./WorkflowBootstrap.vue";
 import { uninstancedText } from "./uninstanced";
 
 /**
@@ -228,7 +229,7 @@ const deleteInUse = computed(() => del.error.value instanceof ApiError && del.er
         </div>
         <FormErrorBanner v-else-if="error" :error="error" :unplaced="unplaced" />
         <div v-if="saved" class="alert" role="status">{{ saved }}</div>
-        <UninstancedWarning v-for="w in warnings" :key="w.code" :warning="w" />
+        <UninstancedWarning v-for="w in warnings" :key="w.code" :warning="w" :bootstrap-target="workflow?.stateAttributeId ? 'wf-bootstrap' : undefined" />
         <div class="form-grid">
           <FormField id="wf-name" label="Name" required :error="fieldErrors.name" hint="Shown to operators when they run a transition.">
             <template #default="{ id: fid, invalid, describedBy }">
@@ -328,6 +329,7 @@ const deleteInUse = computed(() => del.error.value instanceof ApiError && del.er
           </dl>
         </div>
       </section>
+      <WorkflowBootstrap v-if="workflow.stateAttributeId" :workflow="workflow" />
       <section class="panel" aria-labelledby="wf-danger-title">
         <div class="panel-header"><h2 id="wf-danger-title">Delete</h2></div>
         <div class="panel-body stack">
