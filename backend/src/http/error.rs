@@ -51,6 +51,17 @@ pub enum ErrorCode {
     WorkflowConditionFailed,
     /// A direct write to a state field that an active workflow drives; the details name the field (409)
     WorkflowControlledField,
+    /// Four-eyes or separation of duties: the caller may not decide this approval step (the requester, the
+    /// requesting token's creator, an approver of an earlier step, or an actor of an excluded transition); the
+    /// detail's `code` names the reason (403)
+    WorkflowApprovalSelf,
+    /// The workflow instance has a pending approval request, so no other transition runs; the detail names the
+    /// request (409)
+    WorkflowApprovalPending,
+    /// The final approval cannot apply the transition: a field it stages changed since the request, its conditions
+    /// no longer hold, or the request stages a field the transition does not take. Nothing was written, not even
+    /// the decision (409)
+    WorkflowApprovalStale,
     /// The change would leave no active user holding the Administrator profile
     LastAdministrator,
     /// Too many failed password attempts, or too many impact analyses of one user in progress; retry after the
@@ -93,14 +104,17 @@ impl ErrorCode {
             | ErrorCode::MfaEnrolmentRequired
             | ErrorCode::EmailRequired
             | ErrorCode::MfaRequiredForToken
-            | ErrorCode::ReauthenticationRequired => StatusCode::FORBIDDEN,
+            | ErrorCode::ReauthenticationRequired
+            | ErrorCode::WorkflowApprovalSelf => StatusCode::FORBIDDEN,
             ErrorCode::NotFound => StatusCode::NOT_FOUND,
             ErrorCode::Gone => StatusCode::GONE,
             ErrorCode::Conflict
             | ErrorCode::InUse
             | ErrorCode::VersionConflict
             | ErrorCode::LastAdministrator
-            | ErrorCode::WorkflowControlledField => StatusCode::CONFLICT,
+            | ErrorCode::WorkflowControlledField
+            | ErrorCode::WorkflowApprovalPending
+            | ErrorCode::WorkflowApprovalStale => StatusCode::CONFLICT,
             ErrorCode::InvalidName
             | ErrorCode::SchemaChangeRefused
             | ErrorCode::SecretRequired

@@ -11,6 +11,7 @@
 pub mod adopt;
 #[cfg(test)]
 mod adopt_tests;
+pub mod approval_schemas;
 #[cfg(test)]
 mod approvals_tests;
 pub mod approvers;
@@ -41,9 +42,12 @@ use utoipa::openapi::path::{Parameter, ParameterBuilder, ParameterIn};
 use utoipa::openapi::schema::{ObjectBuilder, Type};
 use uuid::Uuid;
 
+use self::approval_schemas::*;
 use self::runtime_schemas::*;
 use self::schemas::*;
-use crate::api::route::{Body, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, PathInput, Query, Route, route};
+use crate::api::route::{
+    Body, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, PathInput, Query, Route, WithStatus, route,
+};
 use crate::api::{schemas as api_schemas, validate};
 use crate::auth::permissions::GlobalPermission;
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
@@ -432,7 +436,11 @@ pub fn routes() -> Vec<Route> {
                  moved, and running it again moves the rest. Each moved instance keeps its CI and its history, gets \
                  a `migrate` event, and is audited on its CI as `workflow.migrate` (version and state before and \
                  after); when the workflow drives a state field and the new state maps to another value, the CI's \
-                 field is written (a CI `update` audit row).",
+                 field is written (a CI `update` audit row). Instances with a pending approval request are counted \
+                 in `pendingApprovals`; with `pendingApprovals: skip` (the default) they stay on `fromVersionNo` \
+                 with their request and are counted in `skipped`, with `cancel` their request is closed (reason \
+                 `instance_migrated`, audited as `workflow.approval_close`) and they move. A request is never \
+                 carried to another version.",
             )
             .requires(manage)
             .session_only()
@@ -464,6 +472,8 @@ pub fn routes() -> Vec<Route> {
 }
 
 const RUN_TAG: &str = "Workflow instances";
+const APPROVAL_TAG: &str = "Workflow approvals";
+const APPROVAL: &str = "/api/v1/workflow-approval-requests/{id}";
 const INSTANCES: &str = "/api/v1/workflow-instances";
 const INSTANCE: &str = "/api/v1/workflow-instances/{id}";
 
@@ -559,7 +569,7 @@ pub fn runtime_routes() -> Vec<Route> {
             ),
         route(Method::POST, "/api/v1/workflow-instances/{id}/transitions", "runWorkflowTransition")
             .tag(RUN_TAG)
-            .summary("Move a workflow instance along a transition")
+            .summary("Move a workflow instance along a transition, or request approval for one that needs it")
             .description(
                 "One transaction: the fields sent are validated as PATCH /configuration-items/{id} validates them \
                  (400 VALIDATION_ERROR on `fields.<key>`, and `not_a_transition_field` for a field the transition \
@@ -570,18 +580,32 @@ pub fn runtime_routes() -> Vec<Route> {
                  audited on the CI as `workflow.transition`. Needs the edit right on the CI's type and a grant of \
                  the transition to one of the caller's profiles; with an API token, to the token's profile as \
                  well (403 FORBIDDEN). 400 `unknown_transition` for a key the version does not have; 409 CONFLICT \
-                 `not_from_current_state` or `not_active`; 409 VERSION_CONFLICT on a stale `expectedVersion`.",
+                 `not_from_current_state` or `not_active`; 409 VERSION_CONFLICT on a stale `expectedVersion`. \
+                 **Approval:** a transition with an approval policy (`requiresApproval` in `availableTransitions`) \
+                 is checked the same way, but writes nothing to the CI: it creates an approval request that stages \
+                 the fields and the comment, and answers 202 with the instance, still in its state, and its \
+                 `pendingApproval`. The transition runs when the request's last step is approved. Audited on the CI \
+                 as `workflow.approval_request`. While a request is pending, every transition of the instance is \
+                 refused with 409 WORKFLOW_APPROVAL_PENDING.",
+            )
+            .also_returns(
+                StatusCode::ACCEPTED,
+                "The transition needs approval: an approval request was created (`pendingApproval`); the instance did \
+                 not move",
             )
             .class_checked()
             .errors(&[
                 ErrorCode::NotFound,
+                ErrorCode::WorkflowApprovalPending,
                 ErrorCode::Conflict,
                 ErrorCode::VersionConflict,
                 ErrorCode::WorkflowConditionFailed,
             ])
             .handle(
                 |api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<WorkflowTransitionRun>>| async move {
-                    Ok(Json(runtime::transition(&api.pool, &api.ctx, id, &b).await?))
+                    let (instance, requested) = runtime::transition(&api.pool, &api.ctx, id, &b).await?;
+                    let status = if requested { StatusCode::ACCEPTED } else { StatusCode::OK };
+                    Ok(WithStatus(status, instance))
                 },
             ),
         route(Method::POST, "/api/v1/workflow-instances/{id}/cancel", "cancelWorkflowInstance")
@@ -589,8 +613,10 @@ pub fn runtime_routes() -> Vec<Route> {
             .summary("Cancel a running workflow instance")
             .description(
                 "Needs `workflows.manage`, or the edit right on the CI's type and the workflow's `_cancel` grant. \
-                 The CI's fields stay as they are. Audited on the CI as `workflow.cancel` with the reason. 409 \
-                 CONFLICT `not_active`; 409 VERSION_CONFLICT on a stale `expectedVersion`.",
+                 The CI's fields stay as they are. Audited on the CI as `workflow.cancel` with the reason. A pending \
+                 approval request is closed (status `cancelled`, reason `instance_cancelled`, audited as \
+                 `workflow.approval_close`). 409 CONFLICT `not_active`; 409 VERSION_CONFLICT on a stale \
+                 `expectedVersion`.",
             )
             .class_checked()
             .errors(&[ErrorCode::NotFound, ErrorCode::Conflict, ErrorCode::VersionConflict])
@@ -606,7 +632,9 @@ pub fn runtime_routes() -> Vec<Route> {
                 "For administrators repairing an instance: needs `workflows.manage` and the edit right on the CI's \
                  type. No condition, field or grant is checked; the state field is written as a transition would. \
                  A terminal state completes the instance. Audited on the CI as `workflow.force` with the mandatory \
-                 reason. 400 `unknown_state`; 409 CONFLICT `same_state` or `not_active`; 409 VERSION_CONFLICT on a \
+                 reason. A pending approval request is closed (status `cancelled`, reason `instance_forced`, audited \
+                 as `workflow.approval_close`) and named in the force row's `overriddenApprovalRequestId`: the \
+                 administrator's override of four-eyes is visible. 400 `unknown_state`; 409 CONFLICT `same_state` or `not_active`; 409 VERSION_CONFLICT on a \
                  stale `expectedVersion`.",
             )
             .requires(GlobalPermission::WorkflowsManage)
@@ -615,6 +643,90 @@ pub fn runtime_routes() -> Vec<Route> {
             .handle(
                 |api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<WorkflowInstanceForce>>| async move {
                     Ok(Json(runtime::force(&api.pool, &api.ctx, id, &b).await?))
+                },
+            ),
+        route(Method::GET, APPROVAL, "getWorkflowApprovalRequest")
+            .tag(APPROVAL_TAG)
+            .summary("Get an approval request with its steps, decisions and requester, and whether you may decide it")
+            .description(
+                "404 for a request on a CI of a type the caller may not view. `requester` is read now: `active` \
+                 (the account is enabled) and `stillAuthorized` (it still holds the edit right on the CI's type \
+                 and a grant of the transition). It is advisory and does not block a decision, so an approver can \
+                 see that a change was staged by an account that has since been disabled or lost the right. \
+                 `myEligibility` tells whether the caller may decide the active step now, with the reason a \
+                 decision would be refused. `approvers` (who may decide the active step) is shown only to \
+                 `workflows.manage` holders and to those who may decide it.",
+            )
+            .errors(&[ErrorCode::NotFound])
+            .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
+                Ok(Json(runtime::approvals::get(&api.pool, &api.ctx, id).await?))
+            }),
+        route(Method::POST, "/api/v1/workflow-approval-requests/{id}/decisions", "decideWorkflowApprovalRequest")
+            .tag(APPROVAL_TAG)
+            .summary("Approve or reject the active step of an approval request")
+            .description(
+                "Needs no edit right: the view right on the CI's type and a place among the active step's \
+                 approvers (a named user, a member of an assigned profile or group, the user a CI field names, or \
+                 an owner of a business service the CI belongs to), read when the decision is made (403 FORBIDDEN \
+                 `not_eligible`). **Four-eyes** (403 WORKFLOW_APPROVAL_SELF): the requester never decides their \
+                 own request, whichever profile or credential they use (`requester`), nor does a token the \
+                 requester minted (`token_creator`); a step can also refuse whoever approved an earlier step \
+                 (`earlier_step`) and the actors of other transitions of the instance (`actor_of:<key>`). API \
+                 tokens decide only on a step that allows them (403 FORBIDDEN `session_required`), and only a \
+                 token its owner minted for themselves (403 FORBIDDEN `token_not_self_minted`). A comment is \
+                 required to reject. Any rejection rejects the request and the instance stays where it is. When \
+                 the step reaches its quorum the next step becomes active; the last one's final approval applies \
+                 the transition in the same transaction: the staged fields (only those the transition takes) and \
+                 the state field are written to the CI with the decider as actor (a CI `update` audit row naming \
+                 `approvalRequestId` and `requestedBy`), and the step is audited as `workflow.transition` with the \
+                 same. If a staged field changed since the request, the conditions no longer hold, or the request \
+                 stages a field the transition does not take, the final approval is refused with 409 \
+                 WORKFLOW_APPROVAL_STALE and nothing is recorded, not even the decision. Each decision is audited \
+                 as `workflow.approval_decide`. 409 CONFLICT `not_pending`, `step_not_active` or \
+                 `already_decided`; 409 VERSION_CONFLICT on a stale `expectedVersion` (the request's `version`).",
+            )
+            .errors(&[
+                ErrorCode::WorkflowApprovalSelf,
+                ErrorCode::NotFound,
+                ErrorCode::WorkflowApprovalStale,
+                ErrorCode::Conflict,
+                ErrorCode::VersionConflict,
+            ])
+            .handle(
+                |api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<WorkflowApprovalDecide>>| async move {
+                    Ok(Json(runtime::approvals::decide(&api.pool, &api.ctx, id, &b).await?))
+                },
+            ),
+        route(Method::POST, "/api/v1/workflow-approval-requests/{id}/withdraw", "withdrawWorkflowApprovalRequest")
+            .tag(APPROVAL_TAG)
+            .summary("Withdraw your own pending approval request")
+            .description(
+                "Only the requester (403 FORBIDDEN `not_requester`). The instance stays in its state and can run any \
+                 transition again, or request the same one anew. Audited on the CI as `workflow.approval_close`. \
+                 409 CONFLICT `not_pending`; 409 VERSION_CONFLICT on a stale `expectedVersion`.",
+            )
+            .class_checked()
+            .errors(&[ErrorCode::NotFound, ErrorCode::Conflict, ErrorCode::VersionConflict])
+            .handle(
+                |api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<WorkflowApprovalWithdraw>>| async move {
+                    Ok(Json(runtime::approvals::withdraw(&api.pool, &api.ctx, id, &b).await?))
+                },
+            ),
+        route(Method::POST, "/api/v1/workflow-approval-requests/{id}/cancel", "cancelWorkflowApprovalRequest")
+            .tag(APPROVAL_TAG)
+            .summary("Cancel a pending approval request (managers), leaving the instance where it is")
+            .description(
+                "Needs `workflows.manage`, or the workflow's `_cancel` grant and the edit right on the CI's type: \
+                 the people who may cancel the instance. The comment is mandatory. Status `cancelled`, reason \
+                 `withdrawn`; audited on the CI as `workflow.approval_close`. For example, the incident runbook \
+                 cancels the pending requests of a requester whose account was disabled. 409 CONFLICT \
+                 `not_pending`; 409 VERSION_CONFLICT on a stale `expectedVersion`.",
+            )
+            .class_checked()
+            .errors(&[ErrorCode::NotFound, ErrorCode::Conflict, ErrorCode::VersionConflict])
+            .handle(
+                |api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<WorkflowApprovalCancel>>| async move {
+                    Ok(Json(runtime::approvals::cancel(&api.pool, &api.ctx, id, &b).await?))
                 },
             ),
         route(Method::GET, "/api/v1/configuration-items/{id}/workflows", "getConfigurationItemWorkflows")

@@ -153,6 +153,7 @@ pub async fn start_created(
             to_version_no: s.version_no,
             comment: None,
             field_changes: None,
+            approval: None,
         };
         runtime::insert_event(conn, ctx, event).await?;
         entries.push(AuditEntry {

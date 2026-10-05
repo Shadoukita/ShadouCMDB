@@ -77,7 +77,7 @@ pub async fn owner_context(
     let principal = Principal {
         user_id: owner,
         username,
-        credential: Credential::Token { profile_id: None, creator_id: None },
+        credential: Credential::Token { profile_id: None, creator_id: None, token_id: None, minted_by: None },
         permissions,
     };
     Ok(RequestContext::import_for_user(Arc::new(principal), job))

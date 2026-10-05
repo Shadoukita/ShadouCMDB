@@ -796,7 +796,8 @@ pub(crate) struct WorkflowWrite {
 /// the same value validation, and references only to CIs the caller may view.
 /// Writes the CI's `update` audit row unless nothing changed. Validation
 /// errors name the fields `attributes.<key>`, as a PATCH does. Without
-/// `apply` it only validates (the CI is left as it is).
+/// `apply` it only validates (the CI is left as it is). `note` adds its keys
+/// to the audit row's new value (a final approval names its request there).
 pub(crate) async fn update_for_workflow(
     conn: &mut PgConnection,
     ctx: &RequestContext,
@@ -804,6 +805,7 @@ pub(crate) async fn update_for_workflow(
     class_id: Uuid,
     attributes: Map<String, Value>,
     apply: bool,
+    note: Option<&Map<String, Value>>,
 ) -> Result<WorkflowWrite, AppError> {
     let model = Model::load(conn).await?;
     let before = must_detail(conn, &model, id, None).await?;
@@ -832,8 +834,11 @@ pub(crate) async fn update_for_workflow(
     plan::apply(conn, &model, &plan).await?;
     let after = must_detail(conn, &model, id, None).await?;
     let old = plan.before.as_ref().map(crud::json);
-    let new = crud::json(&after);
+    let mut new = crud::json(&after);
     if old.as_ref() != Some(&new) {
+        if let (Some(note), Value::Object(m)) = (note, &mut new) {
+            m.extend(note.clone());
+        }
         let entry = AuditEntry {
             action: AuditAction::Update,
             entity_type: "configuration_items",
@@ -1123,7 +1128,12 @@ mod tests {
         let principal = crate::auth::Principal {
             user_id: Uuid::new_v4(),
             username: if administrator { "admin" } else { "editor" }.into(),
-            credential: crate::auth::Credential::Token { profile_id: None, creator_id: None },
+            credential: crate::auth::Credential::Token {
+                profile_id: None,
+                creator_id: None,
+                token_id: None,
+                minted_by: None,
+            },
             permissions,
         };
         RequestContext::user(std::sync::Arc::new(principal), "test".into())
@@ -1361,7 +1371,12 @@ mod tests {
         let principal = crate::auth::Principal {
             user_id: Uuid::new_v4(),
             username: "restricted".into(),
-            credential: crate::auth::Credential::Token { profile_id: None, creator_id: None },
+            credential: crate::auth::Credential::Token {
+                profile_id: None,
+                creator_id: None,
+                token_id: None,
+                minted_by: None,
+            },
             permissions,
         };
         let ctx = RequestContext::user(std::sync::Arc::new(principal), "test".into());

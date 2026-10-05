@@ -237,6 +237,14 @@ pub async fn migrate(
         })
         .collect();
     let total: i64 = counts.values().sum();
+    let pending: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM cmdb.workflow_instances wi WHERE wi.version_id = $1 AND wi.status = 'active'
+           AND EXISTS (SELECT 1 FROM cmdb.workflow_approval_requests r WHERE r.instance_id = wi.id AND r.status = 'pending')",
+    )
+    .bind(from.id)
+    .fetch_one(&mut *conn)
+    .await?;
+    let cancel = b.pending_approvals == WorkflowMigrationPendingApprovals::Cancel;
     let mut report = WorkflowInstanceMigrationReport {
         dry_run: b.dry_run,
         definition_key: d.key.clone(),
@@ -245,6 +253,8 @@ pub async fn migrate(
         total,
         migrated: 0,
         batches: 0,
+        pending_approvals: pending,
+        skipped: 0,
         states,
     };
     if b.dry_run {
@@ -254,8 +264,15 @@ pub async fn migrate(
 
     let map: HashMap<Uuid, &PinnedState> =
         targets.iter().filter_map(|(s, t)| t.as_ref().map(|(to, _)| (s.id, *to))).collect();
-    let step =
-        Step { d: &d, model: &model, from: &from_graph, map: &map, from_no: b.from_version_no, to_no: b.to_version_no };
+    let step = Step {
+        d: &d,
+        model: &model,
+        from: &from_graph,
+        map: &map,
+        from_no: b.from_version_no,
+        to_no: b.to_version_no,
+        cancel,
+    };
     loop {
         let mut tx = pool.begin().await?;
         let moved = step.batch(&mut tx, ctx, from.id, to.id).await?;
@@ -269,6 +286,17 @@ pub async fn migrate(
             break;
         }
     }
+    if !cancel {
+        let mut conn = pool.acquire().await?;
+        report.skipped = sqlx::query_scalar(
+            "SELECT count(*) FROM cmdb.workflow_instances wi WHERE wi.version_id = $1 AND wi.status = 'active'
+               AND EXISTS (SELECT 1 FROM cmdb.workflow_approval_requests r
+                           WHERE r.instance_id = wi.id AND r.status = 'pending')",
+        )
+        .bind(from.id)
+        .fetch_one(&mut *conn)
+        .await?;
+    }
     Ok(report)
 }
 
@@ -279,6 +307,8 @@ struct Step<'a> {
     map: &'a HashMap<Uuid, &'a PinnedState>,
     from_no: i32,
     to_no: i32,
+    /// Close pending approval requests and move their instances (else they stay).
+    cancel: bool,
 }
 
 struct Moved {
@@ -304,12 +334,16 @@ impl Step<'_> {
         from: Uuid,
         to: Uuid,
     ) -> Result<Moved, AppError> {
+        // Instances waiting for approval stay unless their requests are cancelled.
         let picked: Vec<(Uuid, Uuid)> = sqlx::query_as(
-            "SELECT id, ci_id FROM cmdb.workflow_instances WHERE version_id = $1 AND status = 'active'
-             ORDER BY ci_id, id LIMIT $2",
+            "SELECT wi.id, wi.ci_id FROM cmdb.workflow_instances wi WHERE wi.version_id = $1 AND wi.status = 'active'
+               AND ($3 OR NOT EXISTS (SELECT 1 FROM cmdb.workflow_approval_requests r
+                                      WHERE r.instance_id = wi.id AND r.status = 'pending'))
+             ORDER BY wi.ci_id, wi.id LIMIT $2",
         )
         .bind(from)
         .bind(MIGRATION_BATCH)
+        .bind(self.cancel)
         .fetch_all(&mut *tx)
         .await?;
         if picked.is_empty() {
@@ -326,18 +360,27 @@ impl Step<'_> {
             "SELECT wi.id, wi.ci_id, ci.class_id, wi.current_state_id, wi.version
              FROM cmdb.workflow_instances wi JOIN cmdb.configuration_items ci ON ci.id = wi.ci_id
              WHERE wi.id = ANY($1) AND wi.version_id = $2 AND wi.status = 'active'
+               AND ($3 OR NOT EXISTS (SELECT 1 FROM cmdb.workflow_approval_requests r
+                                      WHERE r.instance_id = wi.id AND r.status = 'pending'))
              ORDER BY wi.id FOR UPDATE OF wi",
         )
         .bind(&ids)
         .bind(from)
+        .bind(self.cancel)
         .fetch_all(&mut *tx)
         .await?;
+        // A request is never carried to another version: CI → instance → request.
+        let mut entries = if self.cancel {
+            let locked: Vec<Uuid> = rows.iter().map(|r| r.id).collect();
+            runtime::approvals::close_for_migration(&mut *tx, ctx, &locked).await?
+        } else {
+            Vec::new()
+        };
 
         let mut targets: Vec<Uuid> = Vec::with_capacity(rows.len());
         let mut from_keys: Vec<&str> = Vec::with_capacity(rows.len());
         let mut to_keys: Vec<&str> = Vec::with_capacity(rows.len());
         let mut changes: Vec<Option<serde_json::Value>> = Vec::with_capacity(rows.len());
-        let mut entries = Vec::with_capacity(rows.len());
         for r in &rows {
             let source = self.from.state(r.current_state_id).ok_or_else(AppError::internal)?;
             // An instance moved into an unmapped state after the plan was made.
@@ -361,7 +404,7 @@ impl Step<'_> {
             } else {
                 Default::default()
             };
-            let changed = runtime::write_ci(&mut *tx, ctx, r.ci_id, r.class_id, write).await?;
+            let changed = runtime::write_ci(&mut *tx, ctx, r.ci_id, r.class_id, write, None).await?;
             targets.push(target.id);
             from_keys.push(&source.key);
             to_keys.push(&target.key);

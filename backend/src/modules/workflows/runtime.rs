@@ -22,6 +22,14 @@
 //! shows them and the item visibility rules apply. The CI fields a step writes
 //! (transition fields, the state field) are the usual CI `update` row of the
 //! same request. Each step is also an event of the instance (append-only).
+//!
+//! **Approvals** (approvals design SHAA-1869, [`approvals`]). A transition with
+//! an approval policy creates an approval request instead of moving the
+//! instance; while it is pending no other transition runs, and cancel, force,
+//! migration and a CI deletion close it. The lock order gains a third link:
+//! CI row → instance row → approval request row.
+
+pub mod approvals;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -31,6 +39,7 @@ use sqlx::types::Json as SqlJson;
 use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
+use super::approval_schemas::{WorkflowApprovalCloseReason, WorkflowApprovalStepSummary, WorkflowPendingApproval};
 use super::eval::{self, Subject};
 use super::graph::{self, VERSION_COLUMNS, VersionRow};
 use super::runtime_schemas::*;
@@ -80,6 +89,20 @@ struct PinnedTransition {
     gated: bool,
 }
 
+/// One step of a transition's approval policy.
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct PinnedStep {
+    transition_id: Uuid,
+    step_no: i16,
+    key: String,
+    name: String,
+    required_approvals: i16,
+    due_minutes: Option<i32>,
+    distinct_from_earlier: bool,
+    exclude_actors_of: Vec<String>,
+    allow_api_tokens: bool,
+}
+
 #[derive(Debug, Clone, sqlx::FromRow)]
 struct PinnedField {
     transition_id: Uuid,
@@ -94,6 +117,8 @@ pub(super) struct Pinned {
     pub(super) states: Vec<PinnedState>,
     transitions: Vec<PinnedTransition>,
     fields: Vec<PinnedField>,
+    /// Approval steps, in step order per transition.
+    steps: Vec<PinnedStep>,
 }
 
 impl Pinned {
@@ -111,6 +136,14 @@ impl Pinned {
 
     fn fields_of(&self, transition: Uuid) -> impl Iterator<Item = &PinnedField> {
         self.fields.iter().filter(move |f| f.transition_id == transition)
+    }
+
+    fn steps_of(&self, transition: Uuid) -> impl Iterator<Item = &PinnedStep> {
+        self.steps.iter().filter(move |s| s.transition_id == transition)
+    }
+
+    fn transition(&self, key: &str) -> Option<&PinnedTransition> {
+        self.transitions.iter().find(|t| t.key == key)
     }
 }
 
@@ -160,7 +193,17 @@ pub(super) async fn pinned(conn: &mut PgConnection, version_id: Uuid) -> Result<
     .bind(version_id)
     .fetch_all(&mut *conn)
     .await?;
-    let p = Arc::new(Pinned { initial_state_id, states, transitions, fields });
+    let steps = sqlx::query_as::<_, PinnedStep>(
+        "SELECT s.transition_id, s.step_no, s.key, s.name, s.required_approvals,
+                (extract(epoch FROM s.due_after) / 60)::int AS due_minutes, s.distinct_from_earlier,
+                s.exclude_actors_of, s.allow_api_tokens
+         FROM cmdb.workflow_transition_approval_steps s JOIN cmdb.workflow_transitions t ON t.id = s.transition_id
+         WHERE t.version_id = $1 ORDER BY s.transition_id, s.step_no",
+    )
+    .bind(version_id)
+    .fetch_all(&mut *conn)
+    .await?;
+    let p = Arc::new(Pinned { initial_state_id, states, transitions, fields, steps });
     // A draft can still change: never cached (no instance runs on one).
     if status != "draft"
         && let Ok(mut c) = cache().lock()
@@ -214,7 +257,7 @@ async fn granted(conn: &mut PgConnection, ctx: &RequestContext, definition: Uuid
         return Ok(Granted::All);
     }
     let (token_profile, creator) = match p.credential {
-        Credential::Token { profile_id, creator_id } => (profile_id, creator_id),
+        Credential::Token { profile_id, creator_id, .. } => (profile_id, creator_id),
         Credential::Session { .. } => (None, None),
     };
     let rows: Vec<(String, Option<String>)> = sqlx::query_as(
@@ -280,7 +323,19 @@ const COLUMNS: &str = "wi.id, wi.definition_id, d.key AS definition_key, d.name 
      ci.class_id, c.key AS class_key, ci.deleted_at IS NOT NULL AS ci_deleted, ci.version AS ci_version, \
      wi.current_state_id, s.key AS state_key, s.name AS state_name, s.category AS state_category, \
      s.is_terminal AS state_terminal, wi.status, wi.started_at, wi.started_by_name, wi.last_transition_at, \
-     wi.ended_at, wi.version";
+     wi.ended_at, wi.version, \
+     (SELECT jsonb_build_object('requestId', r.id, 'requestNo', r.request_no, 'transitionKey', r.transition_key, \
+        'toState', ts.key, 'stepNo', st.step_no, 'stepKey', st.step_key, \
+        'stepCount', (SELECT count(*) FROM cmdb.workflow_approval_request_steps c WHERE c.request_id = r.id), \
+        'approvals', (SELECT count(*) FROM cmdb.workflow_approval_decisions dc \
+                      WHERE dc.request_id = r.id AND dc.step_no = st.step_no AND dc.decision = 'approve'), \
+        'required', st.required_approvals, 'dueAt', st.due_at, 'overdue', st.overdue_at IS NOT NULL, \
+        'version', r.version) \
+      FROM cmdb.workflow_approval_requests r \
+      JOIN cmdb.workflow_approval_request_steps st ON st.request_id = r.id AND st.step_no = r.current_step_no \
+      JOIN cmdb.workflow_transitions tr ON tr.version_id = r.version_id AND tr.key = r.transition_key \
+      JOIN cmdb.workflow_states ts ON ts.id = tr.to_state_id \
+      WHERE r.instance_id = wi.id AND r.status = 'pending') AS pending_approval";
 const FROM: &str = "cmdb.workflow_instances wi JOIN cmdb.workflow_definitions d ON d.id = wi.definition_id \
      JOIN cmdb.workflow_versions v ON v.id = wi.version_id \
      JOIN cmdb.configuration_items ci ON ci.id = wi.ci_id JOIN cmdb.ci_classes c ON c.id = ci.class_id \
@@ -313,6 +368,7 @@ struct InstanceRow {
     last_transition_at: chrono::DateTime<chrono::Utc>,
     ended_at: Option<chrono::DateTime<chrono::Utc>>,
     version: i32,
+    pending_approval: Option<SqlJson<WorkflowPendingApproval>>,
 }
 
 impl InstanceRow {
@@ -340,6 +396,7 @@ impl InstanceRow {
             ended_at: self.ended_at,
             version: self.version,
             ci_version: self.ci_version,
+            pending_approval: self.pending_approval.as_ref().map(|p| p.0.clone()),
         }
     }
 }
@@ -516,6 +573,7 @@ fn available(
     if row.status != WorkflowInstanceStatus::Active || row.ci_deleted || !may_edit {
         return Vec::new();
     }
+    let pending = row.pending_approval.as_ref().map(|p| approvals::pending_reason(&p.0));
     p.out_of(row.current_state_id)
         .filter(|t| granted.has(&t.key))
         .filter_map(|t| {
@@ -538,8 +596,17 @@ fn available(
                 name: t.name.clone(),
                 to_state: state_ref(to),
                 requires_comment: t.requires_comment,
+                requires_approval: t.gated,
+                approval_steps: p
+                    .steps_of(t.id)
+                    .map(|s| WorkflowApprovalStepSummary {
+                        key: s.key.clone(),
+                        name: s.name.clone(),
+                        required_approvals: s.required_approvals,
+                    })
+                    .collect(),
                 fields,
-                blocked_by: blocked_by(t, cx),
+                blocked_by: pending.iter().cloned().chain(blocked_by(t, cx)).collect(),
             })
         })
         .collect()
@@ -622,6 +689,8 @@ pub(super) struct NewEvent<'a> {
     pub(super) to_version_no: i32,
     pub(super) comment: Option<&'a str>,
     pub(super) field_changes: Option<Value>,
+    /// The approval request (and step) an `approval_*` event, or the transition a final approval applied, belongs to.
+    pub(super) approval: Option<(Uuid, Option<i16>)>,
 }
 
 pub(super) async fn insert_event(
@@ -633,8 +702,8 @@ pub(super) async fn insert_event(
     sqlx::query(
         "INSERT INTO cmdb.workflow_instance_events
            (instance_id, kind, transition_key, from_state_key, to_state_key, to_version_no,
-            actor_type, actor_id, actor_name, comment, field_changes, request_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+            actor_type, actor_id, actor_name, comment, field_changes, request_id, approval_request_id, approval_step_no)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
     )
     .bind(e.instance)
     .bind(e.kind)
@@ -648,22 +717,26 @@ pub(super) async fn insert_event(
     .bind(e.comment)
     .bind(e.field_changes.map(SqlJson))
     .bind(&ctx.request_id)
+    .bind(e.approval.map(|a| a.0))
+    .bind(e.approval.and_then(|a| a.1))
     .execute(conn)
     .await?;
     Ok(())
 }
 
 /// The CI values a step sets on its CI, through the item write path; returns
-/// `{key: {old, new}}` of what changed (None when nothing did).
+/// `{key: {old, new}}` of what changed (None when nothing did). `note` goes
+/// into the CI `update` audit row's new value.
 pub(super) async fn write_ci(
     conn: &mut PgConnection,
     ctx: &RequestContext,
     ci: Uuid,
     class_id: Uuid,
     attributes: Map<String, Value>,
+    note: Option<&Map<String, Value>>,
 ) -> Result<Option<Value>, AppError> {
     let keys: Vec<String> = attributes.keys().cloned().collect();
-    let w = items::update_for_workflow(conn, ctx, ci, class_id, attributes, true).await?;
+    let w = items::update_for_workflow(conn, ctx, ci, class_id, attributes, true, note).await?;
     let mut changes = Map::new();
     for k in keys {
         let (old, new) = (w.before.attributes.get(&k), w.after.attributes.get(&k));
@@ -810,7 +883,8 @@ pub async fn start(
     .fetch_one(&mut *tx)
     .await?;
     let changes =
-        write_ci(&mut tx, ctx, b.ci_id, locked.class_id, state_value(&model, d.state_attribute_id, initial)).await?;
+        write_ci(&mut tx, ctx, b.ci_id, locked.class_id, state_value(&model, d.state_attribute_id, initial), None)
+            .await?;
     let comment = b.comment.as_deref().filter(|c| !c.trim().is_empty());
     insert_event(
         &mut tx,
@@ -824,6 +898,7 @@ pub async fn start(
             to_version_no: version_no,
             comment,
             field_changes: changes,
+            approval: None,
         },
     )
     .await?;
@@ -868,7 +943,7 @@ pub async fn events(
         .await?;
     let data = sqlx::query_as::<_, WorkflowEvent>(
         "SELECT id, kind, transition_key, from_state_key, to_state_key, from_version_no, to_version_no, occurred_at,
-                actor_type, actor_name, comment, field_changes, request_id
+                actor_type, actor_name, comment, field_changes, request_id, approval_request_id, approval_step_no
          FROM cmdb.workflow_instance_events WHERE instance_id = $1 ORDER BY id LIMIT $2 OFFSET $3",
     )
     .bind(id)
@@ -1051,31 +1126,38 @@ fn as_transition_fields(mut e: AppError) -> AppError {
     e
 }
 
+/// Runs a transition; for one that needs approval, creates the approval
+/// request instead (the instance stays in its state). Returns the instance
+/// and whether it was a request.
 pub async fn transition(
     pool: &PgPool,
     ctx: &RequestContext,
     id: Uuid,
     b: &WorkflowTransitionRun,
-) -> Result<WorkflowInstance, AppError> {
+) -> Result<(WorkflowInstance, bool), AppError> {
     let mut tx = pool.begin().await?;
-    let after = transition_in(&mut tx, ctx, id, b).await?;
+    let (after, request) = transition_in(&mut tx, ctx, id, b).await?;
     tx.commit().await?;
-    Ok(after.dto())
+    Ok((after.dto(), request.is_some()))
 }
 
-/// One transition in the caller's transaction (a single run, or one item of a bulk run).
+/// One transition in the caller's transaction (a single run, or one item of a
+/// bulk run), with the approval request it created instead, if it is gated.
 async fn transition_in(
     tx: &mut PgConnection,
     ctx: &RequestContext,
     id: Uuid,
     b: &WorkflowTransitionRun,
-) -> Result<InstanceRow, AppError> {
+) -> Result<(InstanceRow, Option<Uuid>), AppError> {
     let row = lock(&mut *tx, ctx, id).await?;
     check_active(&row)?;
     check_version(&row, b.expected_version)?;
+    if let Some(pending) = &row.pending_approval {
+        return Err(approvals::pending_error(&pending.0));
+    }
     ctx.require_class(row.class_id, ClassOp::Edit)?;
     let p = pinned(&mut *tx, row.version_id).await?;
-    let Some(t) = p.transitions.iter().find(|t| t.key == b.transition_key) else {
+    let Some(t) = p.transition(&b.transition_key) else {
         return Err(AppError::field(
             "transitionKey",
             format!(
@@ -1102,19 +1184,6 @@ async fn transition_in(
             ),
         ));
     }
-    // Fail closed until approval requests exist (approvals slice A3): a
-    // transition with an approval policy never runs without one.
-    if t.gated {
-        return Err(detail_error(
-            ErrorCode::Conflict,
-            format!(
-                "Transition {} of workflow {} needs approval, and this server cannot create approval requests yet",
-                t.key, row.definition_key
-            ),
-            "transitionKey",
-            "approval_required",
-        ));
-    }
     let to = p.state(t.to_state_id).ok_or_else(AppError::internal)?;
     let model = Model::load(&mut *tx).await?;
 
@@ -1135,12 +1204,13 @@ async fn transition_in(
     if !unknown.is_empty() {
         return Err(AppError::validation(unknown));
     }
-    items::update_for_workflow(&mut *tx, ctx, row.ci_id, row.class_id, b.fields.clone(), false)
+    items::update_for_workflow(&mut *tx, ctx, row.ci_id, row.class_id, b.fields.clone(), false, None)
         .await
         .map_err(as_transition_fields)?;
 
     // Required fields, the comment and the conditions, on the CI's values with the ones sent.
-    let mut values = current_values(&mut *tx, &model, row.ci_id).await?;
+    let current = current_values(&mut *tx, &model, row.ci_id).await?;
+    let mut values = current.clone();
     for (k, v) in &b.fields {
         values.insert(k.clone(), v.clone());
     }
@@ -1190,10 +1260,18 @@ async fn transition_in(
         .with_details(failed));
     }
 
+    // A gated transition writes nothing yet: it stages the fields in an approval request.
+    if t.gated {
+        let staged = approvals::Staged { fields: &b.fields, current: &current, comment };
+        let request = approvals::create(&mut *tx, ctx, &row, &p, t, staged).await?;
+        return Ok((reload(&mut *tx, id).await?, Some(request)));
+    }
+
     // Write: the fields sent and the state field, then the instance, its event and the audit row.
     let mut attributes = b.fields.clone();
     attributes.extend(state_value(&model, row.state_attribute_id, to));
-    let changes = write_ci(&mut *tx, ctx, row.ci_id, row.class_id, attributes).await.map_err(as_transition_fields)?;
+    let changes =
+        write_ci(&mut *tx, ctx, row.ci_id, row.class_id, attributes, None).await.map_err(as_transition_fields)?;
     move_to(&mut *tx, id, to).await?;
     insert_event(
         &mut *tx,
@@ -1207,6 +1285,7 @@ async fn transition_in(
             to_version_no: row.version_no,
             comment,
             field_changes: changes.clone(),
+            approval: None,
         },
     )
     .await?;
@@ -1220,7 +1299,7 @@ async fn transition_in(
             "stateKey": to.key, "version": row.version + 1, "comment": comment, "fields": changes })),
     };
     crud::write_audit(&mut *tx, ctx, vec![entry]).await?;
-    reload(&mut *tx, id).await
+    Ok((reload(&mut *tx, id).await?, None))
 }
 
 // ---------------------------------------------------------------------------
@@ -1261,13 +1340,14 @@ pub async fn bulk_transitions(
         let mut sp = sqlx::Connection::begin(&mut *tx).await?;
         let outcome = transition_in(&mut sp, ctx, item.instance_id, &run).await;
         let result = match outcome {
-            Ok(row) => {
+            Ok((row, request)) => {
                 sp.commit().await?;
                 WorkflowBulkTransitionResult {
                     index: i as i32,
                     instance_id: item.instance_id,
                     ok: true,
                     instance: Some(row.dto()),
+                    approval_request_id: request,
                     error: None,
                 }
             }
@@ -1280,6 +1360,7 @@ pub async fn bulk_transitions(
                     instance_id: item.instance_id,
                     ok: false,
                     instance: None,
+                    approval_request_id: None,
                     error: Some(WorkflowBulkError::from(e)),
                 }
             }
@@ -1319,6 +1400,9 @@ pub async fn cancel(
         }
     }
     let reason = b.reason.trim();
+    let closed =
+        approvals::close_pending(&mut tx, ctx, &row, WorkflowApprovalCloseReason::InstanceCancelled, Some(reason))
+            .await?;
     sqlx::query(
         "UPDATE cmdb.workflow_instances SET status = 'cancelled', ended_at = now(), version = version + 1
          WHERE id = $1",
@@ -1338,6 +1422,7 @@ pub async fn cancel(
             to_version_no: row.version_no,
             comment: Some(reason),
             field_changes: None,
+            approval: None,
         },
     )
     .await?;
@@ -1349,7 +1434,8 @@ pub async fn cancel(
         new_value: Some(json!({ "instanceId": id, "definitionKey": row.definition_key, "stateKey": row.state_key,
             "version": row.version + 1, "reason": reason })),
     };
-    crud::write_audit(&mut tx, ctx, vec![entry]).await?;
+    let entries = closed.map(|c| c.entry).into_iter().chain([entry]).collect();
+    crud::write_audit(&mut tx, ctx, entries).await?;
     let after = reload(&mut tx, id).await?;
     tx.commit().await?;
     Ok(after.dto())
@@ -1385,8 +1471,12 @@ pub async fn force(
     }
     let model = Model::load(&mut tx).await?;
     let reason = b.reason.trim();
+    // The administrator's override of a pending approval, made visible on the force row.
+    let closed =
+        approvals::close_pending(&mut tx, ctx, &row, WorkflowApprovalCloseReason::InstanceForced, Some(reason)).await?;
+    let overridden = closed.as_ref().map(|c| c.request_id);
     let changes =
-        write_ci(&mut tx, ctx, row.ci_id, row.class_id, state_value(&model, row.state_attribute_id, to)).await?;
+        write_ci(&mut tx, ctx, row.ci_id, row.class_id, state_value(&model, row.state_attribute_id, to), None).await?;
     move_to(&mut tx, id, to).await?;
     insert_event(
         &mut tx,
@@ -1400,6 +1490,7 @@ pub async fn force(
             to_version_no: row.version_no,
             comment: Some(reason),
             field_changes: changes.clone(),
+            approval: None,
         },
     )
     .await?;
@@ -1410,9 +1501,11 @@ pub async fn force(
         old_value: Some(json!({ "instanceId": id, "definitionKey": row.definition_key, "stateKey": row.state_key,
             "version": row.version })),
         new_value: Some(json!({ "instanceId": id, "definitionKey": row.definition_key, "stateKey": to.key,
-            "version": row.version + 1, "reason": reason, "fields": changes })),
+            "version": row.version + 1, "reason": reason, "fields": changes,
+            "overriddenApprovalRequestId": overridden })),
     };
-    crud::write_audit(&mut tx, ctx, vec![entry]).await?;
+    let entries = closed.map(|c| c.entry).into_iter().chain([entry]).collect();
+    crud::write_audit(&mut tx, ctx, entries).await?;
     let after = reload(&mut tx, id).await?;
     tx.commit().await?;
     Ok(after.dto())
@@ -1441,7 +1534,9 @@ pub async fn cancel_for_deleted_ci(
         return Ok(Vec::new());
     }
     const REASON: &str = "The configuration item was deleted";
+    // Their pending approval requests close first (CI → instance → request).
     let ids: Vec<Uuid> = rows.iter().map(|r| r.0).collect();
+    let mut entries = approvals::close_for_deleted_ci(&mut *conn, ctx, ci, &ids, REASON).await?;
     let states: Vec<&str> = rows.iter().map(|r| r.2.as_str()).collect();
     let versions: Vec<i32> = rows.iter().map(|r| r.3).collect();
     sqlx::query(
@@ -1457,15 +1552,13 @@ pub async fn cancel_for_deleted_ci(
     .bind(&ctx.request_id)
     .execute(&mut *conn)
     .await?;
-    Ok(rows
-        .into_iter()
-        .map(|(id, key, state, _, version)| AuditEntry {
-            action: AuditAction::WorkflowCancel,
-            entity_type: "configuration_items",
-            entity_id: ci,
-            old_value: None,
-            new_value: Some(json!({ "instanceId": id, "definitionKey": key, "stateKey": state, "version": version,
-                "reason": "ci_deleted" })),
-        })
-        .collect())
+    entries.extend(rows.into_iter().map(|(id, key, state, _, version)| AuditEntry {
+        action: AuditAction::WorkflowCancel,
+        entity_type: "configuration_items",
+        entity_id: ci,
+        old_value: None,
+        new_value: Some(json!({ "instanceId": id, "definitionKey": key, "stateKey": state, "version": version,
+            "reason": "ci_deleted" })),
+    }));
+    Ok(entries)
 }
