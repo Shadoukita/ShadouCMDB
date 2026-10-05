@@ -23379,7 +23379,8 @@
                 "saved_views",
                 "config",
                 "ci_layout_overrides",
-                "workflow_definitions"
+                "workflow_definitions",
+                "workflow_approval_delegations"
               ]
             }
           },
@@ -23426,7 +23427,11 @@
                 "workflow.cancel",
                 "workflow.transition",
                 "workflow.migrate",
-                "workflow.force"
+                "workflow.force",
+                "workflow.approval_request",
+                "workflow.approval_decide",
+                "workflow.approval_close",
+                "workflow.approval_overdue"
               ]
             }
           },
@@ -33642,7 +33647,11 @@
               "workflow.cancel",
               "workflow.transition",
               "workflow.migrate",
-              "workflow.force"
+              "workflow.force",
+              "workflow.approval_request",
+              "workflow.approval_decide",
+              "workflow.approval_close",
+              "workflow.approval_overdue"
             ]
           },
           "entityType": {

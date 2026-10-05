@@ -72,6 +72,8 @@ pub enum EntityType {
     /// Workflow definitions: create, update (settings, grants, retired versions), delete, `workflow.publish`.
     /// Workflow runs on a CI are recorded on the CI (`configuration_items`).
     WorkflowDefinitions,
+    /// Approval delegations: create, update (revocation).
+    WorkflowApprovalDelegations,
 }
 
 impl EntityType {
@@ -107,6 +109,7 @@ impl EntityType {
             EntityType::Config => "config",
             EntityType::CiLayoutOverrides => "ci_layout_overrides",
             EntityType::WorkflowDefinitions => "workflow_definitions",
+            EntityType::WorkflowApprovalDelegations => "workflow_approval_delegations",
         }
     }
 }

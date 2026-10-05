@@ -53,6 +53,7 @@ const ENTITY_LABELS: Record<EntityType, string> = {
   config: "Configuration file",
   ci_layout_overrides: "CI layout",
   workflow_definitions: "Workflow",
+  workflow_approval_delegations: "Approval delegation",
 };
 const ENTITY_TYPES = (Object.keys(ENTITY_LABELS) as EntityType[]).map((value) => ({ value, label: ENTITY_LABELS[value] }));
 const ACTION_SET: Record<Action, true> = {
@@ -84,6 +85,10 @@ const ACTION_SET: Record<Action, true> = {
   "workflow.transition": true,
   "workflow.migrate": true,
   "workflow.force": true,
+  "workflow.approval_request": true,
+  "workflow.approval_decide": true,
+  "workflow.approval_close": true,
+  "workflow.approval_overdue": true,
 };
 const ACTIONS = Object.keys(ACTION_SET) as Action[];
 const entityLabel = (t: string) => ENTITY_TYPES.find((e) => e.value === t)?.label ?? t;

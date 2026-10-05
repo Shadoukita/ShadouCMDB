@@ -108,6 +108,21 @@ erDiagram
     workflow_states ||--o{ workflow_instances : "version_id, current_state_id (composite)"
     configuration_items ||--o{ workflow_instances : "ci_id (RESTRICT)"
     workflow_instances ||--o{ workflow_instance_events : "instance_id (RESTRICT)"
+    workflow_transitions ||--o{ workflow_transition_approval_steps : "transition_id (CASCADE)"
+    workflow_definitions ||--o{ workflow_approval_assignments : "definition_id (CASCADE)"
+    permission_profiles |o--o{ workflow_approval_assignments : "profile_id (CASCADE)"
+    user_groups |o--o{ workflow_approval_assignments : "group_id (CASCADE)"
+    users |o--o{ workflow_approval_assignments : "user_id (CASCADE)"
+    ci_attribute_definitions |o--o{ workflow_approval_assignments : "attribute_id (RESTRICT)"
+    users |o--o{ workflow_approval_delegations : "principal_id / delegate_id / created_by_id (SET NULL)"
+    workflow_definitions |o--o{ workflow_approval_delegations : "definition_id (CASCADE)"
+    workflow_instances ||--o{ workflow_approval_requests : "instance_id (RESTRICT)"
+    workflow_transitions ||--o{ workflow_approval_requests : "version_id, transition_key (composite)"
+    users |o--o{ workflow_approval_requests : "requested_by_id (SET NULL)"
+    workflow_approval_requests ||--o{ workflow_approval_request_steps : "request_id (RESTRICT)"
+    workflow_approval_request_steps ||--o{ workflow_approval_eligibility : "request_id, step_no (CASCADE)"
+    workflow_approval_request_steps ||--o{ workflow_approval_decisions : "request_id, step_no (RESTRICT)"
+    workflow_approval_delegations |o--o{ workflow_approval_decisions : "delegation_id (RESTRICT)"
 
     areas {
         uuid id PK
@@ -527,7 +542,7 @@ erDiagram
     workflow_instance_events {
         bigint id PK
         uuid instance_id FK
-        text kind "start | transition | cancel | migrate | force"
+        text kind "start | transition | cancel | migrate | force | approval_*"
         text transition_key
         text from_state_key
         text to_state_key
@@ -535,6 +550,9 @@ erDiagram
         text actor_type
         jsonb field_changes
         text request_id "joins audit_log"
+        uuid approval_request_id "approval kinds; no FK"
+        smallint approval_step_no
+        text on_behalf_of_name
     }
     workflow_instance_archive {
         uuid instance_id PK "no FK: the CI and instance are gone"
@@ -546,8 +564,94 @@ erDiagram
         text state_key
         text status
         jsonb events "every event, oldest first"
+        jsonb approvals "requests with steps and decisions (0051)"
         timestamptz archived_at
         text request_id "joins the CI's delete row"
+    }
+    workflow_transition_approval_steps {
+        uuid transition_id PK,FK
+        smallint step_no PK "1..5"
+        text key UK
+        text name
+        smallint required_approvals "N of the step"
+        interval due_after
+        text on_overdue "flag | reject"
+        boolean distinct_from_earlier
+        text_array exclude_actors_of
+        boolean allow_api_tokens
+    }
+    workflow_approval_assignments {
+        uuid id PK
+        uuid definition_id FK
+        text transition_key
+        text step_key
+        text role "approver | escalation"
+        text source "profile | group | user | ci_attribute | service_owner"
+        uuid profile_id FK
+        uuid group_id FK
+        uuid user_id FK
+        uuid attribute_id FK
+        text service_owner_role "technical | business"
+    }
+    workflow_approval_delegations {
+        uuid id PK
+        uuid principal_id FK "NULL once the user is deleted"
+        text principal_name
+        uuid delegate_id FK "NULL once the user is deleted"
+        text delegate_name
+        uuid definition_id FK "NULL = every workflow"
+        timestamptz starts_at
+        timestamptz ends_at "at most 90 days after starts_at"
+        uuid created_by_id FK "never the delegate, unless the principal"
+        timestamptz revoked_at
+    }
+    workflow_approval_requests {
+        uuid id PK
+        uuid instance_id FK
+        uuid version_id FK
+        text transition_key FK
+        integer request_no UK
+        text status "pending | approved | rejected | withdrawn | cancelled; one pending per instance"
+        text close_reason
+        uuid requested_by_id FK
+        uuid_array excluded_user_ids "four-eyes"
+        uuid token_id "no FK"
+        uuid token_creator_id "no FK"
+        jsonb staged_fields
+        jsonb field_baseline
+        integer version
+    }
+    workflow_approval_request_steps {
+        uuid request_id PK,FK
+        smallint step_no PK
+        text step_key
+        smallint required_approvals
+        text status "waiting | active | approved | rejected | closed"
+        timestamptz due_at
+        timestamptz overdue_at
+        integer eligible_count
+    }
+    workflow_approval_eligibility {
+        uuid request_id PK,FK
+        smallint step_no PK,FK
+        text role PK
+        text principal_kind PK "user | profile | group"
+        uuid principal_id PK "no FK"
+        jsonb via
+    }
+    workflow_approval_decisions {
+        bigint id PK
+        uuid request_id FK
+        smallint step_no FK
+        text decision "approve | reject"
+        uuid actor_id "no FK; one vote per actor per step"
+        text actor_name
+        text credential "session | token"
+        uuid token_id "set exactly for token decisions; no FK"
+        uuid token_creator_id
+        uuid on_behalf_of_id "one vote per principal per step"
+        uuid delegation_id FK
+        jsonb via
     }
 ```
 
@@ -574,3 +678,13 @@ touches it. Since 0050, deleting a `configuration_items` row (a type purge) firs
 instances, with all of its events, into `workflow_instance_archive` (a SECURITY DEFINER trigger; the
 only path by which events are ever deleted). The archive has no foreign keys, is append-only for
 every role (the API role holds only SELECT), and audit retention never touches it.
+
+Approvals (0051): a transition's approval steps (`workflow_transition_approval_steps`) are part of the
+version graph and as immutable as its transitions. Approver assignments are per definition, keyed by
+transition and step key like transition grants, with exactly one source each. A delegation is never
+deleted, only revoked; deleting a user for good sets their side to NULL and the row keeps their name,
+so a decision made through it stays intact. At most one request per instance is `pending` (a partial
+unique index). `workflow_approval_decisions` is append-only like the events (the same trigger, and the
+API role holds only SELECT and INSERT), with one vote per actor and per principal per step. The CI
+purge trigger archives each instance's requests, steps and decisions into
+`workflow_instance_archive.approvals` before deleting them.

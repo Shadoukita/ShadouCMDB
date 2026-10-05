@@ -83,7 +83,7 @@ async fn rights(pool: &PgPool) -> Vec<(String, String)> {
     .unwrap()
 }
 
-async fn validated(pool: &PgPool, name: &str) -> bool {
+pub(crate) async fn validated(pool: &PgPool, name: &str) -> bool {
     sqlx::query_scalar(
         "SELECT c.convalidated FROM pg_constraint c WHERE c.conrelid = 'cmdb.audit_log'::regclass AND c.conname = $1",
     )
@@ -94,7 +94,7 @@ async fn validated(pool: &PgPool, name: &str) -> bool {
 }
 
 /// Runs `sql`; on failure, the SQLSTATE and the message.
-async fn run(pool: &PgPool, sql: &str) -> Result<(), (String, String)> {
+pub(crate) async fn run(pool: &PgPool, sql: &str) -> Result<(), (String, String)> {
     match pool.execute(sqlx::AssertSqlSafe(sql.to_owned())).await {
         Ok(_) => Ok(()),
         Err(sqlx::Error::Database(e)) => Err((e.code().unwrap_or_default().into_owned(), e.message().to_owned())),
@@ -103,7 +103,7 @@ async fn run(pool: &PgPool, sql: &str) -> Result<(), (String, String)> {
 }
 
 /// `sql` is refused with this SQLSTATE.
-async fn refused(pool: &PgPool, sql: &str, code: &str) -> String {
+pub(crate) async fn refused(pool: &PgPool, sql: &str, code: &str) -> String {
     match run(pool, sql).await {
         Ok(()) => panic!("expected {code}, but it ran: {sql}"),
         Err((got, message)) => {
@@ -113,13 +113,13 @@ async fn refused(pool: &PgPool, sql: &str, code: &str) -> String {
     }
 }
 
-async fn ok(pool: &PgPool, sql: &str) {
+pub(crate) async fn ok(pool: &PgPool, sql: &str) {
     if let Err((code, message)) = run(pool, sql).await {
         panic!("{sql}: {code} {message}");
     }
 }
 
-async fn id(pool: &PgPool, sql: &str) -> Uuid {
+pub(crate) async fn id(pool: &PgPool, sql: &str) -> Uuid {
     sqlx::query_scalar(sqlx::AssertSqlSafe(sql.to_owned()))
         .fetch_one(pool)
         .await
