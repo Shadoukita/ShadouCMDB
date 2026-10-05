@@ -1,5 +1,5 @@
 import type { Browser, Page } from "@playwright/test";
-import { apiGet, apiSend, checkA11y, expect, test } from "./support";
+import { apiGet, apiSend, checkA11y, expect, roValue, test } from "./support";
 
 // Adopting an existing inventory (SHAA-1815, v0.4.0 S6 part 2): an administrator activates a workflow that drives a
 // state field, follows the UNINSTANCED_CIS warning to the bootstrap, previews it (counts per state, values no state
@@ -141,10 +141,14 @@ test("the operator finds the state field locked on the form and the detail page,
   const ci = await apiGet<{ attributes: Record<string, unknown> }>(request, `/configuration-items/${plannedId}`);
   expect(ci.attributes.ticket).toBe("CHG-1815");
 
-  // The detail page edits fields in place: the state field is locked there too.
+  // The detail page edits fields in place: there the state field is shown as a value, with no input, and says why.
   await page.goto(`/cis/${plannedId}`);
-  await expect(page.locator("[data-field='attributes.phase']")).toContainText("Set by a workflow");
-  await expect(page.getByLabel("Phase")).toBeDisabled();
+  await expect(page.getByLabel("Change ticket")).toHaveValue("CHG-1815");
+  await expect(page.getByLabel("Change ticket")).toBeEditable();
+  const shown = page.locator(".field-ro[data-field='attributes.phase']");
+  await expect(shown).toContainText("Set by a workflow");
+  await expect(roValue(page, "attributes.phase")).toHaveText("planned");
+  await expect(shown.locator("input, select, [role='combobox']")).toHaveCount(0);
   await page.context().close();
 });
 
