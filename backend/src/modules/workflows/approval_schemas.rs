@@ -5,15 +5,16 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use utoipa::ToSchema;
 use utoipa::openapi::schema::{ObjectBuilder, Schema, Type};
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use super::runtime_schemas::{MAX_COMMENT, WorkflowInstance};
 use super::schemas::{WorkflowApproverRole, WorkflowApproverSource};
 use crate::api::route::Check;
-use crate::api::schemas::{self, key_schema, ts};
+use crate::api::schemas::{self, QueryBool, Sort, key_schema, ts};
 use crate::http::error::{FieldError, FieldLocation};
+use crate::paged;
 
 fn comment_schema() -> Schema {
     schemas::multiline_text_schema(MAX_COMMENT)
@@ -371,3 +372,153 @@ pub struct WorkflowApprovalCancel {
 }
 
 impl Check for WorkflowApprovalCancel {}
+
+// ---------------------------------------------------------------------------
+// Lists (slice A3b)
+// ---------------------------------------------------------------------------
+
+/// Which requests a list shows (default `actionable`)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowApprovalView {
+    /// Pending requests whose active step the caller may decide now (the inbox)
+    Actionable,
+    /// Requests the caller made
+    Requested,
+    /// Requests the caller approved or rejected a step of
+    Decided,
+    /// Every request on the CIs the caller may view
+    All,
+}
+
+fn view_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .enum_values(Some(["actionable", "requested", "decided", "all"]))
+        .default(Some("actionable".into()))
+        .description(Some(
+            "actionable (default): pending requests whose active step you may decide now, in person; requested: \
+             the ones you made; decided: the ones you approved or rejected a step of; all: every request on the \
+             CIs you may view",
+        ))
+        .into()
+}
+
+fn overdue_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .enum_values(Some(["true", "false"]))
+        .description(Some("true: only requests whose active step is overdue; false: only the others"))
+        .into()
+}
+
+fn request_sort() -> Schema {
+    schemas::sort_schema(&["dueAt", "requestedAt", "closedAt"], "dueAt")
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[serde(rename_all = "camelCase")]
+#[into_params(parameter_in = Query)]
+pub struct WorkflowApprovalRequestList {
+    /// Page size (1-200)
+    #[param(required = false, default = 50, minimum = 1, maximum = 200)]
+    pub limit: i64,
+    /// Rows to skip
+    #[param(required = false, default = 0, minimum = 0, maximum = 1_000_000)]
+    pub offset: i64,
+    #[param(required = false, schema_with = view_schema)]
+    pub view: WorkflowApprovalView,
+    #[param(inline)]
+    pub status: Option<WorkflowApprovalStatus>,
+    /// Only requests on instances of this workflow
+    #[param(schema_with = key_schema)]
+    pub definition_key: Option<String>,
+    /// Only requests on this CI
+    pub ci_id: Option<Uuid>,
+    /// Only requests this user made (the incident runbook: the pending requests of a disabled account)
+    pub requested_by: Option<Uuid>,
+    #[param(schema_with = overdue_schema)]
+    pub overdue: Option<QueryBool>,
+    /// `dueAt` is the active step's due date (the last step reached, for a closed request); requests without one
+    /// come last either way
+    #[param(required = false, schema_with = request_sort)]
+    pub sort: Sort,
+}
+paged!(WorkflowApprovalRequestList);
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[serde(rename_all = "camelCase")]
+#[into_params(parameter_in = Query)]
+pub struct WorkflowApprovalHistoryList {
+    /// Page size (1-200)
+    #[param(required = false, default = 50, minimum = 1, maximum = 200)]
+    pub limit: i64,
+    /// Rows to skip
+    #[param(required = false, default = 0, minimum = 0, maximum = 1_000_000)]
+    pub offset: i64,
+}
+paged!(WorkflowApprovalHistoryList);
+
+/// Who made a request, as recorded then
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowApprovalRequestedBy {
+    /// Null once the account was deleted
+    #[schema(required = true)]
+    pub id: Option<Uuid>,
+    pub name: String,
+}
+
+/// The step a request is at: the active one while pending, the last one reached once closed
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowApprovalCurrentStep {
+    pub step_no: i16,
+    pub key: String,
+    pub name: String,
+    #[schema(inline)]
+    pub status: WorkflowApprovalStepStatus,
+    pub approvals: i64,
+    pub required_approvals: i16,
+    #[schema(required = true)]
+    #[serde(serialize_with = "schemas::ts_opt::serialize")]
+    pub due_at: Option<DateTime<Utc>>,
+    pub overdue: bool,
+}
+
+/// An approval request in a list: no staged values, approvers or decisions (`GET /workflow-approval-requests/{id}`
+/// has them)
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowApprovalRequestItem {
+    pub id: Uuid,
+    pub instance_id: Uuid,
+    pub ci_id: Uuid,
+    pub ci_ident: String,
+    pub ci_label: String,
+    pub class_key: String,
+    pub definition_key: String,
+    pub definition_name: String,
+    pub version_no: i32,
+    pub transition_key: String,
+    pub transition_name: String,
+    pub from_state: String,
+    pub to_state: String,
+    pub request_no: i32,
+    #[schema(inline)]
+    pub status: WorkflowApprovalStatus,
+    #[schema(inline, required = true)]
+    pub close_reason: Option<WorkflowApprovalCloseReason>,
+    #[serde(serialize_with = "ts::serialize")]
+    pub requested_at: DateTime<Utc>,
+    pub requested_by: WorkflowApprovalRequestedBy,
+    pub current_step: WorkflowApprovalCurrentStep,
+    pub step_count: i16,
+    #[schema(required = true)]
+    #[serde(serialize_with = "schemas::ts_opt::serialize")]
+    pub closed_at: Option<DateTime<Utc>>,
+    #[schema(required = true)]
+    pub closed_by_name: Option<String>,
+    /// Send it as `expectedVersion` with a decision, withdrawal or cancellation
+    pub version: i32,
+}

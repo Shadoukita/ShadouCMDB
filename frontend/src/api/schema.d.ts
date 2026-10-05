@@ -3308,6 +3308,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workflow-approval-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List approval requests: your inbox, the ones you made or decided, or all (paginated, filterable)
+         * @description `view=actionable` (the default) is the inbox: pending requests whose active step you may decide now, in person, by the same rules as a decision (an approver of the step, not the requester or the requesting token's creator, not yet decided by you, and the step's separation of duties and API token rules). `requested` and `decided` are the requests you made, and those you approved or rejected a step of; `all` is every request. Requests on CIs of types the caller may not view are left out of the page and of `page.total`. `requestedBy` lists one user's requests, for example to cancel the pending requests of a disabled account (`view=all&status=pending&requestedBy=…`). Sorted by the active step's due date, the earliest first, unless `sort` says otherwise.
+         */
+        get: operations["listWorkflowApprovalRequests"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workflow-approval-requests/{id}": {
         parameters: {
             query?: never;
@@ -3339,7 +3359,7 @@ export interface paths {
         put?: never;
         /**
          * Approve or reject the active step of an approval request
-         * @description Needs no edit right: the view right on the CI's type and a place among the active step's approvers (a named user, a member of an assigned profile or group, the user a CI field names, or an owner of a business service the CI belongs to), read when the decision is made (403 FORBIDDEN `not_eligible`). **Four-eyes** (403 WORKFLOW_APPROVAL_SELF): the requester never decides their own request, whichever profile or credential they use (`requester`), nor does a token the requester minted (`token_creator`); a step can also refuse whoever approved an earlier step (`earlier_step`) and the actors of other transitions of the instance (`actor_of:<key>`). API tokens decide only on a step that allows them (403 FORBIDDEN `session_required`), and only a token its owner minted for themselves (403 FORBIDDEN `token_not_self_minted`). A comment is required to reject. Any rejection rejects the request and the instance stays where it is. When the step reaches its quorum the next step becomes active; the last one's final approval applies the transition in the same transaction: the staged fields (only those the transition takes) and the state field are written to the CI with the decider as actor (a CI `update` audit row naming `approvalRequestId` and `requestedBy`), and the step is audited as `workflow.transition` with the same. If a staged field changed since the request, the conditions no longer hold, or the request stages a field the transition does not take, the final approval is refused with 409 WORKFLOW_APPROVAL_STALE and nothing is recorded, not even the decision. Each decision is audited as `workflow.approval_decide`. 409 CONFLICT `not_pending`, `step_not_active` or `already_decided`; 409 VERSION_CONFLICT on a stale `expectedVersion` (the request's `version`).
+         * @description Needs no edit right: the view right on the CI's type and a place among the active step's approvers (a named user, a member of an assigned profile or group, the user a CI field names, or an owner of a business service the CI belongs to), read when the decision is made (403 FORBIDDEN `not_eligible`). **Four-eyes** (403 WORKFLOW_APPROVAL_SELF): the requester never decides their own request, whichever profile or credential they use (`requester`), nor does a token the requester minted (`token_creator`); a step can also refuse whoever approved an earlier step (`earlier_step`) and whoever ran, requested or approved other transitions of the instance (`actor_of:<key>`). API tokens decide only on a step that allows them (403 FORBIDDEN `session_required`), and only a token its owner minted for themselves (403 FORBIDDEN `token_not_self_minted`). A comment is required to reject. Any rejection rejects the request and the instance stays where it is. When the step reaches its quorum the next step becomes active; the last one's final approval applies the transition in the same transaction: the staged fields (only those the transition takes) and the state field are written to the CI with the decider as actor (a CI `update` audit row naming `approvalRequestId` and `requestedBy`), and the step is audited as `workflow.transition` with the same. If a staged field changed since the request, the conditions no longer hold, or the request stages a field the transition does not take, the final approval is refused with 409 WORKFLOW_APPROVAL_STALE and nothing is recorded, not even the decision. Each decision is audited as `workflow.approval_decide`. 409 CONFLICT `not_pending`, `step_not_active` or `already_decided`; 409 VERSION_CONFLICT on a stale `expectedVersion` (the request's `version`).
          */
         post: operations["decideWorkflowApprovalRequest"];
         delete?: never;
@@ -3382,6 +3402,46 @@ export interface paths {
          * @description Needs `workflows.manage`, or the workflow's `_cancel` grant and the edit right on the CI's type: the people who may cancel the instance. The comment is mandatory. Status `cancelled`, reason `withdrawn`; audited on the CI as `workflow.approval_close`. For example, the incident runbook cancels the pending requests of a requester whose account was disabled. 409 CONFLICT `not_pending`; 409 VERSION_CONFLICT on a stale `expectedVersion`.
          */
         post: operations["cancelWorkflowApprovalRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflow-approval-requests/{id}/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Re-resolve who may decide the active step of a pending request
+         * @description Requires `workflows.manage`. For administrators (`workflows.manage`): the active step's approvers are resolved again from the workflow's current approver assignments and the CI's current values, for example after the CI field that names the approver changed. Decisions already cast stand. No body. 409 CONFLICT `not_pending`.
+         */
+        post: operations["refreshWorkflowApprovalRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflow-instances/{id}/approval-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The approval requests of a workflow instance, newest first (paginated)
+         * @description Every request the instance had, whatever became of it: approved, rejected, withdrawn or cancelled, and the pending one. Kept for the life of the CI. 404 for an instance on a CI of a type the caller may not view.
+         */
+        get: operations["listWorkflowInstanceApprovalRequests"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -6886,6 +6946,22 @@ export interface components {
         WorkflowApproval: {
             steps: components["schemas"]["WorkflowApprovalStep"][];
         };
+        /** @description The step a request is at: the active one while pending, the last one reached once closed */
+        WorkflowApprovalCurrentStep: {
+            /** Format: int32 */
+            stepNo: number;
+            key: string;
+            name: string;
+            /** @enum {string} */
+            status: "waiting" | "active" | "approved" | "rejected" | "closed";
+            /** Format: int64 */
+            approvals: number;
+            /** Format: int32 */
+            requiredApprovals: number;
+            /** Format: date-time */
+            dueAt: string | null;
+            overdue: boolean;
+        };
         /** @description One approve or reject */
         WorkflowApprovalDecision: {
             /** Format: int64 */
@@ -6994,6 +7070,52 @@ export interface components {
              */
             version: number;
         };
+        /**
+         * @description An approval request in a list: no staged values, approvers or decisions (`GET /workflow-approval-requests/{id}`
+         *     has them)
+         */
+        WorkflowApprovalRequestItem: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            instanceId: string;
+            /** Format: uuid */
+            ciId: string;
+            ciIdent: string;
+            ciLabel: string;
+            classKey: string;
+            definitionKey: string;
+            definitionName: string;
+            /** Format: int32 */
+            versionNo: number;
+            transitionKey: string;
+            transitionName: string;
+            fromState: string;
+            toState: string;
+            /** Format: int32 */
+            requestNo: number;
+            /** @enum {string} */
+            status: "pending" | "approved" | "rejected" | "withdrawn" | "cancelled";
+            closeReason: ("approved" | "rejected" | "overdue" | "withdrawn" | "instance_cancelled" | "instance_forced" | "instance_migrated" | "ci_deleted") | null;
+            /** Format: date-time */
+            requestedAt: string;
+            requestedBy: components["schemas"]["WorkflowApprovalRequestedBy"];
+            currentStep: components["schemas"]["WorkflowApprovalCurrentStep"];
+            /** Format: int32 */
+            stepCount: number;
+            /** Format: date-time */
+            closedAt: string | null;
+            closedByName: string | null;
+            /**
+             * Format: int32
+             * @description Send it as `expectedVersion` with a decision, withdrawal or cancellation
+             */
+            version: number;
+        };
+        WorkflowApprovalRequestItemList: {
+            data: components["schemas"]["WorkflowApprovalRequestItem"][];
+            page: components["schemas"]["PageMeta"];
+        };
         /** @description One step of a request */
         WorkflowApprovalRequestStep: {
             /** Format: int32 */
@@ -7022,6 +7144,15 @@ export interface components {
             /** @description Active, and fewer users could decide it than approvals are still needed */
             understaffed: boolean;
             decisions: components["schemas"]["WorkflowApprovalDecision"][];
+        };
+        /** @description Who made a request, as recorded then */
+        WorkflowApprovalRequestedBy: {
+            /**
+             * Format: uuid
+             * @description Null once the account was deleted
+             */
+            id: string | null;
+            name: string;
         };
         /** @description Who made the request, as they stand now (advisory: it does not block a decision) */
         WorkflowApprovalRequester: {
@@ -7059,7 +7190,7 @@ export interface components {
             onOverdue?: "flag" | "reject";
             /** @description Whoever approved an earlier step of the same request may not approve this one (default true) */
             distinctFromEarlier?: boolean;
-            /** @description Transition keys of this version: whoever ran one of them on the instance (and whoever requested it) may not approve this step */
+            /** @description Transition keys of this version: whoever ran, requested or approved one of them on the instance may not approve this step */
             excludeActorsOf?: string[];
             /**
              * @description Decisions may come through an API token the approver minted for themselves (default false: a signed-in
@@ -7724,6 +7855,11 @@ export interface components {
             category: "open" | "active" | "done" | "cancelled";
             /** Format: int64 */
             count: number;
+            /**
+             * Format: int64
+             * @description Of `count`, the instances waiting for approval of a transition out of the state
+             */
+            awaitingApproval: number;
         };
         /** @description A state as an instance is in it, or a transition leads to it */
         WorkflowStateRef: {
@@ -29199,6 +29335,8 @@ export interface operations {
                 classKey?: string;
                 /** @description Only instances on this CI */
                 ciId?: string;
+                /** @description true: only instances waiting for approval (with a pending approval request); false: only the others */
+                awaitingApproval?: "true" | "false";
                 /** @description Sort field; prefix with "-" for descending. One of: lastTransitionAt, startedAt */
                 sort?: "lastTransitionAt" | "-lastTransitionAt" | "startedAt" | "-startedAt";
             };
@@ -30155,6 +30293,98 @@ export interface operations {
             };
         };
     };
+    listWorkflowApprovalRequests: {
+        parameters: {
+            query?: {
+                /** @description Page size (1-200) */
+                limit?: number;
+                /** @description Rows to skip */
+                offset?: number;
+                /** @description actionable (default): pending requests whose active step you may decide now, in person; requested: the ones you made; decided: the ones you approved or rejected a step of; all: every request on the CIs you may view */
+                view?: "actionable" | "requested" | "decided" | "all";
+                status?: "pending" | "approved" | "rejected" | "withdrawn" | "cancelled";
+                /** @description Stable machine key, lower_snake_case */
+                definitionKey?: string;
+                /** @description Only requests on this CI */
+                ciId?: string;
+                /** @description Only requests this user made (the incident runbook: the pending requests of a disabled account) */
+                requestedBy?: string;
+                /** @description true: only requests whose active step is overdue; false: only the others */
+                overdue?: "true" | "false";
+                /** @description Sort field; prefix with "-" for descending. One of: dueAt, requestedAt, closedAt */
+                sort?: "dueAt" | "-dueAt" | "requestedAt" | "-requestedAt" | "closedAt" | "-closedAt";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowApprovalRequestItemList"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     getWorkflowApprovalRequest: {
         parameters: {
             query?: never;
@@ -30581,6 +30811,190 @@ export interface operations {
             };
             /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    refreshWorkflowApprovalRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowApprovalRequest"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listWorkflowInstanceApprovalRequests: {
+        parameters: {
+            query?: {
+                /** @description Page size (1-200) */
+                limit?: number;
+                /** @description Rows to skip */
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowApprovalRequestItemList"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
