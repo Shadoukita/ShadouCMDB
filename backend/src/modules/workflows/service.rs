@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
+use super::approvers::{self, Facts};
 use super::graph::{self, Fields, LintContext, Stored, VERSION_COLUMNS, VersionRow};
 use super::schemas::*;
 use crate::api::context::{Count, RequestContext};
@@ -37,7 +38,7 @@ const FROM: &str = "cmdb.workflow_definitions d JOIN cmdb.ci_classes c ON c.id =
      LEFT JOIN cmdb.workflow_versions cv ON cv.id = d.current_version_id";
 
 /// Who is acting, for the `*_by` columns.
-fn actor(ctx: &RequestContext) -> (Option<Uuid>, String) {
+pub(crate) fn actor(ctx: &RequestContext) -> (Option<Uuid>, String) {
     let id = ctx.principal().map(|p| p.user_id);
     let name = ctx.principal().map(|p| p.username.clone()).or_else(|| ctx.actor.name.clone()).unwrap_or_default();
     (id, name)
@@ -65,7 +66,7 @@ fn stale(what: &str, field: &str, sent: &str, current: &str) -> AppError {
     }])
 }
 
-fn check_version(sent: i32, current: i32) -> Result<(), AppError> {
+pub(crate) fn check_version(sent: i32, current: i32) -> Result<(), AppError> {
     if sent == current {
         return Ok(());
     }
@@ -132,10 +133,11 @@ pub(crate) fn grants_by_name(grants: &[WorkflowGrant]) -> Value {
     )
 }
 
-/// The definition as the audit log records it: its settings and grants.
+/// The definition as the audit log records it: its settings, grants and approvers.
 async fn audit_value(conn: &mut PgConnection, d: &WorkflowDefinition) -> Result<Value, AppError> {
     let mut v = crud::json(d);
     v["grants"] = grants_by_name(&grant_rows(conn, d.id).await?);
+    v["approvers"] = approvers::audit_value(conn, d.id).await?;
     Ok(v)
 }
 
@@ -626,6 +628,7 @@ pub async fn replace_draft(
     let mut out = stored.render(&fields.model, false);
     out.checksum = Some(sum);
     prune_grants(&mut tx, ctx, id).await?;
+    approvers::prune(&mut tx, ctx, id).await?;
     tx.commit().await?;
     Ok(out)
 }
@@ -636,6 +639,7 @@ pub async fn delete_draft(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Resu
     let row = draft_row(&mut tx, id, true).await?.ok_or_else(|| no_draft(id))?;
     sqlx::query("DELETE FROM cmdb.workflow_versions WHERE id = $1").bind(row.id).execute(&mut *tx).await?;
     prune_grants(&mut tx, ctx, id).await?;
+    approvers::prune(&mut tx, ctx, id).await?;
     tx.commit().await?;
     Ok(())
 }
@@ -661,9 +665,11 @@ async fn lint_draft(
     let stored = graph::load(conn, row).await?;
     let fields = Fields::load(conn, d.class_id).await?;
     let granted = granted_keys(conn, d.id).await?;
+    let assignments = approvers::load(conn, d.id).await?;
+    let facts = Facts::gather(conn, d.class_id, &fields, assignments).await?;
     let problems = graph::lint(
         &stored,
-        &LintContext { fields: &fields, state_attribute: d.state_attribute_id, granted: &granted },
+        &LintContext { fields: &fields, state_attribute: d.state_attribute_id, granted: &granted, approvers: &facts },
     );
     let sum = stored.checksum(&fields.model);
     Ok((stored, fields, problems, sum))

@@ -30,7 +30,9 @@ use super::super::impact::ImpactDirection;
 use super::super::lookups::{LocationType, SystemRole};
 use super::super::ui_settings::assets::ImageType;
 use super::super::ui_settings::document::UiSettingsDocument;
-use super::super::workflows::schemas::{MAX_GRANT_PROFILES, WorkflowDraftReplace, WorkflowState, WorkflowTransition};
+use super::super::workflows::schemas::{
+    MAX_APPROVERS, MAX_GRANT_PROFILES, WorkflowApproverSpec, WorkflowDraftReplace, WorkflowState, WorkflowTransition,
+};
 use crate::api::schemas::{self, OwnerKind, description_schema, key_schema, name_schema, sort_order_schema, trimmed};
 use crate::auth::permissions::GlobalPermission;
 
@@ -42,8 +44,9 @@ pub const FORMAT: &str = "shadoucmdb.config";
 /// of classes and relationship types (business services) and of class grants,
 /// version 6 shared saved views, version 7 layout templates in the UI settings (`layoutTemplates`, and
 /// `layouts[].templateKey`; versions 1 to 6 have class layouts, which become templates), version 8 workflows
-/// (the current published version of each); versions 1 to 7 are still read.
-pub const FORMAT_VERSION: i32 = 8;
+/// (the current published version of each), version 9 approval policies on workflow transitions and each
+/// workflow's approvers; versions 1 to 8 are still read.
+pub const FORMAT_VERSION: i32 = 9;
 
 fn yes() -> bool {
     true
@@ -677,6 +680,10 @@ fn workflow_grants_schema() -> Schema {
     list::<WorkflowGrantSpec>(300)
 }
 
+fn workflow_approvers_schema() -> Schema {
+    list::<WorkflowApproverSpec>(MAX_APPROVERS)
+}
+
 /// A workflow, matched by key (case-insensitive), with its current published graph. Drafts, retired versions,
 /// running instances and their history are never part of a file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -716,6 +723,11 @@ pub struct WorkflowSpec {
     #[schema(schema_with = workflow_grants_schema)]
     #[serde(default)]
     pub grants: Vec<WorkflowGrantSpec>,
+    /// Replace who may decide the steps of the graph's approval policies (version 9; left out when there are none).
+    /// Groups and users are matched by name and must exist here: a file never carries them.
+    #[schema(schema_with = workflow_approvers_schema)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub approvers: Vec<WorkflowApproverSpec>,
 }
 
 fn workflows_schema() -> Schema {
@@ -735,8 +747,8 @@ fn exported_at_schema() -> Schema {
 pub struct ConfigFile {
     #[schema(schema_with = format_schema)]
     pub format: String,
-    /// File format version; this server writes version 8 and reads 1 to 8
-    #[schema(minimum = 1, maximum = 8)]
+    /// File format version; this server writes version 9 and reads 1 to 9
+    #[schema(minimum = 1, maximum = 9)]
     pub format_version: i32,
     /// When and by which server version the file was written (informational)
     #[schema(schema_with = exported_at_schema)]
@@ -764,8 +776,8 @@ pub struct ConfigFile {
     #[schema(schema_with = saved_views_schema)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub saved_views: Option<Vec<SavedViewSpec>>,
-    /// Workflows (version 8) with their current published graph. Left out of an export when the caller does not
-    /// hold `workflows.manage`.
+    /// Workflows (version 8) with their current published graph, approval policies and approvers (version 9).
+    /// Left out of an export when the caller does not hold `workflows.manage`.
     #[schema(schema_with = workflows_schema)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflows: Option<Vec<WorkflowSpec>>,
@@ -785,6 +797,17 @@ impl crate::api::route::Check for ConfigFile {
                 x.field = format!("workflows.{i}.graph.{}", x.field);
                 x
             }));
+            for (k, a) in w.approvers.iter().enumerate().filter(|(_, a)| a.source_count() != 1) {
+                e.push(crate::http::error::FieldError {
+                    location: crate::http::error::FieldLocation::Body,
+                    field: format!("workflows.{i}.approvers.{k}"),
+                    message: format!(
+                        "Exactly one of profile, group, user, attribute and serviceOwner (this one has {})",
+                        a.source_count()
+                    ),
+                    code: "source".into(),
+                });
+            }
         }
         e
     }

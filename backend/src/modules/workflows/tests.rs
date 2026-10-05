@@ -675,7 +675,7 @@ async fn workflows_round_trip_through_the_configuration_file() {
     post(&w.app, &w.admin, BASE, json!({ "key": "never_published", "name": "Never", "classId": w.server })).await;
 
     let file = export_config(&w.app, &w.admin).await;
-    assert_eq!(file["formatVersion"], 8);
+    assert_eq!(file["formatVersion"], 9);
     let flows = file["workflows"].as_array().unwrap();
     assert_eq!(flows.len(), 1, "{flows:?}");
     let flow = &flows[0];

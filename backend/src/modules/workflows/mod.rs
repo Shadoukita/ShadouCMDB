@@ -11,6 +11,9 @@
 pub mod adopt;
 #[cfg(test)]
 mod adopt_tests;
+#[cfg(test)]
+mod approvals_tests;
+pub mod approvers;
 pub mod archive;
 pub mod condition;
 pub mod eval;
@@ -100,6 +103,8 @@ const DRAFT: &str = "/api/v1/admin/workflow-definitions/{id}/draft";
 const VALIDATE: &str = "/api/v1/admin/workflow-definitions/{id}/draft/validate";
 const PUBLISH: &str = "/api/v1/admin/workflow-definitions/{id}/draft/publish";
 const GRANTS: &str = "/api/v1/admin/workflow-definitions/{id}/grants";
+const APPROVERS: &str = "/api/v1/admin/workflow-definitions/{id}/approvers";
+const APPROVER_PREVIEW: &str = "/api/v1/admin/workflow-definitions/{id}/approvers/preview";
 const BOOTSTRAP: &str = "/api/v1/admin/workflow-definitions/{id}/bootstrap";
 const MIGRATIONS: &str = "/api/v1/admin/workflow-definitions/{id}/instance-migrations";
 
@@ -345,6 +350,69 @@ pub fn routes() -> Vec<Route> {
             .handle(
                 |api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<WorkflowGrantsReplace>>| async move {
                     Ok(Json(service::replace_grants(&api.pool, &api.ctx, id, &b).await?))
+                },
+            ),
+        route(Method::GET, APPROVERS, "getWorkflowApprovers")
+            .tag(TAG)
+            .summary("Who may decide each step of the workflow's approval policies")
+            .description(
+                "Assignments are per transition key, step key and role, for every version of the workflow; the \
+                 policy itself (steps, quorum, due interval) is part of each version's graph. Sources: a permission \
+                 profile, a user group, a named user, a reference field of the CI that points at the Person type \
+                 (the user linked to that Person), or the technical or business owners of the business services the \
+                 CI is a direct member of. Role `escalation` applies only once the step is overdue. `problems` holds \
+                 the lint's warnings against the current version and the draft: `no_approvers`, \
+                 `approvers_cannot_view`, `understaffed`, `inactive_attribute`, `unknown_step`. Administrators are \
+                 not approvers unless assigned.",
+            )
+            .requires(manage)
+            .errors(&[ErrorCode::NotFound])
+            .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
+                Ok(Json(approvers::get(&api.pool, id).await?))
+            }),
+        route(Method::PUT, APPROVERS, "replaceWorkflowApprovers")
+            .tag(TAG)
+            .summary("Replace who may decide each step of the workflow's approval policies")
+            .description(
+                "`approvers` is the complete new set. Send the workflow's `version`: 409 VERSION_CONFLICT if it \
+                 changed in between. Exactly the field `source` names is set (400 `required` or `source_mismatch`); \
+                 profiles, groups and users are given by id or by name (a user by username), a field by id or by \
+                 key. 400 VALIDATION_ERROR: `unknown_step` on `approvers[i].stepKey` for a step that no version and \
+                 not the draft has, `not_found` for an unknown profile, group or user, `unknown_attribute` or \
+                 `attribute_type` on `approvers[i].attribute` unless it is a reference field of the workflow's type \
+                 (own or inherited) to the Person type, and `duplicate`. A change bumps the workflow's version and \
+                 is audited as an `update` with the assignments before and after, by name. The response carries the \
+                 lint's warnings (`problems`). Assignments of a step that only the draft had are dropped (audited \
+                 the same way) when the draft is deleted or saved without it.",
+            )
+            .requires(manage)
+            .session_only()
+            .errors(&[ErrorCode::NotFound, ErrorCode::VersionConflict])
+            .handle(
+                |api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<WorkflowApproversReplace>>| async move {
+                    Ok(Json(approvers::replace(&api.pool, &api.ctx, id, &b).await?))
+                },
+            ),
+        route(Method::GET, APPROVER_PREVIEW, "previewWorkflowApprovers")
+            .tag(TAG)
+            .summary("Who could decide one approval step, and why each user is in or out")
+            .description(
+                "Resolves the step's assignments to users, for the CI `ciId` or, without it, in general (the field \
+                 and service owner sources are then not resolved). Each user is `eligible`, or out with a reason: \
+                 `inactive` (the account is disabled), `no_view_right` (no profile of theirs lets them view the CI's \
+                 type, so they would never see the request), `excluded` (the `requestedBy` user: four-eyes), or \
+                 `escalation_only`. Each source tells how many users it resolved to, and why none when it is empty. \
+                 Membership is read now; a running request reads it when each decision is made. 400 `unknown_step` \
+                 for a step no version or draft has; 400 `not_covered` when the workflow does not run on the CI's \
+                 type; 404 for a CI that does not exist or that the caller may not view.",
+            )
+            .requires(manage)
+            .class_checked()
+            .errors(&[ErrorCode::NotFound])
+            .handle(
+                |api,
+                 In(IdPath(id), Query(q), NoBody): In<IdPath, Query<WorkflowApproverPreviewQuery>, NoBody>| async move {
+                    Ok(Json(approvers::preview(&api.pool, &api.ctx, id, &q).await?))
                 },
             ),
         route(Method::POST, MIGRATIONS, "migrateWorkflowInstances")

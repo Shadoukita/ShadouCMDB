@@ -16,10 +16,12 @@ use sqlx::PgConnection;
 use sqlx::types::Json as SqlJson;
 use uuid::Uuid;
 
+use super::approvers;
 use super::condition::{self, Scope};
 use super::schemas::{
-    WorkflowDraftReplace, WorkflowProblem, WorkflowProblemSeverity, WorkflowState, WorkflowStateCategory,
-    WorkflowTransition, WorkflowTransitionField, WorkflowVersion, WorkflowVersionStatus,
+    DueAfter, WorkflowApproval, WorkflowApprovalOverdue, WorkflowApprovalStep, WorkflowDraftReplace, WorkflowProblem,
+    WorkflowProblemSeverity, WorkflowState, WorkflowStateCategory, WorkflowTransition, WorkflowTransitionField,
+    WorkflowVersion, WorkflowVersionStatus,
 };
 use crate::http::error::{AppError, FieldError, FieldLocation};
 use crate::modules::classes::AttributeDataType;
@@ -324,6 +326,62 @@ pub async fn store_draft(
     .bind(&order)
     .execute(&mut *conn)
     .await?;
+    store_steps(conn, &body.transitions, &transition_id).await
+}
+
+/// The approval steps of the draft's transitions, numbered 1..n in their order.
+async fn store_steps(
+    conn: &mut PgConnection,
+    transitions: &[WorkflowTransition],
+    transition_id: &HashMap<&str, Uuid>,
+) -> Result<(), AppError> {
+    let mut tids = Vec::new();
+    let mut nos: Vec<i16> = Vec::new();
+    let (mut keys, mut names, mut on_overdue) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut required, mut due, mut distinct, mut exclude, mut tokens): (Vec<i16>, Vec<Option<i32>>, _, _, _) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for t in transitions {
+        for (n, s) in t.approval.iter().flat_map(|a| a.steps.iter()).enumerate() {
+            tids.push(transition_id[t.key.as_str()]);
+            nos.push(n as i16 + 1);
+            keys.push(s.key.as_str());
+            names.push(s.name.as_str());
+            required.push(s.required_approvals);
+            due.push(s.due_after.map(DueAfter::minutes));
+            on_overdue.push(match s.on_overdue {
+                WorkflowApprovalOverdue::Flag => "flag",
+                WorkflowApprovalOverdue::Reject => "reject",
+            });
+            distinct.push(s.distinct_from_earlier);
+            exclude.push(json!(s.exclude_actors_of));
+            tokens.push(s.allow_api_tokens);
+        }
+    }
+    if tids.is_empty() {
+        return Ok(());
+    }
+    sqlx::query(
+        "INSERT INTO cmdb.workflow_transition_approval_steps
+           (transition_id, step_no, key, name, required_approvals, due_after, on_overdue, distinct_from_earlier,
+            exclude_actors_of, allow_api_tokens)
+         SELECT u.t, u.n, u.key, u.name, u.required, make_interval(mins => u.due), u.overdue, u.distinct_,
+                ARRAY(SELECT jsonb_array_elements_text(u.exclude)), u.tokens
+         FROM unnest($1::uuid[], $2::smallint[], $3::text[], $4::text[], $5::smallint[], $6::int[], $7::text[],
+                     $8::bool[], $9::jsonb[], $10::bool[])
+              AS u(t, n, key, name, required, due, overdue, distinct_, exclude, tokens)",
+    )
+    .bind(&tids)
+    .bind(&nos)
+    .bind(&keys)
+    .bind(&names)
+    .bind(&required)
+    .bind(&due)
+    .bind(&on_overdue)
+    .bind(&distinct)
+    .bind(&exclude)
+    .bind(&tokens)
+    .execute(&mut *conn)
+    .await?;
     Ok(())
 }
 
@@ -378,12 +436,27 @@ pub struct FieldRow {
     pub is_required: bool,
 }
 
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct StepRow {
+    pub transition_id: Uuid,
+    pub key: String,
+    pub name: String,
+    pub required_approvals: i16,
+    pub due_minutes: Option<i32>,
+    pub on_overdue: WorkflowApprovalOverdue,
+    pub distinct_from_earlier: bool,
+    pub exclude_actors_of: Vec<String>,
+    pub allow_api_tokens: bool,
+}
+
 /// A version as stored.
 pub struct Stored {
     pub version: VersionRow,
     pub states: Vec<StateRow>,
     pub transitions: Vec<TransitionRow>,
     pub fields: Vec<FieldRow>,
+    /// Approval steps, in step order per transition.
+    pub steps: Vec<StepRow>,
 }
 
 pub async fn load(conn: &mut PgConnection, version: VersionRow) -> Result<Stored, AppError> {
@@ -411,12 +484,44 @@ pub async fn load(conn: &mut PgConnection, version: VersionRow) -> Result<Stored
     .bind(version.id)
     .fetch_all(&mut *conn)
     .await?;
-    Ok(Stored { version, states, transitions, fields })
+    let steps = sqlx::query_as::<_, StepRow>(
+        "SELECT s.transition_id, s.key, s.name, s.required_approvals,
+                (extract(epoch FROM s.due_after) / 60)::int AS due_minutes, s.on_overdue, s.distinct_from_earlier,
+                s.exclude_actors_of, s.allow_api_tokens
+         FROM cmdb.workflow_transition_approval_steps s JOIN cmdb.workflow_transitions t ON t.id = s.transition_id
+         WHERE t.version_id = $1 ORDER BY s.transition_id, s.step_no",
+    )
+    .bind(version.id)
+    .fetch_all(&mut *conn)
+    .await?;
+    Ok(Stored { version, states, transitions, fields, steps })
 }
 
 impl Stored {
     fn state_key(&self, id: Uuid) -> String {
         self.states.iter().find(|s| s.id == id).map(|s| s.key.clone()).unwrap_or_default()
+    }
+
+    /// The approval steps of transition `id`, in order.
+    pub fn steps_of(&self, id: Uuid) -> impl Iterator<Item = &StepRow> {
+        self.steps.iter().filter(move |s| s.transition_id == id)
+    }
+
+    fn approval(&self, id: Uuid) -> Option<WorkflowApproval> {
+        let steps: Vec<WorkflowApprovalStep> = self
+            .steps_of(id)
+            .map(|s| WorkflowApprovalStep {
+                key: s.key.clone(),
+                name: s.name.clone(),
+                required_approvals: s.required_approvals,
+                due_after: s.due_minutes.map(DueAfter),
+                on_overdue: s.on_overdue,
+                distinct_from_earlier: s.distinct_from_earlier,
+                exclude_actors_of: s.exclude_actors_of.clone(),
+                allow_api_tokens: s.allow_api_tokens,
+            })
+            .collect();
+        (!steps.is_empty()).then_some(WorkflowApproval { steps })
     }
 
     fn attribute_key(model: &Model, id: Uuid) -> String {
@@ -460,6 +565,7 @@ impl Stored {
                         s.parse::<Uuid>().ok().and_then(|id| model.field(id)).map(|f| f.key.clone())
                     })
                 }),
+                approval: self.approval(t.id),
             })
             .collect();
         (initial, states, transitions)
@@ -547,6 +653,8 @@ pub struct LintContext<'a> {
     pub state_attribute: Option<Uuid>,
     /// Transition keys granted to at least one profile.
     pub granted: &'a HashSet<String>,
+    /// The approver assignments the approval steps are linted against.
+    pub approvers: &'a approvers::Facts,
 }
 
 fn error(path: impl Into<String>, code: &str, message: impl Into<String>) -> WorkflowProblem {
@@ -716,6 +824,102 @@ pub fn lint(g: &Stored, cx: &LintContext<'_>) -> Vec<WorkflowProblem> {
                 severity: WorkflowProblemSeverity::Warning,
             });
         }
+        for (j, s) in g.steps_of(t.id).enumerate() {
+            for (k, key) in s.exclude_actors_of.iter().enumerate() {
+                if !g.transitions.iter().any(|x| &x.key == key) {
+                    out.push(error(
+                        format!("transitions[{i}].approval.steps[{j}].excludeActorsOf[{k}]"),
+                        "unknown_transition",
+                        format!(
+                            "Step {} excludes the actors of transition {key}, which this version does not have",
+                            s.key
+                        ),
+                    ));
+                }
+            }
+        }
     }
+    out.extend(cx.approvers.lint(g, &cx.fields.class_key, &|i, j| format!("transitions[{i}].approval.steps[{j}]")));
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A graph with states, fields and conditions but no approval policy.
+    fn pre_approvals_graph() -> (Vec<WorkflowState>, Vec<WorkflowTransition>) {
+        let g = json!({
+            "states": [
+                { "key": "planned", "name": "Planned", "category": "open", "terminal": false, "stateValue": "planned" },
+                { "key": "approved", "name": "Approved", "category": "active", "terminal": false, "stateValue": null },
+                { "key": "done", "name": "In production", "category": "done", "terminal": true, "stateValue": "live" }
+            ],
+            "transitions": [
+                { "key": "approve", "name": "Approve", "from": "planned", "to": "approved", "requiresComment": true,
+                  "fields": [ { "attribute": "owner_team", "required": true }, { "attribute": "notes", "required": false } ],
+                  "conditions": { "all": [ { "field": "environment", "op": "in", "value": ["prod"] },
+                                           { "field": "risk", "op": "lte", "value": 2 } ] } },
+                { "key": "go_live", "name": "Go live", "from": "approved", "to": "done", "requiresComment": false, "fields": [] }
+            ]
+        });
+        (
+            serde_json::from_value(g["states"].clone()).unwrap(),
+            serde_json::from_value(g["transitions"].clone()).unwrap(),
+        )
+    }
+
+    /// Approvals design §3.1 and acceptance of slice A2: the checksum of a
+    /// version without approvals is byte-identical to what the code before
+    /// approvals computed (both values were computed on `main` @ a5b3aac,
+    /// before the `approval` block existed). No checksum rewrite is needed.
+    #[test]
+    fn a_graph_without_approvals_keeps_its_pre_approvals_checksum() {
+        let (states, transitions) = pre_approvals_graph();
+        assert_eq!(
+            checksum(&Some("planned".into()), &states, &transitions),
+            "bf4fde411e1565c940affe9e828edf589d39b83d7de53121d857941a80adc9c9"
+        );
+        assert_eq!(checksum(&None, &[], &[]), "33783a6339d9a0615157f90b3ff3f7b4b833dea2e78e1ffbb61a4bb2b56e9839");
+    }
+
+    /// A policy is part of the checksum, and equal intervals checksum equally
+    /// however they are written.
+    #[test]
+    fn an_approval_policy_changes_the_checksum_and_intervals_are_canonical() {
+        let (states, mut transitions) = pre_approvals_graph();
+        let before = checksum(&None, &states, &transitions);
+        let policy = |due: &str| -> WorkflowApproval {
+            serde_json::from_value(json!({ "steps": [ { "key": "cab", "name": "CAB", "dueAfter": due } ] })).unwrap()
+        };
+        transitions[0].approval = Some(policy("PT48H"));
+        let hours = checksum(&None, &states, &transitions);
+        transitions[0].approval = Some(policy("P2D"));
+        assert_eq!(checksum(&None, &states, &transitions), hours);
+        assert_ne!(hours, before);
+        assert_eq!(serde_json::to_value(&transitions[0].approval).unwrap()["steps"][0]["dueAfter"], "P2D");
+    }
+
+    #[test]
+    fn due_intervals_parse_and_print_canonically() {
+        for (input, minutes, canonical) in [
+            ("PT15M", 15, "PT15M"),
+            ("PT90M", 90, "PT1H30M"),
+            ("PT4H", 240, "PT4H"),
+            ("P1DT12H", 2160, "P1DT12H"),
+            ("P1W", 10080, "P7D"),
+            ("P1W2DT3H4M", 13144, "P9DT3H4M"),
+            ("P90D", 129_600, "P90D"),
+        ] {
+            let d = DueAfter::parse(input).unwrap_or_else(|| panic!("{input}"));
+            assert_eq!((d.minutes(), d.to_string().as_str()), (minutes, canonical), "{input}");
+        }
+        for bad in ["", "P", "PT", "P1H", "PT1D", "P1M", "P1Y", "PT1S", "P1D2W", "PT-1H", "p1d", "P1.5D", "P99999999D"]
+        {
+            assert_eq!(DueAfter::parse(bad), None, "{bad}");
+        }
+        let range = serde_json::from_value::<DueAfter>(json!("PT14M")).unwrap_err().to_string();
+        assert!(range.starts_with("range|"), "{range}");
+        assert!(serde_json::from_value::<DueAfter>(json!("P91D")).is_err());
+    }
 }

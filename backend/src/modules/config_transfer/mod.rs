@@ -220,6 +220,10 @@ struct Ids {
     mappings: HashMap<(String, String), Uuid>,
     /// (context, lower(name)) -> id of a shared saved view
     views: HashMap<(String, String), Uuid>,
+    /// lower(name) -> (id, name) of the user groups a file's workflow approvers name (groups are not in a file)
+    groups: HashMap<String, (Uuid, String)>,
+    /// lower(username) -> (id, username) of the users a file's workflow approvers name (users are not in a file)
+    users: HashMap<String, (Uuid, String)>,
 }
 
 struct Snapshot {
@@ -929,7 +933,8 @@ fn validate(
         validate_views(views, file, snap, ctx, &mut e, warnings);
     }
 
-    // Workflows: their types and the profiles granted their transitions
+    // Workflows: their types, the profiles granted their transitions, and the profiles, groups and users that
+    // approve their steps
     if let Some(list) = &file.workflows {
         let profiles: HashSet<String> = file
             .permission_profiles
@@ -938,7 +943,7 @@ fn validate(
             .map(|p| p.name.to_lowercase())
             .chain(ids.profiles.keys().cloned())
             .collect();
-        workflows::validate(list, &classes, &profiles, &mut e);
+        workflows::validate(list, &classes, &profiles, ids, &mut e);
     }
 
     // Images
@@ -1376,7 +1381,8 @@ async fn run(
 ) -> Result<ImportResult, AppError> {
     // One import at a time.
     sqlx::query("SELECT pg_advisory_xact_lock(hashtext('shadoucmdb:config-import'))").execute(&mut *conn).await?;
-    let snap = snapshot(conn).await?;
+    let mut snap = snapshot(conn).await?;
+    workflows::principals(conn, file, &mut snap.ids).await?;
     let mut warnings = Vec::new();
     let mut file = file.clone();
     let mut legacy_problems = legacy::fold(&mut file, snap.file.lookups.as_ref(), &mut warnings);
@@ -2694,7 +2700,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(format!("{err:?}").contains("versions 1 to 8"), "{err:?}");
+        assert!(format!("{err:?}").contains("versions 1 to 9"), "{err:?}");
         let v3 = ConfigFile { format_version: 3, import_mappings: None, ..changed };
         import(&dst.pool, &system, &v3, ImportMode::DryRun).await.unwrap();
 

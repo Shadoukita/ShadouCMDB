@@ -358,6 +358,183 @@ fn yes() -> bool {
     true
 }
 
+// ---------------------------------------------------------------------------
+// Approval policies (approvals design SHAA-1869 §3.1, §10.1)
+// ---------------------------------------------------------------------------
+
+/// Bounds of a step's due interval, in minutes (the column's check).
+pub const MIN_DUE_MINUTES: i32 = 15;
+pub const MAX_DUE_MINUTES: i32 = 90 * 24 * 60;
+
+/// A step's due interval in whole minutes, written as an ISO 8601 duration
+/// of weeks, days, hours and minutes (`P2D`, `PT4H`, `P1DT12H`). It is
+/// serialised in one canonical form (`P2D` for `PT48H`), so equal intervals
+/// checksum equally.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DueAfter(pub i32);
+
+impl DueAfter {
+    pub fn parse(s: &str) -> Option<DueAfter> {
+        let rest = s.strip_prefix('P')?;
+        let (date, time) = match rest.split_once('T') {
+            Some((d, t)) if !t.is_empty() => (d, Some(t)),
+            Some(_) => return None,
+            None => (rest, None),
+        };
+        let mut minutes: i64 = 0;
+        let mut any = false;
+        let mut take = |part: &str, units: &[(char, i64)]| -> Option<()> {
+            let mut part = part;
+            let mut last = 0;
+            while !part.is_empty() {
+                let end = part.find(|c: char| !c.is_ascii_digit())?;
+                let (digits, tail) = part.split_at(end);
+                let unit = tail.chars().next()?;
+                let pos = units.iter().position(|(u, _)| *u == unit)?;
+                if digits.is_empty() || digits.len() > 7 || pos < last {
+                    return None;
+                }
+                last = pos + 1;
+                minutes += digits.parse::<i64>().ok()? * units[pos].1;
+                any = true;
+                part = &tail[1..];
+            }
+            Some(())
+        };
+        take(date, &[('W', 7 * 24 * 60), ('D', 24 * 60)])?;
+        if let Some(t) = time {
+            take(t, &[('H', 60), ('M', 1)])?;
+        }
+        (any && minutes <= i64::from(i32::MAX)).then_some(DueAfter(minutes as i32))
+    }
+
+    pub fn minutes(self) -> i32 {
+        self.0
+    }
+}
+
+impl std::fmt::Display for DueAfter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (days, rest) = (self.0 / (24 * 60), self.0 % (24 * 60));
+        let (hours, minutes) = (rest / 60, rest % 60);
+        write!(f, "P")?;
+        if days > 0 {
+            write!(f, "{days}D")?;
+        }
+        if hours > 0 || minutes > 0 || days == 0 {
+            write!(f, "T")?;
+            if hours > 0 {
+                write!(f, "{hours}H")?;
+            }
+            if minutes > 0 || (hours == 0 && days == 0) {
+                write!(f, "{minutes}M")?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Serialize for DueAfter {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for DueAfter {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        let due = DueAfter::parse(&s).ok_or_else(|| {
+            serde::de::Error::custom(
+                "invalid_format|An ISO 8601 duration of weeks, days, hours and minutes, e.g. P2D, PT4H or P1DT12H",
+            )
+        })?;
+        if !(MIN_DUE_MINUTES..=MAX_DUE_MINUTES).contains(&due.0) {
+            return Err(serde::de::Error::custom("range|Between 15 minutes (PT15M) and 90 days (P90D)"));
+        }
+        Ok(due)
+    }
+}
+
+fn due_after_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .pattern(Some(r"^P(\d+W)?(\d+D)?(T(\d+H)?(\d+M)?)?$"))
+        .max_length(Some(40))
+        .description(Some(
+            "The step is overdue this long after it became active: an ISO 8601 duration of weeks, days, hours and \
+             minutes (`P2D`, `PT4H`, `P1DT12H`), from 15 minutes to 90 days, wall-clock. Returned in canonical form \
+             (`PT48H` is returned as `P2D`). Left out: no due date.",
+        ))
+        .into()
+}
+
+fn exclude_actors_schema() -> Schema {
+    ArrayBuilder::new()
+        .items(utoipa::openapi::RefOr::T(key_schema()))
+        .max_items(Some(20))
+        .description(Some(
+            "Transition keys of this version: whoever ran one of them on the instance (and whoever requested it) may \
+             not approve this step",
+        ))
+        .into()
+}
+
+/// What happens when a step is overdue (default `flag`): `flag` marks it overdue and adds the escalation approvers, `reject`
+/// rejects the request (needs `dueAfter`)
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema, sqlx::Type)]
+#[serde(rename_all = "snake_case")]
+#[sqlx(type_name = "text", rename_all = "snake_case")]
+pub enum WorkflowApprovalOverdue {
+    #[default]
+    Flag,
+    Reject,
+}
+
+fn one() -> i16 {
+    1
+}
+
+/// One step of an approval policy
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowApprovalStep {
+    /// Unique in the transition; approver assignments refer to it
+    #[schema(schema_with = key_schema)]
+    pub key: String,
+    #[schema(schema_with = workflow_name_schema)]
+    #[serde(deserialize_with = "trimmed")]
+    pub name: String,
+    /// Approvals the step needs (1-20, default 1). One rejection rejects the request.
+    #[schema(minimum = 1, maximum = 20)]
+    #[serde(default = "one")]
+    pub required_approvals: i16,
+    #[schema(schema_with = due_after_schema, required = false)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub due_after: Option<DueAfter>,
+    #[schema(inline)]
+    #[serde(default)]
+    pub on_overdue: WorkflowApprovalOverdue,
+    /// Whoever approved an earlier step of the same request may not approve this one (default true)
+    #[serde(default = "yes")]
+    pub distinct_from_earlier: bool,
+    #[schema(schema_with = exclude_actors_schema)]
+    #[serde(default)]
+    pub exclude_actors_of: Vec<String>,
+    /// Decisions may come through an API token the approver minted for themselves (default false: a signed-in
+    /// session only)
+    #[serde(default)]
+    pub allow_api_tokens: bool,
+}
+
+/// The approval policy of a transition: running it creates an approval request, and the instance moves only once
+/// every step is approved, in order. The requester can never approve their own request.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowApproval {
+    #[schema(min_items = 1, max_items = 5)]
+    pub steps: Vec<WorkflowApprovalStep>,
+}
+
 /// A transition of a workflow version: a directed edge between two states
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -383,6 +560,11 @@ pub struct WorkflowTransition {
     #[schema(schema_with = conditions_schema, required = false)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conditions: Option<Value>,
+    /// Left out: the transition runs without approval. Part of the checksum only when present, so a version
+    /// without approvals keeps the checksum it had before approvals existed.
+    #[schema(required = false)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<WorkflowApproval>,
 }
 
 /// The whole draft graph; it replaces the draft (or creates one)
@@ -418,6 +600,35 @@ fn duplicates<'a>(prefix: &str, keys: impl Iterator<Item = &'a str>) -> Vec<Fiel
             code: "duplicate".into(),
         })
         .collect()
+}
+
+/// What the schema cannot say about a policy: unique step keys, a due date
+/// for `onOverdue: reject`, and no transition listed twice in `excludeActorsOf`.
+/// Whether those transitions exist is the lint's question (publishing).
+fn approval_problems(path: &str, a: &WorkflowApproval) -> Vec<FieldError> {
+    let mut errors = duplicates(&format!("{path}.steps"), a.steps.iter().map(|s| s.key.as_str()));
+    for (j, s) in a.steps.iter().enumerate() {
+        if s.on_overdue == WorkflowApprovalOverdue::Reject && s.due_after.is_none() {
+            errors.push(FieldError {
+                location: FieldLocation::Body,
+                field: format!("{path}.steps[{j}].dueAfter"),
+                message: "onOverdue: reject needs a due interval".into(),
+                code: "required".into(),
+            });
+        }
+        let mut seen = HashSet::new();
+        for (k, key) in s.exclude_actors_of.iter().enumerate() {
+            if !seen.insert(key.as_str()) {
+                errors.push(FieldError {
+                    location: FieldLocation::Body,
+                    field: format!("{path}.steps[{j}].excludeActorsOf[{k}]"),
+                    message: "Listed more than once".into(),
+                    code: "duplicate".into(),
+                });
+            }
+        }
+    }
+    errors
 }
 
 impl Check for WorkflowDraftReplace {
@@ -460,6 +671,9 @@ impl Check for WorkflowDraftReplace {
                         code: "duplicate".into(),
                     });
                 }
+            }
+            if let Some(a) = &t.approval {
+                errors.extend(approval_problems(&format!("transitions[{i}].approval"), a));
             }
         }
         if self.layout.as_ref().is_some_and(|l| !l.is_object()) {
@@ -684,6 +898,379 @@ impl Check for WorkflowGrantsReplace {
                 code: "duplicate".into(),
             })
             .collect()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Approvers (approvals design SHAA-1869 §3.1, §6.2, §10.1)
+// ---------------------------------------------------------------------------
+
+/// Approver assignments of one workflow.
+pub const MAX_APPROVERS: usize = 500;
+
+/// When an assignment applies
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, ToSchema, sqlx::Type,
+)]
+#[serde(rename_all = "snake_case")]
+#[sqlx(type_name = "text", rename_all = "snake_case")]
+pub enum WorkflowApproverRole {
+    /// May decide the step while it is active
+    #[default]
+    Approver,
+    /// May decide the step only once it is overdue
+    Escalation,
+}
+
+impl WorkflowApproverRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WorkflowApproverRole::Approver => "approver",
+            WorkflowApproverRole::Escalation => "escalation",
+        }
+    }
+}
+
+/// Where the approvers of an assignment come from: the holders of a permission `profile`, the members of a user
+/// `group`, one named `user`, the user linked to the Person a reference field of the CI points at (`ci_attribute`,
+/// for example the CI's owner), or the owners in one role of the business services the CI is a direct member of
+/// (`service_owner`)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, ToSchema, sqlx::Type)]
+#[serde(rename_all = "snake_case")]
+#[sqlx(type_name = "text", rename_all = "snake_case")]
+pub enum WorkflowApproverSource {
+    Profile,
+    Group,
+    User,
+    CiAttribute,
+    ServiceOwner,
+}
+
+impl WorkflowApproverSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WorkflowApproverSource::Profile => "profile",
+            WorkflowApproverSource::Group => "group",
+            WorkflowApproverSource::User => "user",
+            WorkflowApproverSource::CiAttribute => "ci_attribute",
+            WorkflowApproverSource::ServiceOwner => "service_owner",
+        }
+    }
+}
+
+/// An owner role of a business service
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, ToSchema, sqlx::Type)]
+#[serde(rename_all = "snake_case")]
+#[sqlx(type_name = "text", rename_all = "snake_case")]
+pub enum WorkflowServiceOwnerRole {
+    Technical,
+    Business,
+}
+
+impl WorkflowServiceOwnerRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WorkflowServiceOwnerRole::Technical => "technical",
+            WorkflowServiceOwnerRole::Business => "business",
+        }
+    }
+}
+
+/// A profile, group or user, by id and name (a user's name is their username)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowPrincipalRef {
+    pub id: Uuid,
+    pub name: String,
+}
+
+/// A reference field of the workflow's type (own or inherited)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowAttributeRef {
+    pub id: Uuid,
+    pub key: String,
+    /// Key of the type that defines the field
+    pub class_key: String,
+    pub label: String,
+}
+
+/// Who may decide one step of a transition's approval policy
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowApprover {
+    pub transition_key: String,
+    pub step_key: String,
+    #[schema(inline)]
+    pub role: WorkflowApproverRole,
+    #[schema(inline)]
+    pub source: WorkflowApproverSource,
+    /// Set for `source: profile`
+    #[schema(required = true)]
+    pub profile: Option<WorkflowPrincipalRef>,
+    /// Set for `source: group`
+    #[schema(required = true)]
+    pub group: Option<WorkflowPrincipalRef>,
+    /// Set for `source: user`
+    #[schema(required = true)]
+    pub user: Option<WorkflowPrincipalRef>,
+    /// Set for `source: ci_attribute`
+    #[schema(required = true)]
+    pub attribute: Option<WorkflowAttributeRef>,
+    /// Set for `source: service_owner`
+    #[schema(inline, required = true)]
+    pub service_owner_role: Option<WorkflowServiceOwnerRole>,
+}
+
+/// The approver assignments of a workflow, with what the lint finds in them
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowApprovers {
+    /// The definition's version: send it back with a change
+    pub version: i32,
+    /// By transition, step, role and source
+    pub approvers: Vec<WorkflowApprover>,
+    /// Warnings about the assignments against the current version and the draft (an approval step nobody may
+    /// approve, approvers who cannot view the type, too few approvers for a step's quorum, an assignment for a
+    /// step neither has)
+    pub problems: Vec<WorkflowProblem>,
+}
+
+fn principal_input_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .min_length(Some(1))
+        .max_length(Some(200))
+        .description(Some("By id, or by name regardless of case (a user by username)"))
+        .into()
+}
+
+fn attribute_input_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .min_length(Some(1))
+        .max_length(Some(200))
+        .description(Some(
+            "By id or by key: a reference field of the workflow's type (own or inherited) that points at the Person \
+             type",
+        ))
+        .into()
+}
+
+/// One approver assignment; exactly the field named by `source` is set
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowApproverInput {
+    /// A transition with an approval policy in some version of the workflow, or in its draft
+    #[schema(schema_with = key_schema)]
+    pub transition_key: String,
+    /// A step of that transition's policy
+    #[schema(schema_with = key_schema)]
+    pub step_key: String,
+    #[schema(inline)]
+    #[serde(default)]
+    pub role: WorkflowApproverRole,
+    #[schema(inline)]
+    pub source: WorkflowApproverSource,
+    #[schema(schema_with = principal_input_schema)]
+    #[serde(default)]
+    pub profile: Option<String>,
+    #[schema(schema_with = principal_input_schema)]
+    #[serde(default)]
+    pub group: Option<String>,
+    #[schema(schema_with = principal_input_schema)]
+    #[serde(default)]
+    pub user: Option<String>,
+    #[schema(schema_with = attribute_input_schema)]
+    #[serde(default)]
+    pub attribute: Option<String>,
+    #[schema(inline)]
+    #[serde(default)]
+    pub service_owner_role: Option<WorkflowServiceOwnerRole>,
+}
+
+impl WorkflowApproverInput {
+    /// The field `source` names must be set, and no other.
+    fn problems(&self, path: &str) -> Vec<FieldError> {
+        let set = [
+            (WorkflowApproverSource::Profile, "profile", self.profile.is_some()),
+            (WorkflowApproverSource::Group, "group", self.group.is_some()),
+            (WorkflowApproverSource::User, "user", self.user.is_some()),
+            (WorkflowApproverSource::CiAttribute, "attribute", self.attribute.is_some()),
+            (WorkflowApproverSource::ServiceOwner, "serviceOwnerRole", self.service_owner_role.is_some()),
+        ];
+        let mut out = Vec::new();
+        for (source, field, present) in set {
+            if source == self.source && !present {
+                out.push(FieldError {
+                    location: FieldLocation::Body,
+                    field: format!("{path}.{field}"),
+                    message: format!("Required for source {}", source.as_str()),
+                    code: "required".into(),
+                });
+            } else if source != self.source && present {
+                out.push(FieldError {
+                    location: FieldLocation::Body,
+                    field: format!("{path}.{field}"),
+                    message: format!(
+                        "Only for source {}; this assignment is {}",
+                        source.as_str(),
+                        self.source.as_str()
+                    ),
+                    code: "source_mismatch".into(),
+                });
+            }
+        }
+        out
+    }
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowApproversReplace {
+    /// The version you loaded; if someone saved in between, the request fails with 409 VERSION_CONFLICT
+    #[schema(minimum = 1)]
+    pub version: i32,
+    /// Every assignment of the workflow (replaces the current set)
+    #[schema(inline, max_items = 500)]
+    pub approvers: Vec<WorkflowApproverInput>,
+}
+
+impl Check for WorkflowApproversReplace {
+    fn check(&self) -> Vec<FieldError> {
+        self.approvers.iter().enumerate().flat_map(|(i, a)| a.problems(&format!("approvers[{i}]"))).collect()
+    }
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[serde(rename_all = "camelCase")]
+#[into_params(parameter_in = Query)]
+pub struct WorkflowApproverPreviewQuery {
+    /// Transition key
+    #[param(schema_with = key_schema)]
+    pub transition: String,
+    /// Step key
+    #[param(schema_with = key_schema)]
+    pub step: String,
+    /// Resolve the CI-dependent sources (reference field, service owners) on this CI, and judge the view right on
+    /// its type. Without it, those sources are not resolved and the view right is judged on the workflow's type.
+    pub ci_id: Option<Uuid>,
+    /// Treat this user as the requester: four-eyes excludes them
+    pub requested_by: Option<Uuid>,
+}
+
+/// Why a user may or may not decide the step
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowApproverPreviewReason {
+    /// May decide the step
+    Eligible,
+    /// Assigned only for escalation: may decide once the step is overdue
+    EscalationOnly,
+    /// The requester (four-eyes)
+    Excluded,
+    /// No permission profile of theirs lets them view the CI's type; they would never see the request
+    NoViewRight,
+    /// The account is disabled
+    Inactive,
+}
+
+/// One user an assignment resolves to
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowApproverPreviewUser {
+    pub id: Uuid,
+    pub username: String,
+    pub display_name: String,
+    /// True when the user may decide the step (`reason: eligible`)
+    pub eligible: bool,
+    #[schema(inline)]
+    pub reason: WorkflowApproverPreviewReason,
+    /// The reason, in words
+    pub message: String,
+    /// The assignments the user is reached through, e.g. `approver: group CAB`
+    pub via: Vec<String>,
+}
+
+/// One assignment of the step and what it resolved to
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowApproverPreviewSource {
+    #[schema(inline)]
+    pub role: WorkflowApproverRole,
+    #[schema(inline)]
+    pub source: WorkflowApproverSource,
+    /// e.g. `group CAB`, `field server.owner`, `business service owners`
+    pub label: String,
+    /// Users it resolved to (active or not)
+    pub user_count: i64,
+    /// Why it resolved to nobody, or that it is resolved per CI; null otherwise
+    #[schema(required = true)]
+    pub note: Option<String>,
+}
+
+/// Who could decide one step, and why each user is in or out
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowApproverPreview {
+    pub transition_key: String,
+    pub step_key: String,
+    #[schema(required = true)]
+    pub ci_id: Option<Uuid>,
+    /// From the draft, else the current version; null when neither has the step
+    #[schema(required = true)]
+    pub required_approvals: Option<i32>,
+    /// Distinct users who may decide the step now (`reason: eligible`)
+    pub eligible_count: i64,
+    /// Eligible users first, then by username; at most 500
+    pub users: Vec<WorkflowApproverPreviewUser>,
+    /// More users were resolved than are listed
+    pub truncated: bool,
+    pub sources: Vec<WorkflowApproverPreviewSource>,
+}
+
+/// One approver assignment in a configuration file; exactly one of `profile`, `group`, `user`, `attribute` and
+/// `serviceOwner` is set
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowApproverSpec {
+    /// Transition key
+    #[schema(schema_with = key_schema)]
+    pub transition: String,
+    /// Step key
+    #[schema(schema_with = key_schema)]
+    pub step: String,
+    #[schema(inline)]
+    #[serde(default)]
+    pub role: WorkflowApproverRole,
+    /// Permission profile name (case-insensitive), in the file or already here
+    #[schema(schema_with = principal_input_schema)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    /// User group name (case-insensitive); groups are not part of a file and must exist here
+    #[schema(schema_with = principal_input_schema)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+    /// Username (case-insensitive); users are not part of a file and must exist here
+    #[schema(schema_with = principal_input_schema)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+    /// `<type key>.<field key>`: a reference field to the Person type, of the workflow's type or an ancestor
+    #[schema(schema_with = attribute_input_schema)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attribute: Option<String>,
+    #[schema(inline)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_owner: Option<WorkflowServiceOwnerRole>,
+}
+
+impl WorkflowApproverSpec {
+    pub fn source_count(&self) -> usize {
+        [self.profile.is_some(), self.group.is_some(), self.user.is_some(), self.attribute.is_some()]
+            .into_iter()
+            .filter(|b| *b)
+            .count()
+            + usize::from(self.service_owner.is_some())
     }
 }
 
