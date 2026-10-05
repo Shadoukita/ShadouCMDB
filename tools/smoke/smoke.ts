@@ -1033,6 +1033,42 @@ async function workflows(x: Json) {
   check(who.users.some((u: Json) => u.id === adminMe.user.id && u.reason === 'excluded'), 'the preview explains that the requester cannot approve');
   await get(`${approvers}/preview?ciId=not-a-uuid`, 400);
 
+  // Approvals A3 (SHAA-1880): go_live now needs approval. A request answers 202; the requester may not
+  // decide; a second administrator approves and the transition applies; withdraw and manager cancel.
+  console.log('\n# Workflow approval requests');
+  await post(`${base}/${def.id}/draft/publish`, { expectedDraftChecksum: gatedDraft.checksum, changeNote: 'Smoke approvals' });
+  const requests = '/api/v1/workflow-approval-requests';
+  const gatedInstance = async () => {
+    const c = (await post('/api/v1/configuration-items', { classId: cls.id, attributes: {} })).json;
+    const i = (await post(instances, { definitionId: def.id, ciId: c.id })).json.instance;
+    return (await post(`${instances}/${i.id}/transitions`, { transitionKey: 'approve', expectedVersion: i.version, fields: { ticket: 'CHG-4' }, comment: 'Smoke' }, 200)).json;
+  };
+  const requestGoLive = async (i: Json) =>
+    (await post(`${instances}/${i.id}/transitions`, { transitionKey: 'go_live', expectedVersion: i.version }, 202)).json;
+  const toApprove = await requestGoLive(await gatedInstance());
+  const pending = toApprove.pendingApproval;
+  check(toApprove.state.key === 'approved' && pending?.stepKey === 'cab', 'a transition that needs approval answers 202 with the pending request');
+  const request = (await get(`${requests}/${pending.requestId}`)).json;
+  check(request.status === 'pending' && request.requester?.id === adminMe.user.id, 'the request names its requester');
+  await get(`${requests}/00000000-0000-4000-8000-000000000000`, 404);
+  const decision = { stepKey: 'cab', decision: 'approve', expectedVersion: pending.version, comment: 'Smoke approval' };
+  const self = await post(`${requests}/${pending.requestId}/decisions`, decision, 403);
+  check(self.json?.error?.code === 'WORKFLOW_APPROVAL_SELF', 'the requester cannot approve their own request');
+  const approverPassword = `wf-approver-${RUN}-password`;
+  const approver = (await post('/api/v1/admin/users', { username: `smoke-wf-approver-${RUN}`, displayName: 'Smoke approver', email: `wf-approver-${RUN}@example.com`, password: approverPassword, profileIds: [builtin.id] })).json;
+  await as(await login(approver.username, approverPassword), async () => {
+    const decided = (await post(`${requests}/${pending.requestId}/decisions`, decision, 200)).json;
+    check(decided.request.status === 'approved' && decided.instance?.state.key === 'live', 'the last approval applies the transition');
+  });
+  const toWithdraw = (await requestGoLive(await gatedInstance())).pendingApproval;
+  const withdrawn = (await post(`${requests}/${toWithdraw.requestId}/withdraw`, { expectedVersion: toWithdraw.version }, 200)).json;
+  check(withdrawn.request.status === 'withdrawn', 'the requester withdraws the request');
+  await post(`${requests}/${toWithdraw.requestId}/withdraw`, { expectedVersion: toWithdraw.version }, 409);
+  const toCancel = (await requestGoLive(await gatedInstance())).pendingApproval;
+  await post(`${requests}/${toCancel.requestId}/cancel`, { expectedVersion: toCancel.version }, 400);
+  const cancelledRequest = (await post(`${requests}/${toCancel.requestId}/cancel`, { expectedVersion: toCancel.version, comment: 'Smoke cancel' }, 200)).json;
+  check(cancelledRequest.request.status === 'cancelled', 'an administrator cancels a pending request');
+
   // A second draft, discarded; then the published version is retired.
   await put(`${base}/${def.id}/draft`, graph);
   await del(`${base}/${def.id}/draft`);
@@ -1040,7 +1076,7 @@ async function workflows(x: Json) {
   const retired = (await post(`${base}/${def.id}/versions/1/retire`, undefined, 200)).json;
   check(retired.status === 'retired', 'the version is retired');
   await post(`${base}/${def.id}/versions/1/retire`, undefined, 409);
-  check((await get(`${base}/${def.id}/versions?limit=10`)).json.data.length === 2, 'the versions are listed');
+  check((await get(`${base}/${def.id}/versions?limit=10`)).json.data.length === 3, 'the versions are listed');
 
   const password = `wf-${RUN}-password`;
   const nobody = (await post('/api/v1/admin/users', { username: `smoke-wf-${RUN}`, displayName: 'No workflow rights', email: `wf-${RUN}@example.com`, password })).json;

@@ -7,6 +7,7 @@ use utoipa::openapi::schema::{ObjectBuilder, Schema, Type};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
+use super::approval_schemas::{WorkflowApprovalStepSummary, WorkflowPendingApproval};
 use super::schemas::{WorkflowState, WorkflowStateCategory, WorkflowTransition};
 use crate::api::route::Check;
 use crate::api::schemas::{self, Sort, key_schema, ts};
@@ -85,6 +86,9 @@ pub struct WorkflowInstance {
     pub version: i32,
     /// The CI's own `version` after the step (its fields and state field may have changed)
     pub ci_version: i32,
+    /// The approval request the instance waits for; null when there is none
+    #[schema(required = true)]
+    pub pending_approval: Option<WorkflowPendingApproval>,
 }
 
 /// A field a transition shows
@@ -106,9 +110,9 @@ pub struct WorkflowTransitionFieldView {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkflowBlockedReason {
-    /// `fields.<key>` of the field the condition reads
+    /// `fields.<key>` of the field the condition reads, or `approvalRequestId`
     pub field: String,
-    /// `condition`
+    /// `condition`, or `approval_pending` while the instance waits for an approval request (no transition runs)
     pub code: String,
     pub message: String,
 }
@@ -121,6 +125,10 @@ pub struct WorkflowAvailableTransition {
     pub name: String,
     pub to_state: WorkflowStateRef,
     pub requires_comment: bool,
+    /// Running it creates an approval request (202): the instance moves only once the request is approved
+    pub requires_approval: bool,
+    /// The steps of its approval policy, in order; empty when it needs no approval
+    pub approval_steps: Vec<WorkflowApprovalStepSummary>,
     pub fields: Vec<WorkflowTransitionFieldView>,
     /// The conditions that fail on the CI's current values: empty when it can run (given its required fields and
     /// comment). Values sent with the transition count too, so a condition on one of its fields can still be met.
@@ -371,6 +379,16 @@ pub enum WorkflowEventKind {
     Cancel,
     Migrate,
     Force,
+    /// A gated transition was requested: an approval request is pending
+    ApprovalRequest,
+    /// An approver approved or rejected a step
+    ApprovalDecision,
+    /// The requester withdrew the request
+    ApprovalWithdraw,
+    /// The request was closed by a manager, or by a cancel, forced state, migration or CI deletion
+    ApprovalClose,
+    /// A step went past its due date
+    ApprovalOverdue,
 }
 
 /// One step in an instance's history, oldest first
@@ -405,6 +423,12 @@ pub struct WorkflowEvent {
     /// Joins to the audit log's `requestId`
     #[schema(required = true)]
     pub request_id: Option<String>,
+    /// The approval request of an `approval_*` event, or the one a `transition` event's final approval applied
+    #[schema(required = true)]
+    pub approval_request_id: Option<Uuid>,
+    /// The step an `approval_request`, `approval_decision` or `approval_overdue` event is about
+    #[schema(required = true)]
+    pub approval_step_no: Option<i16>,
 }
 
 // ---------------------------------------------------------------------------
@@ -496,6 +520,9 @@ pub struct WorkflowBulkTransitionResult {
     /// The instance after the transition (ok items)
     #[schema(required = true)]
     pub instance: Option<WorkflowInstance>,
+    /// For a transition that needs approval: the request it created (the instance did not move)
+    #[schema(required = true)]
+    pub approval_request_id: Option<Uuid>,
     /// Why the item was refused (failed items); nothing of it was written
     #[schema(required = true)]
     pub error: Option<WorkflowBulkError>,
@@ -543,6 +570,20 @@ pub struct WorkflowInstanceMigration {
     pub state_map: std::collections::BTreeMap<String, String>,
     /// Only report what would move; nothing is written
     pub dry_run: bool,
+    #[schema(inline)]
+    #[serde(default)]
+    pub pending_approvals: WorkflowMigrationPendingApprovals,
+}
+
+/// Instances with a pending approval request: `skip` (the default) leaves them on `fromVersionNo` with their
+/// request, `cancel` closes the request (reason `instance_migrated`) and moves them. A request is never carried to
+/// another version.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowMigrationPendingApprovals {
+    #[default]
+    Skip,
+    Cancel,
 }
 
 impl Check for WorkflowInstanceMigration {}
@@ -582,6 +623,10 @@ pub struct WorkflowInstanceMigrationReport {
     pub migrated: i64,
     /// Transactions used (each moves up to 1,000 instances)
     pub batches: i32,
+    /// Running instances on `fromVersionNo` with a pending approval request when the request started
+    pub pending_approvals: i64,
+    /// Instances left on `fromVersionNo` because of their pending approval request (`pendingApprovals: skip`)
+    pub skipped: i64,
     /// One entry per non-terminal state of `fromVersionNo` that has running instances or is named in `stateMap`
     pub states: Vec<WorkflowMigrationStateMove>,
 }

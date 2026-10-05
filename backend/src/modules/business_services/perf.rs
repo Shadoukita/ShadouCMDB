@@ -49,7 +49,7 @@ fn restricted(visible: &[Uuid], service_class: Uuid) -> RequestContext {
     let principal = Principal {
         user_id: Uuid::new_v4(),
         username: "perf".into(),
-        credential: Credential::Token { profile_id: None, creator_id: None },
+        credential: Credential::Token { profile_id: None, creator_id: None, token_id: None, minted_by: None },
         permissions,
     };
     RequestContext::user(Arc::new(principal), "services-perf".into())

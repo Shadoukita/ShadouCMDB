@@ -74,7 +74,11 @@ pub enum Credential {
     /// is not the owner: the transition must be granted to the creator too, as
     /// the token's other permissions are capped at the creator's (GH#178,
     /// GH#607). Both None for principals built outside token authentication.
-    Token { profile_id: Option<Uuid>, creator_id: Option<Uuid> },
+    /// `token_id` is the token's id and `minted_by` the user who minted it as
+    /// recorded (`created_by_user_id`, None when unknown): approval decisions
+    /// accept only a token its owner minted, and both are recorded with
+    /// approval requests and decisions (approvals design, SHAA-1872 C1/C3).
+    Token { profile_id: Option<Uuid>, creator_id: Option<Uuid>, token_id: Option<Uuid>, minted_by: Option<Uuid> },
 }
 
 impl Principal {

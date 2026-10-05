@@ -371,6 +371,8 @@ pub async fn authenticate(
         credential: Credential::Token {
             profile_id: t.profile_id,
             creator_id: t.created_by_user_id.filter(|&c| c != t.user_id),
+            token_id: Some(t.id),
+            minted_by: t.created_by_user_id,
         },
         permissions,
     };

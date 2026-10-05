@@ -193,6 +193,14 @@ fn error_status(code: ErrorCode) -> (u16, &'static str) {
              (code MFA_ENROLMENT_REQUIRED), or the session's owner has not confirmed their credentials in the last 10 \
              minutes (code REAUTHENTICATION_REQUIRED; POST /api/v1/auth/reauthenticate, then send the request again)",
         ),
+        ErrorCode::WorkflowApprovalSelf => (
+            403,
+            "Missing permission or not eligible to decide (code FORBIDDEN; details[0].code not_eligible, \
+             session_required or token_not_self_minted), X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up \
+             first (code MFA_ENROLMENT_REQUIRED), the account must enter its e-mail first (code EMAIL_REQUIRED), or \
+             four-eyes and separation of duties (code WORKFLOW_APPROVAL_SELF; details[0].code requester, \
+             token_creator, earlier_step or actor_of:<transitionKey>). Nothing was changed",
+        ),
         ErrorCode::NotFound => (404, "Not found (code NOT_FOUND)"),
         ErrorCode::Gone => (410, "The operation was removed (code GONE); the message names its replacement"),
         ErrorCode::Conflict | ErrorCode::InUse | ErrorCode::VersionConflict | ErrorCode::LastAdministrator => (
@@ -204,6 +212,19 @@ fn error_status(code: ErrorCode) -> (u16, &'static str) {
             "Conflict: CONFLICT (duplicate or not allowed in this state), VERSION_CONFLICT, or \
              WORKFLOW_CONTROLLED_FIELD (a state field an active workflow drives was given another value; \
              details[].field names it as `attributes.<key>`, details[].code workflow_controlled). Nothing was changed",
+        ),
+        ErrorCode::WorkflowApprovalPending => (
+            409,
+            "Conflict: CONFLICT (not allowed in this state), VERSION_CONFLICT, or WORKFLOW_APPROVAL_PENDING (the \
+             instance has a pending approval request, so no other transition runs; details[0].field is \
+             `approvalRequestId`, details[0].message names the request). Nothing was changed",
+        ),
+        ErrorCode::WorkflowApprovalStale => (
+            409,
+            "Conflict: CONFLICT (the request is not pending, the step is no longer active, or you already decided \
+             it), VERSION_CONFLICT (stale `expectedVersion`), or WORKFLOW_APPROVAL_STALE (the final approval cannot \
+             apply the transition: details[].field `fields.<key>` with code changed, not_a_transition_field, \
+             required or condition). Nothing was changed, not even the decision",
         ),
         ErrorCode::InvalidName | ErrorCode::SchemaChangeRefused => (
             422,
