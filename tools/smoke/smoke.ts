@@ -1016,6 +1016,23 @@ async function workflows(x: Json) {
   check(Array.isArray((await get(`/api/v1/admin/workflow-archive?definitionKey=${def.key}&limit=10`)).json.data), 'the workflow archive is listed');
   await get(`/api/v1/admin/workflow-archive?ciId=not-a-uuid`, 400);
 
+  // Approvals A2 (SHAA-1894): a drafted approval policy, its approvers and the preview; discarded with the draft.
+  console.log('\n# Workflow approval policies and approvers');
+  const gated = structuredClone(graph);
+  gated.states = graph.states.slice(0, 3);
+  (gated.transitions[1] as Json).approval = { steps: [{ key: 'cab', name: 'Change board', requiredApprovals: 1, dueAfter: 'PT48H' }] };
+  const gatedDraft = (await put(`${base}/${def.id}/draft`, gated)).json;
+  check(gatedDraft.transitions?.[1]?.approval?.steps?.[0]?.dueAfter === 'P2D', 'a due interval is stored in canonical form');
+  const approvers = `${base}/${def.id}/approvers`;
+  const noApprovers = (await get(approvers)).json;
+  check(noApprovers.approvers.length === 0 && noApprovers.problems.some((p: Json) => p.code === 'no_approvers'), 'a step nobody may approve is a warning');
+  const staffed = (await put(approvers, { version: noApprovers.version, approvers: [{ transitionKey: 'go_live', stepKey: 'cab', source: 'profile', profile: builtin.name }] })).json;
+  check(staffed.approvers[0]?.profile?.id === builtin.id && !staffed.problems.some((p: Json) => p.code === 'no_approvers'), 'a step is staffed with a profile by name');
+  await put(approvers, { version: noApprovers.version, approvers: [] }, 409);
+  const who = (await get(`${approvers}/preview?transition=go_live&step=cab&requestedBy=${adminMe.user.id}`)).json;
+  check(who.users.some((u: Json) => u.id === adminMe.user.id && u.reason === 'excluded'), 'the preview explains that the requester cannot approve');
+  await get(`${approvers}/preview?ciId=not-a-uuid`, 400);
+
   // A second draft, discarded; then the published version is retired.
   await put(`${base}/${def.id}/draft`, graph);
   await del(`${base}/${def.id}/draft`);
@@ -1907,7 +1924,7 @@ async function customization(x: Json) {
   const file = exported.json;
   const raw = JSON.stringify(file);
   check(/^attachment; filename="shadoucmdb-config-/.test(exported.headers.get('content-disposition') ?? ''), 'the export downloads as a file');
-  check(file.format === 'shadoucmdb.config' && file.formatVersion === 8 && Array.isArray(file.workflows) && Array.isArray(file.importMappings) && Array.isArray(file.savedViews) && file.dataModel.areas.some((a: Json) => a.key === 'infrastruktur') && !('users' in file) && !raw.includes('argon2') && !raw.includes('"username"') && !raw.includes('password'), 'the export has no users or password hashes');
+  check(file.format === 'shadoucmdb.config' && file.formatVersion === 9 && Array.isArray(file.workflows) && Array.isArray(file.importMappings) && Array.isArray(file.savedViews) && file.dataModel.areas.some((a: Json) => a.key === 'infrastruktur') && !('users' in file) && !raw.includes('argon2') && !raw.includes('"username"') && !raw.includes('password'), 'the export has no users or password hashes');
   check(file.permissionProfiles.every((p: Json) => p.name !== 'Administrator') && file.uiSettings.logo?.data === PNG_1X1, 'the export has editable profiles and the images');
   check(file.dataModel.attributes.every((a: Json) => typeof a.class === 'string' && !('classId' in a)), 'the export refers to classes by key');
   const noop = (await post('/api/v1/admin/config/import?mode=dry_run', file, 200)).json;
@@ -1956,7 +1973,7 @@ async function customization(x: Json) {
   attr.dataType = 'text';
   const immutable = await post('/api/v1/admin/config/import?mode=dry_run', retyped, 400);
   check(immutable.json.error?.details?.some((d: Json) => d.code === 'immutable'), 'the data type of an existing attribute cannot change');
-  await post('/api/v1/admin/config/import?mode=apply', { format: 'shadoucmdb.config', formatVersion: 9 }, 400);
+  await post('/api/v1/admin/config/import?mode=apply', { format: 'shadoucmdb.config', formatVersion: 10 }, 400);
   // Format 4: saved import mappings, merged by class key and name (SHAA-714 §6.2).
   const cfgMapping = { name: `Smoke config ${RUN}`, classKey: 'server', definition: { mode: 'create_only', columns: [{ header: 'Hostname', target: { kind: 'attribute', key: 'hostname' } }, { header: 'Notes', target: { kind: 'ignore' } }] } };
   const mappingFile = { format: 'shadoucmdb.config', formatVersion: 4, importMappings: [cfgMapping] };
