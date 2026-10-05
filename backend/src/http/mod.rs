@@ -863,6 +863,22 @@ pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'sta
         open_files = open_files.map_or_else(|| "unlimited".to_owned(), |n| n.to_string()),
         "connection limit"
     );
+    let needed = open_files_needed(cfg.http.max_concurrent_requests, cfg.database.pool_max);
+    if let Some(open_files) = open_files.filter(|&n| n < needed) {
+        // A small limit next to the pool leaves few connections, down to one,
+        // which a single keep-alive or slow client then holds (GH#628).
+        tracing::warn!(
+            open_files,
+            needed,
+            max_connections,
+            per_network = peers.by_net.max,
+            wanted = cfg.http.max_concurrent_requests.saturating_mul(CONNECTIONS_PER_REQUEST_SLOT),
+            pool_max = cfg.database.pool_max,
+            "the open-files limit caps the connection limit: raise the hard open-files limit (LimitNOFILE= in \
+             the systemd unit, ulimit -Hn) to at least `needed`, or lower DATABASE_POOL_MAX or \
+             HTTP_MAX_CONCURRENT_REQUESTS"
+        );
+    }
     accept_loop(listener, app, &cfg.http, max_connections, peers, stop).await;
     // Before the exporter's last pass, so the summary rows leave too.
     refusals.stop().await;
@@ -911,6 +927,19 @@ fn connection_limit(max_concurrent_requests: usize, open_files: Option<u64>, poo
         usize::try_from(n.saturating_sub(reserve)).unwrap_or(usize::MAX)
     });
     by_slots.min(by_files).clamp(1, tokio::sync::Semaphore::MAX_PERMITS)
+}
+
+/// The smallest open-files limit at which `connection_limit` is not capped by
+/// it: `n - n / 4` and `n - pool_max - FD_RESERVE_MIN` both reach the
+/// connections the request slots allow (GH#628).
+fn open_files_needed(max_concurrent_requests: usize, pool_max: u32) -> u64 {
+    let by_slots = u64::try_from(
+        max_concurrent_requests.saturating_mul(CONNECTIONS_PER_REQUEST_SLOT).min(tokio::sync::Semaphore::MAX_PERMITS),
+    )
+    .unwrap_or(u64::MAX);
+    // n - floor(n / 4) = ceil(3n / 4) >= s holds from n = floor((4s - 1) / 3).
+    let by_quarter = by_slots.saturating_mul(FD_RESERVE_DIVISOR).saturating_sub(1) / (FD_RESERVE_DIVISOR - 1);
+    by_quarter.max(by_slots.saturating_add(FD_RESERVE_MIN + u64::from(pool_max)))
 }
 
 /// Soft `RLIMIT_NOFILE` of this process, where the platform shows it.
@@ -1713,6 +1742,28 @@ mod tests {
         // Never zero, and never more than a semaphore holds.
         assert_eq!(connection_limit(512, Some(10), 10), 1);
         assert_eq!(connection_limit(usize::MAX, None, 10), tokio::sync::Semaphore::MAX_PERMITS);
+    }
+
+    /// GH#628: start-up warns below `open_files_needed`, which is exactly the
+    /// smallest open-files limit that leaves the full connection limit.
+    #[test]
+    fn open_files_needed_is_where_the_open_files_limit_stops_capping() {
+        assert_eq!(open_files_needed(512, 10), 2730);
+        assert_eq!(open_files_needed(512, 200), 2730);
+        assert_eq!(open_files_needed(1, 200), 268);
+        assert_eq!(open_files_needed(16, 1), 129);
+        // The GH#628 repro: 256 open files with a pool of 200 is far below it.
+        assert!(256 < open_files_needed(512, 200));
+        for slots in [1, 2, 3, 7, 16, 100, 512, 1000, 4096] {
+            for pool in [1, 10, 50, 200] {
+                let full = connection_limit(slots, None, pool);
+                let needed = open_files_needed(slots, pool);
+                assert_eq!(connection_limit(slots, Some(needed), pool), full, "{slots} slots, pool {pool}");
+                assert!(connection_limit(slots, Some(needed - 1), pool) < full, "{slots} slots, pool {pool}");
+            }
+        }
+        let needed = open_files_needed(usize::MAX, 10);
+        assert_eq!(connection_limit(usize::MAX, Some(needed), 10), tokio::sync::Semaphore::MAX_PERMITS);
     }
 
     /// GH#562: the soft open-files limit is raised to the hard one, so a
