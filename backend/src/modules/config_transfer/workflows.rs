@@ -1,4 +1,5 @@
-//! The `workflows` section (format version 8, design SHAA-1411 §7).
+//! The `workflows` section (format version 8, design SHAA-1411 §7; approval
+//! policies and approvers since version 9, approvals design SHAA-1869 §11).
 //!
 //! Export writes each workflow's current published version, by key: drafts,
 //! retired versions, instances and their events are data, never part of a
@@ -10,6 +11,13 @@
 //! write goes through the definitions API's own functions, so it is checked,
 //! linted and audited exactly like a manual change, inside the import's
 //! single transaction: a graph the publish lint refuses fails the import.
+//!
+//! The approval policy is part of the graph and its checksum, so a changed
+//! policy publishes a new version. Approvers are replaced as a whole, like
+//! grants: profiles by name, fields as `<type key>.<field key>`, groups and
+//! users by name. Groups and users are identity data a file never carries; one
+//! the install does not have fails the import before anything is written
+//! (approvals design A-Q1).
 
 use std::collections::{HashMap, HashSet};
 
@@ -18,13 +26,14 @@ use sqlx::PgConnection;
 use uuid::Uuid;
 
 use super::format::{ConfigFile, WorkflowGrantSpec, WorkflowGraphSpec, WorkflowSpec};
-use super::{ChangeAction, FieldChange, ImportWarning, Importer, at, diff, not_in_file, problem};
+use super::{ChangeAction, FieldChange, Ids, ImportWarning, Importer, at, diff, not_in_file, problem};
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
 use crate::modules::classes::ClassSystemRole;
+use crate::modules::workflows::approvers::{self, Assignment, Facts, PersonFields, Source};
 use crate::modules::workflows::graph::{self, Fields, LintContext, VERSION_COLUMNS, VersionRow};
 use crate::modules::workflows::schemas::{
-    WorkflowDefinition, WorkflowDefinitionCreate, WorkflowDefinitionUpdate, WorkflowDraftReplace, WorkflowGrant,
-    WorkflowProblemSeverity,
+    WorkflowApproverSpec, WorkflowDefinition, WorkflowDefinitionCreate, WorkflowDefinitionUpdate, WorkflowDraftReplace,
+    WorkflowGrant, WorkflowProblemSeverity,
 };
 use crate::modules::workflows::service;
 use crate::schema::model::Model;
@@ -71,6 +80,7 @@ pub(super) async fn snapshot(conn: &mut PgConnection) -> Result<Vec<WorkflowSpec
         let stored = graph::load(conn, version).await?;
         let (initial_state, states, transitions) = stored.graph(&model);
         let grants = specs(service::grant_rows(conn, r.id).await?);
+        let approvers = approvers::specs(&approvers::load(conn, r.id).await?);
         out.push(WorkflowSpec {
             key: r.key,
             name: r.name,
@@ -83,6 +93,7 @@ pub(super) async fn snapshot(conn: &mut PgConnection) -> Result<Vec<WorkflowSpec
             is_active: r.is_active,
             graph: WorkflowGraphSpec { initial_state, states, transitions, layout },
             grants,
+            approvers,
         });
     }
     Ok(out)
@@ -107,12 +118,44 @@ async fn current_version(conn: &mut PgConnection, id: Uuid) -> Result<VersionRow
     .await?)
 }
 
-/// What can be checked before anything is written: duplicate keys, and types
-/// and profiles that exist neither in the file nor here.
+/// The user groups and users the file's approvers name that exist here, into
+/// `ids` (a file never carries them, so they are looked up by name).
+pub(super) async fn principals(conn: &mut PgConnection, file: &ConfigFile, ids: &mut Ids) -> Result<(), AppError> {
+    let named = |f: fn(&WorkflowApproverSpec) -> &Option<String>| -> Vec<String> {
+        file.workflows
+            .iter()
+            .flatten()
+            .flat_map(|w| &w.approvers)
+            .filter_map(|a| f(a).as_ref())
+            .map(|n| n.to_lowercase())
+            .collect()
+    };
+    let (groups, users) = (named(|a| &a.group), named(|a| &a.user));
+    if groups.is_empty() && users.is_empty() {
+        return Ok(());
+    }
+    let rows: Vec<(Uuid, String)> = sqlx::query_as("SELECT id, name FROM cmdb.user_groups WHERE lower(name) = ANY($1)")
+        .bind(&groups)
+        .fetch_all(&mut *conn)
+        .await?;
+    ids.groups = rows.into_iter().map(|(id, name)| (name.to_lowercase(), (id, name))).collect();
+    let rows: Vec<(Uuid, String)> =
+        sqlx::query_as("SELECT id, username FROM cmdb.users WHERE lower(username) = ANY($1)")
+            .bind(&users)
+            .fetch_all(&mut *conn)
+            .await?;
+    ids.users = rows.into_iter().map(|(id, name)| (name.to_lowercase(), (id, name))).collect();
+    Ok(())
+}
+
+/// What can be checked before anything is written: duplicate keys, types and
+/// profiles that exist neither in the file nor here, and groups and users
+/// approvers name that do not exist here.
 pub(super) fn validate(
     list: &[WorkflowSpec],
     classes: &HashSet<String>,
     profiles: &HashSet<String>,
+    ids: &Ids,
     e: &mut Vec<FieldError>,
 ) {
     let mut seen = HashSet::new();
@@ -136,6 +179,72 @@ pub(super) fn validate(
                     problem(e, path, "not_found", format!("No permission profile \"{name}\""));
                 } else if !names.insert(name.to_lowercase()) {
                     problem(e, path, "duplicate", "Listed more than once");
+                }
+            }
+        }
+        let mut assignments = HashSet::new();
+        for (k, a) in w.approvers.iter().enumerate() {
+            let path = format!("{p}.approvers.{k}");
+            let lower = |v: &Option<String>| v.as_ref().map(|n| n.to_lowercase());
+            let identity = (
+                a.transition.clone(),
+                a.step.clone(),
+                a.role,
+                lower(&a.profile),
+                lower(&a.group),
+                lower(&a.user),
+                a.attribute.clone(),
+                a.service_owner,
+            );
+            if !assignments.insert(identity) {
+                problem(e, path.clone(), "duplicate", "The same assignment is listed more than once");
+            }
+            if let Some(name) = &a.profile
+                && !profiles.contains(&name.to_lowercase())
+            {
+                problem(e, format!("{path}.profile"), "not_found", format!("No permission profile \"{name}\""));
+            }
+            if let Some(name) = &a.group
+                && !ids.groups.contains_key(&name.to_lowercase())
+            {
+                problem(
+                    e,
+                    format!("{path}.group"),
+                    "not_found",
+                    format!(
+                        "No user group \"{name}\" here. Groups are not part of a configuration file: create it, then \
+                         import again"
+                    ),
+                );
+            }
+            if let Some(name) = &a.user
+                && !ids.users.contains_key(&name.to_lowercase())
+            {
+                problem(
+                    e,
+                    format!("{path}.user"),
+                    "not_found",
+                    format!(
+                        "No user \"{name}\" here. Users are not part of a configuration file: create the account, \
+                         then import again"
+                    ),
+                );
+            }
+            if let Some(attribute) = &a.attribute {
+                match attribute.split_once('.') {
+                    Some((class, _)) if classes.contains(class) => {}
+                    Some((class, _)) => problem(
+                        e,
+                        format!("{path}.attribute"),
+                        "not_found",
+                        format!("Class \"{class}\" does not exist"),
+                    ),
+                    None => problem(
+                        e,
+                        format!("{path}.attribute"),
+                        "invalid_format",
+                        "A field as <type key>.<field key>, e.g. change_request.owner",
+                    ),
                 }
             }
         }
@@ -178,6 +287,84 @@ fn invalid(path: &str, field: &str, message: String, code: &str) -> AppError {
     at(path, AppError::field(field, message, code))
 }
 
+/// The file's approvers of `w` as assignments: names resolved against this
+/// install (profiles, groups and users were checked in `validate`), fields
+/// resolved and checked against the workflow's type.
+fn assignments(
+    w: &WorkflowSpec,
+    fields: &Fields,
+    person: &PersonFields,
+    profiles: &HashMap<String, (Uuid, String)>,
+    ids: &Ids,
+    path: &str,
+) -> Result<Vec<Assignment>, AppError> {
+    let mut out = Vec::with_capacity(w.approvers.len());
+    let mut errors = Vec::new();
+    for (k, a) in w.approvers.iter().enumerate() {
+        let named = |map: &HashMap<String, (Uuid, String)>, name: &str| map.get(&name.to_lowercase()).cloned();
+        let source = if let Some(name) = &a.profile {
+            named(profiles, name).map(|(id, name)| Source::Profile { id, name })
+        } else if let Some(name) = &a.group {
+            named(&ids.groups, name).map(|(id, name)| Source::Group { id, name })
+        } else if let Some(name) = &a.user {
+            named(&ids.users, name).map(|(id, name)| Source::User { id, name })
+        } else if let Some(attribute) = &a.attribute {
+            let field = attribute.split_once('.').and_then(|(class, key)| {
+                fields.by_key(key).filter(|f| fields.model.class(f.class_id).is_some_and(|c| c.key == class))
+            });
+            let resolved = match field {
+                Some(f) => person.resolve(fields, &f.id.to_string()),
+                None => Err((
+                    "unknown_attribute",
+                    format!("Type {} has no field {attribute} (own or inherited)", fields.class_key),
+                )),
+            };
+            match resolved {
+                Ok(source) => Some(source),
+                Err((code, message)) => {
+                    errors.push(FieldError {
+                        location: FieldLocation::Body,
+                        field: format!("{path}.approvers.{k}.attribute"),
+                        message,
+                        code: code.into(),
+                    });
+                    continue;
+                }
+            }
+        } else {
+            a.service_owner.map(Source::ServiceOwner)
+        };
+        // Checked in validate and the file's own check: every name is here and one source is set.
+        let source = source.ok_or_else(AppError::internal)?;
+        out.push(Assignment { transition_key: a.transition.clone(), step_key: a.step.clone(), role: a.role, source });
+    }
+    if errors.is_empty() { Ok(out) } else { Err(AppError::validation(errors)) }
+}
+
+/// Every approver of `w` must name a step of some version of `d` (the
+/// file's graph is one by now), as the approvers API requires.
+async fn check_approver_steps(
+    conn: &mut PgConnection,
+    d: &WorkflowDefinition,
+    w: &WorkflowSpec,
+    path: &str,
+) -> Result<(), AppError> {
+    let known = approvers::known_steps(conn, d.id).await?;
+    let errors: Vec<FieldError> = w
+        .approvers
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| !known.contains(&(a.transition.clone(), a.step.clone())))
+        .map(|(k, a)| FieldError {
+            location: FieldLocation::Body,
+            field: format!("{path}.approvers.{k}.step"),
+            message: approvers::unknown_step(&d.key, &a.transition, &a.step),
+            code: "unknown_step".into(),
+        })
+        .collect();
+    if errors.is_empty() { Ok(()) } else { Err(AppError::validation(errors)) }
+}
+
 /// Every grant of `w` must name `_cancel` or a transition of some version of
 /// `d` (the file's graph is one by now), as the grants API requires.
 async fn check_grant_keys(
@@ -204,13 +391,15 @@ async fn check_grant_keys(
 
 impl Importer<'_> {
     /// Stores `draft` as the definition's draft (its empty v1, or a new
-    /// version), lints it with the file's grants and publishes it.
+    /// version), lints it with the file's grants and approvers and publishes it.
+    #[allow(clippy::too_many_arguments)]
     async fn publish_graph(
         &mut self,
         d: &WorkflowDefinition,
         fields: &Fields,
         draft: &WorkflowDraftReplace,
         granted: &HashSet<String>,
+        facts: &Facts,
         path: &str,
         warnings: &mut Vec<ImportWarning>,
     ) -> Result<i32, AppError> {
@@ -232,7 +421,10 @@ impl Importer<'_> {
             .map_err(|e| at(&gpath, e))?;
         let row = service::draft_row(self.conn, d.id, false).await?.ok_or_else(AppError::internal)?;
         let stored = graph::load(self.conn, row).await?;
-        let problems = graph::lint(&stored, &LintContext { fields, state_attribute: d.state_attribute_id, granted });
+        let problems = graph::lint(
+            &stored,
+            &LintContext { fields, state_attribute: d.state_attribute_id, granted, approvers: facts },
+        );
         let sum = stored.checksum(&fields.model);
         for p in problems.iter().filter(|p| p.severity == WorkflowProblemSeverity::Warning) {
             warnings.push(ImportWarning { path: format!("{gpath}.{}", p.path), message: p.message.clone() });
@@ -255,13 +447,15 @@ impl Importer<'_> {
         let keys: HashSet<String> = list.iter().map(|w| w.key.to_lowercase()).collect();
         self.section(SECTION, not_in_file(here.iter(), &keys));
         let old: HashMap<String, &WorkflowSpec> = current.iter().map(|w| (w.key.to_lowercase(), w)).collect();
-        let profiles: HashMap<String, Uuid> =
+        let named_profiles: HashMap<String, (Uuid, String)> =
             sqlx::query_as::<_, (Uuid, String)>("SELECT id, name FROM cmdb.permission_profiles")
                 .fetch_all(&mut *self.conn)
                 .await?
                 .into_iter()
-                .map(|(id, name)| (name.to_lowercase(), id))
+                .map(|(id, name)| (name.to_lowercase(), (id, name)))
                 .collect();
+        let profiles: HashMap<String, Uuid> = named_profiles.iter().map(|(k, (id, _))| (k.clone(), *id)).collect();
+        let person = PersonFields::load(self.conn).await?;
 
         for (i, w) in list.iter().enumerate() {
             let path = format!("{SECTION}.{i}");
@@ -294,6 +488,8 @@ impl Importer<'_> {
                 }
             }
             let granted: HashSet<String> = rows.iter().map(|(k, _)| k.clone()).collect();
+            let wanted_approvers = assignments(w, &fields, &person, &named_profiles, &self.ids, &path)?;
+            let facts = Facts::gather(self.conn, class_id, &fields, wanted_approvers.clone()).await?;
             let draft = w.graph.to_draft();
             let incoming =
                 graph::draft_checksum(&fields, state_attribute, &draft).map_err(|e| at(&format!("{path}.graph"), e))?;
@@ -315,10 +511,13 @@ impl Importer<'_> {
                     is_active: Some(w.is_active),
                 };
                 let d = service::create_in(self.conn, self.ctx, &create).await.map_err(|e| at(&path, e))?;
-                self.publish_graph(&d, &fields, &draft, &granted, &path, warnings).await?;
+                self.publish_graph(&d, &fields, &draft, &granted, &facts, &path, warnings).await?;
                 let d = service::load(self.conn, d.id, true).await?;
                 check_grant_keys(self.conn, &d, w, &path).await?;
                 service::set_grants_in(self.conn, self.ctx, &d, &rows).await.map_err(|e| at(&path, e))?;
+                check_approver_steps(self.conn, &d, w, &path).await?;
+                let d = service::load(self.conn, d.id, true).await?;
+                approvers::set_in(self.conn, self.ctx, &d, &wanted_approvers).await.map_err(|e| at(&path, e))?;
                 self.record(SECTION, w.key.clone(), Some(ChangeAction::Create), Vec::new());
                 continue;
             };
@@ -388,7 +587,7 @@ impl Importer<'_> {
                         ),
                     ));
                 }
-                let no = self.publish_graph(&d, &fields, &draft, &granted, &path, warnings).await?;
+                let no = self.publish_graph(&d, &fields, &draft, &granted, &facts, &path, warnings).await?;
                 let from = now.map_or(Value::Null, |(no, sum)| json!({ "versionNo": no, "checksum": sum }));
                 changes.push(FieldChange {
                     field: "graph".into(),
@@ -405,6 +604,19 @@ impl Importer<'_> {
                 let d = service::load(self.conn, id, true).await?;
                 service::set_grants_in(self.conn, self.ctx, &d, &rows).await.map_err(|e| at(&path, e))?;
                 changes.push(FieldChange { field: "grants".into(), from: was, to: wanted });
+            }
+
+            // Approvers are replaced.
+            check_approver_steps(self.conn, &d, w, &path).await?;
+            let was = approvers::load(self.conn, id).await?;
+            if !approvers::same(&was, &wanted_approvers) {
+                let d = service::load(self.conn, id, true).await?;
+                approvers::set_in(self.conn, self.ctx, &d, &wanted_approvers).await.map_err(|e| at(&path, e))?;
+                changes.push(FieldChange {
+                    field: "approvers".into(),
+                    from: json!(approvers::specs(&was)),
+                    to: json!(approvers::specs(&wanted_approvers)),
+                });
             }
 
             let action = (!changes.is_empty()).then_some(ChangeAction::Update);

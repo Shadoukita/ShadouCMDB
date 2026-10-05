@@ -3063,6 +3063,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/workflow-definitions/{id}/approvers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Who may decide each step of the workflow's approval policies
+         * @description Requires `workflows.manage`. Assignments are per transition key, step key and role, for every version of the workflow; the policy itself (steps, quorum, due interval) is part of each version's graph. Sources: a permission profile, a user group, a named user, a reference field of the CI that points at the Person type (the user linked to that Person), or the technical or business owners of the business services the CI is a direct member of. Role `escalation` applies only once the step is overdue. `problems` holds the lint's warnings against the current version and the draft: `no_approvers`, `approvers_cannot_view`, `understaffed`, `inactive_attribute`, `unknown_step`. Administrators are not approvers unless assigned.
+         */
+        get: operations["getWorkflowApprovers"];
+        /**
+         * Replace who may decide each step of the workflow's approval policies
+         * @description Requires `workflows.manage`. `approvers` is the complete new set. Send the workflow's `version`: 409 VERSION_CONFLICT if it changed in between. Exactly the field `source` names is set (400 `required` or `source_mismatch`); profiles, groups and users are given by id or by name (a user by username), a field by id or by key. 400 VALIDATION_ERROR: `unknown_step` on `approvers[i].stepKey` for a step that no version and not the draft has, `not_found` for an unknown profile, group or user, `unknown_attribute` or `attribute_type` on `approvers[i].attribute` unless it is a reference field of the workflow's type (own or inherited) to the Person type, and `duplicate`. A change bumps the workflow's version and is audited as an `update` with the assignments before and after, by name. The response carries the lint's warnings (`problems`). Assignments of a step that only the draft had are dropped (audited the same way) when the draft is deleted or saved without it. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        put: operations["replaceWorkflowApprovers"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/workflow-definitions/{id}/approvers/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Who could decide one approval step, and why each user is in or out
+         * @description Requires `workflows.manage`. Resolves the step's assignments to users, for the CI `ciId` or, without it, in general (the field and service owner sources are then not resolved). Each user is `eligible`, or out with a reason: `inactive` (the account is disabled), `no_view_right` (no profile of theirs lets them view the CI's type, so they would never see the request), `excluded` (the `requestedBy` user: four-eyes), or `escalation_only`. Each source tells how many users it resolved to, and why none when it is empty. Membership is read now; a running request reads it when each decision is made. 400 `unknown_step` for a step no version or draft has; 400 `not_covered` when the workflow does not run on the CI's type; 404 for a CI that does not exist or that the caller may not view.
+         */
+        get: operations["previewWorkflowApprovers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/workflow-definitions/{id}/instance-migrations": {
         parameters: {
             query?: never;
@@ -3818,7 +3862,7 @@ export interface components {
             format: "shadoucmdb.config";
             /**
              * Format: int32
-             * @description File format version; this server writes version 8 and reads 1 to 8
+             * @description File format version; this server writes version 9 and reads 1 to 9
              */
             formatVersion: number;
             exportedAt?: string | null;
@@ -3885,6 +3929,26 @@ export interface components {
                     /** @description Stable machine key, lower_snake_case */
                     transition: string;
                     profiles: string[];
+                }[];
+                approvers?: {
+                    /** @description Stable machine key, lower_snake_case */
+                    transition: string;
+                    /** @description Stable machine key, lower_snake_case */
+                    step: string;
+                    /**
+                     * @description When an assignment applies
+                     * @enum {string}
+                     */
+                    role?: "approver" | "escalation";
+                    /** @description By id, or by name regardless of case (a user by username) */
+                    profile?: string;
+                    /** @description By id, or by name regardless of case (a user by username) */
+                    group?: string;
+                    /** @description By id, or by name regardless of case (a user by username) */
+                    user?: string;
+                    /** @description By id or by key: a reference field of the workflow's type (own or inherited) that points at the Person type */
+                    attribute?: string;
+                    serviceOwner?: ("technical" | "business") | null;
                 }[];
             }[];
         };
@@ -6735,6 +6799,146 @@ export interface components {
             /** @description Database migrations shipped with this build */
             migrations: number;
         };
+        /**
+         * @description The approval policy of a transition: running it creates an approval request, and the instance moves only once
+         *     every step is approved, in order. The requester can never approve their own request.
+         */
+        WorkflowApproval: {
+            steps: components["schemas"]["WorkflowApprovalStep"][];
+        };
+        /** @description One step of an approval policy */
+        WorkflowApprovalStep: {
+            /** @description Stable machine key, lower_snake_case */
+            key: string;
+            name: string;
+            /**
+             * Format: int32
+             * @description Approvals the step needs (1-20, default 1). One rejection rejects the request.
+             */
+            requiredApprovals?: number;
+            /** @description The step is overdue this long after it became active: an ISO 8601 duration of weeks, days, hours and minutes (`P2D`, `PT4H`, `P1DT12H`), from 15 minutes to 90 days, wall-clock. Returned in canonical form (`PT48H` is returned as `P2D`). Left out: no due date. */
+            dueAfter?: string;
+            /**
+             * @description What happens when a step is overdue (default `flag`): `flag` marks it overdue and adds the escalation approvers, `reject`
+             *     rejects the request (needs `dueAfter`)
+             * @enum {string}
+             */
+            onOverdue?: "flag" | "reject";
+            /** @description Whoever approved an earlier step of the same request may not approve this one (default true) */
+            distinctFromEarlier?: boolean;
+            /** @description Transition keys of this version: whoever ran one of them on the instance (and whoever requested it) may not approve this step */
+            excludeActorsOf?: string[];
+            /**
+             * @description Decisions may come through an API token the approver minted for themselves (default false: a signed-in
+             *     session only)
+             */
+            allowApiTokens?: boolean;
+        };
+        /** @description Who may decide one step of a transition's approval policy */
+        WorkflowApprover: {
+            transitionKey: string;
+            stepKey: string;
+            /**
+             * @description When an assignment applies
+             * @enum {string}
+             */
+            role: "approver" | "escalation";
+            /**
+             * @description Where the approvers of an assignment come from: the holders of a permission `profile`, the members of a user
+             *     `group`, one named `user`, the user linked to the Person a reference field of the CI points at (`ci_attribute`,
+             *     for example the CI's owner), or the owners in one role of the business services the CI is a direct member of
+             *     (`service_owner`)
+             * @enum {string}
+             */
+            source: "profile" | "group" | "user" | "ci_attribute" | "service_owner";
+            profile: components["schemas"]["WorkflowPrincipalRef"] | null;
+            group: components["schemas"]["WorkflowPrincipalRef"] | null;
+            user: components["schemas"]["WorkflowPrincipalRef"] | null;
+            attribute: components["schemas"]["WorkflowAttributeRef"] | null;
+            /** @description Set for `source: service_owner` */
+            serviceOwnerRole: ("technical" | "business") | null;
+        };
+        /** @description Who could decide one step, and why each user is in or out */
+        WorkflowApproverPreview: {
+            transitionKey: string;
+            stepKey: string;
+            /** Format: uuid */
+            ciId: string | null;
+            /**
+             * Format: int32
+             * @description From the draft, else the current version; null when neither has the step
+             */
+            requiredApprovals: number | null;
+            /**
+             * Format: int64
+             * @description Distinct users who may decide the step now (`reason: eligible`)
+             */
+            eligibleCount: number;
+            /** @description Eligible users first, then by username; at most 500 */
+            users: components["schemas"]["WorkflowApproverPreviewUser"][];
+            /** @description More users were resolved than are listed */
+            truncated: boolean;
+            sources: components["schemas"]["WorkflowApproverPreviewSource"][];
+        };
+        /** @description One assignment of the step and what it resolved to */
+        WorkflowApproverPreviewSource: {
+            /**
+             * @description When an assignment applies
+             * @enum {string}
+             */
+            role: "approver" | "escalation";
+            /**
+             * @description Where the approvers of an assignment come from: the holders of a permission `profile`, the members of a user
+             *     `group`, one named `user`, the user linked to the Person a reference field of the CI points at (`ci_attribute`,
+             *     for example the CI's owner), or the owners in one role of the business services the CI is a direct member of
+             *     (`service_owner`)
+             * @enum {string}
+             */
+            source: "profile" | "group" | "user" | "ci_attribute" | "service_owner";
+            /** @description e.g. `group CAB`, `field server.owner`, `business service owners` */
+            label: string;
+            /**
+             * Format: int64
+             * @description Users it resolved to (active or not)
+             */
+            userCount: number;
+            /** @description Why it resolved to nobody, or that it is resolved per CI; null otherwise */
+            note: string | null;
+        };
+        /** @description One user an assignment resolves to */
+        WorkflowApproverPreviewUser: {
+            /** Format: uuid */
+            id: string;
+            username: string;
+            displayName: string;
+            /** @description True when the user may decide the step (`reason: eligible`) */
+            eligible: boolean;
+            /**
+             * @description Why a user may or may not decide the step
+             * @enum {string}
+             */
+            reason: "eligible" | "escalation_only" | "excluded" | "no_view_right" | "inactive";
+            /** @description The reason, in words */
+            message: string;
+            /** @description The assignments the user is reached through, e.g. `approver: group CAB` */
+            via: string[];
+        };
+        /** @description The approver assignments of a workflow, with what the lint finds in them */
+        WorkflowApprovers: {
+            /**
+             * Format: int32
+             * @description The definition's version: send it back with a change
+             */
+            version: number;
+            /** @description By transition, step, role and source */
+            approvers: components["schemas"]["WorkflowApprover"][];
+            /**
+             * @description Warnings about the assignments against the current version and the draft (an approval step nobody may
+             *     approve, approvers who cannot view the type, too few approvers for a step's quorum, an assignment for a
+             *     step neither has)
+             */
+            problems: components["schemas"]["WorkflowProblem"][];
+        };
         /** @description A workflow instance whose CI was deleted for good (a type purge), with its whole history */
         WorkflowArchivedInstance: {
             /** Format: uuid */
@@ -6773,6 +6977,15 @@ export interface components {
         WorkflowArchivedInstanceList: {
             data: components["schemas"]["WorkflowArchivedInstance"][];
             page: components["schemas"]["PageMeta"];
+        };
+        /** @description A reference field of the workflow's type (own or inherited) */
+        WorkflowAttributeRef: {
+            /** Format: uuid */
+            id: string;
+            key: string;
+            /** @description Key of the type that defines the field */
+            classKey: string;
+            label: string;
         };
         /** @description A transition out of the instance's state that the caller may run */
         WorkflowAvailableTransition: {
@@ -7138,6 +7351,12 @@ export interface components {
             states: components["schemas"]["WorkflowState"][];
             transitions: components["schemas"]["WorkflowTransition"][];
         };
+        /** @description A profile, group or user, by id and name (a user's name is their username) */
+        WorkflowPrincipalRef: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+        };
         /** @description One finding of the graph lint */
         WorkflowProblem: {
             /** @description Where in the draft body, e.g. `states[2]`, `transitions[0].fields[1].attribute` */
@@ -7216,6 +7435,7 @@ export interface components {
             fields?: components["schemas"]["WorkflowTransitionField"][];
             /** @description Must hold for the transition to run. A group `{"all": [...]}` or `{"any": [...]}` of conditions, or a leaf `{"field": <field key>, "op": <op>, "value": <value>}`. Ops: eq, ne, in, notIn (value: array of 1-100), isSet, isNotSet (no value), gt, gte, lt, lte (number, integer, date and datetime fields), contains (text fields). The value has the field's type; enum and lookup values are given by key. At most 4 levels deep, 32 leaves and 16 KiB. The field is one of the workflow type's own or inherited fields. */
             conditions?: Record<string, never>;
+            approval?: components["schemas"]["WorkflowApproval"] | null;
         };
         /** @description A field a transition shows, and whether it must be filled in */
         WorkflowTransitionField: {
@@ -26278,7 +26498,7 @@ export interface operations {
                     format: "shadoucmdb.config";
                     /**
                      * Format: int32
-                     * @description File format version; this server writes version 8 and reads 1 to 8
+                     * @description File format version; this server writes version 9 and reads 1 to 9
                      */
                     formatVersion: number;
                     exportedAt?: string | null;
@@ -26345,6 +26565,26 @@ export interface operations {
                             /** @description Stable machine key, lower_snake_case */
                             transition: string;
                             profiles: string[];
+                        }[];
+                        approvers?: {
+                            /** @description Stable machine key, lower_snake_case */
+                            transition: string;
+                            /** @description Stable machine key, lower_snake_case */
+                            step: string;
+                            /**
+                             * @description When an assignment applies
+                             * @enum {string}
+                             */
+                            role?: "approver" | "escalation";
+                            /** @description By id, or by name regardless of case (a user by username) */
+                            profile?: string;
+                            /** @description By id, or by name regardless of case (a user by username) */
+                            group?: string;
+                            /** @description By id, or by name regardless of case (a user by username) */
+                            user?: string;
+                            /** @description By id or by key: a reference field of the workflow's type (own or inherited) that points at the Person type */
+                            attribute?: string;
+                            serviceOwner?: ("technical" | "business") | null;
                         }[];
                     }[];
                 };
@@ -28043,6 +28283,339 @@ export interface operations {
             };
             /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getWorkflowApprovers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowApprovers"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    replaceWorkflowApprovers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * Format: int32
+                     * @description The version you loaded; if someone saved in between, the request fails with 409 VERSION_CONFLICT
+                     */
+                    version: number;
+                    /** @description Every assignment of the workflow (replaces the current set) */
+                    approvers: {
+                        /** @description Stable machine key, lower_snake_case */
+                        transitionKey: string;
+                        /** @description Stable machine key, lower_snake_case */
+                        stepKey: string;
+                        /**
+                         * @description When an assignment applies
+                         * @enum {string}
+                         */
+                        role?: "approver" | "escalation";
+                        /**
+                         * @description Where the approvers of an assignment come from: the holders of a permission `profile`, the members of a user
+                         *     `group`, one named `user`, the user linked to the Person a reference field of the CI points at (`ci_attribute`,
+                         *     for example the CI's owner), or the owners in one role of the business services the CI is a direct member of
+                         *     (`service_owner`)
+                         * @enum {string}
+                         */
+                        source: "profile" | "group" | "user" | "ci_attribute" | "service_owner";
+                        /** @description By id, or by name regardless of case (a user by username) */
+                        profile?: string;
+                        /** @description By id, or by name regardless of case (a user by username) */
+                        group?: string;
+                        /** @description By id, or by name regardless of case (a user by username) */
+                        user?: string;
+                        /** @description By id or by key: a reference field of the workflow's type (own or inherited) that points at the Person type */
+                        attribute?: string;
+                        serviceOwnerRole?: ("technical" | "business") | null;
+                    }[];
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowApprovers"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    previewWorkflowApprovers: {
+        parameters: {
+            query?: {
+                /** @description Stable machine key, lower_snake_case */
+                transition?: string;
+                /** @description Stable machine key, lower_snake_case */
+                step?: string;
+                /**
+                 * @description Resolve the CI-dependent sources (reference field, service owners) on this CI, and judge the view right on
+                 *     its type. Without it, those sources are not resolved and the view right is judged on the workflow's type.
+                 */
+                ciId?: string;
+                /** @description Treat this user as the requester: four-eyes excludes them */
+                requestedBy?: string;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowApproverPreview"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -76,6 +76,8 @@ struct PinnedTransition {
     to_state_id: Uuid,
     requires_comment: bool,
     conditions: Option<SqlJson<Value>>,
+    /// Has an approval policy (approvals design SHAA-1869).
+    gated: bool,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -143,8 +145,9 @@ pub(super) async fn pinned(conn: &mut PgConnection, version_id: Uuid) -> Result<
     .fetch_all(&mut *conn)
     .await?;
     let transitions = sqlx::query_as::<_, PinnedTransition>(
-        "SELECT id, key, name, from_state_id, to_state_id, requires_comment, conditions
-         FROM cmdb.workflow_transitions WHERE version_id = $1 ORDER BY sort_order, key",
+        "SELECT t.id, t.key, t.name, t.from_state_id, t.to_state_id, t.requires_comment, t.conditions,
+                EXISTS (SELECT 1 FROM cmdb.workflow_transition_approval_steps s WHERE s.transition_id = t.id) AS gated
+         FROM cmdb.workflow_transitions t WHERE t.version_id = $1 ORDER BY t.sort_order, t.key",
     )
     .bind(version_id)
     .fetch_all(&mut *conn)
@@ -1097,6 +1100,19 @@ async fn transition_in(
                 "None of your permission profiles is granted transition {} of workflow {}",
                 t.key, row.definition_key
             ),
+        ));
+    }
+    // Fail closed until approval requests exist (approvals slice A3): a
+    // transition with an approval policy never runs without one.
+    if t.gated {
+        return Err(detail_error(
+            ErrorCode::Conflict,
+            format!(
+                "Transition {} of workflow {} needs approval, and this server cannot create approval requests yet",
+                t.key, row.definition_key
+            ),
+            "transitionKey",
+            "approval_required",
         ));
     }
     let to = p.state(t.to_state_id).ok_or_else(AppError::internal)?;

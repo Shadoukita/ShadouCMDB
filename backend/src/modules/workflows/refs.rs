@@ -1,6 +1,7 @@
 //! What the data model may not take away from a workflow (design §3.3): a
 //! field a version depends on (`workflow_version_attribute_refs`, transition
-//! fields, the definition's state field) and a lookup value a state maps to.
+//! fields, the definition's state field, a reference field that names
+//! approvers, approvals design SHAA-1869 §3.1) and a lookup value a state maps to.
 //! The schema-change paths ask here first and answer 409 IN_USE naming the
 //! workflows and versions; the foreign keys (ON DELETE RESTRICT) are the
 //! backstop.
@@ -38,7 +39,11 @@ pub async fn attribute_users(conn: &mut PgConnection, id: Uuid, reach: Reach) ->
                                                        WHERE i.version_id = w.id AND i.status = 'active')))
            UNION ALL
            SELECT d.key || ' (state field)', d.key, 0 FROM cmdb.workflow_definitions d WHERE d.state_attribute_id = $1
-         ) x ORDER BY k, n",
+           UNION ALL
+           SELECT DISTINCT d.key || ' (approvers of ' || a.transition_key || '.' || a.step_key || ')', d.key, 0
+           FROM cmdb.workflow_approval_assignments a JOIN cmdb.workflow_definitions d ON d.id = a.definition_id
+           WHERE a.attribute_id = $1
+         ) x ORDER BY k, n, u",
     )
     .bind(id)
     .bind(reach == Reach::All)
@@ -60,7 +65,7 @@ pub async fn check_attribute(
     }
     let message = format!(
         "Field {key} cannot be {what}: workflows depend on it ({}). Publish versions without it and retire the old \
-         ones, or change the workflows' state field, first.",
+         ones, change the workflows' state field, or remove it from their approvers, first.",
         users.join(", ")
     );
     Err(AppError::new(ErrorCode::InUse, message).with_details(

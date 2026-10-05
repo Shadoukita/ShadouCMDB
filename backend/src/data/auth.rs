@@ -290,6 +290,34 @@ fn merge_permission_row(
     }
 }
 
+/// Effective permissions of each of `users`, in one query (a user without a
+/// profile is absent and holds nothing).
+pub async fn load_permissions_of(conn: &mut PgConnection, users: &[Uuid]) -> sqlx::Result<HashMap<Uuid, Permissions>> {
+    type Row = (Uuid, String, Option<String>, Option<Uuid>, bool, bool, bool, bool);
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT up.user_id, 'admin', NULL::text, NULL::uuid, true, true, true, true
+         FROM user_permission_profiles up JOIN permission_profiles p ON p.id = up.profile_id
+         WHERE up.user_id = ANY($1) AND p.is_builtin
+         UNION ALL
+         SELECT up.user_id, 'global', g.permission, NULL::uuid, false, false, false, false
+         FROM user_permission_profiles up JOIN permission_profile_global_permissions g ON g.profile_id = up.profile_id
+         WHERE up.user_id = ANY($1)
+         UNION ALL
+         SELECT up.user_id, 'class', NULL::text, c.class_id, c.can_view, c.can_create, c.can_edit, c.can_delete
+         FROM user_permission_profiles up JOIN permission_profile_class_permissions c ON c.profile_id = up.profile_id
+         WHERE up.user_id = ANY($1)",
+    )
+    .bind(users)
+    .fetch_all(conn)
+    .await?;
+    let mut all: HashMap<Uuid, Permissions> = HashMap::new();
+    for (user_id, kind, permission, class_id, view, create, edit, delete) in rows {
+        let p = all.entry(user_id).or_default();
+        merge_permission_row(p, &kind, permission.as_deref(), class_id, ClassRights { view, create, edit, delete });
+    }
+    Ok(all)
+}
+
 /// Effective permissions of every user who owns an API token, in one query
 /// (a token owner without a profile is absent and holds nothing).
 pub async fn load_token_owner_permissions(conn: &mut PgConnection) -> sqlx::Result<HashMap<Uuid, Permissions>> {

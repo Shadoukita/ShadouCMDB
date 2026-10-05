@@ -1,0 +1,1054 @@
+//! Approver assignments: who may decide each step of a transition's approval
+//! policy (approvals design SHAA-1869 §3.1, §4.2, §6.2, §10.1).
+//!
+//! The policy (steps, quorum, due interval) is part of a version's graph; the
+//! staffing is on the definition, keyed by transition and step key like the
+//! grants, so people can join and leave without a new version. Sources are a
+//! permission profile, a user group, a named user, a reference field of the
+//! CI that points at a Person, or the owners of the business services the CI
+//! belongs to. This module stores and audits them, lints them (at publish and
+//! on every change), and previews who they resolve to for one CI.
+//!
+//! Re-resolving the eligibility of pending requests after a change is the
+//! run-time slice's (A3/A4): no request exists before it.
+
+use std::collections::{BTreeSet, HashMap, HashSet};
+
+use serde_json::{Value, json};
+use sqlx::{PgConnection, PgPool};
+use uuid::Uuid;
+
+use super::graph::{self, Fields, Stored};
+use super::schemas::*;
+use super::service;
+use crate::api::context::RequestContext;
+use crate::api::validate;
+use crate::auth::permissions::{ClassOp, Permissions};
+use crate::data::auth as auth_data;
+use crate::data::crud::{self, AuditAction, AuditEntry};
+use crate::http::error::{AppError, FieldError, FieldLocation};
+use crate::modules::classes::AttributeDataType;
+
+/// Users listed by a preview.
+const PREVIEW_USERS: usize = 500;
+
+/// Where an assignment's approvers come from, with what names them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Source {
+    Profile { id: Uuid, name: String },
+    Group { id: Uuid, name: String },
+    User { id: Uuid, name: String },
+    Attribute { id: Uuid, key: String, class_key: String, label: String },
+    ServiceOwner(WorkflowServiceOwnerRole),
+}
+
+impl Source {
+    pub fn kind(&self) -> WorkflowApproverSource {
+        match self {
+            Source::Profile { .. } => WorkflowApproverSource::Profile,
+            Source::Group { .. } => WorkflowApproverSource::Group,
+            Source::User { .. } => WorkflowApproverSource::User,
+            Source::Attribute { .. } => WorkflowApproverSource::CiAttribute,
+            Source::ServiceOwner(_) => WorkflowApproverSource::ServiceOwner,
+        }
+    }
+
+    /// The id it is stored by (none for a service owner role).
+    fn id(&self) -> Option<Uuid> {
+        match self {
+            Source::Profile { id, .. }
+            | Source::Group { id, .. }
+            | Source::User { id, .. }
+            | Source::Attribute { id, .. } => Some(*id),
+            Source::ServiceOwner(_) => None,
+        }
+    }
+
+    /// "group CAB", for messages.
+    pub fn label(&self) -> String {
+        match self {
+            Source::Profile { name, .. } => format!("profile {name}"),
+            Source::Group { name, .. } => format!("group {name}"),
+            Source::User { name, .. } => format!("user {name}"),
+            Source::Attribute { key, class_key, .. } => format!("field {class_key}.{key}"),
+            Source::ServiceOwner(r) => format!("{} owners of the CI's business services", r.as_str()),
+        }
+    }
+
+    /// Profiles, groups and named users resolve to the same people on every CI.
+    fn is_static(&self) -> bool {
+        matches!(self, Source::Profile { .. } | Source::Group { .. } | Source::User { .. })
+    }
+}
+
+/// One approver assignment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Assignment {
+    pub transition_key: String,
+    pub step_key: String,
+    pub role: WorkflowApproverRole,
+    pub source: Source,
+}
+
+impl Assignment {
+    fn of(&self, transition: &str, step: &str) -> bool {
+        self.transition_key == transition && self.step_key == step
+    }
+
+    /// The identity that may appear only once per step and role.
+    fn identity(&self) -> (String, String, WorkflowApproverRole, WorkflowApproverSource, Option<Uuid>, Option<String>) {
+        let role = match &self.source {
+            Source::ServiceOwner(r) => Some(r.as_str().to_owned()),
+            _ => None,
+        };
+        (self.transition_key.clone(), self.step_key.clone(), self.role, self.source.kind(), self.source.id(), role)
+    }
+
+    /// Order of the API, the audit log and the configuration file.
+    fn sort_key(&self) -> (String, String, WorkflowApproverRole, WorkflowApproverSource, String) {
+        let name = match &self.source {
+            Source::Profile { name, .. } | Source::Group { name, .. } | Source::User { name, .. } => {
+                name.to_lowercase()
+            }
+            Source::Attribute { key, class_key, .. } => format!("{class_key}.{key}"),
+            Source::ServiceOwner(r) => r.as_str().to_owned(),
+        };
+        (self.transition_key.clone(), self.step_key.clone(), self.role, self.source.kind(), name)
+    }
+
+    pub fn api(&self) -> WorkflowApprover {
+        let principal = |id: &Uuid, name: &String| Some(WorkflowPrincipalRef { id: *id, name: name.clone() });
+        let mut out = WorkflowApprover {
+            transition_key: self.transition_key.clone(),
+            step_key: self.step_key.clone(),
+            role: self.role,
+            source: self.source.kind(),
+            profile: None,
+            group: None,
+            user: None,
+            attribute: None,
+            service_owner_role: None,
+        };
+        match &self.source {
+            Source::Profile { id, name } => out.profile = principal(id, name),
+            Source::Group { id, name } => out.group = principal(id, name),
+            Source::User { id, name } => out.user = principal(id, name),
+            Source::Attribute { id, key, class_key, label } => {
+                out.attribute = Some(WorkflowAttributeRef {
+                    id: *id,
+                    key: key.clone(),
+                    class_key: class_key.clone(),
+                    label: label.clone(),
+                })
+            }
+            Source::ServiceOwner(r) => out.service_owner_role = Some(*r),
+        }
+        out
+    }
+
+    /// The configuration file's form, by name; also the audit log's.
+    pub fn spec(&self) -> WorkflowApproverSpec {
+        let mut out = WorkflowApproverSpec {
+            transition: self.transition_key.clone(),
+            step: self.step_key.clone(),
+            role: self.role,
+            profile: None,
+            group: None,
+            user: None,
+            attribute: None,
+            service_owner: None,
+        };
+        match &self.source {
+            Source::Profile { name, .. } => out.profile = Some(name.clone()),
+            Source::Group { name, .. } => out.group = Some(name.clone()),
+            Source::User { name, .. } => out.user = Some(name.clone()),
+            Source::Attribute { key, class_key, .. } => out.attribute = Some(format!("{class_key}.{key}")),
+            Source::ServiceOwner(r) => out.service_owner = Some(*r),
+        }
+        out
+    }
+}
+
+pub fn sort(list: &mut [Assignment]) {
+    list.sort_by_key(Assignment::sort_key);
+}
+
+/// The assignments in the configuration file's form, sorted: what the audit
+/// log records and what an import compares (names regardless of case).
+pub fn specs(list: &[Assignment]) -> Vec<WorkflowApproverSpec> {
+    let mut list = list.to_vec();
+    sort(&mut list);
+    list.iter().map(Assignment::spec).collect()
+}
+
+fn comparable(list: &[Assignment]) -> Vec<(String, String, WorkflowApproverRole, WorkflowApproverSource, String)> {
+    let mut keys: Vec<_> = list.iter().map(Assignment::sort_key).collect();
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
+/// Whether two sets of assignments are the same (names regardless of case).
+pub fn same(a: &[Assignment], b: &[Assignment]) -> bool {
+    comparable(a) == comparable(b)
+}
+
+#[derive(sqlx::FromRow)]
+struct Row {
+    transition_key: String,
+    step_key: String,
+    role: WorkflowApproverRole,
+    profile_id: Option<Uuid>,
+    profile_name: Option<String>,
+    group_id: Option<Uuid>,
+    group_name: Option<String>,
+    user_id: Option<Uuid>,
+    username: Option<String>,
+    attribute_id: Option<Uuid>,
+    attribute_key: Option<String>,
+    attribute_class_key: Option<String>,
+    attribute_label: Option<String>,
+    service_owner_role: Option<WorkflowServiceOwnerRole>,
+}
+
+/// The assignments of definition `id`, sorted.
+pub async fn load(conn: &mut PgConnection, id: Uuid) -> Result<Vec<Assignment>, AppError> {
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT a.transition_key, a.step_key, a.role,
+                a.profile_id, p.name AS profile_name, a.group_id, g.name AS group_name, a.user_id, u.username,
+                a.attribute_id, ad.key AS attribute_key, c.key AS attribute_class_key, ad.label AS attribute_label,
+                a.service_owner_role
+         FROM cmdb.workflow_approval_assignments a
+         LEFT JOIN cmdb.permission_profiles p ON p.id = a.profile_id
+         LEFT JOIN cmdb.user_groups g ON g.id = a.group_id
+         LEFT JOIN cmdb.users u ON u.id = a.user_id
+         LEFT JOIN cmdb.ci_attribute_definitions ad ON ad.id = a.attribute_id
+         LEFT JOIN cmdb.ci_classes c ON c.id = ad.class_id
+         WHERE a.definition_id = $1",
+    )
+    .bind(id)
+    .fetch_all(&mut *conn)
+    .await?;
+    let mut out = Vec::with_capacity(rows.len());
+    for r in rows {
+        let source = match (r.profile_id, r.group_id, r.user_id, r.attribute_id, r.service_owner_role) {
+            (Some(id), ..) => Source::Profile { id, name: r.profile_name.unwrap_or_default() },
+            (_, Some(id), ..) => Source::Group { id, name: r.group_name.unwrap_or_default() },
+            (_, _, Some(id), ..) => Source::User { id, name: r.username.unwrap_or_default() },
+            (_, _, _, Some(id), _) => Source::Attribute {
+                id,
+                key: r.attribute_key.unwrap_or_default(),
+                class_key: r.attribute_class_key.unwrap_or_default(),
+                label: r.attribute_label.unwrap_or_default(),
+            },
+            (_, _, _, _, Some(role)) => Source::ServiceOwner(role),
+            // The table's check allows no other shape.
+            _ => return Err(AppError::internal()),
+        };
+        out.push(Assignment { transition_key: r.transition_key, step_key: r.step_key, role: r.role, source });
+    }
+    sort(&mut out);
+    Ok(out)
+}
+
+/// `(transition key, step key)` of every approval step in any version of
+/// definition `id`, its draft included: what an assignment may name.
+pub async fn known_steps(conn: &mut PgConnection, id: Uuid) -> Result<HashSet<(String, String)>, AppError> {
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT DISTINCT t.key, s.key FROM cmdb.workflow_transition_approval_steps s
+         JOIN cmdb.workflow_transitions t ON t.id = s.transition_id
+         JOIN cmdb.workflow_versions v ON v.id = t.version_id WHERE v.definition_id = $1",
+    )
+    .bind(id)
+    .fetch_all(&mut *conn)
+    .await?;
+    Ok(rows.into_iter().collect())
+}
+
+pub fn unknown_step(workflow: &str, transition: &str, step: &str) -> String {
+    format!("Workflow {workflow} has no approval step {step} on transition {transition} in any version or draft")
+}
+
+// ---------------------------------------------------------------------------
+// Reference fields to the Person type
+// ---------------------------------------------------------------------------
+
+/// What a `ci_attribute` source must be: a reference field of the workflow's
+/// type (own or inherited) to the Person type.
+pub struct PersonFields {
+    person: Option<Uuid>,
+    /// Field id -> the type it refers to.
+    targets: HashMap<Uuid, Option<Uuid>>,
+}
+
+impl PersonFields {
+    pub async fn load(conn: &mut PgConnection) -> Result<PersonFields, AppError> {
+        let person: Option<Uuid> = sqlx::query_scalar("SELECT id FROM cmdb.ci_classes WHERE system_role = 'person'")
+            .fetch_optional(&mut *conn)
+            .await?;
+        let targets: Vec<(Uuid, Option<Uuid>)> = sqlx::query_as(
+            "SELECT id, reference_class_id FROM cmdb.ci_attribute_definitions WHERE data_type = 'reference'",
+        )
+        .fetch_all(&mut *conn)
+        .await?;
+        Ok(PersonFields { person, targets: targets.into_iter().collect() })
+    }
+
+    /// Why field `id` cannot name approvers (an error), or None.
+    pub fn problem(&self, fields: &Fields, id: Uuid) -> Option<(&'static str, String)> {
+        let Some(f) = fields.model.field(id) else {
+            return Some(("unknown_attribute", "The field no longer exists".into()));
+        };
+        if !fields.on_type(f) {
+            return Some((
+                "unknown_attribute",
+                format!("{} is not a field of type {} (own or inherited)", f.key, fields.class_key),
+            ));
+        }
+        if f.data_type != AttributeDataType::Reference {
+            return Some((
+                "attribute_type",
+                format!("Field {} is a {} field, not a reference to the Person type", f.key, f.data_type.as_str()),
+            ));
+        }
+        let target = self.targets.get(&id).copied().flatten();
+        let is_person = match (target, self.person) {
+            (Some(t), Some(p)) => fields.model.lineage(t).iter().any(|c| c.id == p),
+            _ => false,
+        };
+        if !is_person {
+            let to = target.and_then(|t| fields.model.class(t)).map_or("another type", |c| c.key.as_str());
+            return Some(("attribute_type", format!("Field {} refers to {to}, not to the Person type", f.key)));
+        }
+        None
+    }
+
+    /// Field `key` (or id) of the workflow's type as a source, or why not.
+    pub fn resolve(&self, fields: &Fields, given: &str) -> Result<Source, (&'static str, String)> {
+        let field = if validate::is_uuid(given) {
+            given.parse::<Uuid>().ok().and_then(|id| fields.model.field(id)).filter(|f| fields.on_type(f))
+        } else {
+            fields.by_key(given)
+        };
+        let Some(f) = field else {
+            return Err((
+                "unknown_attribute",
+                format!("Type {} has no field {given} (own or inherited)", fields.class_key),
+            ));
+        };
+        if let Some(p) = self.problem(fields, f.id) {
+            return Err(p);
+        }
+        let class_key = fields.model.class(f.class_id).map(|c| c.key.clone()).unwrap_or_default();
+        Ok(Source::Attribute { id: f.id, key: f.key.clone(), class_key, label: f.label.clone() })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Lint
+// ---------------------------------------------------------------------------
+
+/// What the lint needs to know about a set of assignments, gathered up front
+/// so the lint itself reads no database.
+#[derive(Default)]
+pub struct Facts {
+    assignments: Vec<Assignment>,
+    /// Per assignment, for a profile, group or named user: the active users of
+    /// it who may view the workflow's type. None for the CI-dependent sources.
+    viewers: Vec<Option<HashSet<Uuid>>>,
+    /// Per assignment: why a field source cannot name approvers (error), or
+    /// that the field is archived (warning).
+    attribute: Vec<Option<(WorkflowProblemSeverity, &'static str, String)>>,
+}
+
+impl Facts {
+    pub async fn gather(
+        conn: &mut PgConnection,
+        class_id: Uuid,
+        fields: &Fields,
+        assignments: Vec<Assignment>,
+    ) -> Result<Facts, AppError> {
+        let ids = |kind: WorkflowApproverSource| -> Vec<Uuid> {
+            assignments.iter().filter(|a| a.source.kind() == kind).filter_map(|a| a.source.id()).collect()
+        };
+        let members: Vec<(Uuid, Uuid)> = sqlx::query_as(
+            "SELECT up.profile_id, up.user_id FROM cmdb.user_permission_profiles up
+             JOIN cmdb.users u ON u.id = up.user_id WHERE up.profile_id = ANY($1) AND u.is_active
+             UNION ALL
+             SELECT m.group_id, m.user_id FROM cmdb.user_group_members m
+             JOIN cmdb.users u ON u.id = m.user_id WHERE m.group_id = ANY($2) AND u.is_active
+             UNION ALL
+             SELECT id, id FROM cmdb.users WHERE id = ANY($3) AND is_active",
+        )
+        .bind(ids(WorkflowApproverSource::Profile))
+        .bind(ids(WorkflowApproverSource::Group))
+        .bind(ids(WorkflowApproverSource::User))
+        .fetch_all(&mut *conn)
+        .await?;
+        let users: Vec<Uuid> = members.iter().map(|(_, u)| *u).collect::<BTreeSet<_>>().into_iter().collect();
+        let permissions = auth_data::load_permissions_of(&mut *conn, &users).await?;
+        let can_view = |u: &Uuid| permissions.get(u).is_some_and(|p| p.can(class_id, ClassOp::View));
+        let mut by_source: HashMap<Uuid, HashSet<Uuid>> = HashMap::new();
+        for (source, user) in &members {
+            let set = by_source.entry(*source).or_default();
+            if can_view(user) {
+                set.insert(*user);
+            }
+        }
+        let person = PersonFields::load(&mut *conn).await?;
+        let viewers = assignments
+            .iter()
+            .map(|a| {
+                a.source
+                    .is_static()
+                    .then(|| a.source.id().and_then(|id| by_source.get(&id).cloned()).unwrap_or_default())
+            })
+            .collect();
+        let attribute = assignments
+            .iter()
+            .map(|a| match &a.source {
+                Source::Attribute { id, key, .. } => match person.problem(fields, *id) {
+                    Some((code, message)) => Some((WorkflowProblemSeverity::Error, code, message)),
+                    None if fields.model.field(*id).is_some_and(|f| !f.is_active) => Some((
+                        WorkflowProblemSeverity::Warning,
+                        "inactive_attribute",
+                        format!("Field {key} is archived; its values still name approvers"),
+                    )),
+                    None => None,
+                },
+                _ => None,
+            })
+            .collect();
+        Ok(Facts { assignments, viewers, attribute })
+    }
+
+    pub fn assignments(&self) -> &[Assignment] {
+        &self.assignments
+    }
+
+    /// The problems of the approval steps of version `g`; `path(i, j)` names
+    /// step `j` of transition `i`.
+    pub fn lint_steps(
+        &self,
+        g: &Stored,
+        class_key: &str,
+        path: &dyn Fn(usize, usize) -> String,
+    ) -> Vec<WorkflowProblem> {
+        let mut out = Vec::new();
+        let problem = |path: String, severity, code: &str, message: String| WorkflowProblem {
+            path,
+            code: code.into(),
+            message,
+            severity,
+        };
+        for (i, t) in g.transitions.iter().enumerate() {
+            for (j, s) in g.steps_of(t.id).enumerate() {
+                let here: Vec<usize> =
+                    (0..self.assignments.len()).filter(|n| self.assignments[*n].of(&t.key, &s.key)).collect();
+                let approvers: Vec<usize> = here
+                    .iter()
+                    .copied()
+                    .filter(|n| self.assignments[*n].role == WorkflowApproverRole::Approver)
+                    .collect();
+                for n in &here {
+                    if let Some((severity, code, message)) = &self.attribute[*n] {
+                        out.push(problem(path(i, j), *severity, code, message.clone()));
+                    }
+                }
+                if approvers.is_empty() {
+                    out.push(problem(
+                        path(i, j),
+                        WorkflowProblemSeverity::Warning,
+                        "no_approvers",
+                        format!(
+                            "Nobody is assigned to approve step {} of transition {}: its requests would wait until \
+                             someone is",
+                            s.key, t.key
+                        ),
+                    ));
+                    continue;
+                }
+                let mut available: HashSet<Uuid> = HashSet::new();
+                for n in &approvers {
+                    if let Some(viewers) = &self.viewers[*n] {
+                        if viewers.is_empty() {
+                            out.push(problem(
+                                path(i, j),
+                                WorkflowProblemSeverity::Warning,
+                                "approvers_cannot_view",
+                                format!(
+                                    "No active user of {} may view type {class_key}: they would never see a request \
+                                     of step {}",
+                                    self.assignments[*n].source.label(),
+                                    s.key
+                                ),
+                            ));
+                        }
+                        available.extend(viewers);
+                    }
+                }
+                // A field names at most one user per CI; service owners can be any number.
+                let open_ended =
+                    approvers.iter().any(|n| matches!(self.assignments[*n].source, Source::ServiceOwner(_)));
+                let fields =
+                    approvers.iter().filter(|n| matches!(self.assignments[**n].source, Source::Attribute { .. }));
+                let most = available.len() + fields.count();
+                if !open_ended && most < s.required_approvals as usize {
+                    out.push(problem(
+                        path(i, j),
+                        WorkflowProblemSeverity::Warning,
+                        "understaffed",
+                        format!(
+                            "Step {} of transition {} needs {} approvals, but at most {most} approvers who may view \
+                             type {class_key} are assigned (the requester never counts)",
+                            s.key, t.key, s.required_approvals
+                        ),
+                    ));
+                }
+            }
+        }
+        out
+    }
+
+    /// Assignments for a step version `g` does not have: kept, because they
+    /// may serve instances pinned to an older version.
+    pub fn lint_unknown(&self, g: &Stored) -> Vec<WorkflowProblem> {
+        let steps: HashSet<(&str, &str)> = g
+            .transitions
+            .iter()
+            .flat_map(|t| g.steps_of(t.id).map(move |s| (t.key.as_str(), s.key.as_str())))
+            .collect();
+        let mut seen = HashSet::new();
+        self.assignments
+            .iter()
+            .filter(|a| !steps.contains(&(a.transition_key.as_str(), a.step_key.as_str())))
+            .filter(|a| seen.insert((a.transition_key.clone(), a.step_key.clone())))
+            .map(|a| WorkflowProblem {
+                path: "approvers".into(),
+                code: "unknown_step".into(),
+                message: format!(
+                    "Approvers are assigned to step {} of transition {}, which this version does not have; they \
+                     still serve instances on older versions",
+                    a.step_key, a.transition_key
+                ),
+                severity: WorkflowProblemSeverity::Warning,
+            })
+            .collect()
+    }
+
+    /// Both, as publishing lints them.
+    pub fn lint(&self, g: &Stored, class_key: &str, path: &dyn Fn(usize, usize) -> String) -> Vec<WorkflowProblem> {
+        let mut out = self.lint_steps(g, class_key, path);
+        out.extend(self.lint_unknown(g));
+        out
+    }
+}
+
+/// The lint of definition `d`'s assignments against its current version and
+/// its draft, steps named by key (`transitions.approve.steps.cab`).
+async fn problems(conn: &mut PgConnection, d: &WorkflowDefinition) -> Result<Vec<WorkflowProblem>, AppError> {
+    let assignments = load(&mut *conn, d.id).await?;
+    let fields = Fields::load(&mut *conn, d.class_id).await?;
+    let facts = Facts::gather(&mut *conn, d.class_id, &fields, assignments).await?;
+    let mut versions = Vec::new();
+    let current: Option<graph::VersionRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT {} FROM cmdb.workflow_versions WHERE id = (SELECT current_version_id FROM cmdb.workflow_definitions \
+         WHERE id = $1)",
+        graph::VERSION_COLUMNS
+    )))
+    .bind(d.id)
+    .fetch_optional(&mut *conn)
+    .await?;
+    for row in current.into_iter().chain(service::draft_row(&mut *conn, d.id, false).await?) {
+        versions.push(graph::load(&mut *conn, row).await?);
+    }
+    let mut out: Vec<WorkflowProblem> = Vec::new();
+    for g in &versions {
+        let path = |i: usize, j: usize| {
+            let t = &g.transitions[i];
+            let s = g.steps_of(t.id).nth(j).map(|s| s.key.as_str()).unwrap_or_default();
+            format!("transitions.{}.steps.{s}", t.key)
+        };
+        for p in facts.lint_steps(g, &fields.class_key, &path) {
+            if !out.iter().any(|o| o.path == p.path && o.code == p.code && o.message == p.message) {
+                out.push(p);
+            }
+        }
+    }
+    let steps: HashSet<(&str, &str)> = versions
+        .iter()
+        .flat_map(|g| {
+            g.transitions.iter().flat_map(move |t| g.steps_of(t.id).map(move |s| (t.key.as_str(), s.key.as_str())))
+        })
+        .collect();
+    let mut seen = HashSet::new();
+    for (k, a) in facts.assignments().iter().enumerate() {
+        if !steps.contains(&(a.transition_key.as_str(), a.step_key.as_str()))
+            && seen.insert((a.transition_key.as_str(), a.step_key.as_str()))
+        {
+            out.push(WorkflowProblem {
+                path: format!("approvers[{k}]"),
+                code: "unknown_step".into(),
+                message: format!(
+                    "Neither the current version nor the draft has step {} of transition {}: the assignment serves \
+                     only instances on older versions",
+                    a.step_key, a.transition_key
+                ),
+                severity: WorkflowProblemSeverity::Warning,
+            });
+        }
+    }
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------
+// GET and PUT
+// ---------------------------------------------------------------------------
+
+pub async fn get(pool: &PgPool, id: Uuid) -> Result<WorkflowApprovers, AppError> {
+    let mut conn = pool.acquire().await?;
+    let d = service::load(&mut conn, id, false).await?;
+    let approvers = load(&mut conn, id).await?.iter().map(Assignment::api).collect();
+    let problems = problems(&mut conn, &d).await?;
+    Ok(WorkflowApprovers { version: d.version, approvers, problems })
+}
+
+fn not_found(field: String, message: String) -> FieldError {
+    FieldError { location: FieldLocation::Body, field, message, code: "not_found".into() }
+}
+
+pub async fn replace(
+    pool: &PgPool,
+    ctx: &RequestContext,
+    id: Uuid,
+    b: &WorkflowApproversReplace,
+) -> Result<WorkflowApprovers, AppError> {
+    let mut tx = pool.begin().await?;
+    let before = service::load(&mut tx, id, true).await?;
+    service::check_version(b.version, before.version)?;
+    let known = known_steps(&mut tx, id).await?;
+    let fields = Fields::load(&mut tx, before.class_id).await?;
+    let person = PersonFields::load(&mut tx).await?;
+    // Every profile, and the groups and users the body names (by id or by name).
+    let profiles: Vec<(Uuid, String)> =
+        sqlx::query_as("SELECT id, name FROM cmdb.permission_profiles").fetch_all(&mut *tx).await?;
+    let named = |f: fn(&WorkflowApproverInput) -> &Option<String>| -> Vec<String> {
+        b.approvers.iter().filter_map(|a| f(a).as_ref().map(|s| s.to_lowercase())).collect()
+    };
+    let groups: Vec<(Uuid, String)> =
+        sqlx::query_as("SELECT id, name FROM cmdb.user_groups WHERE id::text = ANY($1) OR lower(name) = ANY($1)")
+            .bind(named(|a| &a.group))
+            .fetch_all(&mut *tx)
+            .await?;
+    let users: Vec<(Uuid, String)> =
+        sqlx::query_as("SELECT id, username FROM cmdb.users WHERE id::text = ANY($1) OR lower(username) = ANY($1)")
+            .bind(named(|a| &a.user))
+            .fetch_all(&mut *tx)
+            .await?;
+    let find = |list: &[(Uuid, String)], given: &str| -> Option<(Uuid, String)> {
+        let by_id = validate::is_uuid(given).then(|| given.parse::<Uuid>().ok()).flatten();
+        list.iter().find(|(id, name)| Some(*id) == by_id || name.to_lowercase() == given.to_lowercase()).cloned()
+    };
+
+    let mut errors = Vec::new();
+    let mut rows: Vec<Assignment> = Vec::new();
+    let mut seen = HashSet::new();
+    for (i, a) in b.approvers.iter().enumerate() {
+        let path = format!("approvers[{i}]");
+        if !known.contains(&(a.transition_key.clone(), a.step_key.clone())) {
+            errors.push(FieldError {
+                location: FieldLocation::Body,
+                field: format!("{path}.stepKey"),
+                message: unknown_step(&before.key, &a.transition_key, &a.step_key),
+                code: "unknown_step".into(),
+            });
+        }
+        let source = match a.source {
+            WorkflowApproverSource::Profile => {
+                let given = a.profile.as_deref().unwrap_or_default();
+                find(&profiles, given)
+                    .map(|(id, name)| Source::Profile { id, name })
+                    .ok_or_else(|| not_found(format!("{path}.profile"), format!("No permission profile \"{given}\"")))
+            }
+            WorkflowApproverSource::Group => {
+                let given = a.group.as_deref().unwrap_or_default();
+                find(&groups, given)
+                    .map(|(id, name)| Source::Group { id, name })
+                    .ok_or_else(|| not_found(format!("{path}.group"), format!("No user group \"{given}\"")))
+            }
+            WorkflowApproverSource::User => {
+                let given = a.user.as_deref().unwrap_or_default();
+                find(&users, given)
+                    .map(|(id, name)| Source::User { id, name })
+                    .ok_or_else(|| not_found(format!("{path}.user"), format!("No user \"{given}\"")))
+            }
+            WorkflowApproverSource::CiAttribute => person
+                .resolve(&fields, a.attribute.as_deref().unwrap_or_default())
+                .map_err(|(code, message)| FieldError {
+                    location: FieldLocation::Body,
+                    field: format!("{path}.attribute"),
+                    message,
+                    code: code.into(),
+                }),
+            WorkflowApproverSource::ServiceOwner => {
+                a.service_owner_role.map(Source::ServiceOwner).ok_or_else(|| FieldError {
+                    location: FieldLocation::Body,
+                    field: format!("{path}.serviceOwnerRole"),
+                    message: "Required".into(),
+                    code: "required".into(),
+                })
+            }
+        };
+        match source {
+            Ok(source) => {
+                let assignment = Assignment {
+                    transition_key: a.transition_key.clone(),
+                    step_key: a.step_key.clone(),
+                    role: a.role,
+                    source,
+                };
+                if seen.insert(assignment.identity()) {
+                    rows.push(assignment);
+                } else {
+                    errors.push(FieldError {
+                        location: FieldLocation::Body,
+                        field: path,
+                        message: "The same assignment is listed more than once".into(),
+                        code: "duplicate".into(),
+                    });
+                }
+            }
+            Err(e) => errors.push(e),
+        }
+    }
+    if !errors.is_empty() {
+        return Err(AppError::validation(errors));
+    }
+    let version = set_in(&mut tx, ctx, &before, &rows).await?;
+    let after = service::load(&mut tx, id, false).await?;
+    let approvers = load(&mut tx, id).await?.iter().map(Assignment::api).collect();
+    let problems = problems(&mut tx, &after).await?;
+    tx.commit().await?;
+    Ok(WorkflowApprovers { version, approvers, problems })
+}
+
+/// Replaces the assignments of `before` with `rows`, audited when they
+/// change (an `update` on the definition, by name), inside the caller's
+/// transaction. Returns the definition's row version now.
+pub async fn set_in(
+    tx: &mut PgConnection,
+    ctx: &RequestContext,
+    before: &WorkflowDefinition,
+    rows: &[Assignment],
+) -> Result<i32, AppError> {
+    let id = before.id;
+    let old = load(&mut *tx, id).await?;
+    if same(&old, rows) {
+        return Ok(before.version);
+    }
+    sqlx::query("DELETE FROM cmdb.workflow_approval_assignments WHERE definition_id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    let transitions: Vec<&str> = rows.iter().map(|a| a.transition_key.as_str()).collect();
+    let steps: Vec<&str> = rows.iter().map(|a| a.step_key.as_str()).collect();
+    let roles: Vec<&str> = rows.iter().map(|a| a.role.as_str()).collect();
+    let sources: Vec<&str> = rows.iter().map(|a| a.source.kind().as_str()).collect();
+    let pick = |kind: WorkflowApproverSource| -> Vec<Option<Uuid>> {
+        rows.iter().map(|a| (a.source.kind() == kind).then(|| a.source.id()).flatten()).collect()
+    };
+    let owner_roles: Vec<Option<&str>> = rows
+        .iter()
+        .map(|a| match &a.source {
+            Source::ServiceOwner(r) => Some(r.as_str()),
+            _ => None,
+        })
+        .collect();
+    sqlx::query(
+        "INSERT INTO cmdb.workflow_approval_assignments
+           (definition_id, transition_key, step_key, role, source, profile_id, group_id, user_id, attribute_id,
+            service_owner_role)
+         SELECT $1, u.* FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::uuid[], $7::uuid[], $8::uuid[],
+                                    $9::uuid[], $10::text[]) AS u",
+    )
+    .bind(id)
+    .bind(&transitions)
+    .bind(&steps)
+    .bind(&roles)
+    .bind(&sources)
+    .bind(pick(WorkflowApproverSource::Profile))
+    .bind(pick(WorkflowApproverSource::Group))
+    .bind(pick(WorkflowApproverSource::User))
+    .bind(pick(WorkflowApproverSource::CiAttribute))
+    .bind(&owner_roles)
+    .execute(&mut *tx)
+    .await?;
+    let (user_id, user_name) = service::actor(ctx);
+    sqlx::query(
+        "UPDATE cmdb.workflow_definitions SET version = version + 1, updated_by_id = $2, updated_by_name = $3
+         WHERE id = $1",
+    )
+    .bind(id)
+    .bind(user_id)
+    .bind(&user_name)
+    .execute(&mut *tx)
+    .await?;
+    let entry = AuditEntry {
+        action: AuditAction::Update,
+        entity_type: "workflow_definitions",
+        entity_id: id,
+        old_value: Some(json!({ "version": before.version, "approvers": specs(&old) })),
+        new_value: Some(json!({ "version": before.version + 1, "approvers": specs(rows) })),
+    };
+    crud::write_audit(&mut *tx, ctx, vec![entry]).await?;
+    Ok(before.version + 1)
+}
+
+/// Drops, audited, the assignments of definition `id` whose step is in no
+/// version and not in the draft any more, so the stored assignments always
+/// pass the PUT and the configuration import again.
+pub async fn prune(tx: &mut PgConnection, ctx: &RequestContext, id: Uuid) -> Result<(), AppError> {
+    let known = known_steps(&mut *tx, id).await?;
+    let old = load(&mut *tx, id).await?;
+    let keep: Vec<Assignment> =
+        old.iter().filter(|a| known.contains(&(a.transition_key.clone(), a.step_key.clone()))).cloned().collect();
+    if keep.len() == old.len() {
+        return Ok(());
+    }
+    let before = service::load(&mut *tx, id, true).await?;
+    set_in(tx, ctx, &before, &keep).await?;
+    Ok(())
+}
+
+/// The assignments as the definition's audit value records them.
+pub async fn audit_value(conn: &mut PgConnection, id: Uuid) -> Result<Value, AppError> {
+    Ok(json!(specs(&load(conn, id).await?)))
+}
+
+// ---------------------------------------------------------------------------
+// Preview
+// ---------------------------------------------------------------------------
+
+#[derive(sqlx::FromRow)]
+struct UserRow {
+    id: Uuid,
+    username: String,
+    display_name: String,
+    is_active: bool,
+}
+
+fn param(field: &str, message: String, code: &str) -> AppError {
+    AppError::validation(vec![FieldError {
+        location: FieldLocation::Query,
+        field: field.into(),
+        message,
+        code: code.into(),
+    }])
+}
+
+/// Who the assignments of one step resolve to, for one CI or in general, and
+/// why each user may or may not decide it.
+pub async fn preview(
+    pool: &PgPool,
+    ctx: &RequestContext,
+    id: Uuid,
+    q: &WorkflowApproverPreviewQuery,
+) -> Result<WorkflowApproverPreview, AppError> {
+    let mut conn = pool.acquire().await?;
+    let d = service::load(&mut conn, id, false).await?;
+    if !known_steps(&mut conn, id).await?.contains(&(q.transition.clone(), q.step.clone())) {
+        return Err(param("step", unknown_step(&d.key, &q.transition, &q.step), "unknown_step"));
+    }
+    // The step's quorum: the draft's, else the current version's.
+    let required: Option<i32> = sqlx::query_scalar(
+        "SELECT s.required_approvals::int FROM cmdb.workflow_transition_approval_steps s
+         JOIN cmdb.workflow_transitions t ON t.id = s.transition_id
+         JOIN cmdb.workflow_versions v ON v.id = t.version_id
+         JOIN cmdb.workflow_definitions d ON d.id = v.definition_id
+         WHERE v.definition_id = $1 AND t.key = $2 AND s.key = $3
+           AND (v.status = 'draft' OR v.id = d.current_version_id)
+         ORDER BY v.status = 'draft' DESC LIMIT 1",
+    )
+    .bind(id)
+    .bind(&q.transition)
+    .bind(&q.step)
+    .fetch_optional(&mut *conn)
+    .await?;
+    let model = crate::schema::model::Model::load(&mut conn).await?;
+    let class_id = match q.ci_id {
+        None => d.class_id,
+        Some(ci) => {
+            let class: Option<Uuid> = sqlx::query_scalar(
+                "SELECT class_id FROM cmdb.configuration_items WHERE id = $1 AND deleted_at IS NULL",
+            )
+            .bind(ci)
+            .fetch_optional(&mut *conn)
+            .await?;
+            let class = class.ok_or_else(|| AppError::missing("Configuration item", ci))?;
+            ctx.require_class_visible(class, "Configuration item", ci)?;
+            if !service::covered(&model, &d).contains(&class) {
+                return Err(param("ciId", format!("Workflow {} does not run on the CI's type", d.key), "not_covered"));
+            }
+            class
+        }
+    };
+    let class_key = model.class(class_id).map(|c| c.key.clone()).unwrap_or_default();
+    let assignments: Vec<Assignment> =
+        load(&mut conn, id).await?.into_iter().filter(|a| a.of(&q.transition, &q.step)).collect();
+
+    // Each assignment's users, and a note when it resolves to nobody.
+    let values = match q.ci_id {
+        Some(ci) => crate::modules::items::service::details(&mut conn, &model, &[ci])
+            .await?
+            .pop()
+            .map(|c| c.attributes)
+            .unwrap_or_default(),
+        None => Default::default(),
+    };
+    let mut resolved: Vec<(Vec<Uuid>, Option<String>)> = Vec::with_capacity(assignments.len());
+    for a in &assignments {
+        let users: Vec<Uuid> = match &a.source {
+            Source::Profile { id, .. } => {
+                sqlx::query_scalar("SELECT user_id FROM cmdb.user_permission_profiles WHERE profile_id = $1")
+                    .bind(id)
+                    .fetch_all(&mut *conn)
+                    .await?
+            }
+            Source::Group { id, .. } => {
+                sqlx::query_scalar("SELECT user_id FROM cmdb.user_group_members WHERE group_id = $1")
+                    .bind(id)
+                    .fetch_all(&mut *conn)
+                    .await?
+            }
+            Source::User { id, .. } => vec![*id],
+            Source::Attribute { .. } | Source::ServiceOwner(_) if q.ci_id.is_none() => {
+                resolved.push((Vec::new(), Some("Resolved on each CI: give ciId to see whom".into())));
+                continue;
+            }
+            Source::Attribute { key, .. } => {
+                let person = values.get(key).and_then(Value::as_str).and_then(|s| s.parse::<Uuid>().ok());
+                let Some(person) = person else {
+                    resolved.push((Vec::new(), Some(format!("The CI's field {key} is empty"))));
+                    continue;
+                };
+                let user: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM cmdb.users WHERE person_ci_id = $1")
+                    .bind(person)
+                    .fetch_all(&mut *conn)
+                    .await?;
+                if user.is_empty() {
+                    resolved
+                        .push((Vec::new(), Some(format!("No user account is linked to the Person in field {key}"))));
+                    continue;
+                }
+                user
+            }
+            Source::ServiceOwner(role) => {
+                // Direct membership only (approvals design A-Q3).
+                let users: Vec<Uuid> = sqlx::query_scalar(
+                    "SELECT DISTINCT coalesce(o.user_id, m.user_id)
+                     FROM cmdb.ci_relationships r
+                     JOIN cmdb.relationship_types rt ON rt.id = r.relationship_type_id
+                       AND rt.system_role = 'business_service_member'
+                     JOIN cmdb.configuration_items s ON s.id = r.source_ci_id AND s.deleted_at IS NULL
+                     JOIN cmdb.business_service_owners o ON o.service_ci_id = s.id AND o.role = $2
+                     LEFT JOIN cmdb.user_group_members m ON m.group_id = o.group_id
+                     WHERE r.target_ci_id = $1 AND r.deleted_at IS NULL
+                       AND coalesce(o.user_id, m.user_id) IS NOT NULL",
+                )
+                .bind(q.ci_id)
+                .bind(role.as_str())
+                .fetch_all(&mut *conn)
+                .await?;
+                if users.is_empty() {
+                    resolved.push((
+                        Vec::new(),
+                        Some(format!(
+                            "The CI is not a direct member of a business service with {} owners",
+                            role.as_str()
+                        )),
+                    ));
+                    continue;
+                }
+                users
+            }
+        };
+        let note = users.is_empty().then(|| "Has no members".to_owned());
+        resolved.push((users, note));
+    }
+
+    let all: Vec<Uuid> =
+        resolved.iter().flat_map(|(u, _)| u.iter().copied()).collect::<BTreeSet<_>>().into_iter().collect();
+    let rows: Vec<UserRow> =
+        sqlx::query_as("SELECT id, username, display_name, is_active FROM cmdb.users WHERE id = ANY($1)")
+            .bind(&all)
+            .fetch_all(&mut *conn)
+            .await?;
+    let permissions: HashMap<Uuid, Permissions> = auth_data::load_permissions_of(&mut conn, &all).await?;
+    let mut users: Vec<WorkflowApproverPreviewUser> = rows
+        .into_iter()
+        .map(|u| {
+            let via: Vec<&Assignment> = assignments
+                .iter()
+                .zip(&resolved)
+                .filter(|(_, (users, _))| users.contains(&u.id))
+                .map(|(a, _)| a)
+                .collect();
+            let can_view = permissions.get(&u.id).is_some_and(|p| p.can(class_id, ClassOp::View));
+            let approver = via.iter().any(|a| a.role == WorkflowApproverRole::Approver);
+            use WorkflowApproverPreviewReason as R;
+            let (reason, message) = if !u.is_active {
+                (R::Inactive, "The account is disabled".to_owned())
+            } else if !can_view {
+                (
+                    R::NoViewRight,
+                    format!(
+                        "None of their permission profiles lets them view type {class_key}: they would never see the \
+                         request"
+                    ),
+                )
+            } else if q.requested_by == Some(u.id) {
+                (R::Excluded, "The requester: four-eyes never lets anyone decide their own request".to_owned())
+            } else if !approver {
+                (R::EscalationOnly, "Assigned for escalation only: may decide once the step is overdue".to_owned())
+            } else {
+                (R::Eligible, "May decide this step".to_owned())
+            };
+            WorkflowApproverPreviewUser {
+                id: u.id,
+                username: u.username,
+                display_name: u.display_name,
+                eligible: reason == R::Eligible,
+                reason,
+                message,
+                via: via.iter().map(|a| format!("{}: {}", a.role.as_str(), a.source.label())).collect(),
+            }
+        })
+        .collect();
+    users.sort_by(|a, b| {
+        a.reason.cmp(&b.reason).then_with(|| a.username.to_lowercase().cmp(&b.username.to_lowercase()))
+    });
+    let eligible_count = users.iter().filter(|u| u.eligible).count() as i64;
+    let truncated = users.len() > PREVIEW_USERS;
+    users.truncate(PREVIEW_USERS);
+    let sources = assignments
+        .iter()
+        .zip(resolved)
+        .map(|(a, (users, note))| WorkflowApproverPreviewSource {
+            role: a.role,
+            source: a.source.kind(),
+            label: a.source.label(),
+            user_count: users.len() as i64,
+            note,
+        })
+        .collect();
+    Ok(WorkflowApproverPreview {
+        transition_key: q.transition.clone(),
+        step_key: q.step.clone(),
+        ci_id: q.ci_id,
+        required_approvals: required,
+        eligible_count,
+        users,
+        truncated,
+        sources,
+    })
+}
