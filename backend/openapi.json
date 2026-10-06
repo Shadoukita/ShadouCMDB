@@ -930,8 +930,8 @@
         "tags": [
           "Authentication"
         ],
-        "summary": "Change your own password (ends your other sessions and revokes your API tokens)",
-        "description": "Every API token you own that still works is revoked; create new ones after the change. 400 when `currentPassword` is wrong; 409 for an account that signs in through an identity provider. The first 4 wrong current passwords cost nothing; from the 5th on, each one locks password changes for this user for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "summary": "Change your own password (ends your other sessions, renews this one and revokes your API tokens)",
+        "description": "Every API token you own that still works is revoked; create new ones after the change. This session continues under a new session and CSRF token: the response sets both cookies again, the old session cookie stops working (audited as `session.revoke`, reason rotated, with `replacedBy`), and GET /api/v1/auth/me returns the new CSRF token. 400 when `currentPassword` is wrong; 409 for an account that signs in through an identity provider. The first 4 wrong current passwords cost nothing; from the 5th on, each one locks password changes for this user for 1 s, 2 s, 4 s, ... up to 15 min; while locked the answer is 429 RATE_LIMITED with Retry-After. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
         "operationId": "changeOwnPassword",
         "parameters": [],
         "requestBody": {
@@ -1462,7 +1462,7 @@
           "Authentication"
         ],
         "summary": "Confirm the new authenticator with a code from it; returns 10 recovery codes (shown once)",
-        "description": "From now on sign-in asks for a code after the password. This session counts as having proven the second factor; your other sessions that did not prove one end (audited as `session.revoke`, reason mfa_enrolled) and sign in again with a code. 400 (field `code`) when the code does not match (audited as `mfa.failure`, stage enrol_confirm); 409 without a started set-up, when one is already confirmed, or when it was started more than 15 minutes ago (start it again). Wrong codes count together with wrong current passwords on the MFA routes: the first 4 cost nothing; from the 5th on, each one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After). A right code clears the count. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "description": "From now on sign-in asks for a code after the password. This session counts as having proven the second factor and continues under a new session and CSRF token: the response sets both cookies again, the old session cookie stops working (audited as `session.revoke`, reason rotated, with `replacedBy`), and GET /api/v1/auth/me returns the new CSRF token. Your other sessions that did not prove one end (audited as `session.revoke`, reason mfa_enrolled) and sign in again with a code. 400 (field `code`) when the code does not match (audited as `mfa.failure`, stage enrol_confirm); 409 without a started set-up, when one is already confirmed, or when it was started more than 15 minutes ago (start it again). Wrong codes count together with wrong current passwords on the MFA routes: the first 4 cost nothing; from the 5th on, each one locks these routes for this user for 1 s, 2 s, 4 s, ... up to 15 min (429 RATE_LIMITED with Retry-After). A right code clears the count. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
         "operationId": "confirmTotpEnrolment",
         "parameters": [],
         "requestBody": {
