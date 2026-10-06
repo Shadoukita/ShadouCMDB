@@ -848,7 +848,7 @@ pub struct WorkflowGrants {
     pub grants: Vec<WorkflowGrant>,
 }
 
-fn grant_key_schema() -> Schema {
+pub(crate) fn grant_key_schema() -> Schema {
     ObjectBuilder::new()
         .schema_type(Type::String)
         .pattern(Some("^(_cancel|[a-z][a-z0-9_]{0,62})$"))

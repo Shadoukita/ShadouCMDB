@@ -32,6 +32,7 @@ use super::super::ui_settings::assets::ImageType;
 use super::super::ui_settings::document::UiSettingsDocument;
 use super::super::workflows::schemas::{
     MAX_APPROVERS, MAX_GRANT_PROFILES, WorkflowApproverSpec, WorkflowDraftReplace, WorkflowState, WorkflowTransition,
+    grant_key_schema,
 };
 use crate::api::schemas::{self, OwnerKind, description_schema, key_schema, name_schema, sort_order_schema, trimmed};
 use crate::auth::permissions::GlobalPermission;
@@ -668,8 +669,8 @@ fn grant_profiles_schema() -> Schema {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkflowGrantSpec {
-    /// Transition key
-    #[schema(schema_with = key_schema)]
+    /// Transition key, or `_cancel` for cancelling an instance
+    #[schema(schema_with = grant_key_schema)]
     pub transition: String,
     /// Permission profile names (case-insensitive), in the file or already here
     #[schema(schema_with = grant_profiles_schema)]

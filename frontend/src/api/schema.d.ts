@@ -4006,7 +4006,7 @@ export interface components {
                     layout?: Record<string, never>;
                 };
                 grants?: {
-                    /** @description Stable machine key, lower_snake_case */
+                    /** @description A transition key (of any version), or `_cancel` for cancelling an instance */
                     transition: string;
                     profiles: string[];
                 }[];
@@ -26874,7 +26874,7 @@ export interface operations {
                             layout?: Record<string, never>;
                         };
                         grants?: {
-                            /** @description Stable machine key, lower_snake_case */
+                            /** @description A transition key (of any version), or `_cancel` for cancelling an instance */
                             transition: string;
                             profiles: string[];
                         }[];
