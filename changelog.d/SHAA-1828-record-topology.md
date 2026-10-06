@@ -1,0 +1,9 @@
+### Changed: CI record topology panel
+
+The **Relationship map** tab of a CI (and of a business service) now opens with a **Topology** panel: a map of the CIs around the record, with the same relationships listed as text under it.
+
+- **Map:** the CI sits in the middle. A CI it points to (for example the server it runs on) is on the right, a CI pointing at it on the left, and the second hop one column further out. Each box shows the class icon, the name, a status dot and the class; a CI that is inactive or deleted says so in words. Arrows show which way a relationship reads. Relationships whose type does not propagate impact (such as locations) are drawn dashed, with a legend. Clicking a box opens that CI. A column with many CIs shows the first ones and "+n more in the list".
+- **1 hop / 2 hops / Impact:** a segmented control picks the range. 1 hop in both directions is the default. The direction (both, outgoing, incoming) stays selectable for 1 and 2 hops. Impact shows the CIs affected downstream within 2 hops (upstream on a business service: what it depends on), with a link to the full impact analysis. Depths beyond 2 hops are in the impact analysis, which still goes up to the server's limit.
+- **List:** the tree under the map is the keyboard and screen-reader path, and names every relationship. Each row is one hop further out than its parent, so relationships back to the record or between CIs of the same hop no longer show up as extra rows. Rows show how the relationship reads in the data font, the class icon, the CI (in the data font when it is a hostname) and its class, and only the badges that say something.
+- **Impact analysis:** List and Tree are now a segmented control instead of a second row of tabs, and the tree shows class icons.
+- On a window too narrow for the map, the list alone is shown.

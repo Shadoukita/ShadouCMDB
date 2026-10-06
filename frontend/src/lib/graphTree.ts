@@ -1,6 +1,8 @@
 // Rows of GraphTree (pages/detail/GraphTree.vue), the indented tree of the relationship map and
 // of the impact analysis: flattened depth-first, each with its level and how its edge reads.
 import type { RelationshipGraph } from "../api/queries";
+import { plural } from "./format";
+import type { ImpactTreeRow } from "./impact";
 
 export interface TreeRow {
   key: string;
@@ -8,7 +10,7 @@ export interface TreeRow {
   level: number;
   /** How the edge from the parent row reads ("runs on", "hosts"). */
   edgeLabel: string;
-  node: { id: string; label: string; className: string; active: boolean; deletedAt?: string | null };
+  node: { id: string; label: string; classId: string; className: string; active: boolean; deletedAt?: string | null };
   hasChildren: boolean;
   /** Shown already higher up: not expanded again. */
   repeat?: boolean;
@@ -22,10 +24,13 @@ type Edge = RelationshipGraph["edges"][number];
 
 /**
  * The relationship graph as tree rows (App → runs on → VM → runs on → Server → is located in →
- * Rack). A CI reached twice is shown once and marked "(shown above)" instead of expanding again.
+ * Rack). Each row is one hop further out than its parent (the API's hop count): relationships back
+ * towards the root or between CIs of the same hop are not rows. A CI reached from two parents is
+ * shown once and marked "(shown above)" under the second instead of expanding again.
  */
 export function graphRows(graph: RelationshipGraph, rootId: string, direction: "both" | "outgoing" | "incoming"): TreeRow[] {
   const nodes = new Map(graph.nodes.map((n) => [n.id, n]));
+  const hops = (id: string) => nodes.get(id)?.depth ?? (id === rootId ? 0 : -1);
   const adjacency = new Map<string, { edge: Edge; otherId: string; label: string }[]>();
   const add = (from: string, item: { edge: Edge; otherId: string; label: string }) => adjacency.set(from, [...(adjacency.get(from) ?? []), item]);
   for (const e of graph.edges) {
@@ -37,14 +42,14 @@ export function graphRows(graph: RelationshipGraph, rootId: string, direction: "
   const walk = (id: string, level: number) => {
     for (const { edge, otherId, label } of adjacency.get(id) ?? []) {
       const node = nodes.get(otherId);
-      if (!node) continue;
+      if (!node || node.depth !== hops(id) + 1) continue;
       const repeat = seen.has(otherId);
       seen.add(otherId);
       const row: TreeRow = {
         key: `${edge.id}-${otherId}-${out.length}`,
         level,
         edgeLabel: label,
-        node: { id: node.id, label: node.label, className: node.class.name, active: node.active, deletedAt: node.deletedAt },
+        node: { id: node.id, label: node.label, classId: node.classId, className: node.class.name, active: node.active, deletedAt: node.deletedAt },
         hasChildren: false,
         repeat,
       };
@@ -58,6 +63,19 @@ export function graphRows(graph: RelationshipGraph, rootId: string, direction: "
   };
   walk(rootId, 1);
   return out;
+}
+
+/** An impact analysis's tree rows (lib/impact `impactTree`) as GraphTree rows, with their criticality. */
+export function impactRows(rows: readonly ImpactTreeRow[]): TreeRow[] {
+  return rows.map((r) => ({
+    key: r.key,
+    level: r.level,
+    edgeLabel: r.label,
+    node: { id: r.item.id, label: r.item.name, classId: r.item.classId, className: r.item.className, active: r.item.active },
+    hasChildren: r.hasChildren,
+    criticality: r.item.criticality,
+    note: r.item.reachedByCount > 1 ? `also reached via ${plural(r.item.reachedByCount - 1, "other relationship")}` : undefined,
+  }));
 }
 
 /** The rows shown while some are collapsed: everything below a collapsed row is left out. */

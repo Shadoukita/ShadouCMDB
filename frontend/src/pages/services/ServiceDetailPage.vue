@@ -247,7 +247,7 @@ watch(
         :trail="[]"
       />
       <ImpactPanel v-else-if="current === 'impact'" :ci="c" :self="self" :trail="[]" default-direction="upstream" />
-      <RelationshipGraphPanel v-else-if="current === 'graph'" :ci="c" :self="self" :trail="[]" />
+      <RelationshipGraphPanel v-else-if="current === 'graph'" :ci="c" :self="self" :trail="[]" impact-direction="upstream" />
       <HistoryPanel v-else :ci="c" />
     </div>
     <SaveBar v-if="draft.dirty || draft.pending" :label="t('services.detail.unsaved')" dirty :changes="draft.changeCount">
