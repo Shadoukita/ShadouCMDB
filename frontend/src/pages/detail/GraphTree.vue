@@ -1,27 +1,34 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
+import { useCiClasses } from "../../api/queries";
 import CiLink from "../../components/CiLink.vue";
 import CiStateBadge from "../../components/CiStateBadge.vue";
+import ClassBadge from "../../components/ClassBadge.vue";
 import CriticalityBadge from "../../components/CriticalityBadge.vue";
+import Icon from "../../components/Icon.vue";
+import { isHostLike } from "../../lib/format";
 import { parentIndex, visibleRows, type TreeRow } from "../../lib/graphTree";
 import type { TrailStep } from "../../lib/trail";
-import Icon from "../../components/Icon.vue";
 
 /**
  * An indented tree of CIs under a root: the relationship map (lib/graphTree `graphRows`) and the
  * impact analysis's tree view. A WAI-ARIA tree: one stop in the tab order, then the arrow keys move
  * between rows, Right and Left expand and collapse, Home and End go to the first and last row, and
  * Enter opens the row's CI. Tab from a row reaches its links (the CI, and the `actions` slot's).
+ * Each row: how the edge reads, the class icon, the CI (mono when it is a hostname), its class, and
+ * only the badges that say something (criticality, a CI that is not active) (audit R6).
  */
 const props = defineProps<{
   rows: TreeRow[];
-  root: { label: string; className: string };
+  root: { label: string; className: string; classId?: string };
   /** The tree's accessible name. */
   label: string;
   self: TrailStep;
   trail: TrailStep[];
 }>();
 
+const classes = useCiClasses();
+const cls = (id?: string) => (id ? classes.data.value?.find((k) => k.id === id) : undefined);
 const collapsed = ref(new Set<string>());
 const shown = computed(() => visibleRows(props.rows, collapsed.value));
 const activeKey = ref<string | null>(null);
@@ -85,7 +92,9 @@ function onKey(e: KeyboardEvent, r: TreeRow) {
 <template>
   <div class="graph-tree">
     <div class="graph-tree-root">
-      <bdi>{{ root.label }}</bdi> <span class="muted">(<bdi>{{ root.className }}</bdi>)</span>
+      <ClassBadge :icon="cls(root.classId)?.icon" :color="cls(root.classId)?.color" />
+      <bdi :class="{ mono: isHostLike(root.label) }">{{ root.label }}</bdi>
+      <span class="tree-class" dir="auto">{{ root.className }}</span>
     </div>
     <ul ref="list" role="tree" :aria-label="label">
       <li
@@ -97,7 +106,7 @@ function onKey(e: KeyboardEvent, r: TreeRow) {
         :aria-expanded="r.hasChildren ? !collapsed.has(r.key) : undefined"
         :aria-selected="r.key === active"
         :tabindex="r.key === active ? 0 : -1"
-        :style="{ paddingLeft: `${(r.level - 1) * 22}px` }"
+        :style="{ '--level': r.level }"
         @keydown="onKey($event, r)"
         @focus="activeKey = r.key"
       >
@@ -112,13 +121,22 @@ function onKey(e: KeyboardEvent, r: TreeRow) {
           <Icon :name="collapsed.has(r.key) ? 'chevron-right' : 'chevron-down'" :size="14" />
         </button>
         <span v-else class="tree-toggle" aria-hidden="true" />
-        <span class="muted"><bdi>{{ r.edgeLabel }}</bdi> → </span>
-        <CiLink :id="r.node.id" :from="self" :trail="trail" :tabindex="r.key === active ? 0 : -1" data-ci-link>{{ r.node.label }}</CiLink>
-        {{ " " }}<span class="muted" dir="auto">{{ r.node.className }}</span>
-        <template v-if="r.criticality !== undefined">{{ " " }}<CriticalityBadge :value="r.criticality" /></template>
-        {{ " " }}<CiStateBadge :ci="r.node" />
-        <span v-if="r.repeat" class="muted"> (shown above)</span>
-        <span v-if="r.note" class="muted"> · {{ r.note }}</span>
+        <span class="tree-edge" dir="auto">{{ r.edgeLabel }}</span>
+        <ClassBadge :icon="cls(r.node.classId)?.icon" :color="cls(r.node.classId)?.color" />
+        <CiLink
+          :id="r.node.id"
+          :class="{ mono: isHostLike(r.node.label) }"
+          :from="self"
+          :trail="trail"
+          :tabindex="r.key === active ? 0 : -1"
+          data-ci-link
+          >{{ r.node.label }}</CiLink
+        >
+        <span class="tree-class" dir="auto">{{ r.node.className }}</span>
+        <CriticalityBadge v-if="r.criticality !== undefined" :value="r.criticality" />
+        <CiStateBadge :ci="r.node" />
+        <span v-if="r.repeat" class="tree-note">(shown above)</span>
+        <span v-if="r.note" class="tree-note">{{ r.note }}</span>
         <slot name="actions" :row="r" :tabindex="r.key === active ? 0 : -1" />
       </li>
     </ul>

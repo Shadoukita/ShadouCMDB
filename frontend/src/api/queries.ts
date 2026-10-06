@@ -211,6 +211,7 @@ export function useGraph(
   id: MaybeRefOrGetter<string>,
   depth: MaybeRefOrGetter<number>,
   direction: MaybeRefOrGetter<"both" | "outgoing" | "incoming">,
+  enabled: MaybeRefOrGetter<boolean> = true,
 ) {
   return useQuery(() => {
     const ciId = toValue(id);
@@ -218,6 +219,7 @@ export function useGraph(
     const dir = toValue(direction);
     return {
       queryKey: keys.graph(ciId, d, dir),
+      enabled: !!ciId && toValue(enabled),
       queryFn: ({ signal }: { signal: AbortSignal }) =>
         unwrap(api.GET("/api/v1/configuration-items/{id}/graph", { params: { path: { id: ciId }, query: { depth: d, direction: dir } }, signal })),
     };

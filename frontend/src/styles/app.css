@@ -1030,48 +1030,6 @@ table.data td.fill {
   }
 }
 
-/* ---------- Relationship map and impact tree (GraphTree) ---------- */
-.graph-tree-root {
-  font-weight: 600;
-  margin-bottom: 4px;
-}
-.graph-tree ul[role="tree"] {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.graph-tree li[role="treeitem"] {
-  padding: 3px 4px;
-  border-radius: var(--radius);
-}
-/* Links sit inside running text here (label → CI): underlined, so they do not rely on colour alone. */
-.graph-tree li[role="treeitem"] a,
-ol.impact-path a {
-  text-decoration: underline;
-}
-.graph-tree li[role="treeitem"]:focus-visible {
-  outline: 2px solid var(--c-focus);
-  outline-offset: -2px;
-}
-.graph-tree li[role="treeitem"][aria-selected="true"] {
-  background: var(--c-surface-alt);
-}
-.tree-toggle {
-  display: inline-block;
-  width: 18px;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--c-text-muted);
-  cursor: pointer;
-  font: inherit;
-  text-align: center;
-}
-.tree-action {
-  margin-left: var(--sp-3);
-  font-size: var(--fs-sm);
-}
-
 /* ---------- Impact analysis ---------- */
 fieldset.impact-direction {
   margin: 0;
@@ -1082,8 +1040,7 @@ fieldset.impact-direction {
 fieldset.impact-direction legend {
   padding: 0;
 }
-/* The toolbar's text-input width is not for radios and checkboxes. */
-.impact-controls input[type="radio"],
+/* The toolbar's text-input width is not for checkboxes. */
 .impact-controls input[type="checkbox"] {
   width: 16px;
 }
@@ -1145,7 +1102,7 @@ fieldset.impact-direction legend {
   margin: 0 0 var(--sp-2);
 }
 .impact-views {
-  padding: 0 var(--sp-4);
+  padding: 0 var(--panel-p) var(--space-3);
 }
 /* Stale results while the next analysis loads: muted text, never opacity, so the text keeps AA contrast. */
 #impact-view-panel.loading {
