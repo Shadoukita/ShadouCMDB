@@ -23535,6 +23535,8 @@ export interface operations {
                 /** @description History of these entities */
                 entityId?: string;
                 action?: "create" | "update" | "delete" | "restore" | "login.success" | "login.failure" | "login.locked" | "logout" | "session.revoke" | "audit.purge" | "token.use" | "mfa.enrol" | "mfa.disable" | "mfa.failure" | "mfa.recovery_code_used" | "mfa.recovery_codes" | "schema_change.refused" | "export" | "import.commit" | "import.report_read" | "session.reauthenticate" | "session.reauthentication_required" | "workflow.publish" | "workflow.start" | "workflow.cancel" | "workflow.transition" | "workflow.migrate" | "workflow.force" | "workflow.approval_request" | "workflow.approval_decide" | "workflow.approval_close" | "workflow.approval_overdue";
+                /** @description Entries by these kinds of actor: one or more of system, user, api_client and import, comma-separated (or the key repeated) */
+                actorType?: string;
                 /** @description Changes made by this user (their id) */
                 actorId?: string;
                 /** @description Case-insensitive substring */
