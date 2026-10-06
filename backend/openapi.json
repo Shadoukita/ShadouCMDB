@@ -23436,6 +23436,16 @@
             }
           },
           {
+            "name": "actorType",
+            "in": "query",
+            "description": "Entries by these kinds of actor: one or more of system, user, api_client and import, comma-separated (or the key repeated)",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^\\s*(system|user|api_client|import)\\s*(,\\s*(system|user|api_client|import)\\s*)*$"
+            }
+          },
+          {
             "name": "actorId",
             "in": "query",
             "description": "Changes made by this user (their id)",

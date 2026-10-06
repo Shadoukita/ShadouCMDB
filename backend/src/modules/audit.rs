@@ -172,6 +172,44 @@ fn from_schema() -> Schema {
 fn to_schema() -> Schema {
     timestamp_schema("occurredAt < to (ISO 8601)")
 }
+fn actor_types_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .pattern(Some(r"^\s*(system|user|api_client|import)\s*(,\s*(system|user|api_client|import)\s*)*$"))
+        .description(Some(
+            "Entries by these kinds of actor: one or more of system, user, api_client and import, comma-separated \
+             (or the key repeated)",
+        ))
+        .into()
+}
+
+/// One or more actor types, comma-separated (repeated keys are joined with commas first).
+#[derive(Debug, Clone)]
+pub struct ActorTypes(Vec<ActorType>);
+
+impl<'de> Deserialize<'de> for ActorTypes {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        let s = String::deserialize(d)?;
+        let mut types = Vec::new();
+        for part in s.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+            let t = [ActorType::System, ActorType::User, ActorType::ApiClient, ActorType::Import]
+                .into_iter()
+                .find(|t| t.as_str() == part)
+                .ok_or_else(|| {
+                    D::Error::custom("invalid_value|Invalid option: expected one of system|user|api_client|import")
+                })?;
+            if !types.contains(&t) {
+                types.push(t);
+            }
+        }
+        if types.is_empty() {
+            return Err(D::Error::custom("too_small|Too small: expected array to have >=1 items"));
+        }
+        Ok(ActorTypes(types))
+    }
+}
+
 fn actor_name_schema() -> Schema {
     ObjectBuilder::new()
         .schema_type(Type::String)
@@ -199,6 +237,8 @@ pub struct AuditQuery {
     entity_id: Option<UuidList>,
     #[param(inline)]
     action: Option<AuditAction>,
+    #[param(schema_with = actor_types_schema)]
+    actor_type: Option<ActorTypes>,
     /// Changes made by this user (their id)
     #[param(max_length = 128)]
     actor_id: Option<String>,
@@ -235,6 +275,10 @@ pub async fn list(
         }
         if let Some(a) = q.action {
             w.and().push("action = ").push_bind(a.as_str());
+        }
+        if let Some(types) = &q.actor_type {
+            let types: Vec<&str> = types.0.iter().map(|t| t.as_str()).collect();
+            w.and().push("actor_type = ANY(").push_bind(types).push(")");
         }
         if let Some(id) = &q.actor_id {
             w.and().push("actor_id = ").push_bind(id.clone());
@@ -1053,6 +1097,7 @@ pub(crate) mod tests {
             entity_type: None,
             entity_id: None,
             action: None,
+            actor_type: None,
             actor_id: None,
             actor_name: None,
             request_id: None,
@@ -1528,6 +1573,104 @@ pub(crate) mod tests {
         assert_eq!(status, 200, "{v}");
         // Its own read of the audit log comes last.
         assert_eq!(paths(&v)[..requests.len()], requests[..]);
+
+        db.drop().await;
+    }
+
+    /// SHAA-2027: `actorType` takes one or more kinds, comma-separated or
+    /// repeated, and is applied before paging, so `page.total` counts only the
+    /// matching entries; the visibility rules of the other filters still hold.
+    #[tokio::test]
+    async fn entries_can_be_filtered_by_actor_type() {
+        use axum::http::header;
+
+        use crate::db::scratch;
+        use crate::modules::api_tokens::tests::{Creds, app, call};
+
+        let Some(db) = scratch::database("audit_entries_can_be_filtered_by_actor_type").await else { return };
+        let app = app(db.pool.clone());
+        let pool = &db.pool;
+
+        let setup = json!({ "username": "owner", "email": "owner@example.test", "displayName": "Owner", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
+        assert_eq!(status, 201, "{me}");
+        let cookie = headers
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().split(';').next().unwrap().to_owned())
+            .collect::<Vec<_>>()
+            .join("; ");
+        let session = Creds { cookie: Some(cookie), csrf: me["csrfToken"].as_str().map(str::to_owned), bearer: None };
+
+        // One CI of a class the restricted reader may view, one of a class they may not;
+        // each has entries by every kind of actor (two by api_client).
+        let (shown, hidden, shown_class, hidden_class) =
+            (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        for (ci, class) in [(shown, shown_class), (hidden, hidden_class)] {
+            for actor in ["user", "api_client", "api_client", "import", "system"] {
+                sqlx::query(
+                    "INSERT INTO audit_log (actor_type, actor_name, action, entity_type, entity_id, new_value, request_id)
+                     VALUES ($1, 'someone', 'create', 'configuration_items', $2, $3, 'actor-filter')",
+                )
+                .bind(actor)
+                .bind(ci)
+                .bind(json!({ "classId": class }))
+                .execute(pool)
+                .await
+                .unwrap();
+            }
+        }
+
+        let get = |query: String| {
+            let (app, session) = (&app, &session);
+            async move {
+                let (status, v, _) =
+                    call(app, "GET", &format!("/api/v1/audit-log?requestId=actor-filter&{query}"), session, None).await;
+                (status, v)
+            }
+        };
+        let kinds = |v: &Value| -> Vec<String> {
+            v["data"].as_array().unwrap().iter().map(|e| e["actorType"].as_str().unwrap().to_owned()).collect()
+        };
+
+        let (status, v) = get(format!("entityId={shown}&actorType=api_client,import&limit=2")).await;
+        assert_eq!(status, 200, "{v}");
+        assert_eq!(v["page"]["total"], 3, "{v}");
+        assert_eq!(kinds(&v).len(), 2);
+        assert!(kinds(&v).iter().all(|k| k == "api_client" || k == "import"), "{v}");
+        let (status, v) = get(format!("entityId={shown}&actorType=api_client,import&limit=2&offset=2")).await;
+        assert_eq!(status, 200, "{v}");
+        assert_eq!(v["page"]["total"], 3, "{v}");
+        assert_eq!(kinds(&v).len(), 1);
+
+        // The key repeated means the same as the comma-separated list.
+        let (status, v) = get("actorType=system&actorType=user".into()).await;
+        assert_eq!(status, 200, "{v}");
+        assert_eq!(v["page"]["total"], 4, "{v}");
+        assert!(kinds(&v).iter().all(|k| k == "system" || k == "user"), "{v}");
+        let (status, v) = get("actorType=%20import%20".into()).await;
+        assert_eq!(status, 200, "{v}");
+        assert_eq!(v["page"]["total"], 2, "{v}");
+
+        for bad in ["robot", "user,robot", "", ","] {
+            let (status, v) = get(format!("actorType={bad}")).await;
+            assert_eq!(status, 400, "{bad:?}: {v}");
+            assert_eq!(v["error"]["details"][0]["field"], "actorType", "{bad:?}: {v}");
+        }
+
+        // A reader limited to the shown CI's class neither gets nor counts the hidden CI's entries.
+        let restricted = viewer(&[shown_class]);
+        let by = |types: Vec<ActorType>| {
+            query(move |q| {
+                (q.request_id, q.actor_type, q.limit) = (Some("actor-filter".into()), Some(ActorTypes(types)), 50)
+            })
+        };
+        let page = list(pool, &restricted, &Keyring::for_tests(), &by(vec![ActorType::ApiClient])).await.unwrap();
+        assert_eq!(page.page.total, 2);
+        assert!(page.data.iter().all(|e| e.entity_id == shown && e.actor_type == ActorType::ApiClient));
+        let admin = RequestContext::system("test", "test");
+        let page = list(pool, &admin, &Keyring::for_tests(), &by(vec![ActorType::ApiClient])).await.unwrap();
+        assert_eq!(page.page.total, 4);
 
         db.drop().await;
     }
