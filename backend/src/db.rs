@@ -646,6 +646,18 @@ pub mod scratch {
         pub pool: PgPool,
     }
 
+    /// A restore, factory reset or decommission rebuilds or drops the whole
+    /// schema in one transaction and holds a lock on every object it touches
+    /// (some 4,400 with an empty data model). PostgreSQL's lock table is shared
+    /// by the whole server and sized by `max_locks_per_transaction` (64 by
+    /// default): a few such transactions at once fail with `53200 out of
+    /// shared memory` on a many-core host (GH#647). Tests hold this permit
+    /// around them, so one runs at a time and the default setting suffices.
+    pub async fn whole_schema_transaction() -> tokio::sync::SemaphorePermit<'static> {
+        static ONE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+        ONE.acquire().await.expect("never closed")
+    }
+
     /// A database `shadoucmdb migrate` left: migrated and reconciled.
     pub async fn database(test: &str) -> Option<Scratch> {
         let db = empty(test).await?;

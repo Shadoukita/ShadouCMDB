@@ -63,6 +63,33 @@ async fn area_ddl(c: &mut PgConnection) -> Vec<String> {
     .unwrap()
 }
 
+/// Restore and the resets, one at a time across the test process
+/// ([`scratch::whole_schema_transaction`], GH#647).
+mod serial {
+    use super::*;
+
+    pub async fn restore(
+        c: &mut PgConnection,
+        source: &[u8],
+        checked: &Checked,
+        wipe: bool,
+        commit: bool,
+    ) -> anyhow::Result<restore::Report> {
+        let _one = scratch::whole_schema_transaction().await;
+        restore::restore(c, source, checked, wipe, commit).await
+    }
+
+    pub async fn factory_reset(c: &mut PgConnection) -> anyhow::Result<usize> {
+        let _one = scratch::whole_schema_transaction().await;
+        reset::factory_reset(c).await
+    }
+
+    pub async fn decommission(c: &mut PgConnection) -> anyhow::Result<usize> {
+        let _one = scratch::whole_schema_transaction().await;
+        reset::decommission(c).await
+    }
+}
+
 /// Demo inventory in the "infrastruktur" area (a schema with a table per
 /// type), a user with a session, a binary asset and an audit trail.
 async fn populate(pool: &sqlx::PgPool) {
@@ -206,7 +233,7 @@ async fn a_backup_restores_into_another_database_value_for_value() {
     assert!(header.tables[first_type..].iter().all(|t| t.schema == "infrastruktur" || t.schema == "people"));
 
     // The target is a migrated install: it has to be replaced.
-    let report = restore::restore(&mut cb, buf.as_slice(), &checked, true, true).await.unwrap();
+    let report = serial::restore(&mut cb, buf.as_slice(), &checked, true, true).await.unwrap();
     assert_eq!(report.users, 1);
     assert_eq!(report.migrations_applied_after, 0);
     assert!(report.warnings.iter().any(|w| w.contains("server.management_ip stays nullable")), "{:?}", report.warnings);
@@ -294,7 +321,7 @@ async fn the_api_role_backs_up_the_audit_chain_head_but_cannot_move_it() {
     let copied = header.tables.iter().find(|t| t.schema == "cmdb" && t.name == "audit_log_chain_head");
     assert_eq!(copied.map(|t| t.rows), Some(1));
 
-    let report = restore::restore(&mut cb, buf.as_slice(), &checked, true, true).await.unwrap();
+    let report = serial::restore(&mut cb, buf.as_slice(), &checked, true, true).await.unwrap();
     assert_eq!(report.restored_head, restore::ChainLink { chain_seq: head_a.0, row_hash: head_a.1.clone() });
     // GH#513: the restore is recorded on top of the restored head, so the SIEM
     // copy shows which head the chain went back to.
@@ -372,7 +399,7 @@ async fn import_files_stay_out_of_backups_and_unfinished_jobs_expire_on_restore(
     for gone in ["import_job_files", "import_job_issues", "import_idempotency_keys"] {
         assert_eq!(rows(gone), None, "{gone} is not backed up");
     }
-    restore::restore(&mut cb, buf.as_slice(), &checked, true, true).await.unwrap();
+    serial::restore(&mut cb, buf.as_slice(), &checked, true, true).await.unwrap();
 
     let jobs: Vec<(String, Option<String>, bool)> =
         sqlx::query_as("SELECT status, lease_owner, finished_at IS NOT NULL FROM cmdb.import_jobs ORDER BY file_name")
@@ -410,14 +437,14 @@ async fn a_failed_or_dry_run_restore_changes_nothing() {
     let before = fingerprints(&mut c).await;
     assert_ne!(before, original);
 
-    let report = restore::restore(&mut c, buf.as_slice(), &checked, true, false).await.unwrap();
+    let report = serial::restore(&mut c, buf.as_slice(), &checked, true, false).await.unwrap();
     assert_eq!(report.rows, header.total_rows());
     assert_eq!(fingerprints(&mut c).await, before, "dry run rolled back");
 
     // A header that promises a row the file does not have: the load fails, the database is untouched.
     let mut wrong = checked.clone();
     wrong.header.tables[0].rows += 1;
-    assert!(restore::restore(&mut c, buf.as_slice(), &wrong, true, true).await.is_err());
+    assert!(serial::restore(&mut c, buf.as_slice(), &wrong, true, true).await.is_err());
     assert_eq!(fingerprints(&mut c).await, before);
 
     // A backup from a newer release is refused before anything happens.
@@ -427,11 +454,11 @@ async fn a_failed_or_dry_run_restore_changes_nothing() {
         description: "future".into(),
         checksum: "00".into(),
     });
-    let err = restore::restore(&mut c, buf.as_slice(), &newer, true, true).await.unwrap_err().to_string();
+    let err = serial::restore(&mut c, buf.as_slice(), &newer, true, true).await.unwrap_err().to_string();
     assert!(err.contains("does not know"), "{err}");
 
     // Replacing a populated install for real: its area schema is dropped and rebuilt.
-    restore::restore(&mut c, buf.as_slice(), &checked, true, true).await.unwrap();
+    serial::restore(&mut c, buf.as_slice(), &checked, true, true).await.unwrap();
     assert_eq!(fingerprints(&mut c).await, original);
 
     drop(c);
@@ -444,7 +471,7 @@ async fn a_backup_from_an_older_schema_is_upgraded_on_restore() {
     let Some(b) = scratch::database("restore_older_level_b").await else { return };
     let latest = MIGRATOR.iter().map(|m| m.version).max().unwrap();
     let mut ca = a.pool.acquire().await.unwrap();
-    reset::decommission(&mut ca).await.unwrap();
+    serial::decommission(&mut ca).await.unwrap();
     MIGRATOR.run_to(latest - 1, &mut *ca).await.unwrap();
     // As `shadoucmdb migrate` leaves it: types a migration added have their tables.
     let ctx = crate::api::context::RequestContext::system("test", "test");
@@ -454,7 +481,7 @@ async fn a_backup_from_an_older_schema_is_upgraded_on_restore() {
     assert_eq!(header.migration_level(), Some(latest - 1));
 
     let mut cb = b.pool.acquire().await.unwrap();
-    let report = restore::restore(&mut cb, buf.as_slice(), &checked, true, true).await.unwrap();
+    let report = serial::restore(&mut cb, buf.as_slice(), &checked, true, true).await.unwrap();
     assert_eq!(report.migrations_applied_after, 1);
     let n: i64 = sqlx::query_scalar("SELECT count(*) FROM public._sqlx_migrations").fetch_one(&mut *cb).await.unwrap();
     assert_eq!(n as usize, crate::db::expected_count());
@@ -472,7 +499,7 @@ async fn a_backup_from_before_the_stateless_oidc_start_still_restores() {
     let Some(a) = scratch::database("restore_level_20").await else { return };
     let Some(b) = scratch::database("restore_level_20_b").await else { return };
     let mut ca = a.pool.acquire().await.unwrap();
-    reset::decommission(&mut ca).await.unwrap();
+    serial::decommission(&mut ca).await.unwrap();
     MIGRATOR.run_to(20, &mut *ca).await.unwrap();
     let (buf, checked) = take_backup(&mut ca).await;
     let header = &checked.header;
@@ -481,7 +508,7 @@ async fn a_backup_from_before_the_stateless_oidc_start_still_restores() {
     assert!(!header.tables.iter().any(|t| t.name == "oidc_login_states"));
 
     let mut cb = b.pool.acquire().await.unwrap();
-    let report = restore::restore(&mut cb, buf.as_slice(), &checked, true, true).await.unwrap();
+    let report = serial::restore(&mut cb, buf.as_slice(), &checked, true, true).await.unwrap();
     assert!(report.migrations_applied_after >= 1);
     let n: i64 = sqlx::query_scalar("SELECT count(*) FROM public._sqlx_migrations").fetch_one(&mut *cb).await.unwrap();
     assert_eq!(n as usize, crate::db::expected_count());
@@ -500,7 +527,7 @@ async fn factory_reset_returns_to_first_run_and_decommission_leaves_nothing() {
     populate(&a.pool).await;
     let mut c = a.pool.acquire().await.unwrap();
 
-    reset::factory_reset(&mut c).await.unwrap();
+    serial::factory_reset(&mut c).await.unwrap();
     // As on a first install, only the built-in business service type is left (migration 0033).
     let (users, cis, classes, audit): (i64, i64, i64, i64) = sqlx::query_as(
         "SELECT (SELECT count(*) FROM users), (SELECT count(*) FROM configuration_items),
@@ -535,7 +562,7 @@ async fn factory_reset_returns_to_first_run_and_decommission_leaves_nothing() {
 
     crate::seed::install_template(&a.pool, "it_infrastructure").await.unwrap();
     let mut c = a.pool.acquire().await.unwrap();
-    reset::decommission(&mut c).await.unwrap();
+    serial::decommission(&mut c).await.unwrap();
     assert_eq!(app_object_count(&mut c).await.unwrap(), 0);
     let left: i64 =
         sqlx::query_scalar("SELECT count(*) FROM pg_namespace WHERE nspname IN ('cmdb', 'infrastruktur', 'drizzle')")
@@ -581,10 +608,10 @@ async fn saved_views_and_defaults_survive_backup_and_restore() {
     let header = &checked.header;
     let rows = |name: &str| header.tables.iter().find(|t| t.schema == "cmdb" && t.name == name).map(|t| t.rows);
     assert_eq!((rows("saved_views"), rows("saved_view_defaults")), (Some(2), Some(1)));
-    restore::restore(&mut cb, buf.as_slice(), &checked, true, true).await.unwrap();
+    serial::restore(&mut cb, buf.as_slice(), &checked, true, true).await.unwrap();
     assert_eq!(saved_views_snapshot(&mut cb).await, before);
 
-    reset::factory_reset(&mut cb).await.unwrap();
+    serial::factory_reset(&mut cb).await.unwrap();
     let left: (i64, i64) = sqlx::query_as(
         "SELECT (SELECT count(*) FROM cmdb.saved_views), (SELECT count(*) FROM cmdb.saved_view_defaults)",
     )
@@ -646,7 +673,7 @@ async fn workflows_survive_backup_and_restore_and_go_with_a_factory_reset() {
         let expected = if name == "workflow_states" { 2 } else { expected };
         assert_eq!(rows, Some(expected), "{name}");
     }
-    restore::restore(&mut cb, buf.as_slice(), &checked, true, true).await.unwrap();
+    serial::restore(&mut cb, buf.as_slice(), &checked, true, true).await.unwrap();
     for name in TABLES {
         let table = Table::new("cmdb", name);
         assert_eq!(fingerprint(&mut ca, &table).await, fingerprint(&mut cb, &table).await, "{name}");
@@ -658,7 +685,7 @@ async fn workflows_survive_backup_and_restore_and_go_with_a_factory_reset() {
     let err = sqlx::query("UPDATE cmdb.workflow_states SET name = 'x'").execute(&mut *cb).await.unwrap_err();
     assert!(err.to_string().contains("only a draft"), "{err}");
 
-    reset::factory_reset(&mut cb).await.unwrap();
+    serial::factory_reset(&mut cb).await.unwrap();
     for name in TABLES {
         let n: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM cmdb.{name}")))
             .fetch_one(&mut *cb)
@@ -700,7 +727,7 @@ async fn approvals_survive_backup_and_restore_and_go_with_a_factory_reset() {
         let rows = checked.header.tables.iter().find(|t| t.schema == "cmdb" && t.name == name).map(|t| t.rows);
         assert_eq!(rows, Some(1), "{name}");
     }
-    restore::restore(&mut cb, buf.as_slice(), &checked, true, true).await.unwrap();
+    serial::restore(&mut cb, buf.as_slice(), &checked, true, true).await.unwrap();
     for name in TABLES.into_iter().chain(["workflow_instance_events"]) {
         let table = Table::new("cmdb", name);
         assert_eq!(fingerprint(&mut ca, &table).await, fingerprint(&mut cb, &table).await, "{name}");
@@ -718,7 +745,7 @@ async fn approvals_survive_backup_and_restore_and_go_with_a_factory_reset() {
     let err = sqlx::query("DELETE FROM cmdb.workflow_transition_approval_steps").execute(&mut *cb).await.unwrap_err();
     assert!(err.to_string().contains("only a draft"), "{err}");
 
-    reset::factory_reset(&mut cb).await.unwrap();
+    serial::factory_reset(&mut cb).await.unwrap();
     for name in TABLES {
         let n: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM cmdb.{name}")))
             .fetch_one(&mut *cb)

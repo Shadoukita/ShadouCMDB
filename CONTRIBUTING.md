@@ -125,6 +125,14 @@ instead unless `SHADOUCMDB_SKIP_DB_TESTS=1` opts out, so the coverage cannot sil
 SHADOUCMDB_TEST_DATABASE_URL=postgres://user:password@host:5432/postgres cargo test --locked
 ```
 
+A stock PostgreSQL configuration is enough, whatever the number of cores: the tests that restore a
+backup or reset a database (each rebuilds the whole schema in one transaction and holds some 4,400
+locks) take turns, so they stay inside the server's shared lock table at the default
+`max_locks_per_transaction = 64`. A new test that calls `restore`, `factory_reset` or `decommission`
+must do so through the `serial` wrappers in `backend/src/maintenance/tests.rs`
+(`db::scratch::whole_schema_transaction`); otherwise the suite fails with `53200 out of shared memory`
+on many-core machines.
+
 ## Cutting a release
 
 Releases are built by [`.github/workflows/release.yml`](.github/workflows/release.yml) when a tag

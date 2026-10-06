@@ -1527,7 +1527,10 @@ mod tests {
     async fn one_signed_in_user_cannot_hold_every_request_permit() {
         let Some(db) = scratch::database("one_user_cannot_hold_every_permit").await else { return };
         const GLOBAL: usize = 8;
-        const BODY_TIMEOUT: Duration = Duration::from_secs(2);
+        // The stalled bodies must still hold this user's share while the other
+        // requests are authorised and refused; on a host busy with the rest of the
+        // suite that takes seconds (GH#647), so leave them well over that.
+        const BODY_TIMEOUT: Duration = Duration::from_secs(5);
         let capacity = Capacity::with_sizes(GLOBAL, 2, Duration::from_secs(3)).with_body_timeout(BODY_TIMEOUT);
         let app = app_with_capacity(db.pool.clone(), capacity.clone());
         let session = set_up_owner(&app).await;
@@ -1549,14 +1552,19 @@ mod tests {
         // as they are authorised. Wait for those refusals, never for the stalled bodies.
         let mut refused = 0;
         while slow.iter().filter(|t| t.is_finished()).count() < GLOBAL - GLOBAL / 4 {
-            assert!(started.elapsed() < Duration::from_secs(10), "the extra requests were never refused");
+            assert!(started.elapsed() < Duration::from_secs(30), "the extra requests were never refused");
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
         let mut waiting = Vec::new();
         for task in slow {
             if task.is_finished() {
-                assert_eq!(task.await.unwrap(), (503, "SERVER_BUSY".into()));
+                let after = started.elapsed();
+                assert_eq!(
+                    task.await.unwrap(),
+                    (503, "SERVER_BUSY".into()),
+                    "after {after:?}: a stalled body timed out before the other requests were refused"
+                );
                 refused += 1;
             } else {
                 waiting.push(task);
