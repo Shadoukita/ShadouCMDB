@@ -24,7 +24,7 @@
 --     settings document, and to the CIs' own layouts (ci_layout_overrides).
 -- A changed settings document gets `"layoutFormat": 4` and is saved as a new
 -- settings version, and each changed CI layout gets its version bumped, each
--- with an `update` row in the audit log, actor `migration 0053`, in the shape
+-- with an `update` row in the audit log, actor `migration 0055`, in the shape
 -- the API writes. The API converts a document of an older format (an older
 -- configuration export, an older version being restored) the same way
 -- (UiSettingsDocument::upgraded, resize_default_frames).
@@ -32,7 +32,7 @@
 -- Only JSON documents change; no table or column does.
 
 -- The height of a section's frame from the grid: the old estimate (`legacy`) or the new one.
-CREATE OR REPLACE FUNCTION pg_temp.m0053_height(sec jsonb, legacy boolean) RETURNS integer LANGUAGE plpgsql IMMUTABLE AS $$
+CREATE OR REPLACE FUNCTION pg_temp.m0055_height(sec jsonb, legacy boolean) RETURNS integer LANGUAGE plpgsql IMMUTABLE AS $$
 DECLARE
   kind text := coalesce(sec->>'kind', 'fields');
   cols integer := coalesce((sec->>'columns')::integer, 3);
@@ -76,7 +76,7 @@ END;
 $$;
 --> statement-breakpoint
 -- A tab, with the new frames when every framed section is where the old estimate put it; else as it is.
-CREATE OR REPLACE FUNCTION pg_temp.m0053_tab(tab jsonb) RETURNS jsonb LANGUAGE plpgsql IMMUTABLE AS $$
+CREATE OR REPLACE FUNCTION pg_temp.m0055_tab(tab jsonb) RETURNS jsonb LANGUAGE plpgsql IMMUTABLE AS $$
 DECLARE
   sec jsonb;
   secs jsonb := '[]';
@@ -107,8 +107,8 @@ BEGIN
       old_row := 0;
       new_row := 0;
     END IF;
-    old_h := pg_temp.m0053_height(sec, true);
-    new_h := pg_temp.m0053_height(sec, false);
+    old_h := pg_temp.m0055_height(sec, true);
+    new_h := pg_temp.m0055_height(sec, false);
     z := z + 1;
     IF sec->'frame' IS DISTINCT FROM jsonb_build_object(
          'x', round(col / 12.0, 4), 'y', least(old_y, 100000), 'w', round(w / 12.0, 4), 'h', old_h, 'z', z) THEN
@@ -130,10 +130,10 @@ END;
 $$;
 --> statement-breakpoint
 -- A layout object (tabs, hiddenFields, readOnlyFields), converted.
-CREATE OR REPLACE FUNCTION pg_temp.m0053_layout(l jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $$
+CREATE OR REPLACE FUNCTION pg_temp.m0055_layout(l jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $$
   SELECT CASE WHEN jsonb_typeof(l) = 'object' AND jsonb_typeof(l->'tabs') = 'array'
               THEN l || jsonb_build_object('tabs',
-                     (SELECT coalesce(jsonb_agg(pg_temp.m0053_tab(t) ORDER BY n), '[]')
+                     (SELECT coalesce(jsonb_agg(pg_temp.m0055_tab(t) ORDER BY n), '[]')
                       FROM jsonb_array_elements(l->'tabs') WITH ORDINALITY AS e(t, n)))
               ELSE l END;
 $$;
@@ -152,14 +152,14 @@ BEGIN
   updated := current.settings;
   IF jsonb_typeof(updated->'layouts') = 'array' THEN
     updated := updated || jsonb_build_object('layouts',
-      (SELECT coalesce(jsonb_agg(pg_temp.m0053_layout(l) ORDER BY n), '[]')
+      (SELECT coalesce(jsonb_agg(pg_temp.m0055_layout(l) ORDER BY n), '[]')
        FROM jsonb_array_elements(updated->'layouts') WITH ORDINALITY AS e(l, n)));
   END IF;
   IF jsonb_typeof(updated->'layoutTemplates') = 'array' THEN
     updated := updated || jsonb_build_object('layoutTemplates',
       (SELECT coalesce(jsonb_agg(
                 CASE WHEN jsonb_typeof(t) = 'object' AND jsonb_typeof(t->'layout') = 'object'
-                     THEN t || jsonb_build_object('layout', pg_temp.m0053_layout(t->'layout'))
+                     THEN t || jsonb_build_object('layout', pg_temp.m0055_layout(t->'layout'))
                      ELSE t END ORDER BY n), '[]')
        FROM jsonb_array_elements(updated->'layoutTemplates') WITH ORDINALITY AS e(t, n)));
   END IF;
@@ -171,12 +171,12 @@ BEGIN
 
   SELECT max(version) + 1 INTO new_version FROM cmdb.ui_settings_versions;
   INSERT INTO cmdb.ui_settings_versions (version, settings, actor_type, actor_name, comment)
-  VALUES (new_version, updated, 'system', 'migration 0053', note);
+  VALUES (new_version, updated, 'system', 'migration 0055', note);
   UPDATE cmdb.ui_settings
   SET settings = updated, version = new_version,
-      updated_at = now(), updated_by_id = NULL, updated_by_name = 'migration 0053';
+      updated_at = now(), updated_by_id = NULL, updated_by_name = 'migration 0055';
   INSERT INTO cmdb.audit_log (actor_type, actor_name, action, entity_type, entity_id, old_value, new_value)
-  VALUES ('system', 'migration 0053', 'update', 'ui_settings', current.id,
+  VALUES ('system', 'migration 0055', 'update', 'ui_settings', current.id,
           jsonb_build_object('version', current.version, 'settings', current.settings),
           jsonb_build_object('version', new_version, 'settings', updated, 'comment', note));
 END;
@@ -185,27 +185,27 @@ $$;
 -- The CIs' own layouts, each audited like a change through the API (old and new: ciId, templateKey, layout, version).
 WITH changed AS (
   SELECT o.ci_id, o.template_key, o.layout AS old_layout, o.version AS old_version,
-         pg_temp.m0053_layout(o.layout) AS new_layout
+         pg_temp.m0055_layout(o.layout) AS new_layout
   FROM cmdb.ci_layout_overrides o
   WHERE o.layout IS NOT NULL
   FOR UPDATE
 ), written AS (
   UPDATE cmdb.ci_layout_overrides o
   SET layout = c.new_layout, version = o.version + 1,
-      updated_by_type = 'system', updated_by_id = NULL, updated_by_name = 'migration 0053'
+      updated_by_type = 'system', updated_by_id = NULL, updated_by_name = 'migration 0055'
   FROM changed c
   WHERE o.ci_id = c.ci_id AND c.new_layout IS DISTINCT FROM c.old_layout
   RETURNING o.ci_id, o.template_key, o.layout, o.version, c.old_layout, c.old_version
 )
 INSERT INTO cmdb.audit_log (actor_type, actor_name, action, entity_type, entity_id, old_value, new_value)
-SELECT 'system', 'migration 0053', 'update', 'ci_layout_overrides', w.ci_id,
+SELECT 'system', 'migration 0055', 'update', 'ci_layout_overrides', w.ci_id,
        jsonb_build_object('ciId', w.ci_id, 'templateKey', w.template_key, 'layout', w.old_layout, 'version', w.old_version),
        jsonb_build_object('ciId', w.ci_id, 'templateKey', w.template_key, 'layout', w.layout, 'version', w.version)
 FROM written w
 ORDER BY w.ci_id;
 --> statement-breakpoint
-DROP FUNCTION pg_temp.m0053_layout(jsonb);
+DROP FUNCTION pg_temp.m0055_layout(jsonb);
 --> statement-breakpoint
-DROP FUNCTION pg_temp.m0053_tab(jsonb);
+DROP FUNCTION pg_temp.m0055_tab(jsonb);
 --> statement-breakpoint
-DROP FUNCTION pg_temp.m0053_height(jsonb, boolean);
+DROP FUNCTION pg_temp.m0055_height(jsonb, boolean);

@@ -719,7 +719,7 @@ pub fn grid_frames<'a>(sections: impl IntoIterator<Item = &'a UiLayoutSection>, 
 /// heights of layout format 3 and earlier ([`LEGACY_FRAME_METRICS`]), the heights of the current format:
 /// the same columns and order, taller rows. A tab with a window moved, resized or added in the layout
 /// editor is left as it is. Sections without a frame are not counted (they are placed below on save).
-/// Returns whether the tab changed. Migration 0053 does the same to the stored layouts.
+/// Returns whether the tab changed. Migration 0055 does the same to the stored layouts.
 pub fn resize_default_frames(tab: &mut UiLayoutTab) -> bool {
     let framed = || tab.sections.iter().filter(|s| s.frame.is_some());
     let legacy = grid_frames_with(framed(), 0, &LEGACY_FRAME_METRICS);
@@ -1041,7 +1041,7 @@ pub struct UiSettingsDocument {
     /// a "Relationships" section at the end of its first tab, as migration 0048 did with the stored
     /// settings, so the detail page shows what it showed before. In a document before format 4, a tab whose
     /// windows are all still where they were placed from the grid gets them as tall as the detail page's
-    /// inline inputs need, as migration 0053 did with the stored settings.
+    /// inline inputs need, as migration 0055 did with the stored settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false, minimum = 2, maximum = 4)]
     pub layout_format: Option<u8>,
