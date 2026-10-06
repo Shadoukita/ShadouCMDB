@@ -243,9 +243,9 @@ memory`, and PostgreSQL's log adds `HINT: You might need to increase "max_locks_
 is changed: the transaction is rolled back and the database keeps its previous content. With more than
 about 400 CI types, set `max_locks_per_transaction = 256` in `postgresql.conf` (a server restart is
 needed), and check it before you need a restore. With that setting, restores of 1,000 and 2,000 CI types
-(about 27,400 and 50,400 locks) succeeded in the same measurement. Locks scale with the number of CI types, at roughly
-4,400 plus 23 per type. On a managed PostgreSQL service, the setting is usually changed in the
-instance's parameter group.
+(about 27,400 and 50,400 locks) succeeded in the same measurement. Locks scale with the number of CI
+types, at roughly 4,400 plus 23 per type. On a managed PostgreSQL service, the setting is usually
+changed in the instance's parameter group.
 
 ## Changing the schema
 
