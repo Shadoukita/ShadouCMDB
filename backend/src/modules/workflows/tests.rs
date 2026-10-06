@@ -664,7 +664,9 @@ async fn workflows_round_trip_through_the_configuration_file() {
     assert_eq!(status, 201, "{v}");
     let (status, g) = w.call("GET", &format!("{BASE}/{def}/grants"), None).await;
     assert_eq!(status, 200);
-    let grants = json!({ "version": g["version"], "grants": [ { "transitionKey": "approve", "profiles": ["Change managers"] } ] });
+    let grants = json!({ "version": g["version"], "grants": [
+        { "transitionKey": "approve", "profiles": ["Change managers"] },
+        { "transitionKey": "_cancel", "profiles": ["Change managers"] } ] });
     let (status, v) = w.call("PUT", &format!("{BASE}/{def}/grants"), Some(grants)).await;
     assert_eq!(status, 200, "{v}");
     let mut unpublished = lifecycle_graph();
@@ -687,7 +689,12 @@ async fn workflows_round_trip_through_the_configuration_file() {
     for k in ["initialState", "states", "transitions", "layout"] {
         assert_eq!(flow["graph"][k], expected[k], "{k}");
     }
-    assert_eq!(flow["grants"], json!([ { "transition": "approve", "profiles": ["Change managers"] } ]));
+    // GH#641: the cancel grant goes into the file as `_cancel`, and the import below takes it back.
+    assert_eq!(
+        flow["grants"],
+        json!([ { "transition": "_cancel", "profiles": ["Change managers"] },
+                { "transition": "approve", "profiles": ["Change managers"] } ])
+    );
     let text = flow.to_string();
     assert!(!text.contains("Draft only") && !text.contains(&def.to_string()), "{text}");
     // The source's draft is still in the way of a changed graph; it stays out of the no-op below.
@@ -710,6 +717,15 @@ async fn workflows_round_trip_through_the_configuration_file() {
     .unwrap();
     assert_eq!((note.as_deref(), by.as_deref()), (Some("Imported from configuration file"), Some("admin")));
     assert_eq!(hex::encode(sum), v1_sum, "the same graph has the same checksum on both installs");
+    let def_dst: Uuid = sqlx::query_scalar("SELECT id FROM workflow_definitions WHERE key = 'server_lifecycle'")
+        .fetch_one(&dst.pool)
+        .await
+        .unwrap();
+    let (status, g, _) = call(&app2, "GET", &format!("{BASE}/{def_dst}/grants"), &admin2, None).await;
+    assert_eq!(status, 200, "{g}");
+    let keys: Vec<&str> =
+        g["grants"].as_array().unwrap().iter().map(|g| g["transitionKey"].as_str().unwrap()).collect();
+    assert!(keys.contains(&"_cancel") && keys.contains(&"approve"), "{g}");
     let back = export_config(&app2, &admin2).await;
     assert_eq!(back["workflows"], file["workflows"], "round trip");
     let actions: Vec<String> =
@@ -724,6 +740,9 @@ async fn workflows_round_trip_through_the_configuration_file() {
         let audit = "SELECT count(*) FROM audit_log WHERE entity_type = 'workflow_definitions'";
         let versions = "SELECT count(*) FROM workflow_versions";
         let (a, n) = (count(pool, audit).await, count(pool, versions).await);
+        let (status, res, _) =
+            call(app, "POST", "/api/v1/admin/config/import?mode=dry_run", creds, Some(file.clone())).await;
+        assert_eq!(status, 200, "{res}");
         let (status, res) = import_config(app, creds, &file).await;
         assert_eq!(status, 200, "{res}");
         assert_eq!((count(pool, audit).await, count(pool, versions).await), (a, n));
@@ -757,12 +776,13 @@ async fn workflows_round_trip_through_the_configuration_file() {
     // GH#587: a grant for a key in no version (here or in the file) fails the import.
     let mut typo = file.clone();
     typo["workflows"][0]["grants"] = json!([
+        { "transition": "_cancel", "profiles": ["Change managers"] },
         { "transition": "approve", "profiles": ["Change managers"] },
         { "transition": "go_lve", "profiles": ["Change managers"] } ]);
     let (status, v) = import_config(&app2, &admin2, &typo).await;
     assert_eq!(
         (status, details(&v)),
-        (400, vec![("workflows.0.grants.1.transition".to_owned(), "unknown_transition".to_owned())])
+        (400, vec![("workflows.0.grants.2.transition".to_owned(), "unknown_transition".to_owned())])
     );
     let mut changed = file.clone();
     changed["workflows"][0]["graph"]["states"][1]["name"] = json!("Approved by CAB");

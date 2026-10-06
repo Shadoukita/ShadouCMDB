@@ -28807,8 +28807,8 @@
                             "properties": {
                               "transition": {
                                 "type": "string",
-                                "description": "Stable machine key, lower_snake_case",
-                                "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                                "description": "A transition key (of any version), or `_cancel` for cancelling an instance",
+                                "pattern": "^(_cancel|[a-z][a-z0-9_]{0,62})$"
                               },
                               "profiles": {
                                 "type": "array",
@@ -36101,8 +36101,8 @@
                     "properties": {
                       "transition": {
                         "type": "string",
-                        "description": "Stable machine key, lower_snake_case",
-                        "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                        "description": "A transition key (of any version), or `_cancel` for cancelling an instance",
+                        "pattern": "^(_cancel|[a-z][a-z0-9_]{0,62})$"
                       },
                       "profiles": {
                         "type": "array",
