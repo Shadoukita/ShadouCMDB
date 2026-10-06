@@ -24,6 +24,7 @@ export type WorkflowValidation = Schemas["WorkflowValidation"];
 export type WorkflowProblem = Schemas["WorkflowProblem"];
 export type WorkflowGrants = Schemas["WorkflowGrants"];
 export type WorkflowBootstrapResult = Schemas["WorkflowBootstrapResult"];
+export type WorkflowMigrationReport = Schemas["WorkflowInstanceMigrationReport"];
 export type StateCategory = WorkflowState["category"];
 
 export type WorkflowListQuery = ListQuery<"/api/v1/admin/workflow-definitions">;
@@ -31,6 +32,7 @@ export type WorkflowCreateBody = Body<"/api/v1/admin/workflow-definitions", "pos
 export type WorkflowUpdateBody = Body<"/api/v1/admin/workflow-definitions/{id}", "patch">;
 export type WorkflowDraftBody = Body<"/api/v1/admin/workflow-definitions/{id}/draft", "put">;
 export type WorkflowGrantsBody = Body<"/api/v1/admin/workflow-definitions/{id}/grants", "put">;
+export type WorkflowMigrationBody = Body<"/api/v1/admin/workflow-definitions/{id}/instance-migrations", "post">;
 
 export const workflowKeys = {
   all: ["admin", "workflows"] as const,
@@ -154,8 +156,30 @@ export function useBootstrapWorkflow() {
   return useMutation({
     mutationFn: ({ id, dryRun }: { id: string; dryRun: boolean }) =>
       unwrap(api.POST("/api/v1/admin/workflow-definitions/{id}/bootstrap", { ...path(id), body: { stateFromAttribute: true, dryRun } })),
-    onSuccess: (r) => {
+    onSuccess: (r, vars) => {
       if (r.dryRun) return;
+      void qc.invalidateQueries({ queryKey: workflowKeys.detail(vars.id) });
+      void qc.invalidateQueries({ queryKey: workflowKeys.versions(vars.id) });
+      void qc.invalidateQueries({ queryKey: runtimeKeys.all });
+      void qc.invalidateQueries({ queryKey: keys.cis });
+      void qc.invalidateQueries({ queryKey: ["audit"] });
+    },
+  });
+}
+
+/**
+ * Moves the running instances of one version to a newer published one, each into the state `stateMap` names (a state
+ * left out goes to the same key). A dry run only reports what would move; a real run changes instances, their CIs'
+ * state field and audit, and the versions' instance counts.
+ */
+export function useMigrateInstances() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: WorkflowMigrationBody }) =>
+      unwrap(api.POST("/api/v1/admin/workflow-definitions/{id}/instance-migrations", { ...path(id), body })),
+    onSuccess: (r, vars) => {
+      if (r.dryRun) return;
+      void qc.invalidateQueries({ queryKey: workflowKeys.versions(vars.id) });
       void qc.invalidateQueries({ queryKey: runtimeKeys.all });
       void qc.invalidateQueries({ queryKey: keys.cis });
       void qc.invalidateQueries({ queryKey: ["audit"] });
