@@ -365,7 +365,7 @@ async fn check_approver_steps(
     if errors.is_empty() { Ok(()) } else { Err(AppError::validation(errors)) }
 }
 
-/// Every grant of `w` must name `_cancel` or a transition of some version of
+/// Every grant of `w` must name `_cancel`, `_start` or a transition of some version of
 /// `d` (the file's graph is one by now), as the grants API requires.
 async fn check_grant_keys(
     conn: &mut PgConnection,

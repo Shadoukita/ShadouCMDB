@@ -527,7 +527,7 @@ erDiagram
     }
     workflow_transition_grants {
         uuid definition_id PK,FK
-        text transition_key PK "or _cancel"
+        text transition_key PK "or _cancel, _start"
         uuid profile_id PK,FK
     }
     workflow_instances {

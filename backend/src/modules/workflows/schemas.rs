@@ -835,7 +835,7 @@ pub struct WorkflowGrantProfile {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkflowGrant {
-    /// A transition key, or `_cancel` for cancelling an instance
+    /// A transition key, `_cancel` for cancelling an instance, or `_start` for starting it again on a CI where it ended
     pub transition_key: String,
     pub profiles: Vec<WorkflowGrantProfile>,
 }
@@ -852,8 +852,11 @@ pub struct WorkflowGrants {
 pub(crate) fn grant_key_schema() -> Schema {
     ObjectBuilder::new()
         .schema_type(Type::String)
-        .pattern(Some("^(_cancel|[a-z][a-z0-9_]{0,62})$"))
-        .description(Some("A transition key (of any version), or `_cancel` for cancelling an instance"))
+        .pattern(Some("^(_cancel|_start|[a-z][a-z0-9_]{0,62})$"))
+        .description(Some(
+            "A transition key (of any version), `_cancel` for cancelling an instance, or `_start` for starting the \
+             workflow again on a CI where an instance of it ended",
+        ))
         .into()
 }
 

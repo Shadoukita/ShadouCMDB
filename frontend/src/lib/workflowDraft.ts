@@ -326,10 +326,15 @@ export function problemsFor(problems: PlacedProblem[], kind: "state" | "transiti
 // ---------- Grants ----------
 
 export const CANCEL_GRANT = "_cancel";
+/** Starting the workflow again on a CI where an instance of it ended (GH#666). */
+export const START_GRANT = "_start";
+/** Grant keys that are not transitions: rows of their own, never orphans. */
+export const PSEUDO_GRANTS: readonly string[] = [START_GRANT, CANCEL_GRANT];
 
 /**
  * The rows of the grants matrix: the transitions of the draft and of the current version (by key,
- * draft names first), then keys only older versions or stored grants still name, then cancelling.
+ * draft names first), then keys only older versions or stored grants still name, then starting again
+ * and cancelling.
  */
 export function grantRows(
   sources: (Pick<WorkflowTransition, "key" | "name"> & { from?: string; to?: string })[][],
@@ -338,8 +343,9 @@ export function grantRows(
   const out = new Map<string, { key: string; name: string; orphan: boolean }>();
   for (const list of sources) for (const t of list) if (!out.has(t.key)) out.set(t.key, { key: t.key, name: t.name, orphan: false });
   for (const g of grants) {
-    if (g.transitionKey !== CANCEL_GRANT && !out.has(g.transitionKey)) out.set(g.transitionKey, { key: g.transitionKey, name: g.transitionKey, orphan: true });
+    if (!PSEUDO_GRANTS.includes(g.transitionKey) && !out.has(g.transitionKey)) out.set(g.transitionKey, { key: g.transitionKey, name: g.transitionKey, orphan: true });
   }
+  out.set(START_GRANT, { key: START_GRANT, name: "Start again after an instance ended", orphan: false });
   out.set(CANCEL_GRANT, { key: CANCEL_GRANT, name: "Cancel an instance", orphan: false });
   return [...out.values()];
 }
