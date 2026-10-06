@@ -10,7 +10,7 @@ use uuid::Uuid;
 use super::approval_schemas::{WorkflowApprovalStepSummary, WorkflowPendingApproval};
 use super::schemas::{WorkflowState, WorkflowStateCategory, WorkflowTransition};
 use crate::api::route::Check;
-use crate::api::schemas::{self, Sort, key_schema, ts};
+use crate::api::schemas::{self, QueryBool, Sort, key_schema, ts};
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
 use crate::modules::classes::AttributeDataType;
 use crate::paged;
@@ -295,6 +295,16 @@ impl Check for WorkflowInstanceForce {}
 // Lists
 // ---------------------------------------------------------------------------
 
+fn awaiting_approval_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .enum_values(Some(["true", "false"]))
+        .description(Some(
+            "true: only instances waiting for approval (with a pending approval request); false: only the others",
+        ))
+        .into()
+}
+
 fn instance_sort() -> Schema {
     schemas::sort_schema(&["lastTransitionAt", "startedAt"], "-lastTransitionAt")
 }
@@ -322,6 +332,8 @@ pub struct WorkflowInstanceList {
     pub class_key: Option<String>,
     /// Only instances on this CI
     pub ci_id: Option<Uuid>,
+    #[param(schema_with = awaiting_approval_schema)]
+    pub awaiting_approval: Option<QueryBool>,
     #[param(required = false, schema_with = instance_sort)]
     pub sort: Sort,
 }
@@ -348,6 +360,8 @@ pub struct WorkflowStateCount {
     #[schema(inline)]
     pub category: WorkflowStateCategory,
     pub count: i64,
+    /// Of `count`, the instances waiting for approval of a transition out of the state
+    pub awaiting_approval: i64,
 }
 
 /// Running instances per workflow and state, on the CIs the caller may view

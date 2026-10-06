@@ -23300,7 +23300,7 @@
           "Audit log"
         ],
         "summary": "Change history (read-only, paginated, newest first by default)",
-        "description": "Requires `audit.view`. Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. API tokens (`entityType` api_tokens) record `create` and `update` (revocation), and a `token.use` row for every request made with a known token, accepted or refused: `newValue` holds the token's name and prefix, owner, `outcome` (accepted, revoked, expired, owner_disabled, provider_disabled, mfa_required, account_incomplete, email_required, no_scope, session_only, forbidden), method, path (first 512 characters, then `…`, with `pathLength`), `operationId`, `ipAddress` and `userAgent`; a token that can no longer authenticate (revoked, expired, owner_disabled, provider_disabled, mfa_required, account_incomplete, email_required, no_scope) is recorded at most once a minute per outcome, the next row counting the uses left out in `unrecordedRefusals`; when no later request comes, a summary row (`actorType` system, no method or path) carries `unrecordedRefusals`, `windowStart` and `windowEnd` after the window ends or at graceful shutdown. Changes made with a token have `actorType` api_client and the owner as actor; the `token.use` row shares their `requestId`. Two-factor authentication events have `entityType` users and the user's id: `mfa.enrol`, `mfa.disable` (`reason` self_service or admin_reset), `mfa.failure` (a wrong or replayed code; `stage` login, disable or recovery_codes), `mfa.recovery_code_used` (with `recoveryCodesRemaining`) and `mfa.recovery_codes` (new codes replaced the old); sign-ins record `method` password, totp, recovery_code, setup, oidc or ldap in `login.success`. Identity providers (`entityType` identity_providers) record `create`, `update` and `delete` without their secrets; an account an identity provider creates or updates at sign-in is a `create` or `update` row on `users` with `actorType` system and `actorName` `identity provider \"<name>\"` (a new account whose provider address another account or person has is created without one, the address in `providerEmailConflict` of its `create` row), and a sign-in the provider vouched for but ShadouCMDB refused is a `login.failure`. A data model preview refused for a missing right (e.g. a field type change by a user who may not view every type storing the field) is a `schema_change.refused` row on the area, type or field previewed, `newValue` holding the operation, the body sent, `code`, `field` and `message`. A data export is an `export` row on what was exported (`entityType` configuration_items), `newValue` holding `kind`, `format`, `rowCount` and `visibility`, never the rows: the impact analysis CSV (`kind` impact, on the analysed CI, with the `parameters`, `truncated` and `truncatedReason`), a business service's member CSV (`kind` business_service_members, on the service), and the configuration file (`kind` config, `entityType` config with the nil id, `newValue` holding `format`, `formatVersion`, `sections`, `profilesIncluded` and `mappingCount`, never the content). Adding or removing business service members records one relationship `create` or `delete` per member plus one `update` on the service whose `oldValue` and `newValue` are both `{\"members\": {\"added\": [ids], \"removed\": [ids]}}`; replacing its owners records one `update` on the service whose `oldValue` and `newValue` are `{\"owners\": {\"technical\": [...], \"business\": [...]}}`, each owner as `kind`, `id` and `name`. An operator's `shadoucmdb prune-audit` leaves an `audit.purge` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the scope, window, cutoff and the number of rows deleted per action; those rows are never pruned. A `shadoucmdb restore` leaves a `backup.restore` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the `backup` (`database`, `createdAt`, `appVersion`, `migration`, `rows`, `sha256`, `seal` verified, unsigned or unknown_key, and `keyId`), the `restoredHead` (`chainSeq` and `rowHash` of the audit chain as the backup brought it back), `replacedExisting` and `appVersion`; it is never pruned either. A caller whose profile limits the classes they may view does not get entries about a CI of another class, or of a CI that no longer exists, nor relationship entries with an endpoint in one, judged by the CIs' current classes and, for a CI, every class it had in either value: those entries are left out of the page and of `page.total` whatever the filters, so neither tells that they exist. For the same reason such a caller does not get the stored sequence number as `id`, which would show a gap where an entry was left out, but a keyed permutation of it: stable and distinct per entry, unrelated in order or distance to any other (a rotation of the encryption key changes it). In the CI entries they may see, a reference attribute into a CI they may not view keeps only its id (`attributeReferences` shows it hidden, as the item endpoints do), and a business service's membership change lists only the members they may view: one naming none of those is left out like the entries above. Counts an entry took with its writer's view are null to them unless they wrote it: `rowCount`, `truncated` and `truncatedReason` of a CI export (impact, business service members), and `created`, `updated`, `unchanged`, `skipped`, `failed` and `relationshipsAdded` of an `import.commit`, which may span classes they may not view. In `token.use` rows, the id in a `path` that names a CI (`/configuration-items/{id}`, `/configuration-items/{id}/graph`, `/configuration-items/{id}/impact`, `/configuration-items/{id}/impact/export`, `/configuration-items/{id}/business-services`, `/business-services/{id}` and every path below it, whose member in `/business-services/{id}/members/{ciId}` is judged on its own) or relationship (`/relationships/{id}`) they may not view (a relationship: both endpoints) is replaced with `{hidden}`, e.g. `/api/v1/configuration-items/{hidden}/graph`; the rest of the row stays. Schema change entries (`entityType` schema_changes) show `summary` and `impact` as getSchemaChange shows them to the caller: counts of stored data only with the view right on every type they describe. A field entry that lists values stored in CIs (`notMappedValues`, from the upgrade that archived the Application field criticality) keeps its counts but lists the values only to a caller who may view the field's type and every type below it. Shared saved views (`entityType` saved_views) record `create`, `update` and `delete` with the view's `name`, `description`, `context`, `visibility` and `definition` (a shared copy's `create` names its source view in `copiedFrom`; views a configuration import writes have `actorType` import); personal views and default views are not recorded. In those entries a caller whose profile limits the classes they may view does not get the keys of other classes in `definition.classKeys`: they are left out and counted in `hiddenClassKeyCount`. Workflow definitions (`entityType` workflow_definitions) record `create`, `update` and `delete`, and `workflow.publish` for each published version; a caller whose profile limits the classes they may view gets only the entries of definitions on a class they may view that still exist. A workflow run is recorded on its CI (`entityType` configuration_items): `workflow.start` and `workflow.cancel` (details in `newValue`), and `workflow.transition`, `workflow.migrate` and `workflow.force` (before and after), so it follows the visibility rules of CI entries. Passwords (local or directory), session tokens, CSRF tokens, API token secrets, TOTP secrets, authenticator or recovery codes, OIDC client secrets, authorization codes and ID tokens, and LDAP bind passwords are never recorded.",
+        "description": "Requires `audit.view`. Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. API tokens (`entityType` api_tokens) record `create` and `update` (revocation), and a `token.use` row for every request made with a known token, accepted or refused: `newValue` holds the token's name and prefix, owner, `outcome` (accepted, revoked, expired, owner_disabled, provider_disabled, mfa_required, account_incomplete, email_required, no_scope, session_only, forbidden), method, path (first 512 characters, then `…`, with `pathLength`), `operationId`, `ipAddress` and `userAgent`; a token that can no longer authenticate (revoked, expired, owner_disabled, provider_disabled, mfa_required, account_incomplete, email_required, no_scope) is recorded at most once a minute per outcome, the next row counting the uses left out in `unrecordedRefusals`; when no later request comes, a summary row (`actorType` system, no method or path) carries `unrecordedRefusals`, `windowStart` and `windowEnd` after the window ends or at graceful shutdown. Changes made with a token have `actorType` api_client and the owner as actor; the `token.use` row shares their `requestId`. Two-factor authentication events have `entityType` users and the user's id: `mfa.enrol`, `mfa.disable` (`reason` self_service or admin_reset), `mfa.failure` (a wrong or replayed code; `stage` login, disable or recovery_codes), `mfa.recovery_code_used` (with `recoveryCodesRemaining`) and `mfa.recovery_codes` (new codes replaced the old); sign-ins record `method` password, totp, recovery_code, setup, oidc or ldap in `login.success`. Identity providers (`entityType` identity_providers) record `create`, `update` and `delete` without their secrets; an account an identity provider creates or updates at sign-in is a `create` or `update` row on `users` with `actorType` system and `actorName` `identity provider \"<name>\"` (a new account whose provider address another account or person has is created without one, the address in `providerEmailConflict` of its `create` row), and a sign-in the provider vouched for but ShadouCMDB refused is a `login.failure`. A data model preview refused for a missing right (e.g. a field type change by a user who may not view every type storing the field) is a `schema_change.refused` row on the area, type or field previewed, `newValue` holding the operation, the body sent, `code`, `field` and `message`. A data export is an `export` row on what was exported (`entityType` configuration_items), `newValue` holding `kind`, `format`, `rowCount` and `visibility`, never the rows: the impact analysis CSV (`kind` impact, on the analysed CI, with the `parameters`, `truncated` and `truncatedReason`), a business service's member CSV (`kind` business_service_members, on the service), and the configuration file (`kind` config, `entityType` config with the nil id, `newValue` holding `format`, `formatVersion`, `sections`, `profilesIncluded` and `mappingCount`, never the content). Adding or removing business service members records one relationship `create` or `delete` per member plus one `update` on the service whose `oldValue` and `newValue` are both `{\"members\": {\"added\": [ids], \"removed\": [ids]}}`; replacing its owners records one `update` on the service whose `oldValue` and `newValue` are `{\"owners\": {\"technical\": [...], \"business\": [...]}}`, each owner as `kind`, `id` and `name`. An operator's `shadoucmdb prune-audit` leaves an `audit.purge` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the scope, window, cutoff and the number of rows deleted per action; those rows are never pruned. A `shadoucmdb restore` leaves a `backup.restore` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the `backup` (`database`, `createdAt`, `appVersion`, `migration`, `rows`, `sha256`, `seal` verified, unsigned or unknown_key, and `keyId`), the `restoredHead` (`chainSeq` and `rowHash` of the audit chain as the backup brought it back), `replacedExisting` and `appVersion`; it is never pruned either. A caller whose profile limits the classes they may view does not get entries about a CI of another class, or of a CI that no longer exists, nor relationship entries with an endpoint in one, judged by the CIs' current classes and, for a CI, every class it had in either value: those entries are left out of the page and of `page.total` whatever the filters, so neither tells that they exist. For the same reason such a caller does not get the stored sequence number as `id`, which would show a gap where an entry was left out, but a keyed permutation of it: stable and distinct per entry, unrelated in order or distance to any other (a rotation of the encryption key changes it). In the CI entries they may see, a reference attribute into a CI they may not view keeps only its id (`attributeReferences` shows it hidden, as the item endpoints do), and a business service's membership change lists only the members they may view: one naming none of those is left out like the entries above. Counts an entry took with its writer's view are null to them unless they wrote it: `rowCount`, `truncated` and `truncatedReason` of a CI export (impact, business service members), and `created`, `updated`, `unchanged`, `skipped`, `failed` and `relationshipsAdded` of an `import.commit`, which may span classes they may not view. In `token.use` rows, the id in a `path` that names a CI (`/configuration-items/{id}`, `/configuration-items/{id}/graph`, `/configuration-items/{id}/impact`, `/configuration-items/{id}/impact/export`, `/configuration-items/{id}/business-services`, `/business-services/{id}` and every path below it, whose member in `/business-services/{id}/members/{ciId}` is judged on its own) or relationship (`/relationships/{id}`) they may not view (a relationship: both endpoints) is replaced with `{hidden}`, e.g. `/api/v1/configuration-items/{hidden}/graph`; the rest of the row stays. Schema change entries (`entityType` schema_changes) show `summary` and `impact` as getSchemaChange shows them to the caller: counts of stored data only with the view right on every type they describe. A field entry that lists values stored in CIs (`notMappedValues`, from the upgrade that archived the Application field criticality) keeps its counts but lists the values only to a caller who may view the field's type and every type below it. Shared saved views (`entityType` saved_views) record `create`, `update` and `delete` with the view's `name`, `description`, `context`, `visibility` and `definition` (a shared copy's `create` names its source view in `copiedFrom`; views a configuration import writes have `actorType` import); personal views and default views are not recorded. In those entries a caller whose profile limits the classes they may view does not get the keys of other classes in `definition.classKeys`: they are left out and counted in `hiddenClassKeyCount`. Workflow definitions (`entityType` workflow_definitions) record `create`, `update` and `delete`, and `workflow.publish` for each published version; a caller whose profile limits the classes they may view gets only the entries of definitions on a class they may view that still exist. A workflow run is recorded on its CI (`entityType` configuration_items): `workflow.start` and `workflow.cancel` (details in `newValue`), and `workflow.transition`, `workflow.migrate` and `workflow.force` (before and after), and `workflow.approval_refresh` (an approval step's approvers before and after), so it follows the visibility rules of CI entries. Passwords (local or directory), session tokens, CSRF tokens, API token secrets, TOTP secrets, authenticator or recovery codes, OIDC client secrets, authorization codes and ID tokens, and LDAP bind passwords are never recorded.",
         "operationId": "listAuditLog",
         "parameters": [
           {
@@ -23432,7 +23432,8 @@
                 "workflow.approval_decide",
                 "workflow.approval_close",
                 "workflow.approval_overdue",
-                "backup.restore"
+                "backup.restore",
+                "workflow.approval_refresh"
               ]
             }
           },
@@ -32264,6 +32265,19 @@
             }
           },
           {
+            "name": "awaitingApproval",
+            "in": "query",
+            "description": "true: only instances waiting for approval (with a pending approval request); false: only the others",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          },
+          {
             "name": "sort",
             "in": "query",
             "description": "Sort field; prefix with \"-\" for descending. One of: lastTransitionAt, startedAt",
@@ -33619,6 +33633,216 @@
         ]
       }
     },
+    "/api/v1/workflow-approval-requests": {
+      "get": {
+        "tags": [
+          "Workflow approvals"
+        ],
+        "summary": "List approval requests: your inbox, the ones you made or decided, or all (paginated, filterable)",
+        "description": "`view=actionable` (the default) is the inbox: pending requests whose active step you may decide now, in person, by the same rules as a decision (an approver of the step, not the requester or the requesting token's creator, not yet decided by you, and the step's separation of duties and API token rules). `requested` and `decided` are the requests you made, and those you approved or rejected a step of; `all` is every request. Requests on CIs of types the caller may not view are left out of the page and of `page.total`. `requestedBy` lists one user's requests, for example to cancel the pending requests of a disabled account (`view=all&status=pending&requestedBy=…`). Sorted by the active step's due date, the earliest first, unless `sort` says otherwise.",
+        "operationId": "listWorkflowApprovalRequests",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size (1-200)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Rows to skip",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0,
+              "maximum": 1000000,
+              "minimum": 0
+            }
+          },
+          {
+            "name": "view",
+            "in": "query",
+            "description": "actionable (default): pending requests whose active step you may decide now, in person; requested: the ones you made; decided: the ones you approved or rejected a step of; all: every request on the CIs you may view",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "actionable",
+              "enum": [
+                "actionable",
+                "requested",
+                "decided",
+                "all"
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "approved",
+                "rejected",
+                "withdrawn",
+                "cancelled"
+              ]
+            }
+          },
+          {
+            "name": "definitionKey",
+            "in": "query",
+            "description": "Stable machine key, lower_snake_case",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{0,62}$"
+            }
+          },
+          {
+            "name": "ciId",
+            "in": "query",
+            "description": "Only requests on this CI",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "requestedBy",
+            "in": "query",
+            "description": "Only requests this user made (the incident runbook: the pending requests of a disabled account)",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "overdue",
+            "in": "query",
+            "description": "true: only requests whose active step is overdue; false: only the others",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "Sort field; prefix with \"-\" for descending. One of: dueAt, requestedAt, closedAt",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "dueAt",
+              "enum": [
+                "dueAt",
+                "-dueAt",
+                "requestedAt",
+                "-requestedAt",
+                "closedAt",
+                "-closedAt"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowApprovalRequestItemList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
     "/api/v1/workflow-approval-requests/{id}": {
       "get": {
         "tags": [
@@ -33736,7 +33960,7 @@
           "Workflow approvals"
         ],
         "summary": "Approve or reject the active step of an approval request",
-        "description": "Needs no edit right: the view right on the CI's type and a place among the active step's approvers (a named user, a member of an assigned profile or group, the user a CI field names, or an owner of a business service the CI belongs to), read when the decision is made (403 FORBIDDEN `not_eligible`). **Four-eyes** (403 WORKFLOW_APPROVAL_SELF): the requester never decides their own request, whichever profile or credential they use (`requester`), nor does a token the requester minted (`token_creator`); a step can also refuse whoever approved an earlier step (`earlier_step`) and the actors of other transitions of the instance (`actor_of:<key>`). API tokens decide only on a step that allows them (403 FORBIDDEN `session_required`), and only a token its owner minted for themselves (403 FORBIDDEN `token_not_self_minted`). A comment is required to reject. Any rejection rejects the request and the instance stays where it is. When the step reaches its quorum the next step becomes active; the last one's final approval applies the transition in the same transaction: the staged fields (only those the transition takes) and the state field are written to the CI with the decider as actor (a CI `update` audit row naming `approvalRequestId` and `requestedBy`), and the step is audited as `workflow.transition` with the same. If a staged field changed since the request, the conditions no longer hold, or the request stages a field the transition does not take, the final approval is refused with 409 WORKFLOW_APPROVAL_STALE and nothing is recorded, not even the decision. Each decision is audited as `workflow.approval_decide`. 409 CONFLICT `not_pending`, `step_not_active` or `already_decided`; 409 VERSION_CONFLICT on a stale `expectedVersion` (the request's `version`).",
+        "description": "Needs no edit right: the view right on the CI's type and a place among the active step's approvers (a named user, a member of an assigned profile or group, the user a CI field names, or an owner of a business service the CI belongs to), read when the decision is made (403 FORBIDDEN `not_eligible`). **Four-eyes** (403 WORKFLOW_APPROVAL_SELF): the requester never decides their own request, whichever profile or credential they use (`requester`), nor does a token the requester minted (`token_creator`); a step can also refuse whoever approved an earlier step (`earlier_step`) and whoever ran, requested or approved other transitions of the instance (`actor_of:<key>`). API tokens decide only on a step that allows them (403 FORBIDDEN `session_required`), and only a token its owner minted for themselves (403 FORBIDDEN `token_not_self_minted`). A comment is required to reject. Any rejection rejects the request and the instance stays where it is. When the step reaches its quorum the next step becomes active; the last one's final approval applies the transition in the same transaction: the staged fields (only those the transition takes) and the state field are written to the CI with the decider as actor (a CI `update` audit row naming `approvalRequestId` and `requestedBy`), and the step is audited as `workflow.transition` with the same. If a staged field changed since the request, the conditions no longer hold, or the request stages a field the transition does not take, the final approval is refused with 409 WORKFLOW_APPROVAL_STALE and nothing is recorded, not even the decision. Each decision is audited as `workflow.approval_decide`. 409 CONFLICT `not_pending`, `step_not_active` or `already_decided`; 409 VERSION_CONFLICT on a stale `expectedVersion` (the request's `version`).",
         "operationId": "decideWorkflowApprovalRequest",
         "parameters": [
           {
@@ -34258,6 +34482,265 @@
         "security": [
           {
             "csrfHeader": [],
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/workflow-approval-requests/{id}/refresh": {
+      "post": {
+        "tags": [
+          "Workflow approvals"
+        ],
+        "summary": "Re-resolve who may decide the active step of a pending request",
+        "description": "Requires `workflows.manage`. For administrators (`workflows.manage`): the active step's approvers are resolved again from the workflow's current approver assignments and the CI's current values, for example after the CI field that names the approver changed. Decisions already cast stand. No body. Audited on the CI as `workflow.approval_refresh`, also when nothing changed: `oldValue` holds the step's `approvers` (`kind`, `id`, `via`) and `eligibleCount` before, `newValue` the request, the step, `changed` and the same two after. 409 CONFLICT `not_pending`.",
+        "operationId": "refreshWorkflowApprovalRequest",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowApprovalRequest"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/workflow-instances/{id}/approval-requests": {
+      "get": {
+        "tags": [
+          "Workflow approvals"
+        ],
+        "summary": "The approval requests of a workflow instance, newest first (paginated)",
+        "description": "Every request the instance had, whatever became of it: approved, rejected, withdrawn or cancelled, and the pending one. Kept for the life of the CI. 404 for an instance on a CI of a type the caller may not view.",
+        "operationId": "listWorkflowInstanceApprovalRequests",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size (1-200)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Rows to skip",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0,
+              "maximum": 1000000,
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowApprovalRequestItemList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
             "sessionCookie": []
           },
           {
@@ -34907,7 +35390,8 @@
               "workflow.approval_decide",
               "workflow.approval_close",
               "workflow.approval_overdue",
-              "backup.restore"
+              "backup.restore",
+              "workflow.approval_refresh"
             ]
           },
           "entityType": {
@@ -44914,6 +45398,61 @@
         },
         "additionalProperties": false
       },
+      "WorkflowApprovalCurrentStep": {
+        "type": "object",
+        "description": "The step a request is at: the active one while pending, the last one reached once closed",
+        "required": [
+          "stepNo",
+          "key",
+          "name",
+          "status",
+          "approvals",
+          "requiredApprovals",
+          "dueAt",
+          "overdue"
+        ],
+        "properties": {
+          "stepNo": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "waiting",
+              "active",
+              "approved",
+              "rejected",
+              "closed"
+            ]
+          },
+          "approvals": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "requiredApprovals": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "dueAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "overdue": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
       "WorkflowApprovalDecision": {
         "type": "object",
         "description": "One approve or reject",
@@ -45235,6 +45774,166 @@
         },
         "additionalProperties": false
       },
+      "WorkflowApprovalRequestItem": {
+        "type": "object",
+        "description": "An approval request in a list: no staged values, approvers or decisions (`GET /workflow-approval-requests/{id}`\nhas them)",
+        "required": [
+          "id",
+          "instanceId",
+          "ciId",
+          "ciIdent",
+          "ciLabel",
+          "classKey",
+          "definitionKey",
+          "definitionName",
+          "versionNo",
+          "transitionKey",
+          "transitionName",
+          "fromState",
+          "toState",
+          "requestNo",
+          "status",
+          "closeReason",
+          "requestedAt",
+          "requestedBy",
+          "currentStep",
+          "stepCount",
+          "closedAt",
+          "closedByName",
+          "version"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "instanceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "ciId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "ciIdent": {
+            "type": "string"
+          },
+          "ciLabel": {
+            "type": "string"
+          },
+          "classKey": {
+            "type": "string"
+          },
+          "definitionKey": {
+            "type": "string"
+          },
+          "definitionName": {
+            "type": "string"
+          },
+          "versionNo": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "transitionKey": {
+            "type": "string"
+          },
+          "transitionName": {
+            "type": "string"
+          },
+          "fromState": {
+            "type": "string"
+          },
+          "toState": {
+            "type": "string"
+          },
+          "requestNo": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "approved",
+              "rejected",
+              "withdrawn",
+              "cancelled"
+            ]
+          },
+          "closeReason": {
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "approved",
+                  "rejected",
+                  "overdue",
+                  "withdrawn",
+                  "instance_cancelled",
+                  "instance_forced",
+                  "instance_migrated",
+                  "ci_deleted"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "requestedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "requestedBy": {
+            "$ref": "#/components/schemas/WorkflowApprovalRequestedBy"
+          },
+          "currentStep": {
+            "$ref": "#/components/schemas/WorkflowApprovalCurrentStep"
+          },
+          "stepCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "closedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "closedByName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Send it as `expectedVersion` with a decision, withdrawal or cancellation"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowApprovalRequestItemList": {
+        "type": "object",
+        "required": [
+          "data",
+          "page"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowApprovalRequestItem"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageMeta"
+          }
+        },
+        "additionalProperties": false
+      },
       "WorkflowApprovalRequestStep": {
         "type": "object",
         "description": "One step of a request",
@@ -45327,6 +46026,28 @@
         },
         "additionalProperties": false
       },
+      "WorkflowApprovalRequestedBy": {
+        "type": "object",
+        "description": "Who made a request, as recorded then",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Null once the account was deleted"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "WorkflowApprovalRequester": {
         "type": "object",
         "description": "Who made the request, as they stand now (advisory: it does not block a decision)",
@@ -45410,7 +46131,7 @@
               "description": "Stable machine key, lower_snake_case",
               "pattern": "^[a-z][a-z0-9_]{0,62}$"
             },
-            "description": "Transition keys of this version: whoever ran one of them on the instance (and whoever requested it) may not approve this step",
+            "description": "Transition keys of this version: whoever ran, requested or approved one of them on the instance may not approve this step",
             "maxItems": 20
           },
           "allowApiTokens": {
@@ -47240,7 +47961,8 @@
           "stateKey",
           "stateName",
           "category",
-          "count"
+          "count",
+          "awaitingApproval"
         ],
         "properties": {
           "definitionId": {
@@ -47270,6 +47992,11 @@
           "count": {
             "type": "integer",
             "format": "int64"
+          },
+          "awaitingApproval": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Of `count`, the instances waiting for approval of a transition out of the state"
           }
         },
         "additionalProperties": false

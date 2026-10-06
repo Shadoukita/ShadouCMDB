@@ -1073,7 +1073,16 @@ async function workflows(x: Json) {
   const withdrawn = (await post(`${requests}/${toWithdraw.requestId}/withdraw`, { expectedVersion: toWithdraw.version }, 200)).json;
   check(withdrawn.request.status === 'withdrawn', 'the requester withdraws the request');
   await post(`${requests}/${toWithdraw.requestId}/withdraw`, { expectedVersion: toWithdraw.version }, 409);
-  const toCancel = (await requestGoLive(await gatedInstance())).pendingApproval;
+  const cancelInstance = await requestGoLive(await gatedInstance());
+  const toCancel = cancelInstance.pendingApproval;
+  // A3b: the lists, the instance's history and refresh.
+  const refreshed = (await post(`${requests}/${toCancel.requestId}/refresh`, undefined, 200)).json;
+  check(refreshed.status === 'pending' && refreshed.steps?.length === 1, 'an administrator re-resolves the approvers');
+  const byRequester = (await get(`${requests}?view=all&status=pending&requestedBy=${adminMe.user.id}`)).json;
+  check(byRequester.data.some((r: Json) => r.id === toCancel.requestId), 'pending requests are listed by requester');
+  check((await get(requests)).json.page.total === 0, 'the requester has nothing to decide');
+  const history = (await get(`${instances}/${cancelInstance.id}/approval-requests`)).json;
+  check(history.page.total === 1 && history.data[0].id === toCancel.requestId, 'an instance lists its approval requests');
   await post(`${requests}/${toCancel.requestId}/cancel`, { expectedVersion: toCancel.version }, 400);
   const cancelledRequest = (await post(`${requests}/${toCancel.requestId}/cancel`, { expectedVersion: toCancel.version, comment: 'Smoke cancel' }, 200)).json;
   check(cancelledRequest.request.status === 'cancelled', 'an administrator cancels a pending request');

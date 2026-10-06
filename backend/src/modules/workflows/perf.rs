@@ -13,14 +13,21 @@
 //! transitions on instances spread over the table, the instance list (first
 //! page, a state filter, a deep page), the per-state summary, one CI's
 //! workflows and one instance with its graph and available transitions.
+//!
+//! Approvals (SHAA-1869 §13, A3; SHAA-1880): the same 500 000 CIs on a version
+//! whose `approve` needs a technical review and then two CAB approvals, 10 000
+//! of them with a pending request (half at each step). Decisions and the
+//! approvals inbox are measured as class-restricted approvers.
 
 use std::time::Instant;
 
 use serde_json::json;
 use uuid::Uuid;
 
+use super::approvals_runtime_tests::{REQUESTS, setup};
 use super::runtime_tests::{World, world};
 use crate::db::scratch;
+use crate::modules::api_tokens::tests::Creds;
 use crate::modules::impact::perf::{exec, p95};
 use crate::schema::model::Model;
 
@@ -225,6 +232,186 @@ async fn workflow_bootstrap_performance() {
     let t = Instant::now();
     let problems: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_log_verify()").fetch_one(pool).await.unwrap();
     eprintln!("audit_log_verify() over the chain: {problems} problems in {:?}", t.elapsed());
+    assert_eq!(problems, 0);
+    db.drop().await;
+    assert!(failures.is_empty(), "thresholds missed:\n{}", failures.join("\n"));
+}
+
+/// Pending approval requests (every 50th CI).
+const PENDING: i64 = 10_000;
+const DECISIONS: usize = 300;
+/// §13: p95 of a decision, and of an inbox page.
+const DECISION_P95_MS: f64 = 50.0;
+const INBOX_P95_MS: f64 = 200.0;
+
+/// 10 000 pending requests of `approve`, made by `req`: the odd ones at the
+/// technical review, the even ones at the CAB step (tech approved step 1).
+async fn seed_requests(w: &World, req: Uuid, tech: Uuid) {
+    let t = Instant::now();
+    let pool = &w.pool;
+    let profile = |name: &str| {
+        sqlx::query_scalar::<_, Uuid>("SELECT id FROM permission_profiles WHERE name = $1").bind(name.to_owned())
+    };
+    let (tech_profile, cab, blind) = (
+        profile("Tech").fetch_one(pool).await.unwrap(),
+        profile("CAB").fetch_one(pool).await.unwrap(),
+        profile("Blind").fetch_one(pool).await.unwrap(),
+    );
+    exec(
+        pool,
+        &format!(
+            "CREATE TABLE perf_req AS
+             SELECT gen_random_uuid() AS id, wi.id AS instance_id, wi.version_id, row_number() OVER (ORDER BY p.n) AS k
+             FROM workflow_instances wi JOIN perf_ci p ON p.id = wi.ci_id WHERE p.n % ({CIS} / {PENDING}) = 0"
+        ),
+    )
+    .await;
+    sqlx::query(
+        "INSERT INTO workflow_approval_requests
+           (id, instance_id, version_id, transition_key, request_no, status, current_step_no, requested_at,
+            requested_by_id, requested_by_name, excluded_user_ids, staged_fields, field_baseline)
+         SELECT id, instance_id, version_id, 'approve', 1, 'pending', 2 - k % 2, now() - (k || ' minutes')::interval,
+                $1, 'req', ARRAY[$1::uuid], '{\"owner_team\": \"ops\"}', '{\"owner_team\": null}'
+         FROM perf_req",
+    )
+    .bind(req)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO workflow_approval_request_steps
+           (request_id, step_no, step_key, required_approvals, status, activated_at, due_at, completed_at,
+            eligible_count, resolved_at)
+         SELECT id, 1, 'tech', 1, CASE WHEN k % 2 = 0 THEN 'approved' ELSE 'active' END, now() - interval '1 day',
+                now() + (k || ' minutes')::interval, CASE WHEN k % 2 = 0 THEN now() END, 1, now()
+         FROM perf_req
+         UNION ALL
+         SELECT id, 2, 'cab', 2, CASE WHEN k % 2 = 0 THEN 'active' ELSE 'waiting' END,
+                CASE WHEN k % 2 = 0 THEN now() END, CASE WHEN k % 2 = 0 THEN now() + (k || ' minutes')::interval END,
+                NULL, CASE WHEN k % 2 = 0 THEN 3 END, CASE WHEN k % 2 = 0 THEN now() END
+         FROM perf_req",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO workflow_approval_eligibility (request_id, step_no, role, principal_kind, principal_id, via)
+         SELECT id, 1, 'approver', 'profile', $1, '{\"source\": \"profile\", \"label\": \"profile Tech\"}'::jsonb FROM perf_req
+         UNION ALL
+         SELECT id, 2, 'approver', 'profile', $2, '{\"source\": \"profile\", \"label\": \"profile CAB\"}'::jsonb
+         FROM perf_req WHERE k % 2 = 0
+         UNION ALL
+         SELECT id, 2, 'approver', 'profile', $3, '{\"source\": \"profile\", \"label\": \"profile Blind\"}'::jsonb
+         FROM perf_req WHERE k % 2 = 0",
+    )
+    .bind(tech_profile)
+    .bind(cab)
+    .bind(blind)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO workflow_approval_decisions (request_id, step_no, decision, actor_id, actor_name, credential, via)
+         SELECT id, 1, 'approve', $1, 'tech', 'session', '[{\"source\": \"profile\", \"label\": \"profile Tech\"}]'
+         FROM perf_req WHERE k % 2 = 0",
+    )
+    .bind(tech)
+    .execute(pool)
+    .await
+    .unwrap();
+    exec(pool, "ANALYZE").await;
+    eprintln!("seeded {PENDING} pending approval requests in {:?}", t.elapsed());
+}
+
+/// `DECISIONS` requests spread over the pending ones, at step `step` (1 or 2).
+async fn spread(w: &World, step: i64) -> Vec<Uuid> {
+    sqlx::query_scalar(
+        "SELECT id FROM perf_req WHERE 2 - k % 2 = $1 AND (k / 2) % ($2 / 2 / $3) = 0 ORDER BY k LIMIT $3",
+    )
+    .bind(step)
+    .bind(PENDING)
+    .bind(DECISIONS as i64)
+    .fetch_all(&w.pool)
+    .await
+    .unwrap()
+}
+
+/// One approval through the router: (milliseconds, response).
+async fn decide(w: &World, creds: &Creds, id: Uuid, step: &str, version: i32) -> (f64, serde_json::Value) {
+    let body = json!({ "stepKey": step, "decision": "approve", "expectedVersion": version });
+    let t = Instant::now();
+    let (status, v) = w.call(creds, "POST", &format!("{REQUESTS}/{id}/decisions"), Some(body)).await;
+    assert_eq!(status, 200, "{v}");
+    (t.elapsed().as_secs_f64() * 1000.0, v)
+}
+
+#[tokio::test]
+#[ignore = "performance gate: run with --ignored --release (tools/perf/workflows.sh)"]
+async fn workflow_approvals_performance() {
+    let Some(db) = scratch::database("workflow_approvals_performance").await else { return };
+    let w = world(&db).await;
+    let p = setup(&w).await;
+    seed(&w).await;
+    seed_requests(&w, p.req.1, p.tech.1).await;
+    let mut failures = Vec::new();
+
+    // Reads first, on the full 10 000.
+    let reads = [
+        ("inbox: first page (CAB member)", &p.a1.0, format!("{REQUESTS}?limit=50"), INBOX_P95_MS),
+        ("inbox: page at offset 2 000", &p.a1.0, format!("{REQUESTS}?limit=50&offset=2000"), INBOX_P95_MS),
+        ("inbox: overdue only", &p.a1.0, format!("{REQUESTS}?overdue=true&limit=50"), INBOX_P95_MS),
+        ("inbox: first page (tech)", &p.tech.0, format!("{REQUESTS}?limit=50"), INBOX_P95_MS),
+        ("decided by me (tech, 5 000)", &p.tech.0, format!("{REQUESTS}?view=decided&limit=50"), INBOX_P95_MS),
+        (
+            "runbook: pending by requester",
+            &w.admin,
+            format!("{REQUESTS}?view=all&status=pending&requestedBy={}&limit=50", p.req.1),
+            INBOX_P95_MS,
+        ),
+        (
+            "instances awaiting approval",
+            &w.admin,
+            "/api/v1/workflow-instances?awaitingApproval=true&limit=50".into(),
+            READ_P95_MS,
+        ),
+        ("summary with awaitingApproval", &w.admin, "/api/v1/workflow-instances/summary".into(), READ_P95_MS),
+    ];
+    for (what, creds, path, limit) in reads {
+        let mut ms = Vec::with_capacity(READS);
+        for _ in 0..READS {
+            let t = Instant::now();
+            let (status, v) = w.call(creds, "GET", &path, None).await;
+            ms.push(t.elapsed().as_secs_f64() * 1000.0);
+            assert_eq!(status, 200, "{path}: {v}");
+        }
+        report(what, ms, limit, &mut failures);
+    }
+    let (_, v) = w.call(&p.a1.0, "GET", &format!("{REQUESTS}?limit=1"), None).await;
+    assert_eq!(v["page"]["total"], PENDING / 2, "{v}");
+
+    // Step 1: the tech approval activates the CAB step and resolves its approvers.
+    let mut ms = Vec::with_capacity(DECISIONS);
+    for id in spread(&w, 1).await {
+        let (t, v) = decide(&w, &p.tech.0, id, "tech", 1).await;
+        assert_eq!(v["request"]["currentStepNo"], 2, "{v}");
+        ms.push(t);
+    }
+    report("decision: step approved, next step active", ms, DECISION_P95_MS, &mut failures);
+    // Step 2: one of two, then the final approval that applies the transition.
+    let cab = spread(&w, 2).await;
+    let mut ms = Vec::with_capacity(DECISIONS);
+    for id in &cab {
+        ms.push(decide(&w, &p.a1.0, *id, "cab", 1).await.0);
+    }
+    report("decision: 1 of 2", ms, DECISION_P95_MS, &mut failures);
+    let mut ms = Vec::with_capacity(DECISIONS);
+    for id in &cab {
+        let (t, v) = decide(&w, &p.a2.0, *id, "cab", 2).await;
+        assert_eq!(v["instance"]["state"]["key"], "approved", "{v}");
+        ms.push(t);
+    }
+    report("decision: final, applies the transition", ms, DECISION_P95_MS, &mut failures);
+    let problems: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_log_verify()").fetch_one(&w.pool).await.unwrap();
     assert_eq!(problems, 0);
     db.drop().await;
     assert!(failures.is_empty(), "thresholds missed:\n{}", failures.join("\n"));
