@@ -119,6 +119,45 @@ input[type="radio"] {
   background: currentColor;
   mask: var(--icon-circle-alert) center / contain no-repeat;
 }
+/*
+ * The CI picker (CiPicker): the search box, and the chosen CI shown as a filled input with a clear
+ * button (audit R10). 280 px on its own; in a field it takes the field's width like any input.
+ */
+.combo,
+.picker-value {
+  width: 280px;
+  max-width: 100%;
+}
+.field .combo,
+.field .picker-value {
+  width: auto;
+}
+.combo > input {
+  width: 100%;
+}
+.picker-value {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--control-h);
+  padding: 0 var(--space-0_5) 0 var(--space-2);
+  border: 1px solid var(--c-border-control);
+  border-radius: var(--radius-md);
+  background: var(--c-surface);
+  font-size: var(--fs-md);
+}
+.picker-value.invalid {
+  border-color: var(--c-danger-text);
+  background-color: var(--c-danger-subtle);
+}
+.picker-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .checkbox-row {
   display: flex;
   align-items: center;

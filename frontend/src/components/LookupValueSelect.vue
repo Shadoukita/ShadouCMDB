@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch, watchEffect } from "vue";
 import { useLookupListValues } from "../api/datamodel";
+import { t } from "../i18n";
 
 /**
  * <select> over the values of an admin-defined lookup list (`lookup` attributes). Retired values are hidden unless selected.
@@ -60,7 +61,7 @@ const placeholder = computed(() => {
   if (values.isLoading.value) return "Loading…";
   if (values.isError.value) return "Could not load the list";
   if (dependent.value && options.value.length === 0) return `No values for this ${props.parent!.label}`;
-  return "— not set —";
+  return t("common.notSet");
 });
 </script>
 

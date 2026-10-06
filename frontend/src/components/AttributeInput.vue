@@ -2,6 +2,7 @@
 import { computed, ref, watchEffect } from "vue";
 import type { CiSummary } from "../api/queries";
 import { isMultiline, nowFormValue, NOW_HINT, type AttributeShape, type Validation } from "../lib/attributeValues";
+import { t } from "../i18n";
 import CiPicker from "./CiPicker.vue";
 import LookupValueSelect, { type LookupParent } from "./LookupValueSelect.vue";
 
@@ -41,12 +42,12 @@ function onReference(ci: CiSummary | null) {
 
 <template>
   <select v-if="def.dataType === 'boolean'" :id="id" v-model="model" v-bind="aria">
-    <option value="">— not set —</option>
+    <option value="">{{ t("common.notSet") }}</option>
     <option value="true">Yes</option>
     <option value="false">No</option>
   </select>
   <select v-else-if="def.dataType === 'enum'" :id="id" v-model="model" v-bind="aria">
-    <option value="">— not set —</option>
+    <option value="">{{ t("common.notSet") }}</option>
     <option v-for="ev in enumValues" :key="ev" :value="ev">{{ ev }}</option>
     <option v-if="model !== '' && !enumValues.includes(model)" :value="model">{{ model }} (no longer allowed)</option>
   </select>

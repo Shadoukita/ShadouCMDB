@@ -181,18 +181,6 @@ dl.props .group-title {
 dl.props .group-title:first-child {
   padding-top: 0;
 }
-.rel-add {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-3);
-  align-items: flex-end;
-  padding: var(--sp-3) var(--sp-4);
-  border-top: 1px solid var(--c-border);
-  background: var(--c-surface-alt);
-}
-.rel-add .field select {
-  width: 220px;
-}
 .diff {
   font-size: var(--fs-sm);
   margin: 0;
@@ -202,7 +190,7 @@ dl.props .group-title:first-child {
   color: var(--c-danger-text);
 }
 .diff ins {
-  color: var(--c-ok);
+  color: var(--c-success-text);
   text-decoration: none;
 }
 

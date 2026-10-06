@@ -146,6 +146,20 @@ test("edit: the CI opens editable; Save appears once something changed and the p
   await expect(diff.locator("li", { hasText: "attributes.cpu_cores" }).locator("del")).toHaveText("16");
   await expect(diff.locator("li", { hasText: "attributes.cpu_cores" }).locator("ins")).toHaveText("32");
   await snap(page, "07-history-diff");
+
+  // Source chips filter on the server: the edits above came through the UI, none through an API token.
+  const sources = page.getByRole("group", { name: "Filter by source" });
+  const events = page.locator("table.event-table tbody tr");
+  await expect(events.first().locator(".event-source")).toHaveText("UI");
+  const api = sources.getByRole("button", { name: "API", exact: true });
+  await api.click();
+  await expect(api).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("status").filter({ hasText: "No changes from the selected sources." })).toBeVisible();
+  await sources.getByRole("button", { name: "UI", exact: true }).click();
+  await expect(events.first().locator(".event-source")).toHaveText("UI");
+  await sources.getByRole("button", { name: "Show all" }).click();
+  await expect(api).toHaveAttribute("aria-pressed", "false");
+  await expect(diff).toContainText("attributes.cpu_cores");
 });
 
 test("edit: Discard restores the values; leaving with unsaved changes asks first", async ({ page }) => {
@@ -231,7 +245,9 @@ test("relationships: add in both directions; illegal pairs offer no type", async
 
   await expect(panel.getByRole("row")).toHaveCount(3); // header + 2
   await expect(panel.getByRole("row", { name: /is located in\s+FRA1 Rack A01/ })).toBeVisible();
-  await expect(panel.getByRole("row", { name: /hosts\s+CRM/ })).toContainText("← incoming");
+  // The direction is an icon named for assistive technology (audit R5).
+  await expect(panel.getByRole("row", { name: /is located in\s+FRA1 Rack A01/ }).getByRole("img", { name: "Outgoing" })).toBeVisible();
+  await expect(panel.getByRole("row", { name: /hosts\s+CRM/ }).getByRole("img", { name: "Incoming" })).toBeVisible();
 
   await pickCi(page, "#rel-target", "Customer Relationship", "Customer Relationship Management");
   // A fresh install's template services are the built-in business service type (migration 0033).
@@ -239,6 +255,8 @@ test("relationships: add in both directions; illegal pairs offer no type", async
   await expect(page.locator("#rel-type")).toBeDisabled();
   await snap(page, "09-relationships");
   await page.getByRole("button", { name: "Clear Customer Relationship Management" }).click();
+  // Clearing the chosen CI brings the search box back with the focus in it (audit R10).
+  await expect(page.locator("#rel-target")).toBeFocused();
 });
 
 test("navigation: related CIs are links and the breadcrumb carries the walk trail", async ({ page }) => {

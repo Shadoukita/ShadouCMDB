@@ -277,7 +277,7 @@ test.describe("imported into a fresh install", () => {
     // A CI of the imported class, with a value from the imported lookup list.
     // The imported form layout: its panel, and the hidden serial number.
     await page.goto(`/cis/new?classId=${classId}`);
-    await expect(page.locator("#attr-tier option")).toHaveText(["— not set —", "Gold", "Silver"]);
+    await expect(page.locator("#attr-tier option")).toHaveText(["Not set", "Gold", "Silver"]);
     await expect(page.getByLabel("Serial number")).toHaveCount(0);
     await page.locator("#attr-name").fill("pdu-ber1-b01");
     await page.locator("#attr-status").selectOption({ label: "In service" });
