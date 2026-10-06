@@ -16,6 +16,13 @@
 //! the export up: it leaves as a stub without `oldValue` and `newValue`, with
 //! `oversize` set, keeping `chainSeq` and `rowHash` so the collector still has
 //! the chain (GH#179).
+//!
+//! A refused sign-in (`login.failure`, `login.locked`) keeps the username as
+//! typed in the table, and that may be a password typed into the wrong field
+//! (GH#415). The export is read where the server log is (stdout is the
+//! journal), so when the name matches no account it leaves as `null`, with
+//! `attemptedUsernameRedacted` set (GH#509). The table keeps it for those
+//! with `audit.view`; `rowHash` is of the stored row, as for an oversize stub.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -88,6 +95,19 @@ impl Event {
             _ => 5,
         }
     }
+}
+
+/// Actions whose `newValue.attemptedUsername` is the name as typed.
+const ATTEMPTED_USERNAME_ACTIONS: [&str; 2] = ["login.failure", "login.locked"];
+
+/// Blanks `attemptedUsername` in `new_value` when it named no account.
+fn redact_attempted_username(new_value: &mut Option<Value>, known: bool) {
+    let Some(Value::Object(fields)) = new_value else { return };
+    if known || !fields.get("attemptedUsername").is_some_and(|v| !v.is_null()) {
+        return;
+    }
+    fields.insert("attemptedUsername".into(), Value::Null);
+    fields.insert("attemptedUsernameRedacted".into(), json!(true));
 }
 
 /// SD-PARAM value escaping (RFC 5424 §6.3.3).
@@ -299,19 +319,30 @@ async fn head(pool: &PgPool) -> sqlx::Result<i64> {
     sqlx::query_scalar("SELECT coalesce(max(chain_seq), 0) FROM audit_log").fetch_one(pool).await
 }
 
+/// `attempted_known`: for a refused sign-in, whether the name it was given
+/// matches an account now (case-insensitively, as sign-in matches it).
 async fn fetch_after(pool: &PgPool, after: i64) -> sqlx::Result<Vec<Event>> {
     let rows = sqlx::query(
-        "SELECT chain_seq, id, occurred_at, actor_type, actor_id, actor_name, action, entity_type, entity_id,
-                old_value, new_value, request_id, encode(prev_hash, 'hex') AS prev_hash,
-                encode(row_hash, 'hex') AS row_hash
-         FROM audit_log WHERE chain_seq > $1 ORDER BY chain_seq LIMIT $2",
+        "SELECT a.chain_seq, a.id, a.occurred_at, a.actor_type, a.actor_id, a.actor_name, a.action, a.entity_type,
+                a.entity_id, a.old_value, a.new_value, a.request_id, encode(a.prev_hash, 'hex') AS prev_hash,
+                encode(a.row_hash, 'hex') AS row_hash,
+                a.action = ANY($3) AND EXISTS (
+                    SELECT 1 FROM users u WHERE lower(u.username) = lower(a.new_value->>'attemptedUsername')
+                ) AS attempted_known
+         FROM audit_log a WHERE a.chain_seq > $1 ORDER BY a.chain_seq LIMIT $2",
     )
     .bind(after)
     .bind(BATCH)
+    .bind(&ATTEMPTED_USERNAME_ACTIONS[..])
     .fetch_all(pool)
     .await?;
     rows.into_iter()
         .map(|r| {
+            let action: String = r.try_get("action")?;
+            let mut new_value: Option<Value> = r.try_get("new_value")?;
+            if ATTEMPTED_USERNAME_ACTIONS.contains(&action.as_str()) {
+                redact_attempted_username(&mut new_value, r.try_get::<bool, _>("attempted_known")?);
+            }
             Ok(Event {
                 chain_seq: r.try_get("chain_seq")?,
                 id: r.try_get("id")?,
@@ -319,11 +350,11 @@ async fn fetch_after(pool: &PgPool, after: i64) -> sqlx::Result<Vec<Event>> {
                 actor_type: r.try_get("actor_type")?,
                 actor_id: r.try_get("actor_id")?,
                 actor_name: r.try_get("actor_name")?,
-                action: r.try_get("action")?,
+                action,
                 entity_type: r.try_get("entity_type")?,
                 entity_id: r.try_get("entity_id")?,
                 old_value: r.try_get("old_value")?,
-                new_value: r.try_get("new_value")?,
+                new_value,
                 request_id: r.try_get("request_id")?,
                 prev_hash: r.try_get("prev_hash")?,
                 row_hash: r.try_get("row_hash")?,
@@ -697,6 +728,66 @@ mod tests {
         assert!(health.failing.is_none());
         assert_eq!(receive(&collector).await["oversize"], json!(true));
         assert_eq!(receive(&collector).await["newValue"]["name"], "after");
+        db.drop().await;
+    }
+
+    /// GH#509: a refused sign-in under a name that matches no account (often a
+    /// password typed into the wrong field) is exported without that name; a
+    /// real account's name is kept, and the table keeps both.
+    #[tokio::test]
+    async fn unknown_attempted_usernames_are_not_exported() {
+        let Some(db) = crate::db::scratch::database("unknown_attempted_usernames_are_not_exported").await else {
+            return;
+        };
+        let start = head(&db.pool).await.unwrap();
+        let ctx = crate::api::context::RequestContext::system("test", "req-509");
+        let typed = "Tr0ub4dor&3-not-a-name";
+        let mut conn = db.pool.acquire().await.unwrap();
+        sqlx::query(
+            "INSERT INTO users (username, display_name, password_hash) VALUES ('owner', 'Owner', '$argon2id$x')",
+        )
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+        let attempt = crate::auth::events::login_failure(&mut conn, &ctx, typed, None).await.unwrap();
+        crate::auth::events::login_locked(&mut conn, &ctx, attempt, typed, Duration::from_secs(60)).await.unwrap();
+        crate::auth::events::login_failure(&mut conn, &ctx, "OWNER", None).await.unwrap();
+        drop(conn);
+
+        // The stdout sink writes the same lines to another handle.
+        let path = std::env::temp_dir().join(format!("shadoucmdb-audit-{}.jsonl", Uuid::new_v4()));
+        let mut sink = Sink {
+            target: AuditSink::File(path.clone()),
+            format: AuditFormat::Json,
+            facility: 13,
+            hostname: "h".into(),
+            tls: None,
+            conn: None,
+        };
+        drain(&db.pool, &mut sink, start, &mut Health::default()).await;
+        let out = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+
+        assert!(!out.contains(typed), "{out}");
+        let rows: Vec<Value> = out.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        let logins: Vec<&Value> = rows.iter().filter(|r| r["action"].as_str().unwrap().starts_with("login.")).collect();
+        assert_eq!(logins.len(), 3, "{out}");
+        for unknown in &logins[..2] {
+            assert_eq!(unknown["newValue"]["attemptedUsername"], Value::Null, "{unknown}");
+            assert_eq!(unknown["newValue"]["attemptedUsernameRedacted"], true, "{unknown}");
+        }
+        assert_eq!(logins[1]["newValue"]["lockedForSeconds"], 60);
+        assert_eq!(logins[2]["newValue"]["attemptedUsername"], "OWNER", "an account's name is kept");
+        assert!(logins[2]["newValue"].get("attemptedUsernameRedacted").is_none());
+
+        let stored: Vec<Value> = sqlx::query_scalar(
+            "SELECT new_value FROM audit_log WHERE chain_seq > $1 AND action LIKE 'login.%' ORDER BY chain_seq",
+        )
+        .bind(start)
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(stored[0]["attemptedUsername"], typed, "the table keeps the name as typed");
         db.drop().await;
     }
 }
