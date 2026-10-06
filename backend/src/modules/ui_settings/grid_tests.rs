@@ -79,13 +79,13 @@ async fn sections_side_by_side_are_validated_and_stored() {
         stored["settings"]["layouts"][0]["tabs"][0]["sections"],
         json!([
             {"key": "a", "label": "A", "columns": 12, "width": 6, "minHeight": 3, "collapsed": false,
-             "fields": [{"field": "ident", "width": 12}], "frame": {"x": 0.0, "y": 0, "w": 0.5, "h": 192, "z": 1}},
+             "fields": [{"field": "ident", "width": 12}], "frame": {"x": 0.0, "y": 0, "w": 0.5, "h": 334, "z": 1}},
             {"key": "b", "label": "B", "columns": 4, "width": 6, "collapsed": false,
-             "fields": [{"field": "label", "width": 4}], "frame": {"x": 0.5, "y": 0, "w": 0.5, "h": 96, "z": 2}},
+             "fields": [{"field": "label", "width": 4}], "frame": {"x": 0.5, "y": 0, "w": 0.5, "h": 170, "z": 2}},
             {"key": "c", "label": "C", "columns": 3, "width": 6, "newRow": true, "collapsed": false, "fields": [],
-             "frame": {"x": 0.0, "y": 208, "w": 0.5, "h": 96, "z": 3}},
+             "frame": {"x": 0.0, "y": 350, "w": 0.5, "h": 170, "z": 3}},
             {"key": "d", "label": "D", "columns": 2, "width": 12, "collapsed": false,
-             "fields": [{"field": "validFrom", "width": 1}], "frame": {"x": 0.0, "y": 320, "w": 1.0, "h": 96, "z": 4}},
+             "fields": [{"field": "validFrom", "width": 1}], "frame": {"x": 0.0, "y": 536, "w": 1.0, "h": 170, "z": 4}},
         ])
     );
     assert_eq!(stored["settings"]["layouts"][0]["tabs"][0]["placement"], "free");
@@ -181,8 +181,8 @@ async fn free_tabs_are_validated_normalised_audited_and_exported() {
         got,
         [
             ("b", &json!({"x": 0.25, "y": 40, "w": 0.75, "h": 300, "z": 1, "minH": 100})),
-            ("a", &json!({"x": 0.0, "y": 356, "w": 0.5, "h": 96, "z": 2})),
-            ("r", &json!({"x": 0.0, "y": 468, "w": 1.0, "h": 320, "z": 3})),
+            ("a", &json!({"x": 0.0, "y": 356, "w": 0.5, "h": 170, "z": 2})),
+            ("r", &json!({"x": 0.0, "y": 542, "w": 1.0, "h": 320, "z": 3})),
         ],
         "{v}"
     );
@@ -224,9 +224,9 @@ async fn free_tabs_are_validated_normalised_audited_and_exported() {
         {"key": "c", "label": "C", "fields": [{"field": "validFrom"}]},
     ]));
     let expected = json!([
-        {"key": "a", "frame": {"x": 0.0, "y": 0, "w": 0.5, "h": 96, "z": 1}},
-        {"key": "b", "frame": {"x": 0.5, "y": 0, "w": 0.5, "h": 96, "z": 2}},
-        {"key": "c", "frame": {"x": 0.0, "y": 112, "w": 1.0, "h": 96, "z": 3}},
+        {"key": "a", "frame": {"x": 0.0, "y": 0, "w": 0.5, "h": 170, "z": 1}},
+        {"key": "b", "frame": {"x": 0.5, "y": 0, "w": 0.5, "h": 170, "z": 2}},
+        {"key": "c", "frame": {"x": 0.0, "y": 186, "w": 1.0, "h": 170, "z": 3}},
     ]);
     let frames_of = |settings: &Value| {
         let tab = &settings["layouts"][0]["tabs"][0];
