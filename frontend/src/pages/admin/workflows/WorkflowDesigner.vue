@@ -22,6 +22,7 @@ import ErrorAlert from "../../../components/ErrorAlert.vue";
 import LoadingState from "../../../components/LoadingState.vue";
 import {
   CATEGORIES,
+  COLUMN_STEP,
   autoLayout,
   checkDraft,
   describeConditions,
@@ -278,7 +279,7 @@ function addState() {
   if (!d.initialState) d.initialState = key;
   // Next to the selected state, else below the others.
   const near = selectedState.value ? d.positions[selectedState.value.key] : undefined;
-  if (near) d.positions[key] = { x: near.x + 240, y: near.y };
+  if (near) d.positions[key] = { x: near.x + COLUMN_STEP, y: near.y };
   else autoLayout(d);
   selected.value = { kind: "state", key };
 }
@@ -321,6 +322,8 @@ function select(target: { kind: "state" | "transition"; key: string }) {
 function selectProblem(p: PlacedProblem) {
   if (p.target.kind !== "graph") selected.value = { kind: p.target.kind, key: p.target.key };
 }
+/** A state value by its lookup value's name, as the inspector shows it; the key when the value is gone from the list. */
+const stateValueName = (key: string) => stateValues.value?.find((v) => v.key === key)?.name ?? key;
 const stateName = (key: string) => draft.value?.states.find((s) => s.key === key)?.name ?? key;
 const categoryLabel = (c: string) => CATEGORIES.find((x) => x.value === c)?.label ?? c;
 const marker = (kind: "state" | "transition", key: string) => {
@@ -436,40 +439,42 @@ function confirmPublish() {
       </div>
     </section>
 
-    <div class="wf-designer">
-      <section class="panel wf-diagram" aria-label="Diagram">
-        <EmptyState v-if="draft.states.length === 0" title="No states yet">
-          Add the first state; it becomes the initial state. Then add the states it leads to and the transitions between them.
-          <template #actions><button type="button" class="btn btn-primary" @click="addState">+ State</button></template>
-        </EmptyState>
-        <WorkflowGraph v-else :draft="draft" :selected="selected" :problems="problems" @select="select" @move="move" />
-      </section>
-      <div class="wf-side">
-        <StateInspector
-          v-if="selectedState"
-          :key="`s-${selectedState.key}`"
-          :draft="draft"
-          :state="selectedState"
-          :problems="problemsFor(problems, 'state', selectedState.key)"
-          :state-values="stateValues"
-          :state-field-label="stateField?.label"
-          @renamed="(k) => (selected = { kind: 'state', key: k })"
-          @remove="removingState = selectedState.key"
-        />
-        <TransitionInspector
-          v-else-if="selectedTransition"
-          :key="`t-${selectedTransition.key}`"
-          :draft="draft"
-          :transition="selectedTransition"
-          :problems="problemsFor(problems, 'transition', selectedTransition.key)"
-          :fields="fields"
-          :granted-keys="grantedKeys"
-          @renamed="(k) => (selected = { kind: 'transition', key: k })"
-          @remove="removeTransition(selectedTransition.key)"
-        />
-        <section v-else class="panel">
-          <div class="panel-body muted">Select a state or transition in the diagram or the tables to edit it.</div>
+    <div class="wf-designer-wrap">
+      <div class="wf-designer">
+        <section class="panel wf-diagram" aria-label="Diagram">
+          <EmptyState v-if="draft.states.length === 0" title="No states yet">
+            Add the first state; it becomes the initial state. Then add the states it leads to and the transitions between them.
+            <template #actions><button type="button" class="btn btn-primary" @click="addState">+ State</button></template>
+          </EmptyState>
+          <WorkflowGraph v-else :draft="draft" :selected="selected" :problems="problems" :state-values="stateValues" @select="select" @move="move" />
         </section>
+        <div class="wf-side">
+          <StateInspector
+            v-if="selectedState"
+            :key="`s-${selectedState.key}`"
+            :draft="draft"
+            :state="selectedState"
+            :problems="problemsFor(problems, 'state', selectedState.key)"
+            :state-values="stateValues"
+            :state-field-label="stateField?.label"
+            @renamed="(k) => (selected = { kind: 'state', key: k })"
+            @remove="removingState = selectedState.key"
+          />
+          <TransitionInspector
+            v-else-if="selectedTransition"
+            :key="`t-${selectedTransition.key}`"
+            :draft="draft"
+            :transition="selectedTransition"
+            :problems="problemsFor(problems, 'transition', selectedTransition.key)"
+            :fields="fields"
+            :granted-keys="grantedKeys"
+            @renamed="(k) => (selected = { kind: 'transition', key: k })"
+            @remove="removeTransition(selectedTransition.key)"
+          />
+          <section v-else class="panel">
+            <div class="panel-body muted">Select a state or transition in the diagram or the tables to edit it.</div>
+          </section>
+        </div>
       </div>
     </div>
 
@@ -488,7 +493,7 @@ function confirmPublish() {
             </thead>
             <tbody>
               <tr v-for="s in draft.states" :key="s.key" :class="{ selected: selected?.kind === 'state' && selected.key === s.key }">
-                <td>
+                <td class="wrap wf-name-cell">
                   <button type="button" class="btn-link" @click="select({ kind: 'state', key: s.key })">{{ s.name }}</button>
                   <span v-if="draft.initialState === s.key" class="badge info spaced">Initial</span>
                   <span v-if="s.terminal" class="badge spaced">Terminal</span>
@@ -498,7 +503,7 @@ function confirmPublish() {
                 </td>
                 <td class="mono">{{ s.key }}</td>
                 <td>{{ categoryLabel(s.category) }}</td>
-                <td :class="{ muted: !s.stateValue }">{{ s.stateValue ?? "None" }}</td>
+                <td :class="{ muted: !s.stateValue }" :title="s.stateValue ?? undefined">{{ s.stateValue ? stateValueName(s.stateValue) : "None" }}</td>
               </tr>
             </tbody>
           </table>
@@ -518,19 +523,21 @@ function confirmPublish() {
             </thead>
             <tbody>
               <tr v-for="t in draft.transitions" :key="t.key" :class="{ selected: selected?.kind === 'transition' && selected.key === t.key }">
-                <td>
-                  <button type="button" class="btn-link" @click="select({ kind: 'transition', key: t.key })">{{ t.name }}</button>
-                  <span class="mono muted"> {{ t.key }}</span>
+                <td class="wrap wf-name-cell">
+                  <button type="button" class="btn-link" @click="select({ kind: 'transition', key: t.key })">{{ t.name }}</button>{{ " " }}
+                  <span class="mono muted">{{ t.key }}</span>
                   <span v-if="marker('transition', t.key)" :class="['badge', 'spaced', marker('transition', t.key) === 'error' ? 'danger' : 'warn']">
                     {{ marker("transition", t.key) === "error" ? "Error" : "Warning" }}
                   </span>
                 </td>
-                <td>{{ stateName(t.from) }} → {{ stateName(t.to) }}</td>
-                <td class="cell-clip" :title="describeConditions(t.conditions, labelOf)">
-                  <span v-if="t.requiresComment">Comment. </span>
-                  <span v-if="t.fields.length">{{ t.fields.length }} {{ t.fields.length === 1 ? "field" : "fields" }}. </span>
-                  <span v-if="t.conditions.children.length">If {{ describeConditions(t.conditions, labelOf) }}</span>
-                  <span v-if="!t.requiresComment && !t.fields.length && !t.conditions.children.length" class="muted">Nothing</span>
+                <td class="wrap">{{ stateName(t.from) }} → {{ stateName(t.to) }}</td>
+                <td :title="describeConditions(t.conditions, labelOf)">
+                  <span class="cell-clip">
+                    <span v-if="t.requiresComment">Comment. </span>
+                    <span v-if="t.fields.length">{{ t.fields.length }} {{ t.fields.length === 1 ? "field" : "fields" }}. </span>
+                    <span v-if="t.conditions.children.length">If {{ describeConditions(t.conditions, labelOf) }}</span>
+                    <span v-if="!t.requiresComment && !t.fields.length && !t.conditions.children.length" class="muted">Nothing</span>
+                  </span>
                 </td>
               </tr>
             </tbody>

@@ -12,7 +12,16 @@ export interface Edge {
   label: Position;
 }
 
-const SPREAD = 30;
+/** How far apart transitions between the same two states run: more than a label's height, so their labels never overlap. */
+const SPREAD = 40;
+
+/** The longest transition name drawn whole on an arrow; it fits the gap the arrangement leaves between columns. */
+export const EDGE_LABEL_MAX = 22;
+
+/** A name as drawn in the diagram: shortened with an ellipsis past `max` characters (the full name is in its tooltip). */
+export function shorten(name: string, max: number): string {
+  return name.length > max ? `${name.slice(0, max - 1)}…` : name;
+}
 
 /** Where the line from a box's centre towards `toward` leaves the box. */
 export function clipToBox(center: Position, size: { w: number; h: number }, toward: Position): Position {

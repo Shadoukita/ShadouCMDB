@@ -4,6 +4,9 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
+  COLUMN_STEP,
+  NODE_H,
+  NODE_W,
   autoLayout,
   checkDraft,
   conditionsToJson,
@@ -22,7 +25,7 @@ import {
   uniqueKey,
   type Draft,
 } from "../src/lib/workflowDraft";
-import { clipToBox, edgeGeometry } from "../src/lib/workflowGraph";
+import { EDGE_LABEL_MAX, clipToBox, edgeGeometry, shorten } from "../src/lib/workflowGraph";
 
 // The design's example (§6.1), with a condition and a field.
 const VERSION = {
@@ -240,5 +243,19 @@ describe("diagram geometry", () => {
     );
     assert.ok(ab.label.y !== ba.label.y, "labels sit on different sides");
     assert.equal(Math.sign(ab.label.y - 20), -Math.sign(ba.label.y - 20));
+    // Two lines of 11px text: the labels sit more than a line height apart (GH#644).
+    assert.ok(Math.abs(ab.label.y - ba.label.y) >= 2 * 14);
+  });
+  test("an arrangement leaves room for a whole label between neighbouring columns", () => {
+    const node = { w: NODE_W, h: NODE_H };
+    const pos = (k: string) => (k === "a" ? { x: 40, y: 24 } : { x: 40 + COLUMN_STEP, y: 24 });
+    const [e] = edgeGeometry([{ key: "t", name: "x".repeat(40), from: "a", to: "b" }], pos, node);
+    // About 6.5px per character at 11px: the label's half width stays clear of both boxes.
+    const half = (shorten(e.name, EDGE_LABEL_MAX).length * 6.5) / 2;
+    assert.ok(e.label.x - half > 40 + NODE_W && e.label.x + half < 40 + COLUMN_STEP);
+  });
+  test("long names are shortened with an ellipsis", () => {
+    assert.equal(shorten("Start maintenance", EDGE_LABEL_MAX), "Start maintenance");
+    assert.equal(shorten("a".repeat(30), 10), `${"a".repeat(9)}…`);
   });
 });

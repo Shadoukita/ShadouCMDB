@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { CATEGORIES, NODE_H, NODE_W, type Draft, type PlacedProblem, type Position } from "../../../lib/workflowDraft";
-import { edgeGeometry } from "../../../lib/workflowGraph";
+import { EDGE_LABEL_MAX, edgeGeometry, shorten } from "../../../lib/workflowGraph";
 
 /**
  * The workflow as a diagram: states are boxes (drag them, or focus one and move it with the arrow
@@ -13,6 +13,8 @@ const props = defineProps<{
   selected?: { kind: "state" | "transition"; key: string } | null;
   problems?: PlacedProblem[];
   readonly?: boolean;
+  /** The state field's lookup values, to show a state's value by its name rather than its key. */
+  stateValues?: { key: string; name: string }[] | null;
 }>();
 const emit = defineEmits<{
   select: [target: { kind: "state" | "transition"; key: string }];
@@ -44,6 +46,7 @@ function severity(kind: "state" | "transition", key: string): "error" | "warning
 }
 
 const categoryLabel = (c: string) => CATEGORIES.find((x) => x.value === c)?.label ?? c;
+const valueName = (key: string) => props.stateValues?.find((v) => v.key === key)?.name ?? key;
 const nameOf = (key: string) => props.draft.states.find((s) => s.key === key)?.name ?? key;
 
 const edges = computed(() =>
@@ -55,6 +58,31 @@ const edges = computed(() =>
 );
 
 const isSelected = (kind: "state" | "transition", key: string) => props.selected?.kind === kind && props.selected.key === key;
+
+// ---------- Overflow ----------
+
+/** Which sides of the diagram are scrolled out of view: shaded, and named under the canvas, so a narrow panel does not hide states silently. */
+const canvas = ref<HTMLElement | null>(null);
+const more = ref({ left: false, right: false, down: false });
+function measure() {
+  const el = canvas.value;
+  if (!el) return;
+  more.value = {
+    left: el.scrollLeft > 1,
+    right: el.scrollLeft + el.clientWidth < el.scrollWidth - 1,
+    down: el.scrollTop + el.clientHeight < el.scrollHeight - 1,
+  };
+}
+let observer: ResizeObserver | undefined;
+onMounted(() => {
+  measure();
+  if (typeof ResizeObserver !== "undefined" && canvas.value) {
+    observer = new ResizeObserver(measure);
+    observer.observe(canvas.value);
+  }
+});
+onBeforeUnmount(() => observer?.disconnect());
+watch(size, () => void nextTick(measure));
 
 // ---------- Dragging ----------
 
@@ -113,61 +141,69 @@ function onEdgeKey(e: KeyboardEvent, key: string) {
 </script>
 
 <template>
-  <div class="wf-canvas">
-    <svg
-      :width="size.w"
-      :height="size.h"
-      :viewBox="`0 0 ${size.w} ${size.h}`"
-      role="group"
-      :aria-label="readonly ? 'Workflow diagram' : 'Workflow diagram. Drag a state, or focus it and use the arrow keys, to move it.'"
-      @pointermove="onPointerMove"
-      @pointerup="onPointerUp"
-      @pointercancel="drag = null"
-    >
-      <defs>
-        <marker id="wf-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
-          <path d="M0,0 L10,5 L0,10 z" class="wf-arrowhead" />
-        </marker>
-        <marker id="wf-arrow-selected" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
-          <path d="M0,0 L10,5 L0,10 z" class="wf-arrowhead selected" />
-        </marker>
-      </defs>
-
-      <g
-        v-for="e in edges"
-        :key="e.key"
-        :class="['wf-edge', severity('transition', e.key), { selected: isSelected('transition', e.key) }]"
-        :tabindex="0"
-        role="button"
-        :aria-label="`Transition ${e.name}: ${nameOf(e.from)} to ${nameOf(e.to)}${severity('transition', e.key) ? `, has ${severity('transition', e.key)}s` : ''}`"
-        :aria-pressed="isSelected('transition', e.key)"
-        @click="emit('select', { kind: 'transition', key: e.key })"
-        @keydown="onEdgeKey($event, e.key)"
+  <div :class="['wf-canvas-frame', { 'more-left': more.left, 'more-right': more.right }]">
+    <div ref="canvas" class="wf-canvas" @scroll.passive="measure">
+      <svg
+        :width="size.w"
+        :height="size.h"
+        :viewBox="`0 0 ${size.w} ${size.h}`"
+        role="group"
+        :aria-label="readonly ? 'Workflow diagram' : 'Workflow diagram. Drag a state, or focus it and use the arrow keys, to move it.'"
+        @pointermove="onPointerMove"
+        @pointerup="onPointerUp"
+        @pointercancel="drag = null"
       >
-        <path :d="e.path" class="wf-edge-hit" />
-        <path :d="e.path" class="wf-edge-line" :marker-end="isSelected('transition', e.key) ? 'url(#wf-arrow-selected)' : 'url(#wf-arrow)'" />
-        <text :x="e.label.x" :y="e.label.y" class="wf-edge-label" text-anchor="middle" dominant-baseline="middle">{{ e.name }}</text>
-      </g>
+        <defs>
+          <marker id="wf-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" class="wf-arrowhead" />
+          </marker>
+          <marker id="wf-arrow-selected" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" class="wf-arrowhead selected" />
+          </marker>
+        </defs>
 
-      <g
-        v-for="s in draft.states"
-        :key="s.key"
-        :transform="`translate(${pos(s.key).x}, ${pos(s.key).y})`"
-        :class="['wf-node', `cat-${s.category}`, severity('state', s.key), { selected: isSelected('state', s.key), terminal: s.terminal, readonly }]"
-        :tabindex="0"
-        role="button"
-        :aria-label="`State ${s.name}, ${categoryLabel(s.category)}${s.terminal ? ', terminal' : ''}${draft.initialState === s.key ? ', initial' : ''}${severity('state', s.key) ? `, has ${severity('state', s.key)}s` : ''}`"
-        :aria-pressed="isSelected('state', s.key)"
-        @pointerdown="onPointerDown($event, s.key)"
-        @keydown="onNodeKey($event, s.key)"
-      >
-        <path v-if="draft.initialState === s.key" :d="`M -26 ${NODE_H / 2} L -4 ${NODE_H / 2}`" class="wf-initial" marker-end="url(#wf-arrow)" />
-        <rect :width="NODE_W" :height="NODE_H" rx="6" class="wf-node-box" />
-        <rect v-if="s.terminal" x="3" y="3" :width="NODE_W - 6" :height="NODE_H - 6" rx="4" class="wf-node-inner" />
-        <rect width="5" :height="NODE_H" rx="2" class="wf-node-stripe" />
-        <text x="14" y="22" class="wf-node-name">{{ s.name.length > 22 ? `${s.name.slice(0, 21)}…` : s.name }}</text>
-        <text x="14" y="41" class="wf-node-meta">{{ categoryLabel(s.category) }}{{ s.stateValue ? ` · ${s.stateValue}` : "" }}</text>
-      </g>
-    </svg>
+        <g
+          v-for="s in draft.states"
+          :key="s.key"
+          :transform="`translate(${pos(s.key).x}, ${pos(s.key).y})`"
+          :class="['wf-node', `cat-${s.category}`, severity('state', s.key), { selected: isSelected('state', s.key), terminal: s.terminal, readonly }]"
+          :tabindex="0"
+          role="button"
+          :aria-label="`State ${s.name}, ${categoryLabel(s.category)}${s.terminal ? ', terminal' : ''}${draft.initialState === s.key ? ', initial' : ''}${severity('state', s.key) ? `, has ${severity('state', s.key)}s` : ''}`"
+          :aria-pressed="isSelected('state', s.key)"
+          @pointerdown="onPointerDown($event, s.key)"
+          @keydown="onNodeKey($event, s.key)"
+        >
+          <title>{{ s.name }}</title>
+          <path v-if="draft.initialState === s.key" :d="`M -26 ${NODE_H / 2} L -4 ${NODE_H / 2}`" class="wf-initial" marker-end="url(#wf-arrow)" />
+          <rect :width="NODE_W" :height="NODE_H" rx="6" class="wf-node-box" />
+          <rect v-if="s.terminal" x="3" y="3" :width="NODE_W - 6" :height="NODE_H - 6" rx="4" class="wf-node-inner" />
+          <rect width="5" :height="NODE_H" rx="2" class="wf-node-stripe" />
+          <text x="14" y="22" class="wf-node-name">{{ shorten(s.name, 22) }}</text>
+          <text x="14" y="41" class="wf-node-meta">{{ categoryLabel(s.category) }}{{ s.stateValue ? ` · ${shorten(valueName(s.stateValue), 16)}` : "" }}</text>
+        </g>
+
+        <!-- Arrows after the boxes, so a label stays readable where a box is dragged close to an arrow. -->
+        <g
+          v-for="e in edges"
+          :key="e.key"
+          :class="['wf-edge', severity('transition', e.key), { selected: isSelected('transition', e.key) }]"
+          :tabindex="0"
+          role="button"
+          :aria-label="`Transition ${e.name}: ${nameOf(e.from)} to ${nameOf(e.to)}${severity('transition', e.key) ? `, has ${severity('transition', e.key)}s` : ''}`"
+          :aria-pressed="isSelected('transition', e.key)"
+          @click="emit('select', { kind: 'transition', key: e.key })"
+          @keydown="onEdgeKey($event, e.key)"
+        >
+          <title>{{ e.name }}</title>
+          <path :d="e.path" class="wf-edge-hit" />
+          <path :d="e.path" class="wf-edge-line" :marker-end="isSelected('transition', e.key) ? 'url(#wf-arrow-selected)' : 'url(#wf-arrow)'" />
+          <text :x="e.label.x" :y="e.label.y" class="wf-edge-label" text-anchor="middle" dominant-baseline="middle">{{ shorten(e.name, EDGE_LABEL_MAX) }}</text>
+        </g>
+      </svg>
+    </div>
   </div>
+  <p v-if="more.left || more.right || more.down" class="wf-canvas-hint" data-testid="wf-canvas-hint">
+    The diagram is larger than this panel: scroll it to see the other states.
+  </p>
 </template>
