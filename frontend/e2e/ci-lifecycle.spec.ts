@@ -146,6 +146,20 @@ test("edit: the CI opens editable; Save appears once something changed and the p
   await expect(diff.locator("li", { hasText: "attributes.cpu_cores" }).locator("del")).toHaveText("16");
   await expect(diff.locator("li", { hasText: "attributes.cpu_cores" }).locator("ins")).toHaveText("32");
   await snap(page, "07-history-diff");
+
+  // Source chips filter on the server: the edits above came through the UI, none through an API token.
+  const sources = page.getByRole("group", { name: "Filter by source" });
+  const events = page.locator("table.event-table tbody tr");
+  await expect(events.first().locator(".event-source")).toHaveText("UI");
+  const api = sources.getByRole("button", { name: "API", exact: true });
+  await api.click();
+  await expect(api).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("status").filter({ hasText: "No changes from the selected sources." })).toBeVisible();
+  await sources.getByRole("button", { name: "UI", exact: true }).click();
+  await expect(events.first().locator(".event-source")).toHaveText("UI");
+  await sources.getByRole("button", { name: "Show all" }).click();
+  await expect(api).toHaveAttribute("aria-pressed", "false");
+  await expect(diff).toContainText("attributes.cpu_cores");
 });
 
 test("edit: Discard restores the values; leaving with unsaved changes asks first", async ({ page }) => {

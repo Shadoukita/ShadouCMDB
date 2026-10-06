@@ -8,7 +8,7 @@ import Icon from "../../components/Icon.vue";
 import LoadingState from "../../components/LoadingState.vue";
 import PaginationBar from "../../components/PaginationBar.vue";
 import { t } from "../../i18n";
-import { actionLabel, actionTone, eventSource, formatUtc, sourceLabel } from "../../lib/auditEvents";
+import { actionLabel, actionTone, EVENT_SOURCES, eventSource, formatUtc, sourceLabel, type EventSource } from "../../lib/auditEvents";
 import { formatDateTime } from "../../lib/format";
 import AuditActor from "../admin/AuditActor.vue";
 import ChangeValue from "../imports/ChangeValue.vue";
@@ -16,7 +16,7 @@ import ChangeValue from "../imports/ChangeValue.vue";
 /**
  * The CI's history as an event stream (design §2.7, audit R8): GET /audit-log?entityId=…, newest first and
  * paged on the server, with the time in UTC, the actor, the source the change came through, the event and
- * a field-level diff of each update. `embedded`: placed in a layout section, which gives the frame and the heading.
+ * a field-level diff of each update. Source chips narrow it on the server. `embedded`: placed in a layout section, which gives the frame and the heading.
  */
 const props = defineProps<{ ci: Ci; embedded?: boolean }>();
 
@@ -29,11 +29,18 @@ const HIDDEN = new Set(["updatedAt", "createdAt", "version", "classId", "label",
 const REFS = new Set(["class", "status", "environment", "owner", "location"]);
 
 const paging = ref({ limit: 50, offset: 0 });
+/** Sources shown; none selected shows every source. */
+const sources = ref<EventSource[]>([]);
+const actorTypes = computed(() => EVENT_SOURCES.filter((s) => sources.value.includes(s.source)).map((s) => s.actorType));
 watch(
   () => props.ci.id,
-  () => (paging.value = { limit: paging.value.limit, offset: 0 }),
+  () => (sources.value = []),
 );
-const log = useAuditLog(() => props.ci.id, paging);
+watch([() => props.ci.id, sources], () => (paging.value = { limit: paging.value.limit, offset: 0 }));
+function toggleSource(source: EventSource) {
+  sources.value = sources.value.includes(source) ? sources.value.filter((s) => s !== source) : [...sources.value, source];
+}
+const log = useAuditLog(() => props.ci.id, paging, actorTypes);
 const entries = computed(() => log.data.value?.data ?? []);
 const total = computed(() => log.data.value?.page.total ?? 0);
 /** Lookup and reference fields store ids: their definitions (retired ones too) let ChangeValue show names. */
@@ -87,11 +94,28 @@ function workflowStep(entry: AuditEntry) {
 <template>
   <LoadingState v-if="log.isLoading.value" :label="t('history.loading')" />
   <ErrorAlert v-else-if="log.isError.value && !log.data.value" :error="log.error.value" :on-retry="() => log.refetch()" />
-  <EmptyState v-else-if="total === 0" :title="t('history.empty.title')">{{ t("history.empty.body") }}</EmptyState>
+  <EmptyState v-else-if="total === 0 && sources.length === 0" :title="t('history.empty.title')">{{ t("history.empty.body") }}</EmptyState>
   <section v-else :class="['event-stream', { panel: !embedded }]">
-    <div class="event-stream-head muted">{{ t("history.order") }}</div>
+    <div class="event-stream-head">
+      <div class="event-sources" role="group" :aria-label="t('history.sources')">
+        <span class="muted">{{ t("history.col.source") }}</span>
+        <button
+          v-for="s in EVENT_SOURCES"
+          :key="s.source"
+          type="button"
+          :class="['chip', 'event-source-filter', { selected: sources.includes(s.source) }]"
+          :aria-pressed="sources.includes(s.source)"
+          @click="toggleSource(s.source)"
+        >
+          {{ sourceLabel(s.source) }}
+        </button>
+        <button v-if="sources.length > 0" type="button" class="btn btn-link btn-sm" @click="sources = []">{{ t("history.sources.all") }}</button>
+      </div>
+      <span class="muted">{{ t("history.order") }}</span>
+    </div>
     <ErrorAlert v-if="log.isError.value" :error="log.error.value" :on-retry="() => log.refetch()" />
-    <div class="table-wrap">
+    <p v-if="total === 0" class="event-stream-none muted" role="status">{{ t("history.sources.none") }}</p>
+    <div v-else class="table-wrap">
       <table class="data event-table" :aria-busy="log.isFetching.value || undefined">
         <thead>
           <tr>

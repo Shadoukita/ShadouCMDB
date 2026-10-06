@@ -228,14 +228,20 @@ export function useGraph(
 }
 
 /** A record's audit entries, newest first, one server-side page at a time. */
-export function useAuditLog(entityId: MaybeRefOrGetter<string>, paging: MaybeRefOrGetter<{ limit: number; offset: number }> = { limit: 50, offset: 0 }) {
+/** `actorTypes`: only entries by these kinds of actor, filtered on the server so paging and `page.total` match; empty is all. */
+export function useAuditLog(
+  entityId: MaybeRefOrGetter<string>,
+  paging: MaybeRefOrGetter<{ limit: number; offset: number }> = { limit: 50, offset: 0 },
+  actorTypes: MaybeRefOrGetter<readonly AuditEntry["actorType"][]> = [],
+) {
   return useQuery(() => {
     const id = toValue(entityId);
     const { limit, offset } = toValue(paging);
+    const actorType = [...toValue(actorTypes)].sort().join(",") || undefined;
     return {
-      queryKey: [...keys.audit(id), "page", limit, offset] as const,
+      queryKey: [...keys.audit(id), "page", limit, offset, actorType ?? ""] as const,
       queryFn: ({ signal }: { signal: AbortSignal }) =>
-        unwrap(api.GET("/api/v1/audit-log", { params: { query: { entityId: id, sort: "-occurredAt", limit, offset } }, signal })),
+        unwrap(api.GET("/api/v1/audit-log", { params: { query: { entityId: id, actorType, sort: "-occurredAt", limit, offset } }, signal })),
       // Keep the page on screen while the next one loads, but never another record's entries.
       placeholderData: (prev: AuditEntryList | undefined, prevQuery?: { queryKey: readonly unknown[] }) => (prevQuery?.queryKey[1] === id ? prev : undefined),
     };

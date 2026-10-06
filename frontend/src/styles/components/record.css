@@ -480,8 +480,37 @@ table.rel-table td.rel-notes {
 
 /* ---------- History as the event stream (audit R8) ---------- */
 .event-stream-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
   padding: var(--space-2) var(--panel-p);
   font-size: var(--fs-sm);
+}
+.event-sources {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+}
+.chip.event-source-filter {
+  cursor: pointer;
+  font: inherit;
+}
+.chip.event-source-filter:hover {
+  background: var(--c-row-hover);
+}
+.chip.event-source-filter.selected:hover {
+  background: var(--c-primary-subtle);
+}
+.chip.event-source-filter:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: 1px;
+}
+.event-stream-none {
+  margin: 0;
+  padding: var(--space-3) var(--panel-p);
 }
 table.event-table td {
   vertical-align: top;
@@ -497,6 +526,10 @@ table.event-table .event-change {
   min-height: 20px;
   font-family: var(--font-mono);
   font-size: var(--fs-mono);
+}
+/* The template's line breaks between the key and the values are condensed away. */
+.diff li > code:first-child {
+  margin-right: var(--space-2);
 }
 .diff-arrow {
   margin: 0 var(--space-1);

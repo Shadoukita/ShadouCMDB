@@ -22,6 +22,14 @@ export function eventSource(entry: Pick<AuditEntry, "actorType">): EventSource {
   }
 }
 
+/** The sources in the order the filter chips show them, each with the actor type the API filters on. */
+export const EVENT_SOURCES: readonly { source: EventSource; actorType: AuditEntry["actorType"] }[] = [
+  { source: "ui", actorType: "user" },
+  { source: "api", actorType: "api_client" },
+  { source: "import", actorType: "import" },
+  { source: "system", actorType: "system" },
+];
+
 export const sourceLabel = (s: EventSource) => t(`event.source.${s}` satisfies MessageKey);
 
 /** Creating and restoring add, deleting removes, workflow steps are information; everything else is neutral. */
