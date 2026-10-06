@@ -174,48 +174,52 @@ fn me(ctx: &RequestContext) -> Option<Me> {
 
 /// `view=actionable`: what `check_decider` lets the caller decide in person,
 /// condition by condition (§4.2, §4.3).
+///
+/// The conditions only read the request tables, so they are evaluated in a
+/// subquery that starts from the caller's eligibility rows; the `OFFSET 0`
+/// keeps the planner from merging it, so the instance and CI (for the class
+/// scope) are looked up only for the requests the caller may decide.
 fn actionable(w: &mut Where<'_>, me: &Me) {
     if me.token && !me.self_minted {
         w.and().push("false");
         return;
     }
-    w.and().push("r.status = 'pending' AND st.status = 'active'");
-    // Four-eyes: never the requester or the requesting token's creator.
-    w.and().push("NOT (").push_bind(me.id).push(" = ANY(r.excluded_user_ids))");
     // A principal of the active step: the user, one of their profiles or groups.
-    w.and()
-        .push(
-            "EXISTS (SELECT 1 FROM cmdb.workflow_approval_eligibility e \
-             WHERE e.request_id = r.id AND e.step_no = r.current_step_no \
-               AND (e.role = 'approver' OR st.overdue_at IS NOT NULL) \
-               AND ((e.principal_kind = 'user' AND e.principal_id = ",
-        )
-        .push_bind(me.id)
-        .push(
-            ") OR (e.principal_kind = 'profile' AND e.principal_id IN \
-                    (SELECT profile_id FROM cmdb.user_permission_profiles WHERE user_id = ",
-        )
-        .push_bind(me.id)
-        .push(
-            ")) OR (e.principal_kind = 'group' AND e.principal_id IN \
-                    (SELECT group_id FROM cmdb.user_group_members WHERE user_id = ",
-        )
-        .push_bind(me.id)
-        .push("))))");
-    // Not decided by them yet.
-    w.and()
-        .push(
-            "NOT EXISTS (SELECT 1 FROM cmdb.workflow_approval_decisions dd \
-             WHERE dd.request_id = r.id AND dd.step_no = r.current_step_no AND (dd.actor_id = ",
-        )
-        .push_bind(me.id)
-        .push(" OR dd.on_behalf_of_id = ")
-        .push_bind(me.id)
-        .push("))");
-    // The step's policy, from the pinned version.
     let qb = w.and();
     qb.push(
-        "EXISTS (SELECT 1 FROM cmdb.workflow_transitions tr \
+        "r.id IN (SELECT r.id FROM cmdb.workflow_approval_eligibility e \
+         JOIN cmdb.workflow_approval_requests r ON r.id = e.request_id AND r.current_step_no = e.step_no \
+         JOIN cmdb.workflow_approval_request_steps st ON st.request_id = r.id AND st.step_no = r.current_step_no \
+         WHERE r.status = 'pending' AND st.status = 'active' \
+           AND (e.role = 'approver' OR st.overdue_at IS NOT NULL) \
+           AND ((e.principal_kind = 'user' AND e.principal_id = ",
+    )
+    .push_bind(me.id)
+    .push(
+        ") OR (e.principal_kind = 'profile' AND e.principal_id IN \
+                (SELECT profile_id FROM cmdb.user_permission_profiles WHERE user_id = ",
+    )
+    .push_bind(me.id)
+    .push(
+        ")) OR (e.principal_kind = 'group' AND e.principal_id IN \
+                (SELECT group_id FROM cmdb.user_group_members WHERE user_id = ",
+    )
+    .push_bind(me.id)
+    .push(")))");
+    // Four-eyes: never the requester or the requesting token's creator.
+    qb.push(" AND NOT (").push_bind(me.id).push(" = ANY(r.excluded_user_ids))");
+    // Not decided by them yet.
+    qb.push(
+        " AND NOT EXISTS (SELECT 1 FROM cmdb.workflow_approval_decisions dd \
+         WHERE dd.request_id = r.id AND dd.step_no = r.current_step_no AND (dd.actor_id = ",
+    )
+    .push_bind(me.id)
+    .push(" OR dd.on_behalf_of_id = ")
+    .push_bind(me.id)
+    .push("))");
+    // The step's policy, from the pinned version.
+    qb.push(
+        " AND EXISTS (SELECT 1 FROM cmdb.workflow_transitions tr \
          JOIN cmdb.workflow_transition_approval_steps ps ON ps.transition_id = tr.id AND ps.step_no = r.current_step_no \
          WHERE tr.version_id = r.version_id AND tr.key = r.transition_key",
     );
@@ -237,7 +241,7 @@ fn actionable(w: &mut Where<'_>, me: &Me) {
         actors_of("r.instance_id", "ps.exclude_actors_of")
     ))
     .push_bind(me.id)
-    .push(")))");
+    .push("))) OFFSET 0)");
 }
 
 pub async fn list(
@@ -294,9 +298,7 @@ pub async fn list(
     };
     let order = order(&q.sort);
     let mut conn = pool.acquire().await?;
-    let (ids, total) =
-        crud::select_page_counted::<(Uuid,)>(&mut conn, FROM, FROM, "r.id", &filter, &order, q.limit, q.offset).await?;
-    let ids: Vec<Uuid> = ids.into_iter().map(|(id,)| id).collect();
+    let (ids, total) = crud::select_ids_counted(&mut conn, FROM, "r.id", &filter, &order, q.limit, q.offset).await?;
     let data = items(&mut conn, &ids, &order).await?;
     Ok(Page { data, page: q.page_meta(total) })
 }

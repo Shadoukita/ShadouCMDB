@@ -7,6 +7,11 @@
 # - bootstrap: CIs without an instance; times the bootstrap dry run, the run
 #   (batches of 1 000) and a second run, each within the default request
 #   timeout of 120 s, then verifies the audit chain.
+# - approvals (SHAA-1880): 10 000 pending approval requests over the CIs;
+#   measures decisions (p95 target 50 ms: a step approved, one of two, and
+#   the final approval that applies the transition) and the approvals inbox
+#   as class-restricted approvers (p95 target 200 ms), then verifies the
+#   audit chain.
 # Fails when a threshold is missed.
 #
 # Needs a PostgreSQL role that may create databases, as for the backend tests:

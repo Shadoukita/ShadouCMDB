@@ -89,6 +89,37 @@ where
     Ok((page, total))
 }
 
+/// One page of ids plus the total, in a single pass: for filters that cost
+/// as much per row as the page itself (the approvals inbox evaluates the
+/// decider rules on every candidate), counting with `count(*) OVER ()`
+/// halves the work of a page query followed by a count. A page past the end
+/// has no row to carry the total, so it falls back to a count.
+#[allow(clippy::too_many_arguments)]
+pub async fn select_ids_counted(
+    conn: &mut PgConnection,
+    from: &str,
+    id_column: &str,
+    filter: Filter<'_>,
+    order_by: &str,
+    limit: i64,
+    offset: i64,
+) -> sqlx::Result<(Vec<Uuid>, i64)> {
+    let mut rows = QueryBuilder::<Postgres>::new(format!("SELECT {id_column}, count(*) OVER () FROM {from}"));
+    filter(&mut Where::new(&mut rows));
+    rows.push(format!(" ORDER BY {order_by} LIMIT ")).push_bind(limit).push(" OFFSET ").push_bind(offset);
+    let page: Vec<(Uuid, i64)> = rows.build_query_as().fetch_all(&mut *conn).await?;
+    let total = match page.first() {
+        Some((_, total)) => *total,
+        None if offset == 0 => 0,
+        None => {
+            let mut count = QueryBuilder::<Postgres>::new(format!("SELECT count(*) FROM {from}"));
+            filter(&mut Where::new(&mut count));
+            count.build_query_scalar::<i64>().fetch_one(&mut *conn).await?
+        }
+    };
+    Ok((page.into_iter().map(|(id, _)| id).collect(), total))
+}
+
 // ---------------------------------------------------------------------------
 // Column values for INSERT / UPDATE
 // ---------------------------------------------------------------------------

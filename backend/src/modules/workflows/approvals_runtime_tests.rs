@@ -12,27 +12,27 @@ use super::runtime_tests::{DEFS, RUN, World, details, id, pairs, world};
 use crate::db::scratch;
 use crate::modules::api_tokens::tests::{Creds, code};
 
-const REQUESTS: &str = "/api/v1/workflow-approval-requests";
+pub(super) const REQUESTS: &str = "/api/v1/workflow-approval-requests";
 
-struct People {
+pub(super) struct People {
     /// Requests: granted every transition, and also a member of Tech and CAB.
-    req: (Creds, Uuid),
+    pub(super) req: (Creds, Uuid),
     /// A second requester (granted, in no approver profile).
-    req2: (Creds, Uuid),
+    pub(super) req2: (Creds, Uuid),
     /// Tech reviewer.
-    tech: (Creds, Uuid),
+    pub(super) tech: (Creds, Uuid),
     /// CAB members.
-    a1: (Creds, Uuid),
-    a2: (Creds, Uuid),
-    a3: (Creds, Uuid),
+    pub(super) a1: (Creds, Uuid),
+    pub(super) a2: (Creds, Uuid),
+    pub(super) a3: (Creds, Uuid),
     /// Eligible for the CAB step through a profile that may not view servers.
-    blind: (Creds, Uuid),
+    pub(super) blind: (Creds, Uuid),
 }
 
 /// Version 2 of the world's workflow: `approve` needs a technical review and
 /// then two CAB approvals; `implement` one check; `review` one approval by
 /// someone who took no part in `implement`.
-async fn setup(w: &World) -> People {
+pub(super) async fn setup(w: &World) -> People {
     w.ok(
         "POST",
         "/api/v1/attribute-definitions",
@@ -876,6 +876,43 @@ async fn exclude_actors_of_refuses_every_approver_of_the_excluded_transition() {
     }
     assert_eq!(listed(&w, &p.a3.0, "").await, (1, vec![review]));
     let (status, v) = decide(&w, &p.a3.0, instance, "approve", None).await;
+    assert_eq!((status, v["instance"]["state"]["key"].as_str()), (200, Some("done")), "{v}");
+    audit_ok(&w).await;
+    db.drop().await;
+}
+
+/// GH#635: so does an approver of an earlier step of the excluded transition,
+/// not only the approvers of its final step.
+#[tokio::test]
+async fn exclude_actors_of_refuses_an_approver_of_an_earlier_step() {
+    let Some(db) = scratch::database("workflow_approvals_actors_steps").await else { return };
+    let w = world(&db).await;
+    let p = setup(&w).await;
+    let mut g = graph();
+    g["transitions"][2]["approval"]["steps"][0]["excludeActorsOf"] = json!(["implement", "approve"]);
+    publish(&w, g).await;
+    let (tech, cab) = (profile_id(&w, "Tech").await, profile_id(&w, "CAB").await);
+    // t2 does the technical review of `approve` and, as a CAB member, could decide `review`.
+    let t2 = w.user("t2", &[tech, cab]).await;
+    let a4 = w.user("a4", &[cab]).await;
+    let (_, instance) = started(&w).await;
+    assert_eq!(request(&w, &p.req.0, instance, "approve", json!({ "owner_team": "ops" })).await.0, 202);
+    assert_eq!(decide(&w, &t2.0, instance, "approve", None).await.0, 200);
+    assert_eq!(decide(&w, &p.a1.0, instance, "approve", None).await.0, 200);
+    let (status, v) = decide(&w, &p.a2.0, instance, "approve", None).await;
+    assert_eq!((status, v["instance"]["state"]["key"].as_str()), (200, Some("approved")), "{v}");
+    assert_eq!(request(&w, &p.req.0, instance, "implement", json!({})).await.0, 202);
+    assert_eq!(decide(&w, &p.a3.0, instance, "approve", None).await.0, 200);
+    assert_eq!(request(&w, &p.req2.0, instance, "review", json!({})).await.0, 202);
+    let (review, _, _) = pending(&w, instance).await;
+    for (who, creds, key) in [("t2", &t2.0, "approve"), ("a1", &p.a1.0, "approve"), ("a3", &p.a3.0, "implement")] {
+        let (status, v) = decide(&w, creds, instance, "approve", None).await;
+        let expected = refused("WORKFLOW_APPROVAL_SELF", &format!("actor_of:{key}"));
+        assert_eq!((status, reason(&v)), (403, expected), "{who}: {v}");
+        assert_eq!(listed(&w, creds, "").await.0, 0, "{who}'s inbox agrees");
+    }
+    assert_eq!(listed(&w, &a4.0, "").await, (1, vec![review]));
+    let (status, v) = decide(&w, &a4.0, instance, "approve", None).await;
     assert_eq!((status, v["instance"]["state"]["key"].as_str()), (200, Some("done")), "{v}");
     audit_ok(&w).await;
     db.drop().await;
