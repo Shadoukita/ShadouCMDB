@@ -57,7 +57,7 @@ export const authApi = {
   enterEmail: (email: string) => unwrap(api.PUT("/api/v1/auth/email", { body: { email } })),
 };
 
-/** Changes the signed-in user's own password; the API ends their other sessions and keeps this one. */
+/** Changes the signed-in user's own password; the API ends their other sessions and renews this one under new cookies. */
 export function useChangeOwnPassword() {
   return useMutation({
     mutationFn: (body: { currentPassword: string; newPassword: string }) => unwrap(api.PUT("/api/v1/auth/password", { body })),

@@ -1022,6 +1022,19 @@ pub(crate) mod tests {
         Creds { cookie: Some(cookie), csrf: me["csrfToken"].as_str().map(str::to_owned), bearer: None }
     }
 
+    /// The session a response renewed (GH#510): its cookies, and the CSRF
+    /// token from the CSRF cookie, as a browser reading it would.
+    pub(crate) fn renewed(headers: &HeaderMap) -> Creds {
+        let cookies: Vec<String> = headers
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().split(';').next().unwrap().to_owned())
+            .collect();
+        let csrf = cookies.iter().find_map(|c| c.strip_prefix("shadoucmdb_csrf=")).map(str::to_owned);
+        assert!(csrf.is_some(), "the response renews the session: {cookies:?}");
+        Creds { cookie: Some(cookies.join("; ")), csrf, bearer: None }
+    }
+
     /// A new password, set by an administrator or by the owner, revokes the
     /// owner's API tokens: a token minted with a stolen password must not
     /// survive the reset (GH#124).
@@ -1085,7 +1098,7 @@ pub(crate) mod tests {
         // Only hers: the administrator's own token keeps working.
         assert_eq!(works(admins.clone()).await.0, 200);
 
-        // Alice changes her own password: her tokens go, her session stays.
+        // Alice changes her own password: her tokens go, her session continues under a new cookie.
         let alice_session = {
             let login = json!({ "username": "alice", "password": "alice second password" });
             let (status, me, headers) = call(&app, "POST", "/api/v1/auth/login", &Creds::default(), Some(login)).await;
@@ -1094,11 +1107,21 @@ pub(crate) mod tests {
         };
         let alices = mint(alice_session.clone(), "alice again").await;
         let change = json!({ "currentPassword": "alice second password", "newPassword": "alice third password" });
-        let (status, v, _) = call(&app, "PUT", "/api/v1/auth/password", &alice_session, Some(change)).await;
+        let (status, v, headers) = call(&app, "PUT", "/api/v1/auth/password", &alice_session, Some(change)).await;
         assert!(status < 300, "{status} {v}");
         assert_eq!(works(alices).await.0, 401);
+        let (status, _, _) = call(&app, "GET", "/api/v1/auth/me", &renewed(&headers), None).await;
+        assert_eq!(status, 200, "the caller's session continues under its new cookie");
         let (status, _, _) = call(&app, "GET", "/api/v1/auth/me", &alice_session, None).await;
-        assert_eq!(status, 200, "the caller's own session survives");
+        assert_eq!(status, 401, "the old cookie no longer works (GH#510)");
+        let (rotated,): (Value,) = sqlx::query_as(
+            "SELECT new_value FROM audit_log WHERE action = 'session.revoke' AND new_value->>'reason' = 'rotated'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(rotated["username"].as_str(), Some("alice"), "{rotated}");
+        assert!(rotated["replacedBy"].is_string(), "the audit names the new session: {rotated}");
         let (by,): (Option<String>,) = sqlx::query_as("SELECT revoked_by FROM api_tokens WHERE name = 'alice again'")
             .fetch_one(pool)
             .await

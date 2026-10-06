@@ -1030,48 +1030,6 @@ table.data td.fill {
   }
 }
 
-/* ---------- Relationship map and impact tree (GraphTree) ---------- */
-.graph-tree-root {
-  font-weight: 600;
-  margin-bottom: 4px;
-}
-.graph-tree ul[role="tree"] {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.graph-tree li[role="treeitem"] {
-  padding: 3px 4px;
-  border-radius: var(--radius);
-}
-/* Links sit inside running text here (label → CI): underlined, so they do not rely on colour alone. */
-.graph-tree li[role="treeitem"] a,
-ol.impact-path a {
-  text-decoration: underline;
-}
-.graph-tree li[role="treeitem"]:focus-visible {
-  outline: 2px solid var(--c-focus);
-  outline-offset: -2px;
-}
-.graph-tree li[role="treeitem"][aria-selected="true"] {
-  background: var(--c-surface-alt);
-}
-.tree-toggle {
-  display: inline-block;
-  width: 18px;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--c-text-muted);
-  cursor: pointer;
-  font: inherit;
-  text-align: center;
-}
-.tree-action {
-  margin-left: var(--sp-3);
-  font-size: var(--fs-sm);
-}
-
 /* ---------- Impact analysis ---------- */
 fieldset.impact-direction {
   margin: 0;
@@ -1082,8 +1040,7 @@ fieldset.impact-direction {
 fieldset.impact-direction legend {
   padding: 0;
 }
-/* The toolbar's text-input width is not for radios and checkboxes. */
-.impact-controls input[type="radio"],
+/* The toolbar's text-input width is not for checkboxes. */
 .impact-controls input[type="checkbox"] {
   width: 16px;
 }
@@ -1145,7 +1102,7 @@ fieldset.impact-direction legend {
   margin: 0 0 var(--sp-2);
 }
 .impact-views {
-  padding: 0 var(--sp-4);
+  padding: 0 var(--panel-p) var(--space-3);
 }
 /* Stale results while the next analysis loads: muted text, never opacity, so the text keeps AA contrast. */
 #impact-view-panel.loading {
@@ -1520,14 +1477,19 @@ dialog.member-picker td .badge {
 .wf-save-state.warn {
   color: var(--c-warning-text);
 }
+/* The diagram and the inspector side by side only when the diagram keeps room for a few columns of states
+   (on a full-HD screen); below that the inspector goes under the diagram, which then takes the full width. */
+.wf-designer-wrap {
+  container: wf-designer / inline-size;
+}
 .wf-designer {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 400px);
   gap: var(--space-4);
   align-items: start;
   margin-bottom: var(--space-4);
 }
-@media (max-width: 1100px) {
+@container wf-designer (max-width: 1180px) {
   .wf-designer {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -1543,6 +1505,40 @@ dialog.member-picker td .badge {
   max-height: 560px;
   background: var(--c-surface-sunken);
   border-radius: var(--radius-md);
+}
+/* Shading on a side scrolled out of view. */
+.wf-canvas-frame {
+  position: relative;
+}
+.wf-canvas-frame::before,
+.wf-canvas-frame::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 24px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.wf-canvas-frame::before {
+  left: 0;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  background: linear-gradient(to right, var(--c-scroll-shade), transparent);
+}
+.wf-canvas-frame::after {
+  right: 0;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  background: linear-gradient(to left, var(--c-scroll-shade), transparent);
+}
+.wf-canvas-frame.more-left::before,
+.wf-canvas-frame.more-right::after {
+  opacity: 1;
+}
+.wf-canvas-hint {
+  margin: var(--space-1) var(--space-3) var(--space-2);
+  font-size: var(--fs-xs);
+  color: var(--c-text-secondary);
 }
 .wf-canvas svg {
   display: block;
@@ -1634,6 +1630,7 @@ dialog.member-picker td .badge {
   paint-order: stroke;
   stroke: var(--c-surface-sunken);
   stroke-width: 4;
+  stroke-linejoin: round;
 }
 .wf-edge.warning .wf-edge-line {
   stroke: var(--c-warning);
@@ -1650,6 +1647,15 @@ dialog.member-picker td .badge {
 .wf-edge.selected .wf-edge-label,
 .wf-edge:focus-visible .wf-edge-label {
   font-weight: var(--fw-semibold);
+}
+/* Names in the states and transitions tables wrap rather than run into the next column. */
+table.data td.wf-name-cell {
+  min-width: 16ch;
+  max-width: 36ch;
+  overflow-wrap: anywhere;
+}
+table.data td.wf-name-cell .btn-link {
+  text-align: left;
 }
 .wf-problems {
   list-style: none;

@@ -16,7 +16,8 @@
 //! nonce per encryption.
 //!
 //! The master key also keys [`Keyring::audit_row_id`], the audit row ids shown
-//! to a reader whose view is limited to some classes (GH#378).
+//! to a reader whose view is limited to some classes (GH#378), and
+//! [`Keyring::backup_tag`], the HMAC that seals a backup file (GH#513).
 
 pub mod cli;
 #[cfg(test)]
@@ -42,6 +43,7 @@ pub const OVERHEAD: usize = NONCE_LEN + 16;
 const KEY_LEN: usize = 32;
 const KEY_ID_INFO: &[u8] = b"shadoucmdb/key-id/v1";
 const AUDIT_ROW_ID_INFO: &[u8] = b"shadoucmdb/audit-row-id/v1";
+const BACKUP_TRAILER_INFO: &[u8] = b"shadoucmdb/backup-trailer/v1";
 
 /// [`Keyring::audit_row_id`] permutes the low 52 bits of an id (two halves of
 /// 26), so every result stays an integer JavaScript represents exactly.
@@ -140,6 +142,7 @@ struct Key {
     id: KeyId,
     subkeys: Vec<(Purpose, LessSafeKey)>,
     row_id: hmac::Key,
+    backup: hmac::Key,
 }
 
 impl Key {
@@ -156,7 +159,8 @@ impl Key {
             })
             .collect();
         let row_id = prk.expand(&[AUDIT_ROW_ID_INFO], hmac::HMAC_SHA256).expect("HKDF output of one HMAC key").into();
-        Key { id: KeyId(i32::from_be_bytes(id)), subkeys, row_id }
+        let backup = prk.expand(&[BACKUP_TRAILER_INFO], hmac::HMAC_SHA256).expect("HKDF output of one HMAC key").into();
+        Key { id: KeyId(i32::from_be_bytes(id)), subkeys, row_id, backup }
     }
 
     fn subkey(&self, purpose: Purpose) -> &LessSafeKey {
@@ -258,6 +262,23 @@ impl Keyring {
             (left, right) = (right, left ^ (f & ROW_ID_HALF_MASK));
         }
         ((raw & !ROW_ID_MASK) | (left << ROW_ID_HALF_BITS) | right) as i64
+    }
+
+    /// HMAC-SHA256 of `message` (a backup's trailer) under a subkey of the
+    /// active key. Someone who can edit the file can recompute its SHA-256,
+    /// not this (GH#513).
+    pub fn backup_tag(&self, message: &[u8]) -> (KeyId, Vec<u8>) {
+        (self.active.id, hmac::sign(&self.active.backup, message).as_ref().to_vec())
+    }
+
+    /// Checks a [`Keyring::backup_tag`] made with `key_id` (the active or the previous key).
+    pub fn verify_backup_tag(&self, key_id: KeyId, message: &[u8], tag: &[u8]) -> Result<(), OpenError> {
+        let key = [Some(&self.active), self.previous.as_ref()]
+            .into_iter()
+            .flatten()
+            .find(|k| k.id == key_id)
+            .ok_or(OpenError::UnknownKey(key_id))?;
+        hmac::verify(&key.backup, message, tag).map_err(|_| OpenError::Invalid)
     }
 
     /// Encrypts under the active key with a fresh nonce. `ad` binds the value to

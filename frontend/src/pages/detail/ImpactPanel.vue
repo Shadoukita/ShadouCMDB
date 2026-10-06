@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import { ApiError } from "../../api/client";
 import { useRelTypeList } from "../../api/datamodel";
@@ -8,7 +8,7 @@ import EmptyState from "../../components/EmptyState.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
 import { useDebounced } from "../../lib/composables";
 import { plural } from "../../lib/format";
-import type { TreeRow } from "../../lib/graphTree";
+import { impactRows } from "../../lib/graphTree";
 import {
   criticalityCounts,
   DEFAULT_STATE,
@@ -152,24 +152,7 @@ const canDeepen = computed(() => !!data.value && data.value.parameters.depth < (
 const canManage = computed(() => session.can("datamodel.manage"));
 
 // ---------- Tree ----------
-const subtrees = computed(() =>
-  data.value
-    ? impactTree(data.value).map((t) => ({
-        ...t,
-        rows: t.rows.map(
-          (r): TreeRow => ({
-            key: r.key,
-            level: r.level,
-            edgeLabel: r.label,
-            node: { id: r.item.id, label: r.item.name, className: r.item.className, active: r.item.active },
-            hasChildren: r.hasChildren,
-            criticality: r.item.criticality,
-            note: r.item.reachedByCount > 1 ? `also reached via ${plural(r.item.reachedByCount - 1, "other relationship")}` : undefined,
-          }),
-        ),
-      }))
-    : [],
-);
+const subtrees = computed(() => (data.value ? impactTree(data.value).map((t) => ({ ...t, rows: impactRows(t.rows) })) : []));
 
 // ---------- Export ----------
 const exporting = ref(false);
@@ -193,15 +176,6 @@ const VIEWS = [
   { value: "list", label: "List" },
   { value: "tree", label: "Tree" },
 ] as const;
-/** Arrow keys, Home and End move between the two views. */
-async function onViewKey(e: KeyboardEvent) {
-  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
-  e.preventDefault();
-  const view = e.key === "Home" ? "list" : e.key === "End" ? "tree" : state.value.view === "list" ? "tree" : "list";
-  await setState({ view });
-  await nextTick();
-  document.getElementById(`impact-view-${view}`)?.focus();
-}
 </script>
 
 <template>
@@ -219,7 +193,7 @@ async function onViewKey(e: KeyboardEvent) {
               :checked="state.direction === d.value"
               @change="setState({ direction: d.value })"
             />
-            <span>{{ d.label }} <span class="muted">· {{ d.hint }}</span></span>
+            {{ d.label }} <span class="segment-hint">{{ d.hint }}</span>
           </label>
         </div>
       </fieldset>
@@ -360,23 +334,15 @@ async function onViewKey(e: KeyboardEvent) {
         </EmptyState>
 
         <template v-else>
-          <div class="tabs impact-views" role="tablist" aria-label="Result view">
-            <button
-              v-for="v in VIEWS"
-              :id="`impact-view-${v.value}`"
-              :key="v.value"
-              type="button"
-              role="tab"
-              :aria-selected="state.view === v.value"
-              aria-controls="impact-view-panel"
-              :tabindex="state.view === v.value ? 0 : -1"
-              @click="setState({ view: v.value })"
-              @keydown="onViewKey"
-            >
-              {{ v.label }}
-            </button>
+          <!-- List or tree: a segmented control, not a second tab bar under the page's tabs (audit R7). -->
+          <div class="impact-views">
+            <div class="segmented" role="radiogroup" aria-label="Result view">
+              <label v-for="v in VIEWS" :key="v.value">
+                <input type="radio" name="impact-view" :value="v.value" :checked="state.view === v.value" @change="setState({ view: v.value })" />{{ v.label }}
+              </label>
+            </div>
           </div>
-          <div id="impact-view-panel" role="tabpanel" :aria-labelledby="`impact-view-${state.view}`" :class="{ loading: stale }" :aria-busy="stale">
+          <div id="impact-view-panel" :class="{ loading: stale }" :aria-busy="stale">
             <template v-if="state.view === 'list'">
               <ImpactServicesSection :analysis="data" :self="self" :trail="trail" />
               <ImpactList :analysis="data" :group="state.group" :sort="state.sort" :self="self" :trail="trail" @sort="(s) => setState({ sort: s })" />
@@ -388,7 +354,7 @@ async function onViewKey(e: KeyboardEvent) {
                 <GraphTree
                   v-else
                   :rows="t.rows"
-                  :root="{ label: data.root.name, className: data.root.className }"
+                  :root="{ label: data.root.name, className: data.root.className, classId: ci.classId }"
                   :label="`${t.title}: impact tree of ${data.root.name}`"
                   :self="self"
                   :trail="trail"

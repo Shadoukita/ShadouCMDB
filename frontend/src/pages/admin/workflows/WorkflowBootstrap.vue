@@ -12,6 +12,8 @@ import ErrorAlert from "../../../components/ErrorAlert.vue";
  * finished by running it again; CIs that already run the workflow are left alone.
  */
 const props = defineProps<{ workflow: WorkflowDefinitionDetail }>();
+/** A real run finished: what it started and what it skipped (the CIs still without an instance). */
+const emit = defineEmits<{ done: [result: WorkflowBootstrapResult] }>();
 const bootstrap = useBootstrapWorkflow();
 const preview = ref<WorkflowBootstrapResult | null>(null);
 const done = ref<WorkflowBootstrapResult | null>(null);
@@ -52,6 +54,7 @@ function runBootstrap() {
       onSuccess: (r) => {
         done.value = r;
         preview.value = null;
+        emit("done", r);
         confirming.value = false;
       },
       onError: () => (confirming.value = false),

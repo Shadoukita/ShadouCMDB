@@ -201,7 +201,7 @@ test("4. the tree view shows the same CIs and walks by keyboard (§6.3.4)", asyn
   const levels = await tree.getByRole("treeitem").evaluateAll((items) => items.map((i) => `${i.getAttribute("aria-level")} ${i.querySelector("a")!.textContent}`));
   expect(levels).toEqual([`1 ${N("app-a")}`, `2 ${N("app-b")}`, `1 ${N("app-c")}`, `1 ${N("secret")}`, `2 ${N("app-d")}`]);
   await expect(tree.getByRole("treeitem").nth(2)).toContainText("also reached via 1 other relationship");
-  await expect(tree.getByRole("treeitem").first()).toContainText("is needed by →");
+  await expect(tree.getByRole("treeitem").first().locator(".tree-edge")).toHaveText("is needed by");
   await expect(page.locator("#impact-view-panel")).toHaveAttribute("aria-busy", "false");
   await checkA11y(page, testInfo, "impact-tree", { include: ".impact", strict: true });
   await snap(page, "impact-tree");

@@ -8,8 +8,8 @@ import { useSessionStore } from "../../stores/session";
 import FormField from "../form/FormField.vue";
 
 /**
- * The signed-in user's own password: current + new + repeat. The API keeps this
- * session and ends the others. An identity provider's account has no password
+ * The signed-in user's own password: current + new + repeat. The API renews this
+ * session (new cookies) and ends the others. An identity provider's account has no password
  * here, so the form is replaced by a pointer to the provider.
  */
 const session = useSessionStore();
@@ -57,6 +57,9 @@ function submit() {
         pw.value = "";
         pw2.value = "";
         done.value = true;
+        // The session continues under a new CSRF token: re-read it (the cookie
+        // is not readable when the API is on another origin).
+        void session.refresh().catch(() => undefined);
       },
       onError: () => {
         current.value = "";

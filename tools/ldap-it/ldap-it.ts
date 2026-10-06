@@ -128,6 +128,14 @@ function identity(r: Res): Identity {
   return { cookie, csrf: r.json?.csrfToken ?? '' };
 }
 
+/** The renewed session after an authenticator confirm (GH#510): the CSRF token comes from its cookie. */
+function renewed(r: Res): Identity {
+  const cookie = cookieOf(r, 'shadoucmdb_session');
+  const csrf = cookieOf(r, 'shadoucmdb_csrf')?.slice('shadoucmdb_csrf='.length);
+  if (!cookie || !csrf) throw new Error(`no renewed session cookies: ${r.status}`);
+  return { cookie, csrf };
+}
+
 const login = (u: { username: string; password: string }) => call(null, 'POST', '/api/v1/auth/login', u);
 const code = (r: Res) => r.json?.error?.code;
 const message = (r: Res) => r.json?.error?.message ?? '';
@@ -416,6 +424,8 @@ async function main(): Promise<void> {
   const confirm = await call(alice, 'POST', '/api/v1/auth/mfa/totp/confirm', { code: await nextCode() });
   check(confirm.status === 200 && confirm.json?.codes?.length === 10, 'a code confirms it: 200 with 10 recovery codes', brief(confirm));
   let recovery: string[] = confirm.json.codes;
+  check((await call(alice, 'GET', '/api/v1/auth/me')).status === 401, 'the session from before the authenticator stops working (GH#510)');
+  alice = renewed(confirm);
   const enrolledMe = await ok(alice, 'GET', '/api/v1/auth/me');
   check(enrolledMe.mfa.totpEnabled === true && enrolledMe.mfa.enrolmentRequired === false, '/auth/me: MFA on, no enrolment due');
   check((await call(alice, 'GET', '/api/v1/configuration-items?limit=1')).status === 200, 'the inventory is open again');

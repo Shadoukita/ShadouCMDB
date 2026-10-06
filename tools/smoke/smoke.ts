@@ -174,6 +174,15 @@ function identityFrom(name: string, res: { headers: Headers; json: Json }): Iden
   return { name, cookie: session ?? '', csrf: res.json?.csrfToken ?? '' };
 }
 
+/** The caller's renewed session after a change that rotates it (own password change, authenticator confirm; GH#510): the CSRF token comes from its cookie. */
+function renewedFrom(who: Identity, res: { headers: Headers }): Identity {
+  const cookies = res.headers.getSetCookie().map((c) => c.split(';')[0]!);
+  const session = cookies.find((c) => c.startsWith('shadoucmdb_session='));
+  const csrf = cookies.find((c) => c.startsWith('shadoucmdb_csrf='))?.slice('shadoucmdb_csrf='.length);
+  check(session && csrf && session !== who.cookie && csrf !== who.csrf, `${who.name}: the session is renewed with a new session and CSRF cookie`);
+  return { name: who.name, cookie: session ?? '', csrf: csrf ?? '' };
+}
+
 async function login(username: string, password: string): Promise<Identity> {
   const res = await as(null, () => post('/api/v1/auth/login', { username, password }, 200));
   return identityFrom(username, res);
@@ -1217,8 +1226,10 @@ async function permissions(x: Json) {
       check(r.json.error?.code === 'CSRF_TOKEN_INVALID', 'a write without the CSRF token is rejected before anything else'));
     await post('/api/v1/auth/reauthenticate', { currentPassword: password }, 204); // no MFA: the password alone (GH#498)
     await put('/api/v1/auth/password', { currentPassword: 'wrong password!', newPassword: `${password}-2` }, 400);
-    await put('/api/v1/auth/password', { currentPassword: password, newPassword: `${password}-2` }, 204);
-    await get('/api/v1/auth/me'); // this session survives the change
+    const changed = await put('/api/v1/auth/password', { currentPassword: password, newPassword: `${password}-2` }, 204);
+    await get('/api/v1/auth/me', 401); // the old session cookie stops working (GH#510)
+    me = renewedFrom(me!, changed);
+    check((await get('/api/v1/auth/me')).json.csrfToken === me.csrf, 'this session continues under the renewed cookies');
   });
   await loginFails(reader.username, password); // the old password no longer works
 
@@ -1599,7 +1610,10 @@ async function mfa(builtin: Json, createHash: typeof import('node:crypto').creat
       'set-up returns a 160-bit base32 secret and its otpauth URI');
     await post('/api/v1/auth/mfa/totp/confirm', { code: await totpCode(started.secret, nowStep() - 5) }, 400);
     const step = nowStep();
-    const confirmed = (await post('/api/v1/auth/mfa/totp/confirm', { code: await totpCode(started.secret, step) }, 200)).json;
+    const confirmation = await post('/api/v1/auth/mfa/totp/confirm', { code: await totpCode(started.secret, step) }, 200);
+    const confirmed = confirmation.json;
+    await get('/api/v1/auth/mfa', 401); // the session from before the authenticator stops working (GH#510)
+    me = renewedFrom(me!, confirmation);
     check(confirmed.codes.length === 10 && confirmed.codes.every((c: string) => /^[a-z2-7]{4}(-[a-z2-7]{4}){3}$/.test(c)), 'confirming returns 10 recovery codes');
     await post('/api/v1/auth/mfa/totp/confirm', { code: await totpCode(started.secret, step + 1) }, 409);
     await post('/api/v1/auth/mfa/totp', { currentPassword: password }, 409);

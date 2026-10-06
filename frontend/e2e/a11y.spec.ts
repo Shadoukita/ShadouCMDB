@@ -69,6 +69,16 @@ test("CI detail page (built-in layout), its delete dialog and the edit form", as
   await checkA11y(page, testInfo, "ci-edit");
 });
 
+test("CI topology panel (design §2.7, audit R6)", async ({ page, request }, testInfo) => {
+  const serverId = await classIdByName(request, "Server");
+  const ci = (await apiGet<{ data: { id: string; label: string }[] }>(request, `/configuration-items?classId=${serverId}&sort=label&limit=1`)).data[0];
+  await page.goto(`/cis/${ci.id}`);
+  await page.getByRole("tab", { name: "Relationship map" }).click();
+  await expect(page.getByRole("img", { name: new RegExp(`^${ci.label} and \\d+ related CIs? within 1 hop`) })).toBeVisible();
+  await expect(page.getByRole("tree", { name: "Relationship map" }).getByRole("treeitem").first()).toBeVisible();
+  await checkA11y(page, testInfo, "ci-topology");
+});
+
 test("Customization › Layouts: the class picker and Edit CI", async ({ page }, testInfo) => {
   await page.goto("/admin/customization/layouts?class=server");
   await expect(page.getByTestId("layout-edit-ci")).toHaveText(/^Edit CI: .+/);

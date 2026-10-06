@@ -253,8 +253,11 @@ export function removeState(d: Draft, key: string): string[] {
 
 export const NODE_W = 168;
 export const NODE_H = 56;
-const GAP_X = 72;
-const GAP_Y = 40;
+/** Room between columns for a transition's label (EDGE_LABEL_MAX characters) clear of both boxes. */
+const GAP_X = 144;
+/** From one column of the arrangement to the next. */
+export const COLUMN_STEP = NODE_W + GAP_X;
+const GAP_Y = 64;
 
 /**
  * Gives every state without a position one: columns by distance from the initial state (breadth
@@ -283,7 +286,7 @@ export function autoLayout(d: Draft, all = false): void {
     const col = depth.get(s.key) ?? maxDepth + 1;
     const row = rows.get(col) ?? 0;
     rows.set(col, row + 1);
-    d.positions[s.key] = { x: 40 + col * (NODE_W + GAP_X), y: 24 + row * (NODE_H + GAP_Y) };
+    d.positions[s.key] = { x: 40 + col * COLUMN_STEP, y: 24 + row * (NODE_H + GAP_Y) };
   }
 }
 

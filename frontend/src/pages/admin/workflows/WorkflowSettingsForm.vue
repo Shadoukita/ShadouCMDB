@@ -7,6 +7,7 @@ import {
   useCreateWorkflow,
   useDeleteWorkflow,
   useUpdateWorkflow,
+  type WorkflowBootstrapResult,
   type WorkflowDefinitionDetail,
   type WorkflowUpdateBody,
   type WorkflowWarning,
@@ -107,7 +108,24 @@ const className = computed(() => classes.data.value?.find((c) => c.id === form.v
 const error = ref<unknown>(null);
 const local = ref<Record<string, string>>({});
 const saved = ref<string | null>(null);
-const warnings = ref<WorkflowWarning[]>([]);
+/**
+ * The `UNINSTANCED_CIS` banner: from the detail when the API sends it, else from the last save or bootstrap. A
+ * bootstrap leaves the CIs it skipped without an instance, so its result replaces the count. Turning the workflow off
+ * or dropping its state field ends the warning.
+ */
+const warnings = ref<WorkflowWarning[]>(props.workflow?.warnings ?? []);
+watch(
+  () => props.workflow,
+  (w) => {
+    if (!w) return;
+    if (w.warnings.length > 0) warnings.value = w.warnings;
+    else if (!w.isActive || !w.stateAttributeId) warnings.value = [];
+  },
+);
+function onBootstrapped(r: WorkflowBootstrapResult) {
+  const count = r.skippedTerminal + r.skippedUnmapped;
+  warnings.value = [{ code: "UNINSTANCED_CIS", count, message: uninstancedText({ count }) }];
+}
 const FIELDS = ["key", "name", "description", "classId", "includeSubclasses", "stateAttributeId", "autoStart", "isActive"];
 const conflict = computed(() => error.value instanceof ApiError && error.value.code === "VERSION_CONFLICT");
 const fieldErrors = computed(() => ({ ...(error.value instanceof ApiError ? error.value.fieldErrors() : {}), ...local.value }));
@@ -186,7 +204,7 @@ async function save() {
     const next = await update.mutateAsync({ id: w.id, body });
     base.value = fromWorkflow(next);
     form.value = fromWorkflow(next);
-    warnings.value = next.warnings;
+    // The banner follows the answer through the detail cache (see `warnings`).
     saved.value = `Saved ${next.name}.`;
   } catch (e) {
     error.value = e;
@@ -329,7 +347,7 @@ const deleteInUse = computed(() => del.error.value instanceof ApiError && del.er
           </dl>
         </div>
       </section>
-      <WorkflowBootstrap v-if="workflow.stateAttributeId" :workflow="workflow" />
+      <WorkflowBootstrap v-if="workflow.stateAttributeId" :workflow="workflow" @done="onBootstrapped" />
       <section class="panel" aria-labelledby="wf-danger-title">
         <div class="panel-header"><h2 id="wf-danger-title">Delete</h2></div>
         <div class="panel-body stack">

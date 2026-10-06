@@ -42,6 +42,14 @@ pub const MAX_ENTRY_BYTES: u64 = 256 * 1024 * 1024;
 pub const MAX_TOTAL_BYTES: u64 = 512 * 1024 * 1024;
 /// Decompressed size of `xl/sharedStrings.xml`, which calamine holds in memory.
 pub const MAX_SHARED_STRINGS_BYTES: u64 = 64 * 1024 * 1024;
+/// Entries (`<si>`) in `xl/sharedStrings.xml`, and the most its `uniqueCount`
+/// may claim. calamine keeps one `String` (24 bytes, before any text) per
+/// entry and reserves `uniqueCount` of them up front, so a part of empty
+/// entries within [`MAX_SHARED_STRINGS_BYTES`] would cost about five times
+/// its size (GH#505). 2,097,152 entries hold the table to 48 MiB: twenty
+/// distinct strings in every row of a default-size import (`IMPORT_MAX_ROWS`
+/// 100,000). Repeated text is stored once, so real workbooks need far fewer.
+pub const MAX_SHARED_STRINGS: u64 = 2 * 1024 * 1024;
 /// Decompressed size of the other parts held in memory: the workbook, styles,
 /// content types and every relationships part.
 pub const MAX_SMALL_PART_BYTES: u64 = 16 * 1024 * 1024;
@@ -474,10 +482,23 @@ struct Found {
 /// or invalid UTF-8, and an event longer than [`MAX_XML_TOKEN`] (`run` counts the bytes read
 /// since the last event). Collects content types and relationships into
 /// `found`. In a sheet, every `r`, `ref` and `sqref` must be a cell reference.
+/// In the shared strings, the entries and `uniqueCount` are held to
+/// [`MAX_SHARED_STRINGS`].
 fn scan_xml<R: Read>(input: R, name: &str, run: &Cell<u64>, found: &mut Found) -> Result<(), ParseError> {
     let lower = name.to_ascii_lowercase();
     let sheet = is_sheet_part(&lower);
     let is_types = name == "[Content_Types].xml";
+    let strings = lower == "xl/sharedstrings.xml";
+    let mut entries: u64 = 0;
+    let too_many_strings = || {
+        bad(
+            "too_many_shared_strings",
+            format!(
+                "The workbook holds more than {} distinct text values. Split the file and import it in parts.",
+                group_thousands(MAX_SHARED_STRINGS)
+            ),
+        )
+    };
     let mut rels = match lower.as_str() {
         "_rels/.rels" => Some(&mut found.package_rels),
         "xl/_rels/workbook.xml.rels" => Some(&mut found.workbook_rels),
@@ -514,6 +535,37 @@ fn scan_xml<R: Read>(input: R, name: &str, run: &Cell<u64>, found: &mut Found) -
                 }
             }
             Ok(Event::Start(e) | Event::Empty(e)) => {
+                // calamine matches `sst` and `si` by local name, so any prefix counts.
+                if strings {
+                    match e.local_name().as_ref() {
+                        "si" => {
+                            entries += 1;
+                            if entries > MAX_SHARED_STRINGS {
+                                return Err(too_many_strings());
+                            }
+                        }
+                        "sst" => {
+                            for a in e.attributes() {
+                                let a = a.map_err(|_| malformed())?;
+                                if a.key.local_name().as_ref() == "uniqueCount" {
+                                    let v = a.value.as_bytes();
+                                    if v.is_empty() || !v.iter().all(u8::is_ascii_digit) {
+                                        return Err(not_a_workbook(&format!(
+                                            "the part {name} has an invalid uniqueCount"
+                                        )));
+                                    }
+                                    let n = v
+                                        .iter()
+                                        .fold(0u64, |n, b| n.saturating_mul(10).saturating_add(u64::from(b - b'0')));
+                                    if n > MAX_SHARED_STRINGS {
+                                        return Err(too_many_strings());
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
                 if sheet {
                     for a in e.attributes() {
                         let a = a.map_err(|_| malformed())?;
@@ -959,6 +1011,61 @@ mod tests {
         // GR is the 200th column, the last allowed; GS the first refused.
         assert!(read(workbook(&[("GR1", C::S("x"))]), None).is_ok());
         assert_eq!(read(workbook(&[("GS1", C::S("x"))]), None).unwrap_err().code, "column_limit");
+    }
+
+    /// A workbook whose `xl/sharedStrings.xml` is `xml`, stored so the ratio check stays out of the way.
+    fn with_strings_part(xml: String) -> Vec<u8> {
+        let mut parts = workbook_parts(&sheet_xml(&[("A1", C::S("Hostname"))]), None, false, false);
+        with_shared_strings(&mut parts, &[]);
+        let part = parts.iter_mut().find(|p| p.name == "xl/sharedStrings.xml").unwrap();
+        part.data = xml.into_bytes();
+        part.method = 0;
+        zip(&parts)
+    }
+
+    fn sst(unique_count: &str, entries: &str) -> String {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" uniqueCount="{unique_count}">{entries}</sst>"#
+        )
+    }
+
+    #[test]
+    fn shared_strings_are_capped_by_count_not_only_by_size() {
+        // GH#505: empty entries, far below the 64 MiB part cap, cost calamine
+        // 24 bytes each before any text.
+        let over = (MAX_SHARED_STRINGS + 1) as usize;
+        let xml = sst("1", &"<si></si>".repeat(over));
+        assert!((xml.len() as u64) < MAX_SHARED_STRINGS_BYTES);
+        let err = check(with_strings_part(xml)).unwrap_err();
+        assert_eq!(err.code, "too_many_shared_strings");
+        assert!(err.message.contains("2,097,152"), "{}", err.message);
+        // Self-closing and prefixed entries count too.
+        assert_eq!(code(with_strings_part(sst("1", &"<si/>".repeat(over)))), "too_many_shared_strings");
+        let prefixed = format!(
+            r#"<x:sst xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main">{}</x:sst>"#,
+            "<x:si></x:si>".repeat(over)
+        );
+        assert_eq!(code(with_strings_part(prefixed)), "too_many_shared_strings");
+        // The cap itself is accepted, and read.
+        let at = MAX_SHARED_STRINGS as usize;
+        let mut c = Cursor::new(with_strings_part(sst(&at.to_string(), &"<si></si>".repeat(at))));
+        preflight(&mut c).unwrap();
+        assert!(open(c).is_ok());
+    }
+
+    #[test]
+    fn unique_count_is_checked_before_calamine_reserves_it() {
+        let one = "<si><t>a</t></si>";
+        assert!(check(with_strings_part(sst("2097152", one))).is_ok());
+        assert!(check(with_strings_part(sst("0002097152", one))).is_ok());
+        for claim in ["2097153", "1000000000", "99999999999999999999999999"] {
+            assert_eq!(code(with_strings_part(sst(claim, one))), "too_many_shared_strings", "{claim}");
+        }
+        for claim in ["", "-1", "+5", "1e9", " 5"] {
+            assert_eq!(code(with_strings_part(sst(claim, one))), "not_a_workbook", "{claim:?}");
+        }
+        let prefixed = r#"<sst xmlns:x="urn:x" x:uniqueCount="4000000000"><si><t>a</t></si></sst>"#;
+        assert_eq!(code(with_strings_part(prefixed.to_owned())), "too_many_shared_strings");
     }
 
     /// A sheet whose row 1 is a header and whose row 2 refers to shared string 0 from `cells` columns.

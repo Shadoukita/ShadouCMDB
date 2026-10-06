@@ -187,3 +187,243 @@ a.fact-chip:focus-visible {
 .record-class-picker .alert {
   margin: var(--space-3) 0 0;
 }
+
+/* ---------- Topology panel (design §2.7, audit R6): the canvas, its legend, the list ---------- */
+.topology-heading,
+.topology-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+}
+.topology-heading h2 {
+  margin: 0;
+}
+.topology-direction {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.topology-direction label {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--c-text-secondary);
+}
+.topology-direction select {
+  width: auto;
+  min-height: var(--control-h-sm);
+  font-size: var(--fs-sm);
+}
+.topology-canvas {
+  width: 100%;
+}
+.topology-stage {
+  position: relative;
+  overflow: hidden;
+}
+.topology-edges {
+  position: absolute;
+  inset: 0;
+}
+.topology-edge {
+  fill: none;
+  stroke: var(--c-border-control);
+  stroke-width: 1.25;
+}
+.topology-edge.dashed {
+  stroke-dasharray: 5 4;
+}
+.topology-arrow {
+  fill: var(--c-border-control);
+}
+.topology-edge-label {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  padding: 0 var(--space-1);
+  overflow: hidden;
+  background: var(--c-surface);
+  color: var(--c-text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.topology-node {
+  position: absolute;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  height: 40px;
+  padding: 0 var(--space-2);
+  overflow: hidden;
+  border: 1px solid var(--c-border-control);
+  border-radius: var(--radius-md);
+  background: var(--c-surface);
+  color: var(--c-text);
+  text-decoration: none;
+}
+a.topology-node:hover {
+  border-color: var(--c-primary);
+  background: var(--c-row-hover);
+  text-decoration: none;
+}
+/* The CI itself: tinted and outlined in the primary colour. */
+.topology-node.root {
+  border: 2px solid var(--c-primary);
+  background: var(--c-primary-subtle);
+}
+/* A CI that is not active says so in words as well as with its border. */
+.topology-node.off {
+  border-style: dashed;
+}
+.topology-node.danger {
+  border-color: var(--c-danger-text);
+}
+.topology-node.more {
+  align-items: center;
+  border-style: dashed;
+  color: var(--c-text-secondary);
+  font-size: var(--fs-sm);
+}
+.topology-name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1_5);
+  min-width: 0;
+  white-space: nowrap;
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+  line-height: 18px;
+}
+.topology-sub {
+  overflow: hidden;
+  font-size: var(--fs-xs);
+  line-height: 14px;
+  color: var(--c-text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.topology-sub .status-dot {
+  margin-right: var(--space-1);
+  vertical-align: 0;
+}
+.topology-name bdi {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.topology-narrow {
+  margin: 0;
+  color: var(--c-text-secondary);
+}
+.topology-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin-top: var(--space-2);
+  font-size: var(--fs-sm);
+}
+.topology-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--c-text-secondary);
+}
+.topology-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1_5);
+}
+.topology-swatch {
+  width: 20px;
+  border-top: 2px solid var(--c-border-control);
+}
+.topology-swatch.dashed {
+  border-top-style: dashed;
+}
+.topology-list-title {
+  margin: var(--space-4) 0 var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--c-divider);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+  color: var(--c-text-secondary);
+}
+
+/* ---------- The CI tree: relationship map list and impact tree (GraphTree, audit R6) ---------- */
+.graph-tree-root,
+.graph-tree li[role="treeitem"] {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+  min-height: 28px;
+}
+.graph-tree-root {
+  font-weight: var(--fw-semibold);
+}
+.graph-tree ul[role="tree"] {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.graph-tree li[role="treeitem"] {
+  padding: 2px var(--space-1) 2px calc(var(--space-1) + (var(--level, 1) - 1) * 20px);
+  border-radius: var(--radius-md);
+}
+.graph-tree li[role="treeitem"]:hover {
+  background: var(--c-row-hover);
+}
+.graph-tree li[role="treeitem"]:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: -2px;
+}
+/* The roving row is marked only while the tree has focus; otherwise no row looks chosen. */
+.graph-tree ul[role="tree"]:focus-within li[role="treeitem"][aria-selected="true"] {
+  background: var(--c-row-selected);
+}
+/* Links sit among other words here: underlined, so they do not rely on colour alone. */
+.graph-tree li[role="treeitem"] a[data-ci-link],
+ol.impact-path a {
+  text-decoration: underline;
+}
+.tree-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--c-text-secondary);
+  cursor: pointer;
+}
+.tree-toggle:hover {
+  background: var(--c-surface-alt);
+}
+/* How the edge from the parent reads: quiet, in the data font, before the CI. */
+.tree-edge {
+  color: var(--c-text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+.tree-class,
+.tree-note {
+  color: var(--c-text-tertiary);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-regular);
+}
+.tree-action {
+  margin-left: auto;
+  font-size: var(--fs-sm);
+}

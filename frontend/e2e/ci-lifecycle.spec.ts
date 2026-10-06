@@ -280,21 +280,41 @@ test("navigation: related CIs are links and the breadcrumb carries the walk trai
   await expect(crumbs).toHaveText(["Dashboard", "Inventory", "fra1-tor-a01", "FRA1 Rack A01"]);
 });
 
-test("relationship map renders the multi-hop tree as links", async ({ page, request }) => {
+test("relationship map: the topology canvas, 1 hop / 2 hops / Impact, and the tree as links", async ({ page, request }) => {
   const crm = await ciIdByName(request, "CRM");
   await page.goto(`/cis/${crm}`);
   await page.getByRole("tab", { name: "Relationship map" }).click();
   const panel = page.getByRole("tabpanel");
-  await expect(panel.getByText("runs on →").first()).toBeVisible();
-  // crm-app-01 is reached twice (CRM runs on it; crm-db, which CRM depends on, runs on it too).
-  await expect(panel.getByRole("link", { name: "crm-app-01", exact: true }).first()).toBeVisible();
-  await expect(panel.getByText("(shown above)").first()).toBeVisible();
-  await expect(panel.getByRole("link", { name: "fra1-esx-01", exact: true }).first()).toBeVisible(); // two hops
-  await page.locator("#g-depth").selectOption("1");
-  await expect(panel.getByRole("link", { name: "fra1-esx-01", exact: true })).toHaveCount(0);
-  await page.locator("#g-dir").selectOption("both");
-  await expect(panel.getByRole("link", { name: "Customer Relationship Management", exact: true })).toBeVisible();
+  const tree = panel.getByRole("tree", { name: "Relationship map" });
+  // 1 hop, both directions: the canvas is one image with a summary, the tree the same CIs as links.
+  await expect(panel.getByRole("radio", { name: "1 hop" })).toBeChecked();
+  await expect(panel.getByRole("img", { name: /^CRM and \d+ related CIs within 1 hop\./ })).toBeVisible();
+  await expect(tree.getByText("runs on", { exact: true }).first()).toBeVisible();
+  await expect(tree.getByRole("link", { name: "crm-app-01", exact: true }).first()).toBeVisible();
+  await expect(tree.getByRole("link", { name: "Customer Relationship Management", exact: true })).toBeVisible();
+  await expect(tree.getByRole("link", { name: "fra1-esx-01", exact: true })).toHaveCount(0);
+  // A canvas box is a link to its CI, for the mouse; the tree is the keyboard path.
+  const box = panel.locator("a.topology-node").filter({ hasText: "crm-app-01" });
+  await expect(box).toHaveAttribute("tabindex", "-1");
   await snap(page, "11-relationship-map");
+  // Two hops: each row one hop further out. crm-db runs on crm-app-01 too, but both are one hop away, and
+  // nothing leads back to CRM, so neither is a row.
+  await panel.getByRole("radio", { name: "2 hops" }).check();
+  await expect(tree.getByRole("link", { name: "fra1-esx-01", exact: true }).first()).toBeVisible();
+  await expect(tree.getByRole("link", { name: "crm-app-01", exact: true })).toHaveCount(1);
+  await expect(tree.getByRole("link", { name: "CRM", exact: true })).toHaveCount(0);
+  await page.locator("#g-dir").selectOption("outgoing");
+  await expect(tree.getByRole("link", { name: "Customer Relationship Management", exact: true })).toHaveCount(0);
+  await expect(tree.getByRole("link", { name: "fra1-esx-01", exact: true }).first()).toBeVisible();
+  // Impact: what CRM takes down, with the full analysis a link away.
+  await panel.getByRole("radio", { name: "Impact" }).check();
+  await expect(page.locator("#g-dir")).toHaveCount(0);
+  await panel.getByRole("link", { name: "Open the impact analysis" }).first().click();
+  await expect(page).toHaveURL(`/cis/${crm}/impact`);
+  // The canvas box navigates like the tree's link.
+  await page.getByRole("tab", { name: "Relationship map" }).click();
+  await page.locator("a.topology-node").filter({ hasText: "crm-app-01" }).click();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("crm-app-01");
 });
 
 test("delete: the confirmation lists the relationships that will break", async ({ page }) => {

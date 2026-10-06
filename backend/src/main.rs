@@ -70,7 +70,7 @@ enum Command {
     Verify,
     /// Check the audit_log hash chain; prints the chain head to compare with the SIEM copy.
     AuditVerify {
-        /// Report missing rows (gaps in chainSeq) without failing, e.g. after retention pruning.
+        /// Accept gaps in chainSeq that a prune-audit run (audit.purge entry) accounts for. Other gaps always fail.
         #[arg(long)]
         allow_gaps: bool,
     },
@@ -226,7 +226,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         }
         Command::Backup(args) => {
             let cfg = Config::from_env()?;
-            runtime()?.block_on(maintenance::backup::run(&cfg.database, args))
+            runtime()?.block_on(maintenance::backup::run(&cfg.database, &cfg.encryption, args))
         }
         // These rebuild or drop the schema: like `migrate`, they connect as the
         // schema owner when MIGRATION_DATABASE_URL is set.
