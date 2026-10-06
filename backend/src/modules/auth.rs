@@ -1445,6 +1445,59 @@ pub(crate) mod tests {
         db.drop().await;
     }
 
+    /// Rotating keeps the user, expiry and second-factor state under a new
+    /// token and ends the old row; a session that ended meanwhile (signed out,
+    /// or rotated already) is not resurrected (GH#510).
+    #[tokio::test]
+    async fn rotating_a_session_ends_it_and_never_revives_an_ended_one() {
+        let Some(db) = scratch::database("rotating_a_session_ends_it_and_never_revives_an_ended_one").await else {
+            return;
+        };
+        let (pool, auth) = (&db.pool, auth_state());
+        setup(pool, &auth, &HeaderMap::new(), &anon(), body("owner")).await.expect("setup");
+        let mut held = pool.acquire().await.unwrap();
+        let conn: &mut PgConnection = &mut held;
+        let user_id: Uuid = sqlx::query_scalar("SELECT id FROM users").fetch_one(&mut *conn).await.unwrap();
+        let old =
+            data::create_session(conn, user_id, &[1; 32], "csrf-old", Duration::from_secs(3600), None, None, true)
+                .await
+                .unwrap();
+        async fn rotate(conn: &mut PgConnection, id: Uuid, token: u8) -> Option<(Uuid, data::EndedSession)> {
+            data::rotate_session(conn, id, &[token; 32], "csrf-new", Some("ua"), None, false).await.unwrap()
+        }
+
+        let (new, ended) = rotate(conn, old, 2).await.expect("a live session rotates");
+        assert_eq!((ended.id, ended.user_id), (old, user_id));
+        let rows: Vec<(Uuid, Uuid, bool, String)> =
+            sqlx::query_as("SELECT id, user_id, mfa_verified, csrf_token FROM sessions WHERE id IN ($1, $2)")
+                .bind(old)
+                .bind(new)
+                .fetch_all(&mut *conn)
+                .await
+                .unwrap();
+        assert_eq!(rows, vec![(new, user_id, true, "csrf-new".to_owned())], "only the new row, second factor kept");
+        let same_expiry: bool = sqlx::query_scalar(
+            "SELECT expires_at <= now() + interval '3600 seconds' AND expires_at > now() + interval '3500 seconds' FROM sessions WHERE id = $1",
+        )
+        .bind(new)
+        .fetch_one(&mut *conn)
+        .await
+        .unwrap();
+        assert!(same_expiry, "the renewed session keeps the old expiry");
+
+        assert!(rotate(conn, old, 3).await.is_none(), "an already rotated session does not rotate again");
+        data::delete_session(conn, new).await.unwrap().expect("signed out");
+        assert!(rotate(conn, new, 4).await.is_none(), "a signed-out session does not come back");
+        let left: i64 = sqlx::query_scalar("SELECT count(*) FROM sessions WHERE id = $1 OR user_agent = 'ua'")
+            .bind(old)
+            .fetch_one(&mut *conn)
+            .await
+            .unwrap();
+        assert_eq!(left, 0);
+        drop(held);
+        db.drop().await;
+    }
+
     /// Wrong current passwords lock password changes for that user, like login.
     #[tokio::test]
     async fn guessing_the_current_password_is_throttled() {
