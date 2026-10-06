@@ -21,13 +21,19 @@ export const FRAME_MIN_W = 0.05;
 export const FRAME_MIN_H = 48;
 export const FRAME_MAX_H = 4000;
 export const FRAME_MAX_Y = 100_000;
-/** Height estimates of the API's grid → free conversion. */
-const HEADER_PX = 48;
-const ROW_PX = 48;
+/**
+ * Height estimates of the API's grid → free conversion (FRAME_METRICS), sized for the detail page's
+ * inline inputs in the comfortable density (GH#621): the title bar and the padding around the field
+ * grid, one row of fields (label, input and hint, with the gap to the next row), a separator, a note,
+ * the record details (two rows) and the other built-in panels.
+ */
+export const HEADER_PX = 48 + 40;
+export const ROW_PX = 82;
+export const SEPARATOR_PX = 28;
 export const FRAME_GAP_PX = 16;
 const NOTE_PX = 144;
 const PANEL_PX = 320;
-const RECORD_PX = 144;
+export const RECORD_PX = HEADER_PX + 2 * ROW_PX;
 /** Below this tab width (and in print) a free tab stacks its windows in reading order, as the grid does. */
 export const STACK_BELOW_PX = 820;
 /** The editor's fine guide grid, in px. */
@@ -55,7 +61,7 @@ export function clampFrame(f: Frame): Frame {
   return out;
 }
 
-/** The API's estimate of a section's height when it leaves the grid (title bar plus field rows, a note, a panel). */
+/** The API's estimate of a section's height when it leaves the grid (title bar plus field rows and separators, a note, a panel). */
 export function estimatedHeight(s: LayoutSection): number {
   const kind = sectionKind(s);
   if (kind === "note") return NOTE_PX;
@@ -63,16 +69,23 @@ export function estimatedHeight(s: LayoutSection): number {
   if (kind !== "fields") return PANEL_PX;
   const columns = s.columns ?? GRID_COLUMNS;
   let rows = 0;
+  let lines = 0;
   let col = columns;
   for (const f of s.fields ?? []) {
-    const w = f.separator ? Math.max(columns, 1) : clamp(f.width ?? 1, 1, Math.max(columns, 1));
+    // A separator is a line of its own: the next field starts a new row.
+    if (f.separator) {
+      lines += 1;
+      col = columns;
+      continue;
+    }
+    const w = clamp(f.width ?? 1, 1, Math.max(columns, 1));
     if (col + w > columns) {
       rows += 1;
       col = 0;
     }
     col += w;
   }
-  return clamp(HEADER_PX + Math.max(rows, s.minHeight ?? 1, 1) * ROW_PX, FRAME_MIN_H, FRAME_MAX_H);
+  return clamp(HEADER_PX + Math.max(rows, s.minHeight ?? 1, 1) * ROW_PX + lines * SEPARATOR_PX, FRAME_MIN_H, FRAME_MAX_H);
 }
 
 /**

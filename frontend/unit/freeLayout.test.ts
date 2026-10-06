@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import type { UiClassLayout } from "../src/api/uiSettings";
-import { makeFree, settleFrames } from "../src/lib/freeLayout";
+import { FRAME_GAP_PX, HEADER_PX, makeFree, ROW_PX, settleFrames } from "../src/lib/freeLayout";
 import { addTab, materialize, moveSectionToTab } from "../src/lib/layoutDesign";
 import { CORE_FIELDS, normalizeDocument, resolveLayout } from "../src/lib/uiSettings";
 
@@ -27,12 +27,15 @@ function gridLayout(placement?: "grid"): UiClassLayout {
   };
 }
 
-/** The frames as the API makes them of the same tab (backend document.rs grid_frames). */
+/** A fields window of `rows` rows, as the API estimates it: title bar and padding, then the rows (GH#621). */
+const rows = (n: number) => HEADER_PX + n * ROW_PX;
+
+/** The frames as the API makes them of the same tab (backend document.rs grid_frames): 170, 334 (minHeight 3), 170. */
 const API_FRAMES = [
-  { key: "a", frame: { x: 0, y: 0, w: 0.5, h: 96, z: 1 } },
-  { key: "b", frame: { x: 0.5, y: 0, w: 0.5, h: 192, z: 2 } },
-  { key: "c", frame: { x: 0, y: 208, w: 1, h: 96, z: 3 } },
-  { key: "d", frame: { x: 0, y: 320, w: 0.3333, h: 144, z: 4 } },
+  { key: "a", frame: { x: 0, y: 0, w: 0.5, h: rows(1), z: 1 } },
+  { key: "b", frame: { x: 0.5, y: 0, w: 0.5, h: rows(3), z: 2 } },
+  { key: "c", frame: { x: 0, y: rows(3) + FRAME_GAP_PX, w: 1, h: rows(1), z: 3 } },
+  { key: "d", frame: { x: 0, y: rows(3) + rows(1) + 2 * FRAME_GAP_PX, w: 0.3333, h: 144, z: 4 } },
 ];
 
 describe("free placement only: layouts saved on the grid", () => {
@@ -81,9 +84,9 @@ describe("free placement only: layouts saved on the grid", () => {
     assert.deepEqual(
       tab.sections!.slice(1).map((s) => s.frame),
       [
-        { x: 0, y: 356, w: 0.5, h: 192, z: 6 },
-        { x: 0, y: 564, w: 1, h: 96, z: 7 },
-        { x: 0, y: 676, w: 0.3333, h: 144, z: 8 },
+        { x: 0, y: 356, w: 0.5, h: rows(3), z: 6 },
+        { x: 0, y: 356 + rows(3) + FRAME_GAP_PX, w: 1, h: rows(1), z: 7 },
+        { x: 0, y: 356 + rows(3) + rows(1) + 2 * FRAME_GAP_PX, w: 0.3333, h: 144, z: 8 },
       ],
     );
   });
@@ -94,12 +97,12 @@ describe("free placement only: layouts saved on the grid", () => {
     const t = addTab(l, "Hardware");
     settleFrames(l.tabs);
     assert.equal(t.placement, "free");
-    assert.deepEqual(t.sections![0].frame, { x: 0, y: 0, w: 1, h: 96, z: 1 });
+    assert.deepEqual(t.sections![0].frame, { x: 0, y: 0, w: 1, h: rows(1), z: 1 });
     // A section moved to another tab gets a window below the ones there.
     const general = l.tabs![0].sections![0];
     moveSectionToTab(l, general, t);
     settleFrames(l.tabs);
-    assert.equal(general.frame!.y, 96 + 16);
+    assert.equal(general.frame!.y, rows(1) + FRAME_GAP_PX);
     assert.equal(general.frame!.z, 2);
   });
 });

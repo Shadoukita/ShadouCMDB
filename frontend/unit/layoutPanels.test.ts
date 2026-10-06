@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import type { UiClassLayout } from "../src/api/uiSettings";
-import { estimatedHeight } from "../src/lib/freeLayout";
+import { estimatedHeight, HEADER_PX, RECORD_PX, ROW_PX, SEPARATOR_PX } from "../src/lib/freeLayout";
 import {
   addPanel,
   addSeparator,
@@ -82,8 +82,8 @@ describe("record and relations panels", () => {
     const kinds = l.tabs![0].sections!.map((s) => s.kind ?? "fields");
     assert.deepEqual(kinds.slice(-2), ["record", "relations"]);
     assert.ok(l.tabs![0].sections!.every((s) => s.frame));
-    // The record window is the API's estimate for it.
-    assert.equal(l.tabs![0].sections!.at(-2)!.frame!.h, 144);
+    // The record window is the API's estimate for it: two rows of details, not cut off (GH#621).
+    assert.equal(l.tabs![0].sections!.at(-2)!.frame!.h, RECORD_PX);
   });
 });
 
@@ -148,8 +148,8 @@ describe("separators in field sections", () => {
     // Removing the section moves it into the one before or after it, as wide as that one.
     removeSection(l, l.tabs![0].sections![0]);
     assert.deepEqual(fieldsOf(l, "b").at(-1), { separator: true, width: 2 });
-    // A separator takes a row of its own in the height estimate: validUntil and ident, validFrom, the line.
-    assert.equal(estimatedHeight(l.tabs![0].sections![0]), 48 + 3 * 48);
+    // A separator takes a line of its own in the height estimate: validUntil and ident, validFrom, the line.
+    assert.equal(estimatedHeight(l.tabs![0].sections![0]), HEADER_PX + 2 * ROW_PX + SEPARATOR_PX);
   });
 
   test("do not keep a tab whose fields have nowhere to go from being removed", () => {

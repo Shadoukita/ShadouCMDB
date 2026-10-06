@@ -44763,9 +44763,9 @@
           "layoutFormat": {
             "type": "integer",
             "format": "int32",
-            "description": "Layout format of the document; always 3 when returned. Send back what was returned. A document\nwithout it (an older configuration export, an older settings version being restored, an API client\nwritten before format 3) is from before layouts placed the record details and the relationships\nexplicitly: when it is saved, every layout that has tabs and does not place them gets a \"Record\" and\na \"Relationships\" section at the end of its first tab, as migration 0048 did with the stored\nsettings, so the detail page shows what it showed before.",
+            "description": "Layout format of the document; always 4 when returned. Send back what was returned. A document\nwithout it (an older configuration export, an older settings version being restored, an API client\nwritten before format 3) is from before layouts placed the record details and the relationships\nexplicitly: when it is saved, every layout that has tabs and does not place them gets a \"Record\" and\na \"Relationships\" section at the end of its first tab, as migration 0048 did with the stored\nsettings, so the detail page shows what it showed before. In a document before format 4, a tab whose\nwindows are all still where they were placed from the grid gets them as tall as the detail page's\ninline inputs need, as migration 0058 did with the stored settings.",
             "default": null,
-            "maximum": 3,
+            "maximum": 4,
             "minimum": 2
           }
         },
