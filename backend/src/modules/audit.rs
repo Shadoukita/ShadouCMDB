@@ -418,7 +418,7 @@ pub(crate) fn push_visible(qb: &mut QueryBuilder<Postgres>, visible: &[Uuid]) {
     .push(")))");
     // A shared saved view the caller may not see, answered `404` by the API, in
     // either value: one that names classes, none of them viewable (GH#506).
-    qb.push(" AND (entity_type <> 'saved_views'");
+    qb.push(" AND (entity_type <> 'saved_views' OR (TRUE");
     for v in ["old_value", "new_value"] {
         qb.push(format!(
             " AND ({v} IS NULL OR coalesce({v} -> 'definition' -> 'classKeys', '[]'::jsonb) = '[]'::jsonb \
@@ -427,7 +427,7 @@ pub(crate) fn push_visible(qb: &mut QueryBuilder<Postgres>, visible: &[Uuid]) {
         .push_bind(visible.to_vec())
         .push(")))");
     }
-    qb.push(")");
+    qb.push("))");
 }
 
 fn uuid_at(value: &Value, key: &str) -> Option<Uuid> {
