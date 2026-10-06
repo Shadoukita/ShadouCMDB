@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { RouterLink } from "vue-router";
-import { useAuditLog, type AuditEntry, type Ci } from "../../api/queries";
+import { useAuditLog, useClassAttributes, type AuditEntry, type Ci } from "../../api/queries";
 import EmptyState from "../../components/EmptyState.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
 import LoadingState from "../../components/LoadingState.vue";
 import { formatDateTime } from "../../lib/format";
 import AuditActor from "../admin/AuditActor.vue";
+import ChangeValue from "../imports/ChangeValue.vue";
 
 /** Change history from GET /audit-log?entityId=… with a field-level diff of each update. */
 /** `embedded`: placed in a layout section, which gives the frame and the heading. */
@@ -22,6 +23,9 @@ const REFS = new Set(["class", "status", "environment", "owner", "location"]);
 
 const log = useAuditLog(() => props.ci.id);
 const entries = computed(() => log.data.value?.data ?? []);
+/** Lookup and reference fields store ids: their definitions (retired ones too) let ChangeValue show names. */
+const attrs = useClassAttributes(() => props.ci.classId, { includeInactive: true });
+const fieldDef = (key: string) => attrs.data.value?.find((a) => a.key === key);
 
 function changes(entry: AuditEntry) {
   const oldV = flatten(entry.oldValue);
@@ -29,7 +33,7 @@ function changes(entry: AuditEntry) {
   const keys = [...new Set([...Object.keys(oldV), ...Object.keys(newV)])].filter(
     (k) => !HIDDEN.has(k.split(".")[0]) && oldV[k] !== newV[k],
   );
-  return keys.map((k) => ({ key: k, old: oldV[k], new: newV[k] }));
+  return keys.map((k) => ({ key: k, def: k.startsWith("attributes.") ? fieldDef(k.slice("attributes.".length)) : undefined, old: oldV[k], new: newV[k] }));
 }
 
 function flatten(value: unknown, prefix = ""): Record<string, string> {
@@ -68,7 +72,7 @@ function workflowStep(entry: AuditEntry) {
     from: entry.action === "workflow.cancel" ? undefined : o.stateKey,
     to: n.stateKey,
     note: n.reason === "ci_deleted" ? "the CI was deleted" : (n.comment ?? n.reason ?? undefined),
-    fields: Object.entries(n.fields ?? {}).map(([k, v]) => ({ key: k, old: show(v?.old), new: show(v?.new) })),
+    fields: Object.entries(n.fields ?? {}).map(([k, v]) => ({ key: k, def: fieldDef(k), old: show(v?.old), new: show(v?.new) })),
   };
 }
 
@@ -107,8 +111,8 @@ const actionTone = (action: string) => (action === "delete" ? "danger" : action 
                   <div v-if="w.note" class="wf-comment muted" dir="auto">{{ w.note }}</div>
                   <ul v-if="w.fields.length > 0" class="diff">
                     <li v-for="c in w.fields" :key="c.key">
-                      <code>{{ c.key }}</code>: <del v-if="c.old !== undefined" dir="auto">{{ c.old }}</del> →
-                      <ins v-if="c.new !== undefined" dir="auto">{{ c.new }}</ins><span v-else class="muted">cleared</span>
+                      <code>{{ c.key }}</code>: <del v-if="c.old !== undefined" dir="auto"><ChangeValue :def="c.def" :value="c.old" /></del> →
+                      <ins v-if="c.new !== undefined" dir="auto"><ChangeValue :def="c.def" :value="c.new" /></ins><span v-else class="muted">cleared</span>
                     </li>
                   </ul>
                 </div>
@@ -118,8 +122,8 @@ const actionTone = (action: string) => (action === "delete" ? "danger" : action 
               <span v-else-if="changes(e).length === 0" class="muted">No visible field changes</span>
               <ul v-else class="diff">
                 <li v-for="c in changes(e)" :key="c.key">
-                  <code>{{ c.key }}</code>: <del v-if="c.old !== undefined" dir="auto">{{ c.old }}</del> →
-                  <ins v-if="c.new !== undefined" dir="auto">{{ c.new }}</ins><span v-else class="muted">cleared</span>
+                  <code>{{ c.key }}</code>: <del v-if="c.old !== undefined" dir="auto"><ChangeValue :def="c.def" :value="c.old" /></del> →
+                  <ins v-if="c.new !== undefined" dir="auto"><ChangeValue :def="c.def" :value="c.new" /></ins><span v-else class="muted">cleared</span>
                 </li>
               </ul>
             </td>

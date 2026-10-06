@@ -17,6 +17,7 @@ import { CATEGORIES } from "../../lib/workflowDraft";
 import { useFlashStore } from "../../stores/flash";
 import { useSessionStore } from "../../stores/session";
 import FormField from "../form/FormField.vue";
+import ChangeValue from "../imports/ChangeValue.vue";
 import WorkflowActions from "./WorkflowActions.vue";
 import WorkflowStateBadge from "./WorkflowStateBadge.vue";
 
@@ -41,10 +42,11 @@ const notFound = computed(() => {
 
 const classes = useCiClasses();
 const ciClass = computed(() => classes.data.value?.find((c) => c.key === inst.value?.classKey));
-const attrs = useClassAttributes(() => ciClass.value?.id);
+/** Retired fields too: the history may record changes to a field deactivated since. */
+const attrs = useClassAttributes(() => ciClass.value?.id, { includeInactive: true });
 /** The CI, for the names of the CIs its reference fields point to. */
 const ci = useCi(() => inst.value?.ciId);
-const fieldLabel = (key: string) => attrs.data.value?.find((a) => a.key === key)?.label ?? key;
+const fieldDef = (key: string) => attrs.data.value?.find((a) => a.key === key);
 
 const stateName = (key: string | null | undefined) => (key ? (d.value?.graph.states.find((s) => s.key === key)?.name ?? key) : "");
 const transitionName = (key: string | null | undefined) => (key ? (d.value?.graph.transitions.find((t) => t.key === key)?.name ?? key) : "");
@@ -56,10 +58,14 @@ const evLimit = ref(50);
 const evOffset = ref(0);
 const events = useWorkflowEvents(id, evLimit, evOffset);
 const evRows = computed(() => events.data.value?.data ?? []);
+/** Field changes of a step. Lookup and reference fields store ids: ChangeValue shows the value's name and the CI's label. */
 function changes(e: WorkflowEvent) {
   const fc = (e.fieldChanges ?? {}) as Record<string, { old?: unknown; new?: unknown }>;
-  const show = (v: unknown) => (v === null || v === undefined ? "" : typeof v === "object" ? JSON.stringify(v) : String(v));
-  return Object.entries(fc).map(([k, v]) => ({ key: k, label: fieldLabel(k), old: show(v?.old), new: show(v?.new) }));
+  const set = (v: unknown) => v !== null && v !== undefined && v !== "";
+  return Object.entries(fc).map(([k, v]) => {
+    const def = fieldDef(k);
+    return { key: k, label: def?.label ?? k, def, old: v?.old, new: v?.new, hasOld: set(v?.old), hasNew: set(v?.new) };
+  });
 }
 const actor = (e: WorkflowEvent) =>
   e.actorType === "system" ? "System" : e.actorType === "import" ? `Import${e.actorName ? ` (${e.actorName})` : ""}` : `${e.actorName ?? "Unknown"}${e.actorType === "api_client" ? " (API token)" : ""}`;
@@ -235,8 +241,8 @@ async function reload() {
                   <div v-if="e.comment" class="wf-comment" dir="auto">{{ e.comment }}</div>
                   <ul v-if="changes(e).length > 0" class="diff">
                     <li v-for="c in changes(e)" :key="c.key">
-                      <span :title="c.key">{{ c.label }}</span>: <del v-if="c.old" dir="auto">{{ c.old }}</del> →
-                      <ins v-if="c.new" dir="auto">{{ c.new }}</ins><span v-else class="muted">cleared</span>
+                      <span :title="c.key">{{ c.label }}</span>: <del v-if="c.hasOld" dir="auto"><ChangeValue :def="c.def" :value="c.old" /></del> →
+                      <ins v-if="c.hasNew" dir="auto"><ChangeValue :def="c.def" :value="c.new" /></ins><span v-else class="muted">cleared</span>
                     </li>
                   </ul>
                   <span v-if="!e.comment && changes(e).length === 0" class="muted">–</span>
