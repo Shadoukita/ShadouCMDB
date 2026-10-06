@@ -559,14 +559,41 @@ pub const FRAME_MIN_W: f64 = 0.05;
 pub const FRAME_MIN_H: u32 = 48;
 pub const FRAME_MAX_H: u32 = 4000;
 pub const FRAME_MAX_Y: u32 = 100_000;
-/// Heights used to turn grid positions into frames: a section's title bar, one row of its field grid (the
-/// `minHeight` unit, 3em), the gap between grid rows, a note, the record details and the other built-in panels.
+/// Heights used to turn grid positions into frames, sized for the detail page's inline inputs in the
+/// comfortable density (SHAA-1833): a section's title bar, the padding around its field grid, one row of
+/// fields (label, input and hint, with the gap to the next row: the `minHeight` unit), a separator, the gap
+/// between grid rows, a note, the record details (two rows) and the other built-in panels.
 pub const FRAME_HEADER_PX: u32 = 48;
-pub const FRAME_ROW_PX: u32 = 48;
+pub const FRAME_BODY_PX: u32 = 40;
+pub const FRAME_ROW_PX: u32 = 82;
+pub const FRAME_SEPARATOR_PX: u32 = 28;
 pub const FRAME_GAP_PX: u32 = 16;
 pub const FRAME_NOTE_PX: u32 = 144;
-pub const FRAME_RECORD_PX: u32 = 144;
+pub const FRAME_RECORD_PX: u32 = FRAME_HEADER_PX + FRAME_BODY_PX + 2 * FRAME_ROW_PX;
 pub const FRAME_PANEL_PX: u32 = 320;
+
+/// The heights a grid position becomes a frame with.
+#[derive(Debug, Clone, Copy)]
+pub struct FrameMetrics {
+    /// Title bar and the padding around the field grid
+    header: u32,
+    /// One row of fields
+    row: u32,
+    /// A separator; `None`: a row of fields
+    separator: Option<u32>,
+    record: u32,
+}
+
+/// The heights of layout format 4 and later.
+pub const FRAME_METRICS: FrameMetrics = FrameMetrics {
+    header: FRAME_HEADER_PX + FRAME_BODY_PX,
+    row: FRAME_ROW_PX,
+    separator: Some(FRAME_SEPARATOR_PX),
+    record: FRAME_RECORD_PX,
+};
+/// The heights of layout format 3 and earlier: 48 px per row of fields, which cut the inline inputs of the
+/// detail page in half (GH#621). Used to recognise the frames they gave.
+pub const LEGACY_FRAME_METRICS: FrameMetrics = FrameMetrics { header: 48, row: 48, separator: None, record: 144 };
 /// Tolerance for `x + w <= 1`, so that e.g. 11/12 + 1/12 passes.
 const FRAME_EPSILON: f64 = 1e-6;
 
@@ -653,12 +680,18 @@ fn round4(v: f64) -> f64 {
 }
 
 /// Height of a section's frame when it leaves the grid: title bar plus its field rows (at least one, and at
-/// least `minHeight`), a note or a built-in panel.
-pub fn estimated_height(s: &UiLayoutSection) -> u32 {
+/// least `minHeight`) and separators, a note or a built-in panel.
+fn estimated_height_with(s: &UiLayoutSection, m: &FrameMetrics) -> u32 {
     let h = match s.kind {
         UiSectionKind::Fields => {
-            let (mut rows, mut col) = (0u32, s.columns);
+            let (mut rows, mut lines, mut col) = (0u32, 0u32, s.columns);
             for f in &s.fields {
+                // A separator takes a line of its own: the next field starts a new row.
+                if let (true, Some(_)) = (f.separator, m.separator) {
+                    lines += 1;
+                    col = s.columns;
+                    continue;
+                }
                 let w = if f.separator { s.columns.max(1) } else { f.width.clamp(1, s.columns.max(1)) };
                 if col + w > s.columns {
                     rows += 1;
@@ -666,10 +699,10 @@ pub fn estimated_height(s: &UiLayoutSection) -> u32 {
                 }
                 col += w;
             }
-            FRAME_HEADER_PX + rows.max(u32::from(s.min_height.unwrap_or(1))).max(1) * FRAME_ROW_PX
+            m.header + rows.max(u32::from(s.min_height.unwrap_or(1))).max(1) * m.row + lines * m.separator.unwrap_or(0)
         }
         UiSectionKind::Note => FRAME_NOTE_PX,
-        UiSectionKind::Record => FRAME_RECORD_PX,
+        UiSectionKind::Record => m.record,
         _ => FRAME_PANEL_PX,
     };
     h.clamp(FRAME_MIN_H, FRAME_MAX_H)
@@ -679,6 +712,35 @@ pub fn estimated_height(s: &UiLayoutSection) -> u32 {
 /// starts a new row when it has `newRow` or does not fit), each as tall as its tallest section, with
 /// [`FRAME_GAP_PX`] between rows. `z` is 1..n in order.
 pub fn grid_frames<'a>(sections: impl IntoIterator<Item = &'a UiLayoutSection>, top: u32) -> Vec<UiSectionFrame> {
+    grid_frames_with(sections, top, &FRAME_METRICS)
+}
+
+/// Gives a tab whose windows are all still where an earlier version put them from the grid, with the
+/// heights of layout format 3 and earlier ([`LEGACY_FRAME_METRICS`]), the heights of the current format:
+/// the same columns and order, taller rows. A tab with a window moved, resized or added in the layout
+/// editor is left as it is. Sections without a frame are not counted (they are placed below on save).
+/// Returns whether the tab changed. Migration 0053 does the same to the stored layouts.
+pub fn resize_default_frames(tab: &mut UiLayoutTab) -> bool {
+    let framed = || tab.sections.iter().filter(|s| s.frame.is_some());
+    let legacy = grid_frames_with(framed(), 0, &LEGACY_FRAME_METRICS);
+    if legacy.is_empty() || !framed().map(|s| s.frame).eq(legacy.iter().map(|f| Some(*f))) {
+        return false;
+    }
+    let current = grid_frames_with(framed(), 0, &FRAME_METRICS);
+    if current == legacy {
+        return false;
+    }
+    for (s, f) in tab.sections.iter_mut().filter(|s| s.frame.is_some()).zip(current) {
+        s.frame = Some(f);
+    }
+    true
+}
+
+fn grid_frames_with<'a>(
+    sections: impl IntoIterator<Item = &'a UiLayoutSection>,
+    top: u32,
+    m: &FrameMetrics,
+) -> Vec<UiSectionFrame> {
     let cols = u32::from(GRID_COLUMNS);
     let (mut col, mut row_y, mut row_h) = (0u32, top, 0u32);
     let mut out = Vec::new();
@@ -688,7 +750,7 @@ pub fn grid_frames<'a>(sections: impl IntoIterator<Item = &'a UiLayoutSection>, 
             row_y = row_y.saturating_add(row_h + FRAME_GAP_PX);
             (col, row_h) = (0, 0);
         }
-        let h = estimated_height(s);
+        let h = estimated_height_with(s, m);
         out.push(UiSectionFrame {
             x: round4(f64::from(col) / f64::from(cols)),
             y: row_y.min(FRAME_MAX_Y),
@@ -972,20 +1034,23 @@ pub struct UiSettingsDocument {
     /// (key "standard"); settings without templates (older exports and versions) are converted on save.
     #[schema(max_items = 1000)]
     pub layout_templates: Vec<UiLayoutTemplate>,
-    /// Layout format of the document; always 3 when returned. Send back what was returned. A document
+    /// Layout format of the document; always 4 when returned. Send back what was returned. A document
     /// without it (an older configuration export, an older settings version being restored, an API client
     /// written before format 3) is from before layouts placed the record details and the relationships
     /// explicitly: when it is saved, every layout that has tabs and does not place them gets a "Record" and
     /// a "Relationships" section at the end of its first tab, as migration 0048 did with the stored
-    /// settings, so the detail page shows what it showed before.
+    /// settings, so the detail page shows what it showed before. In a document before format 4, a tab whose
+    /// windows are all still where they were placed from the grid gets them as tall as the detail page's
+    /// inline inputs need, as migration 0053 did with the stored settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schema(nullable = false, minimum = 2, maximum = 3)]
+    #[schema(nullable = false, minimum = 2, maximum = 4)]
     pub layout_format: Option<u8>,
 }
 
 /// Layout format of the documents the API stores and returns (`layoutFormat`): layouts with tabs show the
-/// record and relations panels only where they place them.
-pub const LAYOUT_FORMAT: u8 = 3;
+/// record and relations panels only where they place them (3), and the windows placed from the grid are as
+/// tall as the inline inputs need (4).
+pub const LAYOUT_FORMAT: u8 = 4;
 
 // ---------------------------------------------------------------------------
 // Structural rules (independent of the data model)
@@ -999,12 +1064,19 @@ impl Check for UiSettingsDocument {
 
 impl UiSettingsDocument {
     /// In the current layout format: a document from before format 3 gets the record and relations panels
-    /// placed where the detail page showed them (see [`place_implicit_panels`]).
+    /// placed where the detail page showed them (see [`place_implicit_panels`]); one from before format 4
+    /// gets the windows still placed from the grid resized (see [`resize_default_frames`]).
     pub fn upgraded(mut self) -> Self {
-        if self.layout_format.is_none_or(|f| f < LAYOUT_FORMAT) {
+        if self.layout_format.is_none_or(|f| f < 3) {
             let templates = self.layout_templates.iter_mut().map(|t| &mut t.layout.tabs);
             for tabs in self.layouts.iter_mut().map(|l| &mut l.tabs).chain(templates) {
                 place_implicit_panels(tabs);
+            }
+        }
+        if self.layout_format.is_none_or(|f| f < 4) {
+            let templates = self.layout_templates.iter_mut().flat_map(|t| &mut t.layout.tabs);
+            for tab in self.layouts.iter_mut().flat_map(|l| &mut l.tabs).chain(templates) {
+                resize_default_frames(tab);
             }
         }
         self.layout_format = Some(LAYOUT_FORMAT);
@@ -1026,7 +1098,7 @@ impl UiSettingsDocument {
         let mut e = Vec::new();
         let at = |p: String| format!("{prefix}{p}");
         if self.layout_format.is_some_and(|f| !(2..=LAYOUT_FORMAT).contains(&f)) {
-            e.push(custom(at("layoutFormat".into()), format!("2 or {LAYOUT_FORMAT}")));
+            e.push(custom(at("layoutFormat".into()), format!("2 to {LAYOUT_FORMAT}")));
         }
 
         let mut pages = HashSet::new();
@@ -2190,7 +2262,7 @@ mod tests {
         assert_eq!(frames(&n.layouts[0].tabs[1]), [("b", 0.0, 0, 0.5, 200, 2), ("n", 0.25, 40, 0.75, 120, 1)]);
         assert_eq!(n.layouts[0].tabs[1], d.layouts[0].tabs[1]);
         assert_eq!(n.layouts[0].tabs[0].placement, UiTabPlacement::Free);
-        assert_eq!(frames(&n.layouts[0].tabs[0]), [("a", 0.0, 0, 1.0, 96, 1)]);
+        assert_eq!(frames(&n.layouts[0].tabs[0]), [("a", 0.0, 0, 1.0, 170, 1)]);
         assert_eq!(serde_json::to_value(&n).unwrap()["layouts"][0]["tabs"][0]["placement"], "free");
     }
 
@@ -2243,13 +2315,14 @@ mod tests {
 
     #[test]
     fn grid_tabs_become_free_with_every_section_where_it_was() {
-        // Rows at y 0 (a; b with 3 field rows), 208 (c: 2 field rows), 368 (d) and 480 (r, a panel).
+        // Rows at y 0 (a; b with 3 field rows), 350 (c: 2 field rows), 618 (d) and 804 (r, a panel).
+        let row = |n: u32| FRAME_HEADER_PX + FRAME_BODY_PX + n * FRAME_ROW_PX;
         let expected = [
-            ("a", 0.0, 0, 0.5, 96, 1),
-            ("b", 0.5, 0, 0.5, 192, 2),
-            ("c", 0.0, 208, 1.0, 144, 3),
-            ("d", 0.0, 368, 0.3333, 96, 4),
-            ("r", 0.0, 480, 1.0, FRAME_PANEL_PX, 5),
+            ("a", 0.0, 0, 0.5, row(1), 1),
+            ("b", 0.5, 0, 0.5, row(3), 2),
+            ("c", 0.0, 350, 1.0, row(2), 3),
+            ("d", 0.0, 618, 0.3333, row(1), 4),
+            ("r", 0.0, 804, 1.0, FRAME_PANEL_PX, 5),
         ];
         // Free without frames, grid (still accepted, as older exports send it) and no placement at all.
         for placement in [json!("free"), json!("grid"), serde_json::Value::Null] {
@@ -2285,7 +2358,7 @@ mod tests {
                 ("left", 0.0, 0, 0.55, 300, 2),
                 ("right", 0.6, 10, 0.4, 200, 3),
                 ("low", 0.0, 500, 1.0, 100, 1),
-                ("new", 0.0, 616, 1.0, 96, 4),
+                ("new", 0.0, 616, 1.0, 170, 4),
             ]
         );
     }
@@ -2307,7 +2380,7 @@ mod tests {
                 ("c", 0.1, 0, 0.2, 60, 1),
                 ("a", 0.5, 0, 0.5, 200, 3),
                 ("b", 0.1235, 300, 0.3, 100, 2),
-                ("new", 0.0, 416, 1.0, 96, 4),
+                ("new", 0.0, 416, 1.0, 170, 4),
             ]
         );
         // Saving again changes nothing.
@@ -2337,7 +2410,7 @@ mod tests {
     }
 
     fn sections_doc(sections: serde_json::Value) -> UiSettingsDocument {
-        doc(json!({"layoutFormat": 3, "layouts": [{"classKey": "server", "tabs": [
+        doc(json!({"layoutFormat": 4, "layouts": [{"classKey": "server", "tabs": [
             {"key": "main", "label": "Main", "sections": sections}]}]}))
     }
 
@@ -2375,9 +2448,9 @@ mod tests {
         let stored = d.normalized();
         let section = &stored.layouts[0].tabs[0].sections[0];
         assert_eq!(section.fields[1].width, 2, "stored as the section's columns");
-        // Label, separator (a row of its own), separator: three rows.
+        // Label, a separator, the unknown attribute (until resolved), a separator: two rows and two lines.
         let frame = section.frame.unwrap();
-        assert_eq!(frame.h, FRAME_HEADER_PX + 4 * FRAME_ROW_PX);
+        assert_eq!(frame.h, FRAME_HEADER_PX + FRAME_BODY_PX + 2 * FRAME_ROW_PX + 2 * FRAME_SEPARATOR_PX);
         let json = serde_json::to_value(&section.fields).unwrap();
         assert_eq!(json[1], json!({"separator": true, "label": "Hardware", "width": 2}));
         assert_eq!(json[0], json!({"field": "label", "width": 1}), "fields are stored as before");
@@ -2442,7 +2515,7 @@ mod tests {
         let current = sections_doc(json!([{"key": "a", "label": "A", "fields": [{"field": "label"}]}]));
         assert_eq!(current.clone().upgraded(), current);
         let mut future = current.clone();
-        future.layout_format = Some(4);
+        future.layout_format = Some(LAYOUT_FORMAT + 1);
         assert_eq!(future.check()[0].field, "layoutFormat");
     }
 }

@@ -304,7 +304,8 @@ impl PathInput for VersionPath {
 /// A stored document, in the current layout format and normalised: layout tabs
 /// stored on the earlier grid come back free (see `UiLayoutTab::normalize`),
 /// one stored before layout format 3 gets its record and relations panels
-/// placed (see `UiSettingsDocument::upgraded`), so every reader, the export and the
+/// placed, one before format 4 its windows placed from the grid resized (see
+/// `UiSettingsDocument::upgraded`), so every reader, the export and the
 /// version history see what a save would store. Stored documents were validated
 /// on save; one that no longer parses (a future format change without a
 /// migration) falls back to the defaults rather than breaking the UI.
@@ -888,7 +889,7 @@ mod tests {
             call(&app, "POST", "/api/v1/ci-classes", &s, Some(json!({ "key": "server", "name": "Server" }))).await;
         assert_eq!(status, 201, "{v}");
         let (_, current, _) = call(&app, "GET", "/api/v1/ui-settings", &s, None).await;
-        assert_eq!(current["settings"]["layoutFormat"], 3, "{current}");
+        assert_eq!(current["settings"]["layoutFormat"], 4, "{current}");
         let version = current["version"].as_i64().unwrap();
         let older = json!({ "layouts": [{ "classKey": "server", "tabs": [{ "key": "main", "label": "Main", "sections": [
             { "key": "core", "label": "Core", "fields": [
@@ -915,9 +916,9 @@ mod tests {
         assert_eq!(kinds(&saved["settings"]), ["fields", "record", "relations"], "{saved}");
         let section = &saved["settings"]["layouts"][0]["tabs"][0]["sections"][0];
         assert_eq!(section["fields"][1], json!({ "separator": true, "label": "Lifecycle", "width": 3 }), "{saved}");
-        assert_eq!(saved["settings"]["layoutFormat"], 3);
+        assert_eq!(saved["settings"]["layoutFormat"], 4);
 
-        // Sent back without the record details (the returned document, format 3): they stay removed.
+        // Sent back without the record details (the returned document, the current format): they stay removed.
         let mut edited = saved["settings"].clone();
         edited["layouts"][0]["tabs"][0]["sections"].as_array_mut().unwrap().remove(1);
         let (status, v, _) = call(

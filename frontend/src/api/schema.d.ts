@@ -6677,12 +6677,14 @@ export interface components {
             layoutTemplates: components["schemas"]["UiLayoutTemplate"][];
             /**
              * Format: int32
-             * @description Layout format of the document; always 3 when returned. Send back what was returned. A document
+             * @description Layout format of the document; always 4 when returned. Send back what was returned. A document
              *     without it (an older configuration export, an older settings version being restored, an API client
              *     written before format 3) is from before layouts placed the record details and the relationships
              *     explicitly: when it is saved, every layout that has tabs and does not place them gets a "Record" and
              *     a "Relationships" section at the end of its first tab, as migration 0048 did with the stored
-             *     settings, so the detail page shows what it showed before.
+             *     settings, so the detail page shows what it showed before. In a document before format 4, a tab whose
+             *     windows are all still where they were placed from the grid gets them as tall as the detail page's
+             *     inline inputs need, as migration 0053 did with the stored settings.
              * @default null
              */
             layoutFormat: number;

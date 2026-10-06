@@ -8,7 +8,7 @@ use crate::modules::api_tokens::tests::{Creds, app, call, code};
 
 /// One tab, in the current layout format (it shows the panels it places, and no others).
 fn layout(sections: Value) -> Value {
-    json!({"layoutFormat": 3, "layouts": [{"classKey": "server", "tabs": [{"key": "t", "label": "T", "sections": sections}]}]})
+    json!({"layoutFormat": 4, "layouts": [{"classKey": "server", "tabs": [{"key": "t", "label": "T", "sections": sections}]}]})
 }
 
 fn errors(v: &Value) -> Vec<&str> {
@@ -124,7 +124,7 @@ async fn free_tabs_are_validated_normalised_audited_and_exported() {
     let (_, current, _) = call(&app, "GET", "/api/v1/ui-settings", &s, None).await;
     let version = current["version"].as_i64().unwrap();
     let free = |sections: Value| {
-        json!({"layoutFormat": 3, "layouts": [{"classKey": "server", "tabs": [
+        json!({"layoutFormat": 4, "layouts": [{"classKey": "server", "tabs": [
             {"key": "t", "label": "T", "placement": "free", "sections": sections}]}]})
     };
 

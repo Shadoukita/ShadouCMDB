@@ -8,7 +8,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::db::{MIGRATOR, scratch};
-use crate::modules::ui_settings::document::{LAYOUT_FORMAT, UiLayout, UiSettingsDocument, place_implicit_panels};
+use crate::modules::ui_settings::document::{UiLayout, UiSettingsDocument, place_implicit_panels};
 
 fn record(key: &str) -> Value {
     json!({ "key": key, "label": "Record", "kind": "record", "columns": 3, "width": 12, "fields": [], "collapsed": false })
@@ -115,7 +115,7 @@ async fn layouts_get_the_record_and_relations_sections_they_showed() {
             .unwrap();
     }
 
-    MIGRATOR.run(pool).await.expect("migration 0048");
+    MIGRATOR.run_to(48, pool).await.expect("migration 0048");
 
     let (version, s) = current(pool).await;
     assert_eq!(version, before_version + 1, "saved as a new version");
@@ -159,16 +159,17 @@ async fn layouts_get_the_record_and_relations_sections_they_showed() {
     // The API converts the old document the same way, and the result is valid for a save.
     let stored: UiSettingsDocument = serde_json::from_value(s.clone()).expect("the new format");
     let old: UiSettingsDocument = serde_json::from_value(settings_before()).expect("the old format");
-    assert_eq!(stored.layout_format, Some(LAYOUT_FORMAT));
-    assert_eq!(old.clone().upgraded(), stored);
-    assert_eq!(stored.clone().upgraded(), stored, "format 3 is left alone");
+    assert_eq!(stored.layout_format, Some(3));
+    assert_eq!(old.clone().upgraded(), stored.clone().upgraded());
     assert!(stored.problems("").is_empty(), "{:?}", stored.problems(""));
     // Read back, the new sections are windows below the first tab's others.
-    let read = stored.normalized();
+    let read = stored.upgraded().normalized();
     let tab = &read.layout_templates[1].layout.tabs[0];
     let rec = tab.sections.last().unwrap();
     assert_eq!(rec.key, "record_2");
-    assert_eq!(rec.frame.map(|f| (f.x, f.y, f.w)), Some((0.0, 144 + 16, 1.0)), "below the note");
+    // The first tab's windows are where the grid put them, so format 4 makes "Main" taller (one row of
+    // fields: 170 px); the note stays the taller one.
+    assert_eq!(rec.frame.map(|f| (f.x, f.y, f.w)), Some((0.0, 170 + 16, 1.0)), "below the windows");
 
     // The CIs' own layouts: the one with tabs converted, with a new version, audited like the API's writes.
     type Row = (Uuid, Option<Value>, i32, String, Option<String>);
@@ -213,8 +214,8 @@ async fn settings_without_tabs_get_no_new_version() {
     let empty = json!({ "tabs": [], "hiddenFields": [], "readOnlyFields": [] });
     store(pool, &json!({ "layoutTemplates": [{ "key": "standard", "name": "Standard", "layout": empty }] })).await;
     let before = current(pool).await;
-    MIGRATOR.run(pool).await.expect("migration 0048");
+    MIGRATOR.run_to(48, pool).await.expect("migration 0048");
     assert_eq!(current(pool).await, before);
-    MIGRATOR.run(pool).await.expect("re-run");
+    MIGRATOR.run_to(48, pool).await.expect("re-run");
     db.drop().await;
 }

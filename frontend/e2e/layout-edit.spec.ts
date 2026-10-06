@@ -724,3 +724,88 @@ test("record details and relationships are panels: moved, removed and added back
 
   await resetUiSettings(request);
 });
+
+test("a tabbed layout upgraded by migration 0048: one Record with its details, no window cut off, and it saves with its separator", async ({ page: origin, request }) => {
+  await resetUiSettings(request);
+  const current = await apiGet<{ version: number }>(request, "/ui-settings");
+  // What migration 0048 left (layout format 3): the record details placed at the end of the first tab, the
+  // relationships on the second, each window where the old estimate (48 px per row of fields) put it (GH#619,
+  // GH#621), and a separator between two fields (GH#620).
+  const frame = (y: number, h: number, z: number) => ({ x: 0, y, w: 1, h, z });
+  const network = [{ field: "attributes.serial_number", width: 1 }, { separator: true, label: "Vendor", width: 3 }, { field: "attributes.manufacturer", width: 1 }];
+  const upgraded = {
+    classKey: "server",
+    tabs: [
+      {
+        key: "general",
+        label: "General",
+        placement: "free",
+        sections: [
+          { key: "network", label: "Network", columns: 3, width: 12, collapsed: false, fields: network, frame: frame(0, 48 + 3 * 48, 1) },
+          { key: "note", label: "Read me", kind: "note", text: "Patch on Sundays", columns: 3, width: 12, collapsed: false, fields: [], frame: frame(208, 144, 2) },
+          { key: "record", label: "Record", kind: "record", columns: 3, width: 12, collapsed: false, fields: [], frame: frame(368, 144, 3) },
+        ],
+      },
+      { key: "links", label: "Links", placement: "free", sections: [{ key: "relations", label: "Relationships", kind: "relations", columns: 3, width: 12, collapsed: false, fields: [], frame: frame(0, 320, 1) }] },
+    ],
+    hiddenFields: [],
+    readOnlyFields: [],
+  };
+  const res = await request.put("/api/v1/ui-settings", {
+    data: { version: current.version, settings: { layoutFormat: 3, layouts: [upgraded] } },
+    headers: { "X-CSRF-Token": await csrf(request) },
+  });
+  expect(res.ok(), await res.text()).toBeTruthy();
+  // Stored in format 4: the windows the grid placed are as tall as the inline inputs need, the rest is kept.
+  type Frame = { x: number; y: number; w: number; h: number; z: number };
+  type Stored = { settings: { layoutFormat: number; layouts: { classKey: string; tabs: { sections: { key: string; fields?: unknown[]; frame?: Frame }[] }[] }[] } };
+  const stored = await apiGet<Stored>(request, "/ui-settings");
+  expect(stored.settings.layoutFormat).toBe(4);
+  const tabs = stored.settings.layouts.find((l) => l.classKey === "server")!.tabs;
+  expect(tabs[0].sections.map((s) => [s.key, s.frame?.y, s.frame?.h])).toEqual([
+    ["network", 0, 88 + 2 * 82 + 28],
+    ["note", 296, 144],
+    ["record", 456, 88 + 2 * 82],
+  ]);
+  expect(tabs[0].sections[0].fields).toEqual(network);
+  expect(tabs[1].sections.map((s) => [s.key, s.frame])).toEqual([["relations", frame(0, 320, 1)]]);
+
+  // The detail page at a common desktop size: one Record, with the record details, where the layout puts it.
+  await origin.setViewportSize({ width: 1440, height: 900 });
+  await origin.goto(`/cis/${ci.id}`);
+  const headings = origin.locator(".layout-container details > summary h2");
+  await expect(headings).toHaveText(["Network", "Read me", "Record"]);
+  await expect(pagePanel(origin, "Record")).toContainText(ci.id);
+  await expect(origin.getByRole("separator", { name: "Vendor" })).toBeVisible();
+  // No window scrolls its inline inputs or the record details out of view (GH#621).
+  const clipped = () =>
+    origin.locator(".lg-free > details.lg-win[open]").evaluateAll((els) =>
+      els.filter((e) => e.scrollHeight > e.clientHeight + 1).map((e) => `${e.getAttribute("data-section")}: ${e.clientHeight}/${e.scrollHeight}`),
+    );
+  await expect(origin.locator('details[data-section="network"] input').first()).toBeVisible();
+  expect(await clipped()).toEqual([]);
+  await snap(origin, "layout-upgraded-0048");
+  // The comfortable density has the taller inputs the heights are sized for.
+  await origin.evaluate(() => localStorage.setItem("shadoucmdb.density", "comfortable"));
+  await origin.reload();
+  await expect(origin.locator("html")).toHaveAttribute("data-density", "comfortable");
+  await expect(origin.locator('details[data-section="network"] input').first()).toBeVisible();
+  expect(await clipped()).toEqual([]);
+  await origin.evaluate(() => localStorage.removeItem("shadoucmdb.density"));
+  await origin.reload();
+
+  // The editor loads the separator and saves a change to the layout (GH#620).
+  const page = await openEditor(origin);
+  await expect(section(page, "Network").locator(".le-sep")).toHaveText(/Vendor/);
+  await page.getByRole("button", { name: /^Manufacturer, / }).focus();
+  await page.keyboard.press("Alt+ArrowRight");
+  await expect(page.getByRole("button", { name: /^Manufacturer, / })).toHaveAccessibleName(/Manufacturer, 2 of 3 columns/);
+  await saveLayout(page);
+  await page.close();
+  type Tabs = { tabs?: { sections: { key: string; fields?: unknown[] }[] }[] };
+  const saved = await apiGet<{ settings: { layouts: Tabs[]; layoutTemplates: { layout: Tabs }[] } }>(request, "/ui-settings");
+  const layouts = [...saved.settings.layouts, ...saved.settings.layoutTemplates.map((t) => t.layout)];
+  const fields = layouts.flatMap((l) => l.tabs ?? []).flatMap((t) => t.sections).find((s) => s.key === "network")!.fields;
+  expect(fields).toEqual([network[0], network[1], { field: "attributes.manufacturer", width: 2 }]);
+  await resetUiSettings(request);
+});

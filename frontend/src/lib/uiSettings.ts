@@ -32,7 +32,7 @@ export function emptyDocument(): UiSettingsDocument {
     listViews: [],
     layouts: [],
     layoutTemplates: [],
-    layoutFormat: 3,
+    layoutFormat: 4,
   };
 }
 
@@ -56,8 +56,8 @@ export function normalizeDocument(doc: Partial<UiSettingsDocument> | undefined):
     // Kept as the API sent them (classes and CIs refer to them, and the API refuses to drop one in use), as a
     // copy: the editors change the draft, and the query cache's data is read-only.
     layoutTemplates: JSON.parse(JSON.stringify(d.layoutTemplates ?? [])) as UiSettingsDocument["layoutTemplates"],
-    // Sent back as returned (the API returns 3, the current format).
-    layoutFormat: d.layoutFormat ?? 3,
+    // Sent back as returned (the API returns 4, the current format).
+    layoutFormat: d.layoutFormat ?? 4,
   };
 }
 
