@@ -2872,7 +2872,7 @@ export interface paths {
         };
         /**
          * Get a workflow definition, with its current version number and its draft's checksum
-         * @description Requires `workflows.manage`.
+         * @description Requires `workflows.manage`. While the workflow is active and drives a state field, `warnings` carries `UNINSTANCED_CIS` with the number of live CIs it covers that have no running instance, 0 included once every one has an instance (`count` is null when the caller may not view all the types it spans). Otherwise `warnings` is empty.
          */
         get: operations["getWorkflowDefinition"];
         put?: never;
@@ -7424,7 +7424,10 @@ export interface components {
             /** Format: date-time */
             updatedAt: string;
             updatedByName: string;
-            /** @description Filled by create and update only (e.g. `UNINSTANCED_CIS` when the workflow is activated); empty otherwise */
+            /**
+             * @description `UNINSTANCED_CIS` when the workflow is an active state-field driver: on read always (count 0 included), on
+             *     create and update only when the change makes it one and some CIs lack an instance; empty otherwise
+             */
             warnings: components["schemas"]["WorkflowWarning"][];
         };
         WorkflowDefinitionList: {
@@ -7828,8 +7831,8 @@ export interface components {
         WorkflowWarning: {
             /**
              * @description `UNINSTANCED_CIS`: the workflow drives a state field and is active, and this many live CIs it covers have
-             *     no running instance of it. Their state field cannot be edited (it is driven by the workflow) until an
-             *     instance is started on them.
+             *     no running instance of it (0 on read once every one has). Their state field cannot be edited (it is driven
+             *     by the workflow) until an instance is started on them.
              * @enum {string}
              */
             code: "UNINSTANCED_CIS";
