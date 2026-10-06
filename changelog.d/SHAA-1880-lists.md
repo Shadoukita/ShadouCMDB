@@ -25,5 +25,10 @@
   in each state are waiting for approval.
 - With `excludeActorsOf`, everyone who approved a request for one of the listed transitions is
   now refused, not only the approver whose vote completed it (GH-635).
-- **Upgrade:** migration 0053 adds two indexes on `workflow_approval_decisions`. The table is new
-  in this release, so the migration is quick.
+- Each refresh is audited on the CI as `workflow.approval_refresh`, also when nothing changed.
+  The entry holds the step's approvers and how many people may decide, before and after
+  (GH-663).
+- **Upgrade:** migration 0055 adds two indexes on `workflow_approval_decisions`. The table is new
+  in this release, so the migration is quick. Migration 0056 adds the `workflow.approval_refresh`
+  audit action and 0057 validates it in its own transaction, so the API keeps writing audit
+  entries while the log is scanned.
