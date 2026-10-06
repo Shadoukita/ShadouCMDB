@@ -402,13 +402,14 @@ test("layouts: the API validates the layout document and converts the older pane
   expect(v1.ok(), await v1.text()).toBeTruthy();
   const saved = (await v1.json()).settings.layouts[0];
   expect(saved.panels).toBeUndefined();
-  // Every tab is stored free (SHAA-1471): the section is a window at the full width.
+  // Every tab is stored free (SHAA-1471): the section is a window at the full width, as tall as its title bar
+  // and one row of inline inputs (GH#621).
   expect(saved.tabs).toEqual([
     {
       key: "general",
       label: "General",
       placement: "free",
-      sections: [{ key: "main", label: "Main", columns: 3, width: 12, collapsed: false, fields: [{ field: "attributes.model", width: 1 }], frame: { x: 0, y: 0, w: 1, h: 96, z: 1 } }],
+      sections: [{ key: "main", label: "Main", columns: 3, width: 12, collapsed: false, fields: [{ field: "attributes.model", width: 1 }], frame: { x: 0, y: 0, w: 1, h: 88 + 82, z: 1 } }],
     },
   ]);
 });
