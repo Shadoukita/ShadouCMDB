@@ -69,7 +69,7 @@ test("the editor window: add a tab and a section, move fields, save, and a viewe
   await origin.getByRole("button", { name: "Edit layout" }).click();
   await expect.poll(() => origin.context().pages().length).toBe(2);
   // Tall enough that a dragged field and where it is dropped are both in view.
-  await page.setViewportSize({ width: 1440, height: 2400 });
+  await page.setViewportSize({ width: 1440, height: 3200 });
   // The mode is unmistakable, and says what the change applies to.
   await expect(bar(page)).toContainText("Layout editor · Server");
   await expect(bar(page).getByTestId("le-target")).toContainText("Template: Standard");
@@ -361,7 +361,7 @@ test("content blocks: a note and built-in panels placed in the editor, on the de
   await resetUiSettings(request);
   await page.goto(`/cis/${ci.id}/layout-editor`);
   await expect(bar(page)).toBeVisible();
-  await page.setViewportSize({ width: 1440, height: 2400 });
+  await page.setViewportSize({ width: 1440, height: 3200 });
 
   // + Note: added with its text editor open; limited Markdown, raw HTML shown as text.
   await page.getByRole("button", { name: "Add a note to General" }).click();
@@ -456,7 +456,7 @@ test("windows dragged, resized, overlapped and layered, saved, and shown as plac
   await resetUiSettings(request);
   await origin.goto(`/cis/${ci.id}`);
   const page = await openEditor(origin);
-  await page.setViewportSize({ width: 1440, height: 2400 });
+  await page.setViewportSize({ width: 1440, height: 3200 });
   const area = page.locator("[data-le-area]");
   const win = (key: string) => page.locator(`[data-window="${key}"]`);
   const num = async (key: string, attr: "x" | "y" | "w" | "h" | "z") => Number(await win(key).getAttribute(`data-${attr}`));
@@ -622,7 +622,7 @@ test("record details and relationships are panels: moved, removed and added back
   await resetUiSettings(request);
   await page.goto(`/cis/${ci.id}/layout-editor`);
   await expect(bar(page)).toBeVisible();
-  await page.setViewportSize({ width: 1440, height: 2400 });
+  await page.setViewportSize({ width: 1440, height: 3200 });
   const say = page.locator(".le-canvas [aria-live=assertive]");
   const panelOptions = page.getByLabel("Add a panel to General").locator("option");
 
@@ -773,23 +773,26 @@ test("a tabbed layout upgraded by migration 0048: one Record with its details, n
   // The detail page at a common desktop size: one Record, with the record details, where the layout puts it.
   await origin.setViewportSize({ width: 1440, height: 900 });
   await origin.goto(`/cis/${ci.id}`);
-  const headings = origin.locator(".layout-container details > summary h2");
+  const headings = origin.locator(".layout-container .lg-free > .lg-win > .panel-header h2");
   await expect(headings).toHaveText(["Network", "Read me", "Record"]);
   await expect(pagePanel(origin, "Record")).toContainText(ci.id);
   await expect(origin.getByRole("separator", { name: "Vendor" })).toBeVisible();
   // No window scrolls its inline inputs or the record details out of view (GH#621).
+  const windows = origin.locator(".lg-free > .lg-win:not(.is-collapsed)");
   const clipped = () =>
-    origin.locator(".lg-free > details.lg-win[open]").evaluateAll((els) =>
+    windows.evaluateAll((els) =>
       els.filter((e) => e.scrollHeight > e.clientHeight + 1).map((e) => `${e.getAttribute("data-section")}: ${e.clientHeight}/${e.scrollHeight}`),
     );
-  await expect(origin.locator('details[data-section="network"] input').first()).toBeVisible();
+  await expect(origin.locator('.lg-win[data-section="network"] input').first()).toBeVisible();
+  await expect(windows).toHaveCount(3);
   expect(await clipped()).toEqual([]);
   await snap(origin, "layout-upgraded-0048");
   // The comfortable density has the taller inputs the heights are sized for.
   await origin.evaluate(() => localStorage.setItem("shadoucmdb.density", "comfortable"));
   await origin.reload();
   await expect(origin.locator("html")).toHaveAttribute("data-density", "comfortable");
-  await expect(origin.locator('details[data-section="network"] input').first()).toBeVisible();
+  await expect(origin.locator('.lg-win[data-section="network"] input').first()).toBeVisible();
+  await expect(windows).toHaveCount(3);
   expect(await clipped()).toEqual([]);
   await origin.evaluate(() => localStorage.removeItem("shadoucmdb.density"));
   await origin.reload();
