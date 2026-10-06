@@ -1602,10 +1602,20 @@ pub(crate) mod tests {
             .join("; ");
         let session = Creds { cookie: Some(cookie), csrf: me["csrfToken"].as_str().map(str::to_owned), bearer: None };
 
-        // One CI of a class the restricted reader may view, one of a class they may not;
-        // each has entries by every kind of actor (two by api_client).
-        let (shown, hidden, shown_class, hidden_class) =
-            (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        // One CI of a class the restricted reader may view, one of a class they may not
+        // (real CIs: one that no longer exists counts as hidden); each has entries by
+        // every kind of actor (two by api_client).
+        crate::seed::install_template(pool, "it_infrastructure").await.unwrap();
+        crate::seed::seed_demo_data(pool).await.unwrap();
+        let ci = |label: &'static str| async move {
+            sqlx::query_as::<_, (Uuid, Uuid)>("SELECT id, class_id FROM configuration_items WHERE label = $1")
+                .bind(label)
+                .fetch_one(pool)
+                .await
+                .unwrap()
+        };
+        let ((shown, shown_class), (hidden, hidden_class)) = (ci("fra1-esx-01").await, ci("crm-app-01").await);
+        assert_ne!(shown_class, hidden_class);
         for (ci, class) in [(shown, shown_class), (hidden, hidden_class)] {
             for actor in ["user", "api_client", "api_client", "import", "system"] {
                 sqlx::query(
