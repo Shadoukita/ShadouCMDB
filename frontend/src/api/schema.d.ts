@@ -3048,12 +3048,12 @@ export interface paths {
         };
         /**
          * Who may run which transition of a workflow
-         * @description Requires `workflows.manage`. Grants are per transition key and permission profile, for every version of the workflow. `_cancel` is the grant to cancel an instance. Running a transition also needs the edit right on the CI's type; administrators may run every transition.
+         * @description Requires `workflows.manage`. Grants are per transition key and permission profile, for every version of the workflow. `_cancel` is the grant to cancel an instance, `_start` the grant to start the workflow again on a CI where an instance of it ended. Running a transition also needs the edit right on the CI's type; administrators may run every transition.
          */
         get: operations["getWorkflowGrants"];
         /**
          * Replace who may run which transition of a workflow
-         * @description Requires `workflows.manage`. `grants` is the complete new set; profiles are given by id or by name. Send the workflow's `version`: 409 VERSION_CONFLICT if it changed in between. An unknown profile is 400 VALIDATION_ERROR `not_found` on `grants[i].profiles[j]`, and a transition key that is neither `_cancel` nor a transition of any version or the draft is 400 `unknown_transition` on `grants[i].transitionKey`. A change bumps the workflow's version and is audited with the grants before and after, by profile name. A grant on a transition only the draft has is dropped (audited the same way) when the draft is deleted or saved without it. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `workflows.manage`. `grants` is the complete new set; profiles are given by id or by name. Send the workflow's `version`: 409 VERSION_CONFLICT if it changed in between. An unknown profile is 400 VALIDATION_ERROR `not_found` on `grants[i].profiles[j]`, and a transition key that is neither `_cancel`, `_start` nor a transition of any version or the draft is 400 `unknown_transition` on `grants[i].transitionKey`. A change bumps the workflow's version and is audited with the grants before and after, by profile name. A grant on a transition only the draft has is dropped (audited the same way) when the draft is deleted or saved without it. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         put: operations["replaceWorkflowGrants"];
         post?: never;
@@ -3162,7 +3162,7 @@ export interface paths {
         put?: never;
         /**
          * Start a workflow on a CI
-         * @description Needs the edit right on the CI's type. The instance starts in the initial state of the workflow's current version and stays on that version. When the workflow drives a state field and the initial state maps to one of its values, the CI's field is set (a CI `update` audit row). 404 when the CI or the workflow does not exist or is of a type the caller may not view. 400 VALIDATION_ERROR `not_covered` when the workflow does not run on the CI's type. 409 CONFLICT `deleted` (the CI is deleted), `unpublished`, `inactive` or `already_running` (one running instance per workflow and CI). Audited on the CI as `workflow.start`.
+         * @description Needs the edit right on the CI's type. Starting the workflow again on a CI where an instance of it completed or was cancelled also needs `workflows.manage` or the workflow's `_start` grant (else 403 FORBIDDEN), since it sets the state field back to the initial state. The instance starts in the initial state of the workflow's current version and stays on that version. When the workflow drives a state field and the initial state maps to one of its values, the CI's field is set (a CI `update` audit row). 404 when the CI or the workflow does not exist or is of a type the caller may not view. 400 VALIDATION_ERROR `not_covered` when the workflow does not run on the CI's type. 409 CONFLICT `deleted` (the CI is deleted), `unpublished`, `inactive` or `already_running` (one running instance per workflow and CI). Audited on the CI as `workflow.start`.
          */
         post: operations["startWorkflowInstance"];
         delete?: never;
@@ -3949,7 +3949,8 @@ export interface components {
             data: components["schemas"]["WorkflowInstanceView"][];
             /**
              * @description Active workflows of the CI's type that are not running on it and that the caller may start (the edit right
-             *     on the type); empty for a deleted CI
+             *     on the type; where an instance of the workflow ended, also `workflows.manage` or its `_start` grant); empty
+             *     for a deleted CI
              */
             startable: components["schemas"]["WorkflowStartable"][];
             /**
@@ -4066,7 +4067,7 @@ export interface components {
                     layout?: Record<string, never>;
                 };
                 grants?: {
-                    /** @description A transition key (of any version), or `_cancel` for cancelling an instance */
+                    /** @description A transition key (of any version), `_cancel` for cancelling an instance, or `_start` for starting the workflow again on a CI where an instance of it ended */
                     transition: string;
                     profiles: string[];
                 }[];
@@ -7618,7 +7619,7 @@ export interface components {
         };
         /** @description The profiles that may run one transition */
         WorkflowGrant: {
-            /** @description A transition key, or `_cancel` for cancelling an instance */
+            /** @description A transition key, `_cancel` for cancelling an instance, or `_start` for starting it again on a CI where it ended */
             transitionKey: string;
             profiles: components["schemas"]["WorkflowGrantProfile"][];
         };
@@ -27023,7 +27024,7 @@ export interface operations {
                             layout?: Record<string, never>;
                         };
                         grants?: {
-                            /** @description A transition key (of any version), or `_cancel` for cancelling an instance */
+                            /** @description A transition key (of any version), `_cancel` for cancelling an instance, or `_start` for starting the workflow again on a CI where an instance of it ended */
                             transition: string;
                             profiles: string[];
                         }[];
@@ -28661,7 +28662,7 @@ export interface operations {
                     version: number;
                     /** @description Every grant of the workflow (replaces the current set) */
                     grants: {
-                        /** @description A transition key (of any version), or `_cancel` for cancelling an instance */
+                        /** @description A transition key (of any version), `_cancel` for cancelling an instance, or `_start` for starting the workflow again on a CI where an instance of it ended */
                         transitionKey: string;
                         /** @description Permission profiles by id or by name (regardless of case) */
                         profiles: string[];

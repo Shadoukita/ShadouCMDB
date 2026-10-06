@@ -336,7 +336,8 @@ pub fn routes() -> Vec<Route> {
             .summary("Who may run which transition of a workflow")
             .description(
                 "Grants are per transition key and permission profile, for every version of the workflow. `_cancel` \
-                 is the grant to cancel an instance. Running a transition also needs the edit right on the CI's type; \
+                 is the grant to cancel an instance, `_start` the grant to start the workflow again on a CI where an \
+                 instance of it ended. Running a transition also needs the edit right on the CI's type; \
                  administrators may run every transition.",
             )
             .requires(manage)
@@ -350,8 +351,8 @@ pub fn routes() -> Vec<Route> {
             .description(
                 "`grants` is the complete new set; profiles are given by id or by name. Send the workflow's \
                  `version`: 409 VERSION_CONFLICT if it changed in between. An unknown profile is 400 \
-                 VALIDATION_ERROR `not_found` on `grants[i].profiles[j]`, and a transition key that is neither `_cancel` \
-                 nor a transition of any version or the draft is 400 `unknown_transition` on \
+                 VALIDATION_ERROR `not_found` on `grants[i].profiles[j]`, and a transition key that is neither `_cancel`, \
+                 `_start` nor a transition of any version or the draft is 400 `unknown_transition` on \
                  `grants[i].transitionKey`. A change bumps the workflow's version and \
                  is audited with the grants before and after, by profile name. A grant on a transition only the \
                  draft has is dropped (audited the same way) when the draft is deleted or saved without it.",
@@ -514,7 +515,9 @@ pub fn runtime_routes() -> Vec<Route> {
             .tag(RUN_TAG)
             .summary("Start a workflow on a CI")
             .description(
-                "Needs the edit right on the CI's type. The instance starts in the initial state of the workflow's \
+                "Needs the edit right on the CI's type. Starting the workflow again on a CI where an instance of it \
+                 completed or was cancelled also needs `workflows.manage` or the workflow's `_start` grant (else 403 \
+                 FORBIDDEN), since it sets the state field back to the initial state. The instance starts in the initial state of the workflow's \
                  current version and stays on that version. When the workflow drives a state field and the initial \
                  state maps to one of its values, the CI's field is set (a CI `update` audit row). 404 when the CI \
                  or the workflow does not exist or is of a type the caller may not view. 400 VALIDATION_ERROR \

@@ -200,8 +200,9 @@ describe("grants matrix", () => {
     { transitionKey: "approve", profiles: [{ id: "p2", name: "B" }, { id: "p1", name: "A" }] },
     { transitionKey: "old_key", profiles: [{ id: "p1", name: "A" }] },
     { transitionKey: "_cancel", profiles: [] },
+    { transitionKey: "_start", profiles: [{ id: "p1", name: "A" }] },
   ];
-  test("rows: draft and current transitions by key, then keys only grants name, then cancelling", () => {
+  test("rows: draft and current transitions by key, then keys only grants name, then starting again and cancelling", () => {
     const rows = grantRows([[{ key: "approve", name: "Approve (new)" }], [{ key: "approve", name: "Approve" }, { key: "reject", name: "Reject" }]], grants);
     assert.deepEqual(
       rows.map((r) => [r.key, r.name, r.orphan]),
@@ -209,6 +210,7 @@ describe("grants matrix", () => {
         ["approve", "Approve (new)", false],
         ["reject", "Reject", false],
         ["old_key", "old_key", true],
+        ["_start", "Start again after an instance ended", false],
         ["_cancel", "Cancel an instance", false],
       ],
     );
@@ -219,6 +221,7 @@ describe("grants matrix", () => {
     assert.deepEqual(grantsBody(sets), [
       { transitionKey: "approve", profiles: ["p1", "p2"] },
       { transitionKey: "old_key", profiles: ["p1"] },
+      { transitionKey: "_start", profiles: ["p1"] },
     ]);
   });
 });

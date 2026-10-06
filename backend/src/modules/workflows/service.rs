@@ -26,6 +26,8 @@ const TABLE: &str = "workflow_definitions";
 const LABEL: &str = "Workflow definition";
 /// The grant key for cancelling an instance; never a transition key.
 const CANCEL_KEY: &str = "_cancel";
+/// The grant key for starting a workflow again on a CI where it ended (GH#666).
+const START_KEY: &str = "_start";
 
 const COLUMNS: &str = "d.id, d.key, d.name, d.description, d.class_id, c.key AS class_key, d.include_subclasses, \
      d.state_attribute_id, a.key AS state_attribute_key, d.auto_start, d.is_active, \
@@ -953,7 +955,7 @@ pub async fn replace_grants(
     Ok(WorkflowGrants { version, grants })
 }
 
-/// The keys a grant may name: `_cancel` and every transition key of any
+/// The keys a grant may name: `_cancel`, `_start` and every transition key of any
 /// version of the definition, its draft included.
 pub(crate) async fn transition_keys(conn: &mut PgConnection, id: Uuid) -> Result<HashSet<String>, AppError> {
     let mut keys: HashSet<String> = sqlx::query_scalar(
@@ -966,6 +968,7 @@ pub(crate) async fn transition_keys(conn: &mut PgConnection, id: Uuid) -> Result
     .into_iter()
     .collect();
     keys.insert(CANCEL_KEY.to_owned());
+    keys.insert(START_KEY.to_owned());
     Ok(keys)
 }
 

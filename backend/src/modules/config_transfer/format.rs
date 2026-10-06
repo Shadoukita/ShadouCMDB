@@ -669,7 +669,7 @@ fn grant_profiles_schema() -> Schema {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkflowGrantSpec {
-    /// Transition key, or `_cancel` for cancelling an instance
+    /// Transition key, `_cancel` for cancelling an instance, or `_start` for starting it again on a CI where it ended
     #[schema(schema_with = grant_key_schema)]
     pub transition: String,
     /// Permission profile names (case-insensitive), in the file or already here

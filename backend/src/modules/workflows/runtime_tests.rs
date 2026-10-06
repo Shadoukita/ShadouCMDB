@@ -472,6 +472,8 @@ async fn workflow_instances_run_with_conditions_grants_and_audit() {
     assert_eq!(status, 200, "{v}");
     assert_eq!(v["data"][0]["instance"]["status"], "cancelled");
     assert_eq!(v["data"][0]["availableTransitions"], json!([]));
+    assert_eq!(v["startable"], json!([]), "starting again needs the _start grant (GH#666)");
+    let (_, v) = w.call(&w.admin, "GET", &format!("/api/v1/configuration-items/{ci2}/workflows"), None).await;
     assert_eq!(v["startable"][0]["definitionKey"], "server_lifecycle");
     let (_, v) = w.call(&viewer, "GET", &format!("/api/v1/configuration-items/{ci2}/workflows"), None).await;
     assert_eq!(v["startable"], json!([]), "no edit right, nothing to start");
@@ -709,6 +711,91 @@ async fn unpublished_and_inactive_workflows_start_nothing() {
     w.ok("PATCH", &format!("{DEFS}/{}", w.definition), json!({ "version": def["version"], "isActive": false })).await;
     let (status, v) = w.start(&w.admin, w.ci(w.server).await).await;
     assert_eq!((status, details(&v)), (409, pairs(&[("definitionId", "inactive")])), "{v}");
+    db.drop().await;
+}
+
+/// GH#666: starting a workflow again on a CI where it completed or was
+/// cancelled sets the state field back to the initial state, so the edit right
+/// alone is not enough: it needs `workflows.manage` or the `_start` grant. The
+/// first start needs only the edit right.
+#[tokio::test]
+async fn starting_again_where_a_workflow_ended_needs_the_start_grant() {
+    let Some(db) = scratch::database("workflow_restart_grant").await else { return };
+    let w = world(&db).await;
+    let (approver, _) = w.user("approver", &[w.approvers]).await;
+    let (editor, _) = w.user("editor", &[w.editors]).await;
+    let ci = w.ci(w.server).await;
+    let item = format!("/api/v1/configuration-items/{ci}");
+    let workflows = format!("{item}/workflows");
+    w.ok("PATCH", &item, json!({ "attributes": { "environment": "prod" } })).await;
+
+    // The repro: the editor starts it, the approver takes it live.
+    let (status, v) = w.start(&editor, ci).await;
+    assert_eq!(status, 201, "the first start needs only the edit right: {v}");
+    let instance = id(&v["instance"]);
+    let run = |key: &str, version: i64| {
+        json!({ "transitionKey": key, "expectedVersion": version,
+        "fields": { "owner_team": "ops", "risk": 1 }, "comment": "CAB ok" })
+    };
+    let (status, v) = w.transition(&approver, instance, run("approve", 1)).await;
+    assert_eq!(status, 200, "{v}");
+    let (status, v) =
+        w.transition(&approver, instance, json!({ "transitionKey": "go_live", "expectedVersion": 2 })).await;
+    assert_eq!((status, v["status"].as_str()), (200, Some("completed")), "{v}");
+    let live = json!(w.value("live").to_string());
+    assert_eq!(w.ci_values(ci).await["attributes"]["lifecycle"], live);
+
+    // Neither a PATCH nor a new start lets the editor put it back to planned.
+    let planned = w.value("planned").to_string();
+    let (status, v) = w.call(&editor, "PATCH", &item, Some(json!({ "attributes": { "lifecycle": planned } }))).await;
+    assert_eq!((status, code(&v)), (409, "WORKFLOW_CONTROLLED_FIELD"), "{v}");
+    let (status, v) = w.start(&editor, ci).await;
+    assert_eq!((status, code(&v)), (403, "FORBIDDEN"), "{v}");
+    assert_eq!(w.ci_values(ci).await["attributes"]["lifecycle"], live, "nothing changed");
+    let (_, v) = w.call(&editor, "GET", &workflows, None).await;
+    assert_eq!(v["startable"], json!([]), "not offered to the editor: {v}");
+    let (_, v) = w.call(&approver, "GET", &workflows, None).await;
+    assert_eq!(v["startable"], json!([]), "the approver has no _start grant either: {v}");
+
+    // Cancel, then start: the _cancel grant holder may cancel, not restart.
+    let ci2 = w.ci(w.server).await;
+    let (_, v) = w.start(&editor, ci2).await;
+    let second = id(&v["instance"]);
+    let cancel = json!({ "expectedVersion": 1, "reason": "Server order withdrawn" });
+    let (status, v) = w.call(&approver, "POST", &format!("{RUN}/{second}/cancel"), Some(cancel)).await;
+    assert_eq!(status, 200, "{v}");
+    let (status, v) = w.start(&approver, ci2).await;
+    assert_eq!((status, code(&v)), (403, "FORBIDDEN"), "{v}");
+
+    // The _start grant (or workflows.manage) allows it, audited as a start.
+    let def = w.ok("GET", &format!("{DEFS}/{}", w.definition), json!(null)).await;
+    w.ok(
+        "PUT",
+        &format!("{DEFS}/{}/grants", w.definition),
+        json!({ "version": def["version"], "grants": [
+            { "transitionKey": "approve", "profiles": ["Approvers"] },
+            { "transitionKey": "go_live", "profiles": ["Approvers"] },
+            { "transitionKey": "_cancel", "profiles": ["Approvers"] },
+            { "transitionKey": "_start", "profiles": ["Approvers"] }
+        ] }),
+    )
+    .await;
+    let (_, v) = w.call(&approver, "GET", &workflows, None).await;
+    assert_eq!(v["startable"][0]["definitionKey"], "server_lifecycle", "{v}");
+    let (_, v) = w.call(&editor, "GET", &workflows, None).await;
+    assert_eq!(v["startable"], json!([]), "{v}");
+    let (status, v) = w.start(&approver, ci).await;
+    assert_eq!((status, v["instance"]["state"]["key"].as_str()), (201, Some("planned")), "{v}");
+    assert_eq!(w.ci_values(ci).await["attributes"]["lifecycle"], json!(planned));
+    let (status, v) = w.start(&w.admin, ci2).await;
+    assert_eq!(status, 201, "workflows.manage: {v}");
+    let starts: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM audit_log WHERE entity_id = ANY($1) AND action = 'workflow.start'")
+            .bind(vec![ci, ci2])
+            .fetch_one(&w.pool)
+            .await
+            .unwrap();
+    assert_eq!(starts, 4);
     db.drop().await;
 }
 

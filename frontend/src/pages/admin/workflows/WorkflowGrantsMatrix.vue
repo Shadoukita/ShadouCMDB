@@ -6,7 +6,7 @@ import { useSaveGrants, useWorkflowDraft, useWorkflowGrants, useWorkflowVersion,
 import EmptyState from "../../../components/EmptyState.vue";
 import ErrorAlert from "../../../components/ErrorAlert.vue";
 import LoadingState from "../../../components/LoadingState.vue";
-import { CANCEL_GRANT, grantRows, grantSets, grantsBody } from "../../../lib/workflowDraft";
+import { PSEUDO_GRANTS, grantRows, grantSets, grantsBody } from "../../../lib/workflowDraft";
 
 /**
  * Who may run which transition: transitions (of the draft and the current version, by key) ×
@@ -113,7 +113,7 @@ function reset() {
   added.value = [];
   error.value = null;
 }
-const ungranted = computed(() => rows.value.filter((r) => r.key !== CANCEL_GRANT && !r.orphan && !(sets.value.get(r.key)?.size ?? 0)).length);
+const ungranted = computed(() => rows.value.filter((r) => !PSEUDO_GRANTS.includes(r.key) && !r.orphan && !(sets.value.get(r.key)?.size ?? 0)).length);
 </script>
 
 <template>
@@ -163,7 +163,7 @@ const ungranted = computed(() => rows.value.filter((r) => r.key !== CANCEL_GRANT
           <tbody>
             <tr v-for="r in rows" :key="r.key">
               <th scope="row">
-                {{ r.name }} <span v-if="r.key !== CANCEL_GRANT" class="mono muted">{{ r.key }}</span>
+                {{ r.name }} <span v-if="!PSEUDO_GRANTS.includes(r.key)" class="mono muted">{{ r.key }}</span>
                 <span v-if="r.orphan" class="badge off spaced" title="No longer in the draft or the current version">Older version</span>
               </th>
               <td v-for="c in columns" :key="c.id" class="wf-grant-cell">
