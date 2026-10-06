@@ -1501,8 +1501,13 @@ pub(crate) mod tests {
         .fetch_all(pool)
         .await
         .unwrap();
-        // The reset ends two sessions: C and the owner's own (GH#413).
-        assert_eq!(reasons, ["mfa_enrolled", "mfa_reset", "mfa_reset", "mfa_disabled"]);
+        // The reset ends two sessions: C and the owner's own (GH#413). Each
+        // confirm (the owner's two, the second administrator's) renews the
+        // confirming session (GH#510).
+        assert_eq!(
+            reasons,
+            ["rotated", "mfa_enrolled", "rotated", "mfa_reset", "mfa_reset", "rotated", "mfa_disabled"]
+        );
         db.drop().await;
     }
 
