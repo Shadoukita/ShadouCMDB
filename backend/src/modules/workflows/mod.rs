@@ -123,7 +123,7 @@ pub fn routes() -> Vec<Route> {
             .requires(manage)
             .handle(
                 |api, In(NoPath, Query(q), NoBody): In<NoPath, Query<WorkflowDefinitionList>, NoBody>| async move {
-                    Ok(Json(service::list(&api.pool, &q).await?))
+                    Ok(Json(service::list(&api.pool, &api.ctx, &q).await?))
                 },
             ),
         route(Method::POST, BASE, "createWorkflowDefinition")
@@ -210,7 +210,7 @@ pub fn routes() -> Vec<Route> {
             .requires(manage)
             .errors(&[ErrorCode::NotFound])
             .handle(|api, In(VersionNoPath(id, no), NoQuery, NoBody): In<VersionNoPath, NoQuery, NoBody>| async move {
-                Ok(Json(service::version(&api.pool, id, no).await?))
+                Ok(Json(service::version(&api.pool, &api.ctx, id, no).await?))
             }),
         route(Method::POST, RETIRE, "retireWorkflowVersion")
             .tag(TAG)
@@ -232,7 +232,7 @@ pub fn routes() -> Vec<Route> {
             .requires(manage)
             .errors(&[ErrorCode::NotFound])
             .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
-                Ok(Json(service::draft(&api.pool, id).await?))
+                Ok(Json(service::draft(&api.pool, &api.ctx, id).await?))
             }),
         route(Method::PUT, DRAFT, "replaceWorkflowDraft")
             .tag(TAG)
@@ -286,7 +286,7 @@ pub fn routes() -> Vec<Route> {
             .requires(manage)
             .errors(&[ErrorCode::NotFound])
             .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
-                Ok(Json(service::validate_draft(&api.pool, id).await?))
+                Ok(Json(service::validate_draft(&api.pool, &api.ctx, id).await?))
             }),
         route(Method::POST, PUBLISH, "publishWorkflowDraft")
             .tag(TAG)
@@ -343,7 +343,7 @@ pub fn routes() -> Vec<Route> {
             .requires(manage)
             .errors(&[ErrorCode::NotFound])
             .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
-                Ok(Json(service::grants(&api.pool, id).await?))
+                Ok(Json(service::grants(&api.pool, &api.ctx, id).await?))
             }),
         route(Method::PUT, GRANTS, "replaceWorkflowGrants")
             .tag(TAG)
@@ -381,7 +381,7 @@ pub fn routes() -> Vec<Route> {
             .requires(manage)
             .errors(&[ErrorCode::NotFound])
             .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
-                Ok(Json(approvers::get(&api.pool, id).await?))
+                Ok(Json(approvers::get(&api.pool, &api.ctx, id).await?))
             }),
         route(Method::PUT, APPROVERS, "replaceWorkflowApprovers")
             .tag(TAG)
