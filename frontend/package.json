@@ -15,7 +15,7 @@
     "api:check": "openapi-typescript ../backend/openapi.json -o src/api/schema.d.ts --check"
   },
   "dependencies": {
-    "@tanstack/vue-query": "^5.104.0",
+    "@tanstack/vue-query": "^5.104.1",
     "openapi-fetch": "^0.17.0",
     "pinia": "^4.0.3",
     "qrcode-generator": "^2.0.4",
@@ -25,11 +25,11 @@
   "devDependencies": {
     "@axe-core/playwright": "4.13.0",
     "@playwright/test": "^1.63.0",
-    "@types/node": "^22.20.4",
+    "@types/node": "^22.20.5",
     "@vitejs/plugin-vue": "^6.0.9",
     "openapi-typescript": "^7.13.0",
     "typescript": "^6.0.3",
-    "vite": "^8.3.1",
-    "vue-tsc": "^3.3.11"
+    "vite": "^8.3.2",
+    "vue-tsc": "^3.3.12"
   }
 }
