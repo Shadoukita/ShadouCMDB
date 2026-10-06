@@ -157,13 +157,16 @@ jobs:
           errors=$(grep -c '"level":"ERROR"' serve-custom.log || true)
           if [ "$errors" != "0" ]; then grep '"level":"ERROR"' serve-custom.log; exit 1; fi
           # GH#396: backup runs as the API role (DATABASE_URL), restore as the schema owner; the audit
-          # chain verifies afterwards and ends at the same head.
-          HEAD="SELECT last_seq || ':' || encode(last_hash, 'hex') FROM cmdb.audit_log_chain_head"
+          # chain verifies afterwards. GH#513: the restored chain continues from the backed-up head with
+          # exactly one backup.restore entry.
+          HEAD="SELECT (last_seq + 1) || ':' || encode(last_hash, 'hex') FROM cmdb.audit_log_chain_head"
           before=$(psql "postgres://invqa-owner:ci-owner@$U" -XAtc "$HEAD")
           $B backup --out "$RUNNER_TEMP/three-role.jsonl.gz"
           MIGRATION_DATABASE_URL="postgres://invqa-owner:ci-owner@$U" $B restore --replace --yes "$RUNNER_TEMP/three-role.jsonl.gz"
           $B audit-verify
-          test "$(psql "postgres://invqa-owner:ci-owner@$U" -XAtc "$HEAD")" = "$before"
+          test "$(psql "postgres://invqa-owner:ci-owner@$U" -XAtc \
+            "SELECT h.last_seq || ':' || encode(l.prev_hash, 'hex') || ':' || l.action::text
+               FROM cmdb.audit_log_chain_head h JOIN cmdb.audit_log l ON l.chain_seq = h.last_seq")" = "$before:backup.restore"
           $B verify
 
       # The unattended \password step of deploy/linux/README.txt (GH#450): empty input exits 0 and clears the password,

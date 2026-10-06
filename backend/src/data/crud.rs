@@ -368,6 +368,11 @@ pub enum AuditAction {
     #[serde(rename = "workflow.approval_overdue")]
     #[sqlx(rename = "workflow.approval_overdue")]
     WorkflowApprovalOverdue,
+    /// Written by `shadoucmdb restore`, never by the API (entity type
+    /// `audit_log`): the backup and the audit chain head it brought back.
+    #[serde(rename = "backup.restore")]
+    #[sqlx(rename = "backup.restore")]
+    BackupRestore,
 }
 
 impl AuditAction {
@@ -405,6 +410,7 @@ impl AuditAction {
             AuditAction::WorkflowApprovalDecide => "workflow.approval_decide",
             AuditAction::WorkflowApprovalClose => "workflow.approval_close",
             AuditAction::WorkflowApprovalOverdue => "workflow.approval_overdue",
+            AuditAction::BackupRestore => "backup.restore",
         }
     }
 }

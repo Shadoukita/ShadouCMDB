@@ -1,9 +1,12 @@
 //! `shadoucmdb audit-verify`: checks the audit_log hash chain (migration 0018).
 //!
-//! Prints the chain head (sequence number and hash). Compare it with the
-//! `rowHash` of the same `chainSeq` in the SIEM (`AUDIT_EXPORT`): someone who
-//! can rewrite the whole table can also recompute every hash in it, but not
-//! the copy that already left the host.
+//! Prints the chain head as `audit_log_chain_head` records it (sequence number
+//! and hash). Compare it with the `rowHash` of the same `chainSeq` in the SIEM
+//! (`AUDIT_EXPORT`): someone who can rewrite the whole table can also
+//! recompute every hash in it, but not the copy that already left the host.
+//!
+//! Gaps fail unless a prune-audit run accounts for them (`retention`, accepted
+//! with `--allow-gaps`); any other gap is `deleted` and always fails.
 
 use sqlx::Row;
 
@@ -18,10 +21,12 @@ pub async fn run(cfg: &DatabaseConfig, allow_gaps: bool) -> anyhow::Result<()> {
 }
 
 async fn check(pool: &sqlx::PgPool, allow_gaps: bool) -> anyhow::Result<()> {
+    // The head as the insert trigger recorded it (GH#511): the SIEM copy is
+    // compared with this, and audit_log_verify() with the row it points to.
     let (rows, head_seq, head_hash): (i64, Option<i64>, Option<String>) = sqlx::query_as(
         "SELECT (SELECT count(*) FROM audit_log),
-                (SELECT chain_seq FROM audit_log ORDER BY chain_seq DESC LIMIT 1),
-                (SELECT encode(row_hash, 'hex') FROM audit_log ORDER BY chain_seq DESC LIMIT 1)",
+                (SELECT last_seq FROM audit_log_chain_head),
+                (SELECT encode(last_hash, 'hex') FROM audit_log_chain_head)",
     )
     .fetch_one(pool)
     .await?;
@@ -30,32 +35,37 @@ async fn check(pool: &sqlx::PgPool, allow_gaps: bool) -> anyhow::Result<()> {
 
     println!("audit_log: {rows} rows");
     match (head_seq, head_hash) {
-        (Some(seq), Some(hash)) => println!("chain head: chainSeq {seq}, rowHash {hash}"),
+        (Some(seq), Some(hash)) if seq > 0 => println!("chain head: chainSeq {seq}, rowHash {hash}"),
         _ => println!("chain head: empty"),
     }
-    let mut altered = 0;
+    let (mut broken, mut retention) = (0, 0);
     for p in &problems {
         let seq: i64 = p.try_get("chain_seq")?;
         let id: Option<i64> = p.try_get("audit_id")?;
         let problem: String = p.try_get("problem")?;
         let detail: String = p.try_get("detail")?;
-        if problem != "gap" {
-            altered += 1;
+        // Only a gap a prune-audit run accounts for may pass (GH#512); a
+        // `deleted` gap fails like any other finding.
+        if problem == "retention" {
+            retention += 1;
+        } else {
+            broken += 1;
         }
         let id = id.map(|i| format!(" (id {i})")).unwrap_or_default();
-        println!("  {problem:<8} chainSeq {seq}{id}: {detail}");
+        println!("  {problem:<9} chainSeq {seq}{id}: {detail}");
     }
-    let gaps = problems.len() - altered;
-    if altered > 0 {
-        anyhow::bail!("audit_log chain is broken: {altered} altered, relinked or missing-tail finding(s)");
-    }
-    if gaps > 0 && !allow_gaps {
+    if broken > 0 {
         anyhow::bail!(
-            "audit_log has {gaps} gap(s): rows were deleted. If retention pruning removed them, re-run with --allow-gaps"
+            "audit_log chain is broken: {broken} finding(s) (altered, relinked, deleted, missing tail or head mismatch)"
         );
     }
-    if gaps > 0 {
-        println!("chain intact apart from {gaps} gap(s) (--allow-gaps)");
+    if retention > 0 && !allow_gaps {
+        anyhow::bail!(
+            "audit_log has {retention} gap(s) left by prune-audit runs; re-run with --allow-gaps to accept them"
+        );
+    }
+    if retention > 0 {
+        println!("chain intact apart from {retention} gap(s) left by prune-audit runs (--allow-gaps)");
     } else {
         println!("chain intact");
     }
@@ -249,7 +259,156 @@ mod tests {
         insert_in_one_transaction(&db.pool, 2).await;
         assert_eq!(
             problems(&db.pool).await,
-            vec![(n + 2, "gap".into(), format!("rows {} to {} missing", n + 1, n + 1))]
+            vec![(
+                n + 2,
+                "deleted".into(),
+                format!("rows {} to {} missing; no prune-audit run (audit.purge) accounts for them", n + 1, n + 1)
+            )]
+        );
+        db.drop().await;
+    }
+
+    /// Runs `sql` as the table owner with the append-only trigger off, the
+    /// way someone with the schema owner's rights edits the chain.
+    async fn behind_the_trigger(pool: &sqlx::PgPool, sql: &str) {
+        let mut c = pool.acquire().await.unwrap();
+        let mut tx = c.begin().await.unwrap();
+        tx.execute("ALTER TABLE audit_log DISABLE TRIGGER audit_log_append_only").await.unwrap();
+        tx.execute(sqlx::AssertSqlSafe(sql.to_owned())).await.unwrap();
+        tx.execute("ALTER TABLE audit_log ENABLE TRIGGER audit_log_append_only").await.unwrap();
+        tx.commit().await.unwrap();
+    }
+
+    /// Clears the log and resets the head, as on a database whose chain has
+    /// no rows yet, so a test numbers its rows from 1. A migrated scratch
+    /// database already holds rows dated now, which would sit before a test's
+    /// back-dated ones.
+    async fn empty_chain(pool: &sqlx::PgPool) {
+        behind_the_trigger(
+            pool,
+            "DELETE FROM audit_log;
+             UPDATE audit_log_chain_head SET last_seq = 0, last_hash = decode(repeat('00', 32), 'hex')",
+        )
+        .await;
+    }
+
+    /// `n` audit rows dated `days` ago, one transaction each.
+    async fn insert_dated(pool: &sqlx::PgPool, n: usize, days: i32) {
+        for _ in 0..n {
+            sqlx::query(
+                "INSERT INTO audit_log (occurred_at, actor_type, action, entity_type, entity_id, new_value)
+                 VALUES (now() - make_interval(days => $1), 'system', 'create', 'lookup_list', gen_random_uuid(), '{}')",
+            )
+            .bind(days)
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+    }
+
+    /// GH#511: the newest rows rewritten and their hashes recomputed with
+    /// cmdb.audit_log_hash() verify row by row; the head still holds the hash
+    /// the trigger wrote, and audit-verify prints that one.
+    #[tokio::test]
+    async fn rewritten_newest_rows_with_recomputed_hashes_fail_on_the_head() {
+        let Some(db) = scratch::database("rewritten_newest_rows_with_recomputed_hashes_fail_on_the_head").await else {
+            return;
+        };
+        insert_in_one_transaction(&db.pool, 5).await;
+        let (seq, written): (i64, String) =
+            sqlx::query_as("SELECT last_seq, encode(last_hash, 'hex') FROM audit_log_chain_head")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        // Oldest first, each re-linked onto the rewritten row before it.
+        let rehash = |s: i64| {
+            format!(
+                "UPDATE audit_log a SET new_value = '{{\"forged\": true}}',
+                   prev_hash = p.row_hash,
+                   row_hash = cmdb.audit_log_hash(p.row_hash, a.chain_seq, a.occurred_at, a.actor_type, a.actor_id,
+                       a.actor_name, a.action, a.entity_type, a.entity_id, a.old_value,
+                       '{{\"forged\": true}}'::jsonb, a.request_id)
+                 FROM audit_log p WHERE a.chain_seq = {s} AND p.chain_seq = {s} - 1"
+            )
+        };
+        behind_the_trigger(&db.pool, &format!("{}; {}", rehash(seq - 1), rehash(seq))).await;
+
+        let found = problems(&db.pool).await;
+        assert_eq!(
+            found.iter().map(|(s, p, _)| (*s, p.as_str())).collect::<Vec<_>>(),
+            vec![(seq, "head")],
+            "{found:?}"
+        );
+        assert!(found[0].2.contains(&written), "the detail names the hash the trigger wrote: {found:?}");
+        let err = super::check(&db.pool, true).await.unwrap_err().to_string();
+        assert!(err.contains("chain is broken"), "{err}");
+        db.drop().await;
+    }
+
+    /// GH#512: --allow-gaps accepts only gaps a prune-audit run accounts for.
+    #[tokio::test]
+    async fn only_a_prune_audit_run_excuses_a_gap() {
+        let Some(db) = scratch::database("only_a_prune_audit_run_excuses_a_gap").await else { return };
+        empty_chain(&db.pool).await;
+        insert_dated(&db.pool, 3, 60).await; // chainSeq 1..=3, old enough to prune
+        insert_dated(&db.pool, 3, 0).await; // 4..=6
+        sqlx::query("SELECT * FROM prune_audit_log(interval '40 days', 'changes', false, 'test')")
+            .execute(&db.pool)
+            .await
+            .unwrap(); // removes 1..=3, records audit.purge as 7
+        assert_eq!(
+            problems(&db.pool).await,
+            vec![(
+                4,
+                "retention".into(),
+                "rows 1 to 3 missing; pruned by the prune-audit run recorded at chainSeq 7".into()
+            )]
+        );
+        let err = super::check(&db.pool, false).await.unwrap_err().to_string();
+        assert!(err.contains("--allow-gaps"), "{err}");
+        super::check(&db.pool, true).await.unwrap();
+
+        // A recent row deleted behind the trigger: the purge does not cover it.
+        behind_the_trigger(&db.pool, "DELETE FROM audit_log WHERE chain_seq = 5").await;
+        assert_eq!(
+            problems(&db.pool).await.into_iter().map(|(s, p, _)| (s, p)).collect::<Vec<_>>(),
+            vec![(4, "retention".into()), (6, "deleted".into())]
+        );
+        let err = super::check(&db.pool, true).await.unwrap_err().to_string();
+        assert!(err.contains("chain is broken"), "{err}");
+
+        // Nor does a later prune-audit run: the row before the gap is newer than its cutoff.
+        insert_dated(&db.pool, 1, 0).await;
+        sqlx::query("SELECT * FROM prune_audit_log(interval '30 days', 'changes', false, 'test')")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        assert!(problems(&db.pool).await.contains(&(
+            6,
+            "deleted".into(),
+            "rows 5 to 5 missing; no prune-audit run (audit.purge) accounts for them".into()
+        )));
+        db.drop().await;
+    }
+
+    /// GH#512: an audit.purge row whose cutoff breaks the 30-day floor (one
+    /// prune_audit_log() would never write) excuses nothing.
+    #[tokio::test]
+    async fn a_purge_row_inside_the_floor_does_not_excuse_a_gap() {
+        let Some(db) = scratch::database("a_purge_row_inside_the_floor_does_not_excuse_a_gap").await else { return };
+        insert_dated(&db.pool, 3, 0).await;
+        sqlx::query(
+            "INSERT INTO audit_log (actor_type, actor_name, action, entity_type, entity_id, new_value)
+             VALUES ('system', 'forged', 'audit.purge', 'audit_log', gen_random_uuid(),
+                     jsonb_build_object('cutoff', now() + interval '1 day'))",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        behind_the_trigger(&db.pool, "DELETE FROM audit_log WHERE chain_seq = 2").await;
+        assert_eq!(
+            problems(&db.pool).await.into_iter().map(|(s, p, _)| (s, p)).collect::<Vec<_>>(),
+            vec![(3, "deleted".into())]
         );
         db.drop().await;
     }

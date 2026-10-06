@@ -10,7 +10,11 @@
 //! Delivery is at-least-once while the process runs: a failed send is retried
 //! from the same row on the next poll. The position is not persisted; after a
 //! restart export resumes at the newest row, and rows written while the server
-//! was down stay in the database only (their gap shows in `chainSeq`).
+//! was down stay in the database only (their gap shows in `chainSeq`). The
+//! exception is the `backup.restore` entry that `shadoucmdb restore` leaves at
+//! the end of the chain: it is sent at start-up (again after every restart
+//! until a newer row follows), so the collector learns which head the restore
+//! went back to (GH#513).
 //!
 //! A row that can never be sent (larger than one UDP datagram) must not hold
 //! the export up: it leaves as a stub without `oldValue` and `newValue`, with
@@ -315,6 +319,17 @@ async fn write_line<W: AsyncWriteExt + Unpin>(w: &mut W, msg: &str) -> std::io::
     w.flush().await
 }
 
+/// The first cursor: the newest row, before any `backup.restore` entries at the end.
+async fn start(pool: &PgPool) -> sqlx::Result<i64> {
+    sqlx::query_scalar(
+        "SELECT coalesce((SELECT chain_seq FROM audit_log WHERE action <> 'backup.restore'
+                          ORDER BY chain_seq DESC LIMIT 1), 0)",
+    )
+    .fetch_one(pool)
+    .await
+}
+
+#[cfg(test)]
 async fn head(pool: &PgPool) -> sqlx::Result<i64> {
     sqlx::query_scalar("SELECT coalesce(max(chain_seq), 0) FROM audit_log").fetch_one(pool).await
 }
@@ -415,7 +430,7 @@ async fn run(pool: PgPool, cfg: AuditExportConfig, tls: Option<TlsConnector>, mu
     let mut cursor = None;
     loop {
         cursor = match cursor {
-            None => match head(&pool).await {
+            None => match start(&pool).await {
                 Ok(seq) => {
                     tracing::info!(after_chain_seq = seq, "audit export started");
                     Some(seq)
