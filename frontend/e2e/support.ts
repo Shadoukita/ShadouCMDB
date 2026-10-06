@@ -180,7 +180,7 @@ export async function shownValue(page: Page, label: string): Promise<string> {
     if (ro) return ro.textContent ?? "";
     const select = el.querySelector("select");
     if (select) return select.value ? (select.selectedOptions[0]?.text ?? "") : "";
-    const picked = el.querySelector(".checkbox-row strong");
+    const picked = el.querySelector(".picker-value .picker-name");
     if (picked) return picked.textContent ?? "";
     return el.querySelector<HTMLInputElement | HTMLTextAreaElement>("input, textarea")?.value ?? "";
   });

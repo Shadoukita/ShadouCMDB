@@ -167,7 +167,7 @@ test("the CI form and detail page follow the new definitions", async ({ page }) 
   await expect(page.locator("#attr-rack_units")).toHaveValue("2");
   await expect(page.locator("#attr-rack_units-hint")).toContainText("Height in rack units");
   await expect(page.locator("#attr-tier option:checked")).toHaveText("Silver");
-  await expect(page.locator("#attr-tier option")).toHaveText(["— not set —", "Gold", "Bronze", "Silver"]);
+  await expect(page.locator("#attr-tier option")).toHaveText(["Not set", "Gold", "Bronze", "Silver"]);
   // Name and status are attributes the class inherits from Hardware.
   await page.locator("#attr-name").fill(CI);
   await page.locator("#attr-status").selectOption({ label: "In service" });

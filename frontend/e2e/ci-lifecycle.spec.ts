@@ -231,7 +231,9 @@ test("relationships: add in both directions; illegal pairs offer no type", async
 
   await expect(panel.getByRole("row")).toHaveCount(3); // header + 2
   await expect(panel.getByRole("row", { name: /is located in\s+FRA1 Rack A01/ })).toBeVisible();
-  await expect(panel.getByRole("row", { name: /hosts\s+CRM/ })).toContainText("← incoming");
+  // The direction is an icon named for assistive technology (audit R5).
+  await expect(panel.getByRole("row", { name: /is located in\s+FRA1 Rack A01/ }).getByRole("img", { name: "Outgoing" })).toBeVisible();
+  await expect(panel.getByRole("row", { name: /hosts\s+CRM/ }).getByRole("img", { name: "Incoming" })).toBeVisible();
 
   await pickCi(page, "#rel-target", "Customer Relationship", "Customer Relationship Management");
   // A fresh install's template services are the built-in business service type (migration 0033).
@@ -239,6 +241,8 @@ test("relationships: add in both directions; illegal pairs offer no type", async
   await expect(page.locator("#rel-type")).toBeDisabled();
   await snap(page, "09-relationships");
   await page.getByRole("button", { name: "Clear Customer Relationship Management" }).click();
+  // Clearing the chosen CI brings the search box back with the focus in it (audit R10).
+  await expect(page.locator("#rel-target")).toBeFocused();
 });
 
 test("navigation: related CIs are links and the breadcrumb carries the walk trail", async ({ page }) => {

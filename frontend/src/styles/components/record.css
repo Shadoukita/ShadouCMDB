@@ -427,3 +427,79 @@ ol.impact-path a {
   margin-left: auto;
   font-size: var(--fs-sm);
 }
+
+/* ---------- Relationships (audit R5) ---------- */
+.rel-edge,
+.rel-ci {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1_5);
+}
+.rel-dir {
+  flex: none;
+  color: var(--c-text-secondary);
+}
+table.rel-table td.rel-notes {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--c-text-secondary);
+}
+.rel-sentence {
+  margin-top: 0;
+}
+/* The add form: one control width for the CI and the type, the notes take the rest of the row. */
+.rel-add {
+  --rel-add-w: 280px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: flex-start;
+  padding: var(--panel-p);
+  border-top: 1px solid var(--c-border);
+  background: var(--c-surface-alt);
+}
+.rel-add > .field {
+  width: var(--rel-add-w);
+  max-width: 100%;
+}
+.rel-add > .field.rel-add-notes {
+  flex: 1 1 200px;
+  width: auto;
+}
+.rel-add > .btn {
+  align-self: flex-start;
+  margin-top: calc(16px + var(--space-1));
+}
+.rel-add > [role="status"] {
+  align-self: center;
+}
+.rel-add-alert {
+  flex-basis: 100%;
+}
+
+/* ---------- History as the event stream (audit R8) ---------- */
+.event-stream-head {
+  padding: var(--space-2) var(--panel-p);
+  font-size: var(--fs-sm);
+}
+table.event-table td {
+  vertical-align: top;
+}
+table.event-table td.event-time {
+  font-size: var(--fs-mono);
+}
+table.event-table .event-change {
+  width: 100%;
+  white-space: normal;
+}
+.chip.event-source {
+  min-height: 20px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+}
+.diff-arrow {
+  margin: 0 var(--space-1);
+  color: var(--c-text-tertiary);
+  vertical-align: -1px;
+}
