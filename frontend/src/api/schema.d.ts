@@ -6744,7 +6744,7 @@ export interface components {
              *     a "Relationships" section at the end of its first tab, as migration 0048 did with the stored
              *     settings, so the detail page shows what it showed before. In a document before format 4, a tab whose
              *     windows are all still where they were placed from the grid gets them as tall as the detail page's
-             *     inline inputs need, as migration 0055 did with the stored settings.
+             *     inline inputs need, as migration 0058 did with the stored settings.
              * @default null
              */
             layoutFormat: number;

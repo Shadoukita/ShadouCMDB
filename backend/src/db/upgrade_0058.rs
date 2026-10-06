@@ -1,4 +1,4 @@
-//! Migration 0055 (layout windows as tall as the inline inputs, SHAA-1833, GH#621) against stored settings
+//! Migration 0058 (layout windows as tall as the inline inputs, SHAA-1833, GH#621) against stored settings
 //! and CI layouts: a tab whose windows are all still where the old height estimate put them from the grid
 //! gets the frames of the new one, exactly as the API converts a document of an older layout format; a tab
 //! arranged in the layout editor is left alone, the old versions stay in the history and every change is
@@ -112,7 +112,7 @@ async fn ci(pool: &PgPool, ident: &str) -> Uuid {
 async fn windows_placed_from_the_grid_get_the_new_heights() {
     let Some(db) = scratch::empty("windows_placed_from_the_grid_get_the_new_heights").await else { return };
     let pool = &db.pool;
-    MIGRATOR.run_to(54, pool).await.expect("migrations up to 0054");
+    MIGRATOR.run_to(57, pool).await.expect("migrations up to 0057");
     store(pool, &settings_before()).await;
     let (before_version, _) = current(pool).await;
     let (own, arranged) = (ci(pool, "CI-1").await, ci(pool, "CI-2").await);
@@ -127,7 +127,7 @@ async fn windows_placed_from_the_grid_get_the_new_heights() {
             .unwrap();
     }
 
-    MIGRATOR.run_to(55, pool).await.expect("migration 0055");
+    MIGRATOR.run_to(58, pool).await.expect("migration 0058");
 
     let (version, s) = current(pool).await;
     assert_eq!(version, before_version + 1, "saved as a new version");
@@ -143,7 +143,7 @@ async fn windows_placed_from_the_grid_get_the_new_heights() {
             .fetch_one(pool)
             .await
             .unwrap();
-    assert_eq!(by, "migration 0055");
+    assert_eq!(by, "migration 0058");
     assert!(comment.contains("layout format 4"), "{comment}");
     let (actor, old, new): (String, Value, Value) = sqlx::query_as(
         "SELECT actor_name, old_value, new_value FROM audit_log WHERE entity_type = 'ui_settings' ORDER BY id DESC LIMIT 1",
@@ -151,7 +151,7 @@ async fn windows_placed_from_the_grid_get_the_new_heights() {
     .fetch_one(pool)
     .await
     .unwrap();
-    assert_eq!(actor, "migration 0055");
+    assert_eq!(actor, "migration 0058");
     assert_eq!(old, json!({ "version": before_version, "settings": settings_before() }));
     assert_eq!((new["version"].as_i64(), &new["settings"]), (Some(i64::from(version)), &s));
 
@@ -182,13 +182,13 @@ async fn windows_placed_from_the_grid_get_the_new_heights() {
     let row = |id: Uuid| rows.iter().find(|r| r.0 == id).unwrap().clone();
     let mut own_after = own_layout.clone();
     own_after["tabs"] = default_tabs_after();
-    assert_eq!(row(own), (own, own_after.clone(), 2, Some("migration 0055".into())));
+    assert_eq!(row(own), (own, own_after.clone(), 2, Some("migration 0058".into())));
     let mut api: UiLayout = serde_json::from_value(own_layout.clone()).unwrap();
     assert!(resize_default_frames(&mut api.tabs[0]));
     assert_eq!(serde_json::to_value(&api).unwrap(), own_after, "as the API resizes them");
     assert_eq!(row(arranged), (arranged, arranged_layout, 1, Some("Owner".into())));
     let audits: Vec<(Uuid, Value, Value)> = sqlx::query_as(
-        "SELECT entity_id, old_value, new_value FROM audit_log WHERE entity_type = 'ci_layout_overrides' AND actor_name = 'migration 0055'",
+        "SELECT entity_id, old_value, new_value FROM audit_log WHERE entity_type = 'ci_layout_overrides' AND actor_name = 'migration 0058'",
     )
     .fetch_all(pool)
     .await
@@ -207,9 +207,9 @@ async fn windows_placed_from_the_grid_get_the_new_heights() {
 
 #[tokio::test]
 async fn arranged_layouts_get_no_new_version() {
-    let Some(db) = scratch::empty("arranged_layouts_get_no_new_version_0055").await else { return };
+    let Some(db) = scratch::empty("arranged_layouts_get_no_new_version_0058").await else { return };
     let pool = &db.pool;
-    MIGRATOR.run_to(54, pool).await.expect("migrations up to 0054");
+    MIGRATOR.run_to(57, pool).await.expect("migrations up to 0057");
     let layout = json!({ "tabs": arranged_tabs(), "hiddenFields": [], "readOnlyFields": [] });
     store(
         pool,
@@ -217,8 +217,8 @@ async fn arranged_layouts_get_no_new_version() {
     )
     .await;
     let before = current(pool).await;
-    MIGRATOR.run_to(55, pool).await.expect("migration 0055");
+    MIGRATOR.run_to(58, pool).await.expect("migration 0058");
     assert_eq!(current(pool).await, before);
-    MIGRATOR.run_to(55, pool).await.expect("re-run");
+    MIGRATOR.run_to(58, pool).await.expect("re-run");
     db.drop().await;
 }
