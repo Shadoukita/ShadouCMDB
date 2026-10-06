@@ -226,6 +226,27 @@ before ShadouCMDB sealed backups, or without the key) or sealed with a key that 
 restored only with `--allow-unsigned`. Each restore records a `backup.restore` audit entry with the
 audit chain head it brought back; compare it with the SIEM copy (`AUDIT_EXPORT`).
 
+Because `restore`, `factory-reset` and `decommission` each run in one transaction, they hold a lock on
+every table, index and constraint of the installation until they commit, and PostgreSQL keeps those in
+a lock table sized by `max_locks_per_transaction` × (`max_connections` + `max_prepared_transactions`).
+Measured on PostgreSQL 17 with the default 64 locks and 100 connections:
+
+| Data model | Locks held by `restore` | Result at the defaults |
+|---|---|---|
+| no CI types | about 4,400 | succeeds |
+| 200 CI types (8 fields each) | about 9,000 | succeeds |
+| 400 CI types | about 13,600 | succeeds |
+| 1,000 CI types | about 27,400 | fails: `out of shared memory` (SQLSTATE 53200) |
+
+At the limit, the restore stops with an error such as `could not run: ALTER TABLE … : out of shared
+memory`, and PostgreSQL's log adds `HINT: You might need to increase "max_locks_per_transaction".` Nothing
+is changed: the transaction is rolled back and the database keeps its previous content. With more than
+about 400 CI types, set `max_locks_per_transaction = 256` in `postgresql.conf` (a server restart is
+needed), and check it before you need a restore. With that setting, restores of 1,000 and 2,000 CI types
+(about 27,400 and 50,400 locks) succeeded in the same measurement. Locks scale with the number of CI
+types, at roughly 4,400 plus 23 per type. On a managed PostgreSQL service, the setting is usually
+changed in the instance's parameter group.
+
 ## Changing the schema
 
 Every schema change is a migration. No hand-applied DDL.
