@@ -839,6 +839,8 @@ async fn approval_lists_show_what_each_caller_may_decide() {
     assert_eq!(v["steps"][1]["eligibleCount"], 3, "a3 left CAB: {v}");
     let (status, v) = w.call(&w.admin, "POST", &format!("{REQUESTS}/{r1}/refresh"), None).await;
     assert_eq!(status, 200, "{v}");
+    let (status, v) = w.call(&w.admin, "POST", &format!("{REQUESTS}/{r2}/refresh"), None).await;
+    assert_eq!(status, 200, "{v}");
     // GH#663: each refresh is audited on the CI in its transaction, the
     // approvers before and after, also when nothing changed.
     let rows: Vec<(String, Uuid, Value, Value)> = sqlx::query_as(
@@ -848,7 +850,7 @@ async fn approval_lists_show_what_each_caller_may_decide() {
     .fetch_all(&w.pool)
     .await
     .unwrap();
-    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert_eq!(rows.len(), 3, "{rows:?}");
     let (actor, ci, old, new) = &rows[0];
     assert_eq!((actor.as_str(), new["requestId"].as_str()), ("admin", Some(r2.to_string().as_str())), "{new}");
     let ci_of_r2: Uuid = sqlx::query_scalar(
@@ -862,9 +864,17 @@ async fn approval_lists_show_what_each_caller_may_decide() {
     assert_eq!((old["eligibleCount"].as_i64(), new["eligibleCount"].as_i64()), (Some(4), Some(3)), "{old} {new}");
     assert_eq!((new["changed"].as_bool(), new["stepNo"].as_i64()), (Some(true), Some(2)), "{new}");
     assert_eq!(old["approvers"], new["approvers"], "the CAB profile stays the principal; its members changed");
-    assert!(new["approvers"].as_array().is_some_and(|a| a.iter().any(|p| p["kind"] == "profile" && p["id"] == json!(cab))));
-    let (_, _, old, new) = &rows[1];
-    assert_eq!((new["changed"].as_bool(), &old["approvers"]), (Some(false), &new["approvers"]), "{new}");
+    assert!(
+        new["approvers"].as_array().is_some_and(|a| a.iter().any(|p| p["kind"] == "profile" && p["id"] == json!(cab)))
+    );
+    // r1 sits at the same CAB step, so a3 leaving changed it as well.
+    let (_, _, _, new) = &rows[1];
+    assert_eq!((new["requestId"].as_str(), new["changed"].as_bool()), (Some(r1.to_string().as_str()), Some(true)));
+    // r2 again: nothing changed, still recorded.
+    let (_, _, old, new) = &rows[2];
+    assert_eq!((new["requestId"].as_str(), new["changed"].as_bool()), (Some(r2.to_string().as_str()), Some(false)));
+    assert_eq!((&old["approvers"], old["eligibleCount"].as_i64()), (&new["approvers"], Some(3)), "{old} {new}");
+    audit_ok(&w).await;
     let (_, v) = w.call(&w.admin, "GET", &format!("{RUN}/{i3}/approval-requests"), None).await;
     let rejected = id(&json!({ "id": v["data"][1]["id"] }));
     let (status, v) = w.call(&w.admin, "POST", &format!("{REQUESTS}/{rejected}/refresh"), None).await;
