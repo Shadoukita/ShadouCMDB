@@ -4,11 +4,14 @@ import { ApiError } from "../../api/client";
 import { useCreateRelationship, useRelationshipTypes, type Ci, type CiSummary } from "../../api/queries";
 import CiPicker from "../../components/CiPicker.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
+import Icon from "../../components/Icon.vue";
+import { t } from "../../i18n";
 import { useSessionStore } from "../../stores/session";
 
 /**
  * Relate this CI to another. Only types the API allows between the two classes are offered, in both directions,
  * and only in a direction the user may create (edit right on the source CI's class).
+ * Every control has the form's one width (`.rel-add`), the notes field takes what is left (audit R5).
  */
 const props = defineProps<{ ci: Ci }>();
 const target = ref<CiSummary | null>(null);
@@ -46,7 +49,13 @@ const showGeneralError = computed(() => {
   return other.length > 0 || apiError.value.details.length === 0;
 });
 const typePlaceholder = computed(() =>
-  !target.value ? "Pick a CI first" : typesLoading.value ? "Loading…" : options.value.length === 0 ? "No relationship allowed" : "Choose…",
+  !target.value
+    ? t("rel.add.pickFirst")
+    : typesLoading.value
+      ? t("common.loading")
+      : options.value.length === 0
+        ? t("rel.add.noneAllowed")
+        : t("rel.add.choose"),
 );
 
 function onTarget(t: CiSummary | null) {
@@ -57,17 +66,17 @@ function onTarget(t: CiSummary | null) {
 }
 
 function submit() {
-  const t = target.value;
-  if (!t || !choice.value) return;
+  const other = target.value;
+  if (!other || !choice.value) return;
   const [typeId, dir] = choice.value.split(":");
-  const sourceCiId = dir === "out" ? props.ci.id : t.id;
-  const targetCiId = dir === "out" ? t.id : props.ci.id;
+  const sourceCiId = dir === "out" ? props.ci.id : other.id;
+  const targetCiId = dir === "out" ? other.id : props.ci.id;
   const label = options.value.find((o) => o.value === choice.value)?.label ?? "";
   create.mutate(
     { relationshipTypeId: typeId, sourceCiId, targetCiId, notes: notes.value.trim() || null },
     {
       onSuccess: () => {
-        done.value = `Added: ${label}`;
+        done.value = t("rel.add.done", { label });
         target.value = null;
         choice.value = "";
         notes.value = "";
@@ -78,9 +87,9 @@ function submit() {
 </script>
 
 <template>
-  <form class="rel-add" aria-label="Add relationship" @submit.prevent="submit">
+  <form class="rel-add" :aria-label="t('rel.add.title')" @submit.prevent="submit">
     <div class="field">
-      <label for="rel-target">Relate to</label>
+      <label for="rel-target">{{ t("rel.add.target") }}</label>
       <CiPicker
         id="rel-target"
         :exclude-id="ci.id"
@@ -92,7 +101,7 @@ function submit() {
       <span v-if="targetError" id="rel-target-err" class="error">{{ targetError }}</span>
     </div>
     <div class="field">
-      <label for="rel-type">Relationship</label>
+      <label for="rel-type">{{ t("rel.add.type") }}</label>
       <select
         id="rel-type"
         v-model="choice"
@@ -107,23 +116,32 @@ function submit() {
       <span v-if="target && !typesLoading && !typeError" id="rel-type-hint" class="hint">
         {{
           options.length === 0
-            ? `No relationship rule allows ${ci.class.name} ↔ ${target.class.name}.`
-            : `Only types allowed between ${ci.class.name} and ${target.class.name}`
+            ? t("rel.add.hintNone", { a: ci.class.name, b: target.class.name })
+            : t("rel.add.hintSome", { a: ci.class.name, b: target.class.name })
         }}
       </span>
     </div>
-    <div class="field">
-      <label for="rel-notes">Notes</label>
-      <input id="rel-notes" v-model="notes" type="text" placeholder="Optional" style="width: 200px" :aria-invalid="fe.notes ? true : undefined" />
-      <span v-if="fe.notes" class="error">{{ fe.notes }}</span>
+    <div class="field rel-add-notes">
+      <label for="rel-notes">{{ t("rel.add.notes") }}</label>
+      <input
+        id="rel-notes"
+        v-model="notes"
+        type="text"
+        :placeholder="t('rel.add.optional')"
+        :aria-invalid="fe.notes ? true : undefined"
+        :aria-describedby="fe.notes ? 'rel-notes-err' : undefined"
+      />
+      <span v-if="fe.notes" id="rel-notes-err" class="error">{{ fe.notes }}</span>
     </div>
     <button type="submit" class="btn btn-primary" :disabled="!target || !choice || create.isPending.value">
-      {{ create.isPending.value ? "Adding…" : "Add relationship" }}
+      <Icon name="plus" :size="16" />{{ create.isPending.value ? t("rel.add.adding") : t("rel.add.submit") }}
     </button>
     <span v-if="done && !create.error.value" role="status" class="muted">{{ done }}</span>
-    <ErrorAlert v-if="typesError != null" :error="typesError" title="Could not load relationship types" />
-    <div v-if="showGeneralError" style="flex-basis: 100%">
-      <ErrorAlert :error="create.error.value" title="Relationship not added" />
+    <div v-if="typesError != null" class="rel-add-alert">
+      <ErrorAlert :error="typesError" :title="t('rel.add.typesFailed')" />
+    </div>
+    <div v-if="showGeneralError" class="rel-add-alert">
+      <ErrorAlert :error="create.error.value" :title="t('rel.add.failed')" />
     </div>
   </form>
 </template>

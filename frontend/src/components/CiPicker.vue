@@ -1,12 +1,16 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, useId } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, useId } from "vue";
 import { useCiList, type CiSummary } from "../api/queries";
+import { t } from "../i18n";
 import { useDebounced } from "../lib/composables";
+import Icon from "./Icon.vue";
 
 /**
  * Type-ahead picker for a configuration item. Queries the API server-side
  * (optionally restricted to a class and its subclasses); never loads the inventory.
  * The `selected` slot renders the chosen CI's name (a CI page makes it a link).
+ * A chosen CI reads as a filled input: the name in a control-sized box with a clear button, which
+ * brings the search back and focuses it (audit R10).
  */
 const props = withDefaults(
   defineProps<{
@@ -18,7 +22,7 @@ const props = withDefaults(
     invalid?: boolean;
     describedBy?: string;
   }>(),
-  { id: undefined, classId: undefined, excludeId: undefined, placeholder: "Search by label, ident, attribute…", describedBy: undefined },
+  { id: undefined, classId: undefined, excludeId: undefined, placeholder: undefined, describedBy: undefined },
 );
 const emit = defineEmits<{ select: [ci: CiSummary | null] }>();
 
@@ -43,6 +47,13 @@ function choose(ci: CiSummary) {
   emit("select", ci);
   text.value = "";
   open.value = false;
+}
+
+const input = ref<HTMLInputElement | null>(null);
+function clear() {
+  emit("select", null);
+  // The parent swaps the value for the search box: focus it there, not on the button that went away.
+  void nextTick(() => input.value?.focus());
 }
 
 function onInput(e: Event) {
@@ -82,13 +93,16 @@ onBeforeUnmount(() => clearTimeout(closeTimer));
 </script>
 
 <template>
-  <div v-if="selected" class="checkbox-row">
-    <strong><slot name="selected" :selected="selected">{{ selected.name }}</slot></strong>
-    <button type="button" class="btn btn-sm" :aria-label="`Clear ${selected.name}`" @click="emit('select', null)">Change</button>
+  <div v-if="selected" :class="['picker-value', { invalid }]">
+    <span class="picker-name" dir="auto"><slot name="selected" :selected="selected">{{ selected.name }}</slot></span>
+    <button type="button" class="btn btn-sm btn-ghost btn-icon" :aria-label="t('ciPicker.clear', { name: selected.name })" :title="t('ciPicker.clear', { name: selected.name })" :aria-describedby="describedBy" @click="clear">
+      <Icon name="x" :size="14" />
+    </button>
   </div>
   <div v-else class="combo">
     <input
       :id="inputId"
+      ref="input"
       type="search"
       role="combobox"
       :aria-expanded="open"
@@ -98,17 +112,16 @@ onBeforeUnmount(() => clearTimeout(closeTimer));
       :aria-invalid="invalid || undefined"
       :aria-describedby="describedBy"
       autocomplete="off"
-      :placeholder="placeholder"
+      :placeholder="placeholder ?? t('ciPicker.placeholder')"
       :value="text"
-      style="width: 280px"
       @input="onInput"
       @focus="onFocus"
       @blur="onBlur"
       @keydown="onKeydown"
     />
     <ul v-if="open" :id="listId" class="combo-list" role="listbox">
-      <li v-if="isError" class="note">Search failed</li>
-      <li v-else-if="items.length === 0" class="note">{{ isFetching ? "Searching…" : "No matching CIs" }}</li>
+      <li v-if="isError" class="note">{{ t("common.searchFailed") }}</li>
+      <li v-else-if="items.length === 0" class="note">{{ isFetching ? t("common.searching") : t("ciPicker.noMatch") }}</li>
       <li
         v-for="(ci, i) in items"
         :id="`${listId}-${i}`"
@@ -121,10 +134,10 @@ onBeforeUnmount(() => clearTimeout(closeTimer));
         <span>{{ ci.label }}</span>
         <span class="muted">{{ ci.class.name }}</span>
         <span class="muted mono">{{ ci.ident }}</span>
-        <span v-if="!ci.active" class="muted">inactive</span>
+        <span v-if="!ci.active" class="muted">{{ t("ciPicker.inactive") }}</span>
       </li>
       <li v-if="data && data.page.total > items.length" class="note">
-        {{ data.page.total - items.length }} more — keep typing to narrow down
+        {{ t("common.moreResults", { n: data.page.total - items.length }) }}
       </li>
     </ul>
   </div>

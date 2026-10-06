@@ -143,15 +143,15 @@ test("the CI form: the child dropdown follows its parent", async ({ page, reques
   // Manufacturer = Cisco → Model shows only Cisco models.
   await maker.selectOption({ label: "Cisco" });
   await expect(model).toBeEnabled();
-  await expect(modelOptions).toHaveText(["— not set —", "Nexus 9000", "Catalyst 9300"]);
+  await expect(modelOptions).toHaveText(["Not set", "Nexus 9000", "Catalyst 9300"]);
   await model.selectOption({ label: "Catalyst 9300" });
 
   // Another parent clears a child value it does not offer.
   await maker.selectOption({ label: "HPE" });
-  await expect(modelOptions).toHaveText(["— not set —", "ProLiant DL380"]);
+  await expect(modelOptions).toHaveText(["Not set", "ProLiant DL380"]);
   await expect(model).toHaveValue("");
   // Clearing the parent disables the child again.
-  await maker.selectOption({ label: "— not set —" });
+  await maker.selectOption({ label: "Not set" });
   await expect(model).toBeDisabled();
 
   await maker.selectOption({ label: "Cisco" });

@@ -2,6 +2,7 @@
 import type { Ci } from "../../api/queries";
 import AttributeInput from "../../components/AttributeInput.vue";
 import CiLink from "../../components/CiLink.vue";
+import { t } from "../../i18n";
 import { nowFormValue, NOW_HINT } from "../../lib/attributeValues";
 import type { TrailStep } from "../../lib/trail";
 import { BUILTIN, cellClass } from "../../lib/uiSettings";
@@ -55,7 +56,7 @@ function linkable(key: string, id: string): boolean {
         :aria-invalid="p.invalid || undefined"
         :aria-describedby="p.describedBy"
       >
-        <option value="">{{ draft.criticalityLoading ? "Loading…" : draft.criticalityError ? "Could not load the list" : "— not set —" }}</option>
+        <option value="">{{ draft.criticalityLoading ? "Loading…" : draft.criticalityError ? "Could not load the list" : t("common.notSet") }}</option>
         <option v-for="v in draft.criticalityOptions" :key="v.id" :value="v.id">{{ v.name }}{{ v.isActive ? "" : " (retired)" }}</option>
         <option v-if="draft.criticalityStray" :value="draft.criticalityId">{{ draft.base?.criticality?.name ?? "Unknown value" }}</option>
       </select>

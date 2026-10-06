@@ -17,6 +17,7 @@ export type Relationship = Schemas["Relationship"];
 export type RelationshipType = Schemas["RelationshipType"];
 export type RelationshipGraph = Schemas["RelationshipGraph"];
 export type AuditEntry = Schemas["AuditEntry"];
+type AuditEntryList = Schemas["AuditEntryList"];
 export type Status = Schemas["Status"];
 export type Environment = Schemas["Environment"];
 export type Location = Schemas["Location"];
@@ -226,13 +227,23 @@ export function useGraph(
   });
 }
 
-export function useAuditLog(entityId: MaybeRefOrGetter<string>) {
+/** A record's audit entries, newest first, one server-side page at a time. */
+/** `actorTypes`: only entries by these kinds of actor, filtered on the server so paging and `page.total` match; empty is all. */
+export function useAuditLog(
+  entityId: MaybeRefOrGetter<string>,
+  paging: MaybeRefOrGetter<{ limit: number; offset: number }> = { limit: 50, offset: 0 },
+  actorTypes: MaybeRefOrGetter<readonly AuditEntry["actorType"][]> = [],
+) {
   return useQuery(() => {
     const id = toValue(entityId);
+    const { limit, offset } = toValue(paging);
+    const actorType = [...toValue(actorTypes)].sort().join(",") || undefined;
     return {
-      queryKey: keys.audit(id),
+      queryKey: [...keys.audit(id), "page", limit, offset, actorType ?? ""] as const,
       queryFn: ({ signal }: { signal: AbortSignal }) =>
-        unwrap(api.GET("/api/v1/audit-log", { params: { query: { entityId: id, sort: "-occurredAt", limit: 50 } }, signal })),
+        unwrap(api.GET("/api/v1/audit-log", { params: { query: { entityId: id, actorType, sort: "-occurredAt", limit, offset } }, signal })),
+      // Keep the page on screen while the next one loads, but never another record's entries.
+      placeholderData: (prev: AuditEntryList | undefined, prevQuery?: { queryKey: readonly unknown[] }) => (prevQuery?.queryKey[1] === id ? prev : undefined),
     };
   });
 }
