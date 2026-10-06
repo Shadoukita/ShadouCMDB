@@ -39,9 +39,10 @@ const columns = computed(() => {
 
 // ---------- Local edits ----------
 
-const sets = ref(new Map<string, Set<string>>());
-const base = ref("");
 const serialize = (m: Map<string, Set<string>>) => JSON.stringify(grantsBody(m).sort((a, b) => a.transitionKey.localeCompare(b.transitionKey)));
+const sets = ref(new Map<string, Set<string>>());
+// The baseline starts as the empty matrix, so nothing counts as changed before the grants load and seed it.
+const base = ref(serialize(sets.value));
 const dirty = computed(() => serialize(sets.value) !== base.value);
 function seed(g: WorkflowGrants) {
   sets.value = grantSets(g.grants);
