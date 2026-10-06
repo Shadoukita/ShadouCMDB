@@ -148,10 +148,16 @@ pub fn routes() -> Vec<Route> {
         route(Method::GET, BY_ID, "getWorkflowDefinition")
             .tag(TAG)
             .summary("Get a workflow definition, with its current version number and its draft's checksum")
+            .description(
+                "While the workflow is active and drives a state field, `warnings` carries `UNINSTANCED_CIS` with the \
+                 number of live CIs it covers that have no running instance, 0 included once every one has an \
+                 instance (`count` is null when the caller may not view all the types it spans). Otherwise \
+                 `warnings` is empty.",
+            )
             .requires(manage)
             .errors(&[ErrorCode::NotFound])
             .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
-                Ok(Json(service::get(&api.pool, id).await?))
+                Ok(Json(service::get(&api.pool, &api.ctx, id).await?))
             }),
         route(Method::PATCH, BY_ID, "updateWorkflowDefinition")
             .tag(TAG)

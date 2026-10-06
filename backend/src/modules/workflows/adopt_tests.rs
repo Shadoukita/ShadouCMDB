@@ -59,6 +59,16 @@ impl World {
         .await
     }
 
+    /// The `UNINSTANCED_CIS` count on GET (GH#645), `None` when `warnings` is empty.
+    async fn uninstanced(&self) -> Option<i64> {
+        let d = self.ok("GET", &format!("{DEFS}/{}", self.definition), json!(null)).await;
+        match d["warnings"].as_array().map(Vec::as_slice) {
+            Some([]) => None,
+            Some([w]) if w["code"] == "UNINSTANCED_CIS" => Some(w["count"].as_i64().unwrap_or_else(|| panic!("{d}"))),
+            _ => panic!("unexpected warnings: {d}"),
+        }
+    }
+
     async fn running(&self) -> i64 {
         sqlx::query_scalar("SELECT count(*) FROM workflow_instances WHERE definition_id = $1 AND status = 'active'")
             .bind(self.definition)
@@ -74,6 +84,8 @@ impl World {
 async fn a_driven_state_field_is_refused_on_create_and_patch_while_the_workflow_is_active() {
     let Some(db) = scratch::database("workflow_controlled_field").await else { return };
     let w = world(&db).await;
+    // GH#645: GET reports the uninstanced count of an active driver, 0 included.
+    assert_eq!(w.uninstanced().await, Some(0));
     let patch = |ci: Uuid, attributes: Value| {
         let w = &w;
         async move { w.call(&w.admin, "PATCH", &format!("{CIS}/{ci}"), Some(json!({ "attributes": attributes }))).await }
@@ -88,6 +100,7 @@ async fn a_driven_state_field_is_refused_on_create_and_patch_while_the_workflow_
     let (status, v) = w.create(None).await;
     assert_eq!(status, 201, "{v}");
     let ci = id(&v);
+    assert_eq!(w.uninstanced().await, Some(2));
 
     // PATCH, without an instance: setting it is refused, as is clearing a set value.
     let approved = json!(w.value("approved").to_string());
@@ -101,6 +114,7 @@ async fn a_driven_state_field_is_refused_on_create_and_patch_while_the_workflow_
     // With an instance: the workflow writes the field; resending its value is no change, another is refused.
     let (status, v) = w.start(&w.admin, ci).await;
     assert_eq!(status, 201, "{v}");
+    assert_eq!(w.uninstanced().await, Some(1));
     let planned = json!(w.value("planned").to_string());
     assert_eq!(w.lifecycle_of(ci).await, planned);
     let (status, v) = patch(ci, json!({ "lifecycle": planned, "owner_team": "net" })).await;
@@ -126,8 +140,9 @@ async fn a_driven_state_field_is_refused_on_create_and_patch_while_the_workflow_
     assert_eq!(status, 200, "{v}");
     assert_eq!(w.lifecycle_of(ci).await, approved, "the workflow's own write passes");
 
-    // Inactive: the field is an ordinary field again.
+    // Inactive: the field is an ordinary field again, and GET warns about nothing.
     w.set_active(false, false).await;
+    assert_eq!(w.uninstanced().await, None);
     let (status, v) = patch(ci, json!({ "lifecycle": planned })).await;
     assert_eq!(status, 200, "{v}");
     let (status, v) = w.create(Some("approved")).await;

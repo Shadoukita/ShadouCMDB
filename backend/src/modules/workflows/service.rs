@@ -153,11 +153,13 @@ async fn detail(
 /// Amendment 2 of the design review: activating a workflow that drives a state
 /// field makes that field read-only on every CI it covers (Q3). Tell how many
 /// live CIs have no running instance yet, so their status is not locked by
-/// surprise (`bootstrap` starts them).
+/// surprise (`bootstrap` starts them). `with_zero` keeps the warning when every
+/// covered CI has an instance, so a reader can tell "all adopted" from "not a driver".
 async fn activation_warnings(
     conn: &mut PgConnection,
     ctx: &RequestContext,
     d: &WorkflowDefinition,
+    with_zero: bool,
 ) -> Result<Vec<WorkflowWarning>, AppError> {
     if !d.is_active || d.state_attribute_id.is_none() {
         return Ok(Vec::new());
@@ -174,12 +176,13 @@ async fn activation_warnings(
     .bind(d.id)
     .fetch_one(&mut *conn)
     .await?;
-    if n == 0 {
+    if n == 0 && !with_zero {
         return Ok(Vec::new());
     }
     let count = Count::scoped(ctx, &classes, n);
     let field = d.state_attribute_key.as_deref().unwrap_or_default();
     let message = match count.exact() {
+        Some(0) => format!("Every live CI of type {} has a running instance of this workflow", d.class_key),
         Some(n) => format!(
             "{n} live CIs of type {} have no running instance of this workflow: their {field} field cannot be \
              edited until an instance is started on them",
@@ -276,10 +279,11 @@ pub async fn list(pool: &PgPool, q: &WorkflowDefinitionList) -> Result<Page<Work
     Ok(Page { data, page: q.page_meta(total) })
 }
 
-pub async fn get(pool: &PgPool, id: Uuid) -> Result<WorkflowDefinitionDetail, AppError> {
+pub async fn get(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<WorkflowDefinitionDetail, AppError> {
     let mut conn = pool.acquire().await?;
     let d = load(&mut conn, id, false).await?;
-    detail(&mut conn, d, Vec::new()).await
+    let warnings = activation_warnings(&mut conn, ctx, &d, true).await?;
+    detail(&mut conn, d, warnings).await
 }
 
 /// Stores an empty draft as version `no` and returns its id.
@@ -303,7 +307,7 @@ pub async fn create(
 ) -> Result<WorkflowDefinitionDetail, AppError> {
     let mut tx = pool.begin().await?;
     let d = create_in(&mut tx, ctx, b).await?;
-    let warnings = activation_warnings(&mut tx, ctx, &d).await?;
+    let warnings = activation_warnings(&mut tx, ctx, &d, false).await?;
     let out = detail(&mut tx, d, warnings).await?;
     tx.commit().await?;
     Ok(out)
@@ -387,7 +391,7 @@ pub async fn update(
     let newly_driving = after.is_active
         && after.state_attribute_id.is_some()
         && (!before.is_active || after.state_attribute_id != before.state_attribute_id);
-    let warnings = if newly_driving { activation_warnings(&mut tx, ctx, &after).await? } else { Vec::new() };
+    let warnings = if newly_driving { activation_warnings(&mut tx, ctx, &after, false).await? } else { Vec::new() };
     let out = detail(&mut tx, after, warnings).await?;
     tx.commit().await?;
     Ok(out)

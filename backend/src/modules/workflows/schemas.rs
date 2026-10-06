@@ -107,8 +107,8 @@ pub struct WorkflowDefinition {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkflowWarning {
     /// `UNINSTANCED_CIS`: the workflow drives a state field and is active, and this many live CIs it covers have
-    /// no running instance of it. Their state field cannot be edited (it is driven by the workflow) until an
-    /// instance is started on them.
+    /// no running instance of it (0 on read once every one has). Their state field cannot be edited (it is driven
+    /// by the workflow) until an instance is started on them.
     #[schema(inline)]
     pub code: WorkflowWarningCode,
     /// Null when withheld: the count spans CIs of types the caller may not view
@@ -155,7 +155,8 @@ pub struct WorkflowDefinitionDetail {
     #[serde(serialize_with = "ts::serialize")]
     pub updated_at: DateTime<Utc>,
     pub updated_by_name: String,
-    /// Filled by create and update only (e.g. `UNINSTANCED_CIS` when the workflow is activated); empty otherwise
+    /// `UNINSTANCED_CIS` when the workflow is an active state-field driver: on read always (count 0 included), on
+    /// create and update only when the change makes it one and some CIs lack an instance; empty otherwise
     pub warnings: Vec<WorkflowWarning>,
 }
 
