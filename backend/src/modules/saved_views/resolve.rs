@@ -203,10 +203,24 @@ impl Viewer {
     pub fn sees_shared(&self, cat: &Catalogue, stored: &SavedViewDefinition) -> bool {
         stored.class_keys.is_empty() || stored.class_keys.iter().any(|k| !self.hides(cat, k))
     }
+
+    /// Whether no class of the view is hidden from the caller. Changing or
+    /// deleting a shared view needs this: an edit made without seeing all of
+    /// it could widen it for the readers who do (GH#508).
+    pub fn sees_all(&self, cat: &Catalogue, stored: &SavedViewDefinition) -> bool {
+        !stored.class_keys.iter().any(|k| self.hides(cat, k))
+    }
+
+    /// The keys of the classes the caller may view; `None` when they may view every class.
+    pub fn visible_keys(&self, cat: &Catalogue) -> Option<Vec<String>> {
+        self.restricted().then(|| cat.classes.keys().filter(|k| self.class(cat, k).is_some()).cloned().collect())
+    }
 }
 
 /// `edited` with the stored keys hidden from the editor added back (§2.4): an
-/// edit never quietly strips the parts of a view the editor cannot see.
+/// edit never quietly strips the parts of a view the editor cannot see. Only
+/// personal views get here with hidden keys (their owner's rights shrank): a
+/// shared one needs [`Viewer::sees_all`] to be changed at all.
 pub fn merge_hidden(
     viewer: &Viewer,
     cat: &Catalogue,
