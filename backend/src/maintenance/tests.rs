@@ -2,20 +2,27 @@
 
 use sqlx::postgres::PgConnection;
 
-use super::archive::{self, Header};
+use super::archive::{self, Checked, Header};
 use super::{
     EXCLUDED_TABLES, Table, app_object_count, app_tables, area_schemas, backup, ident, reset, restore, stored_columns,
 };
 use crate::db::{MIGRATOR, scratch};
 
-/// Every stored value of a table, independent of row and column order.
+/// Every stored value of a table, independent of row and column order. The
+/// `backup.restore` entries a restore adds, and the chain head that moves with
+/// them, are left out: [`the_api_role_backs_up_the_audit_chain_head_but_cannot_move_it`] checks those.
 async fn fingerprint(c: &mut PgConnection, table: &Table) -> String {
     let mut cols = stored_columns(c, table).await.unwrap();
     cols.sort();
     let cols = cols.iter().map(|c| ident(c)).collect::<Vec<_>>().join(", ");
+    let only = match (table.schema.as_str(), table.name.as_str()) {
+        ("cmdb", "audit_log") => " WHERE action <> 'backup.restore'",
+        ("cmdb", "audit_log_chain_head") => " WHERE false",
+        _ => "",
+    };
     sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT coalesce(md5(string_agg(r, E'\\n' ORDER BY r)), '') || ':' || count(*)
-         FROM (SELECT row_to_json(x)::text AS r FROM (SELECT {cols} FROM {}) x) y",
+         FROM (SELECT row_to_json(x)::text AS r FROM (SELECT {cols} FROM {}{only}) x) y",
         table.sql()
     )))
     .fetch_one(c)
@@ -112,12 +119,12 @@ async fn populate(pool: &sqlx::PgPool) {
     .unwrap();
 }
 
-async fn take_backup(c: &mut PgConnection) -> (Vec<u8>, Header) {
+async fn take_backup(c: &mut PgConnection) -> (Vec<u8>, Checked) {
     let mut buf = Vec::new();
-    let header = backup::write(c, &mut buf).await.unwrap();
-    let checked = archive::verify(buf.as_slice()).unwrap();
-    assert_eq!(checked.total_rows(), header.total_rows());
-    (buf, header)
+    let header = backup::write(c, &mut buf, None).await.unwrap();
+    let checked = archive::verify(buf.as_slice(), None).unwrap();
+    assert_eq!(checked.header.total_rows(), header.total_rows());
+    (buf, checked)
 }
 
 /// Header tables with their columns sorted: a rebuilt type table may order its columns differently.
@@ -152,7 +159,8 @@ async fn a_backup_restores_into_another_database_value_for_value() {
         .unwrap();
     assert!(missing > 0, "demo data has servers without a management IP");
 
-    let (buf, header) = take_backup(&mut ca).await;
+    let (buf, checked) = take_backup(&mut ca).await;
+    let header = &checked.header;
     assert!(header.total_rows() > 20, "demo data is in the backup");
     assert_eq!(
         header.excluded_tables,
@@ -179,7 +187,7 @@ async fn a_backup_restores_into_another_database_value_for_value() {
         ]
     );
     let none = crate::config::EncryptionConfig::default();
-    let warning = restore::key_warning(&header, &none).unwrap();
+    let warning = restore::key_warning(header, &none).unwrap();
     assert!(
         warning.starts_with(&format!(
             "This backup holds 1 authenticator secret and 1 identity provider secret encrypted with key {key}. No \
@@ -198,7 +206,7 @@ async fn a_backup_restores_into_another_database_value_for_value() {
     assert!(header.tables[first_type..].iter().all(|t| t.schema == "infrastruktur" || t.schema == "people"));
 
     // The target is a migrated install: it has to be replaced.
-    let report = restore::restore(&mut cb, buf.as_slice(), &header, true, true).await.unwrap();
+    let report = restore::restore(&mut cb, buf.as_slice(), &checked, true, true).await.unwrap();
     assert_eq!(report.users, 1);
     assert_eq!(report.migrations_applied_after, 0);
     assert!(report.warnings.iter().any(|w| w.contains("server.management_ip stays nullable")), "{:?}", report.warnings);
@@ -231,13 +239,17 @@ async fn a_backup_restores_into_another_database_value_for_value() {
         sqlx::query_scalar(seq).fetch_one(&mut *ca).await.unwrap(),
         sqlx::query_scalar(seq).fetch_one(&mut *cb).await.unwrap(),
     );
-    assert_eq!(sa, sb);
+    // One further: the backup.restore entry is written after the sequences.
+    assert_eq!(sa + 1, sb);
     let err = sqlx::query("DELETE FROM audit_log").execute(&mut *cb).await.unwrap_err();
     assert!(err.to_string().contains("append-only"), "{err}");
 
     // A backup of the restored database is the same data.
     let (_, again) = take_backup(&mut cb).await;
-    assert_eq!(normalized(&again), normalized(&header));
+    let mut expected = normalized(header);
+    // Plus the backup.restore entry.
+    expected.iter_mut().filter(|t| t.schema == "cmdb" && t.name == "audit_log").for_each(|t| t.rows += 1);
+    assert_eq!(normalized(&again.header), expected);
 
     drop((ca, cb));
     a.drop().await;
@@ -277,13 +289,29 @@ async fn the_api_role_backs_up_the_audit_chain_head_but_cannot_move_it() {
         let code = err.as_database_error().and_then(|d| d.code()).unwrap_or_default().into_owned();
         assert_eq!(code, "42501", "{denied}: {err}");
     }
-    let (buf, header) = take_backup(&mut ca).await;
+    let (buf, checked) = take_backup(&mut ca).await;
+    let header = &checked.header;
     let copied = header.tables.iter().find(|t| t.schema == "cmdb" && t.name == "audit_log_chain_head");
     assert_eq!(copied.map(|t| t.rows), Some(1));
 
-    restore::restore(&mut cb, buf.as_slice(), &header, true, true).await.unwrap();
+    let report = restore::restore(&mut cb, buf.as_slice(), &checked, true, true).await.unwrap();
+    assert_eq!(report.restored_head, restore::ChainLink { chain_seq: head_a.0, row_hash: head_a.1.clone() });
+    // GH#513: the restore is recorded on top of the restored head, so the SIEM
+    // copy shows which head the chain went back to.
     let head_b: (i64, String) = sqlx::query_as(head).fetch_one(&mut *cb).await.unwrap();
-    assert_eq!(head_b, head_a);
+    assert_eq!(head_b, (head_a.0 + 1, report.entry.row_hash.clone()));
+    assert_eq!(report.entry.chain_seq, head_a.0 + 1);
+    let (prev, actor, details): (String, String, serde_json::Value) = sqlx::query_as(
+        "SELECT encode(prev_hash, 'hex'), actor_type, new_value FROM cmdb.audit_log
+         WHERE action = 'backup.restore' AND entity_type = 'audit_log'",
+    )
+    .fetch_one(&mut *cb)
+    .await
+    .unwrap();
+    assert_eq!((prev, actor.as_str()), (head_a.1.clone(), "system"));
+    assert_eq!(details["restoredHead"], serde_json::json!({ "chainSeq": head_a.0, "rowHash": head_a.1 }));
+    assert_eq!(details["backup"]["seal"], "unsigned");
+    assert_eq!(details["backup"]["sha256"], checked.sha256.as_str());
     let problems: i64 =
         sqlx::query_scalar("SELECT count(*) FROM cmdb.audit_log_verify()").fetch_one(&mut *cb).await.unwrap();
     assert_eq!(problems, 0, "the restored audit chain verifies");
@@ -337,13 +365,14 @@ async fn import_files_stay_out_of_backups_and_unfinished_jobs_expire_on_restore(
     .await
     .unwrap();
 
-    let (buf, header) = take_backup(&mut ca).await;
+    let (buf, checked) = take_backup(&mut ca).await;
+    let header = &checked.header;
     let rows = |name: &str| header.tables.iter().find(|t| t.schema == "cmdb" && t.name == name).map(|t| t.rows);
     assert_eq!((rows("import_jobs"), rows("import_mappings"), rows("import_settings")), (Some(2), Some(1), Some(1)));
     for gone in ["import_job_files", "import_job_issues", "import_idempotency_keys"] {
         assert_eq!(rows(gone), None, "{gone} is not backed up");
     }
-    restore::restore(&mut cb, buf.as_slice(), &header, true, true).await.unwrap();
+    restore::restore(&mut cb, buf.as_slice(), &checked, true, true).await.unwrap();
 
     let jobs: Vec<(String, Option<String>, bool)> =
         sqlx::query_as("SELECT status, lease_owner, finished_at IS NOT NULL FROM cmdb.import_jobs ORDER BY file_name")
@@ -370,7 +399,8 @@ async fn a_failed_or_dry_run_restore_changes_nothing() {
     let Some(a) = scratch::database("restore_all_or_nothing").await else { return };
     populate(&a.pool).await;
     let mut c = a.pool.acquire().await.unwrap();
-    let (buf, header) = take_backup(&mut c).await;
+    let (buf, checked) = take_backup(&mut c).await;
+    let header = &checked.header;
     let original = fingerprints(&mut c).await;
     sqlx::query("UPDATE owners SET name = name || ' (changed)'").execute(&mut *c).await.unwrap();
     sqlx::query("UPDATE infrastruktur.server SET cpu_cores = coalesce(cpu_cores, 0) + 1")
@@ -380,19 +410,19 @@ async fn a_failed_or_dry_run_restore_changes_nothing() {
     let before = fingerprints(&mut c).await;
     assert_ne!(before, original);
 
-    let report = restore::restore(&mut c, buf.as_slice(), &header, true, false).await.unwrap();
+    let report = restore::restore(&mut c, buf.as_slice(), &checked, true, false).await.unwrap();
     assert_eq!(report.rows, header.total_rows());
     assert_eq!(fingerprints(&mut c).await, before, "dry run rolled back");
 
     // A header that promises a row the file does not have: the load fails, the database is untouched.
-    let mut wrong = header.clone();
-    wrong.tables[0].rows += 1;
+    let mut wrong = checked.clone();
+    wrong.header.tables[0].rows += 1;
     assert!(restore::restore(&mut c, buf.as_slice(), &wrong, true, true).await.is_err());
     assert_eq!(fingerprints(&mut c).await, before);
 
     // A backup from a newer release is refused before anything happens.
-    let mut newer = header.clone();
-    newer.migrations.push(archive::MigrationEntry {
+    let mut newer = checked.clone();
+    newer.header.migrations.push(archive::MigrationEntry {
         version: 9999,
         description: "future".into(),
         checksum: "00".into(),
@@ -401,7 +431,7 @@ async fn a_failed_or_dry_run_restore_changes_nothing() {
     assert!(err.contains("does not know"), "{err}");
 
     // Replacing a populated install for real: its area schema is dropped and rebuilt.
-    restore::restore(&mut c, buf.as_slice(), &header, true, true).await.unwrap();
+    restore::restore(&mut c, buf.as_slice(), &checked, true, true).await.unwrap();
     assert_eq!(fingerprints(&mut c).await, original);
 
     drop(c);
@@ -419,11 +449,12 @@ async fn a_backup_from_an_older_schema_is_upgraded_on_restore() {
     // As `shadoucmdb migrate` leaves it: types a migration added have their tables.
     let ctx = crate::api::context::RequestContext::system("test", "test");
     crate::schema::reconcile(&mut ca, &ctx, "Reconcile after migrate").await.map_err(|e| e.message).unwrap();
-    let (buf, header) = take_backup(&mut ca).await;
+    let (buf, checked) = take_backup(&mut ca).await;
+    let header = &checked.header;
     assert_eq!(header.migration_level(), Some(latest - 1));
 
     let mut cb = b.pool.acquire().await.unwrap();
-    let report = restore::restore(&mut cb, buf.as_slice(), &header, true, true).await.unwrap();
+    let report = restore::restore(&mut cb, buf.as_slice(), &checked, true, true).await.unwrap();
     assert_eq!(report.migrations_applied_after, 1);
     let n: i64 = sqlx::query_scalar("SELECT count(*) FROM public._sqlx_migrations").fetch_one(&mut *cb).await.unwrap();
     assert_eq!(n as usize, crate::db::expected_count());
@@ -443,13 +474,14 @@ async fn a_backup_from_before_the_stateless_oidc_start_still_restores() {
     let mut ca = a.pool.acquire().await.unwrap();
     reset::decommission(&mut ca).await.unwrap();
     MIGRATOR.run_to(20, &mut *ca).await.unwrap();
-    let (buf, header) = take_backup(&mut ca).await;
+    let (buf, checked) = take_backup(&mut ca).await;
+    let header = &checked.header;
     assert_eq!(header.migration_level(), Some(20));
     assert!(header.excluded_tables.contains(&"cmdb.oidc_login_states".to_owned()), "{:?}", header.excluded_tables);
     assert!(!header.tables.iter().any(|t| t.name == "oidc_login_states"));
 
     let mut cb = b.pool.acquire().await.unwrap();
-    let report = restore::restore(&mut cb, buf.as_slice(), &header, true, true).await.unwrap();
+    let report = restore::restore(&mut cb, buf.as_slice(), &checked, true, true).await.unwrap();
     assert!(report.migrations_applied_after >= 1);
     let n: i64 = sqlx::query_scalar("SELECT count(*) FROM public._sqlx_migrations").fetch_one(&mut *cb).await.unwrap();
     assert_eq!(n as usize, crate::db::expected_count());
@@ -545,10 +577,11 @@ async fn saved_views_and_defaults_survive_backup_and_restore() {
     let before = saved_views_snapshot(&mut ca).await;
     assert_eq!(before.len(), 2);
 
-    let (buf, header) = take_backup(&mut ca).await;
+    let (buf, checked) = take_backup(&mut ca).await;
+    let header = &checked.header;
     let rows = |name: &str| header.tables.iter().find(|t| t.schema == "cmdb" && t.name == name).map(|t| t.rows);
     assert_eq!((rows("saved_views"), rows("saved_view_defaults")), (Some(2), Some(1)));
-    restore::restore(&mut cb, buf.as_slice(), &header, true, true).await.unwrap();
+    restore::restore(&mut cb, buf.as_slice(), &checked, true, true).await.unwrap();
     assert_eq!(saved_views_snapshot(&mut cb).await, before);
 
     reset::factory_reset(&mut cb).await.unwrap();
@@ -606,14 +639,14 @@ async fn workflows_survive_backup_and_restore_and_go_with_a_factory_reset() {
     let mut ca = a.pool.acquire().await.unwrap();
     let mut cb = b.pool.acquire().await.unwrap();
 
-    let (buf, header) = take_backup(&mut ca).await;
+    let (buf, checked) = take_backup(&mut ca).await;
     for name in TABLES {
-        let rows = header.tables.iter().find(|t| t.schema == "cmdb" && t.name == name).map(|t| t.rows);
+        let rows = checked.header.tables.iter().find(|t| t.schema == "cmdb" && t.name == name).map(|t| t.rows);
         let expected = if name == "workflow_transition_grants" || name == "workflow_instance_events" { 2 } else { 1 };
         let expected = if name == "workflow_states" { 2 } else { expected };
         assert_eq!(rows, Some(expected), "{name}");
     }
-    restore::restore(&mut cb, buf.as_slice(), &header, true, true).await.unwrap();
+    restore::restore(&mut cb, buf.as_slice(), &checked, true, true).await.unwrap();
     for name in TABLES {
         let table = Table::new("cmdb", name);
         assert_eq!(fingerprint(&mut ca, &table).await, fingerprint(&mut cb, &table).await, "{name}");
@@ -662,12 +695,12 @@ async fn approvals_survive_backup_and_restore_and_go_with_a_factory_reset() {
     let mut ca = a.pool.acquire().await.unwrap();
     let mut cb = b.pool.acquire().await.unwrap();
 
-    let (buf, header) = take_backup(&mut ca).await;
+    let (buf, checked) = take_backup(&mut ca).await;
     for name in TABLES {
-        let rows = header.tables.iter().find(|t| t.schema == "cmdb" && t.name == name).map(|t| t.rows);
+        let rows = checked.header.tables.iter().find(|t| t.schema == "cmdb" && t.name == name).map(|t| t.rows);
         assert_eq!(rows, Some(1), "{name}");
     }
-    restore::restore(&mut cb, buf.as_slice(), &header, true, true).await.unwrap();
+    restore::restore(&mut cb, buf.as_slice(), &checked, true, true).await.unwrap();
     for name in TABLES.into_iter().chain(["workflow_instance_events"]) {
         let table = Table::new("cmdb", name);
         assert_eq!(fingerprint(&mut ca, &table).await, fingerprint(&mut cb, &table).await, "{name}");

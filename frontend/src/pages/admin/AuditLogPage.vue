@@ -69,6 +69,7 @@ const ACTION_SET: Record<Action, true> = {
   "session.reauthenticate": true,
   "session.reauthentication_required": true,
   "audit.purge": true,
+  "backup.restore": true,
   "token.use": true,
   "mfa.enrol": true,
   "mfa.disable": true,
@@ -139,6 +140,12 @@ function recordName(e: AuditEntry): string {
       const scope = str(snap.scope) ?? "?";
       const window = str(snap.olderThan);
       return window ? `Pruned ${scope} entries older than ${window}` : `Pruned ${scope} entries`;
+    }
+    if (e.action === "backup.restore") {
+      // An operator's restore: when the backup it brought back was taken.
+      const backup = (snap.backup ?? {}) as Record<string, unknown>;
+      const taken = str(backup.createdAt);
+      return taken ? `Restored a backup taken ${formatDateTime(taken)}` : "Restored a backup";
     }
     if (e.action === "token.use") {
       // A request made with an API token: which token, what it called, and whether it was let in.

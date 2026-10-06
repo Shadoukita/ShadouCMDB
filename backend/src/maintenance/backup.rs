@@ -18,7 +18,8 @@ use super::archive::{
     self, EncryptionKeyEntry, FORMAT, FORMAT_VERSION, Header, MigrationEntry, SequenceEntry, TableEntry,
 };
 use super::{Table, app_schemas, app_tables, ident, stored_columns};
-use crate::config::DatabaseConfig;
+use crate::config::{DatabaseConfig, EncryptionConfig};
+use crate::secrets::Keyring;
 
 #[derive(Debug, Args)]
 pub struct BackupArgs {
@@ -28,7 +29,7 @@ pub struct BackupArgs {
     pub out: Option<PathBuf>,
 }
 
-pub async fn run(cfg: &DatabaseConfig, args: BackupArgs) -> anyhow::Result<()> {
+pub async fn run(cfg: &DatabaseConfig, encryption: &EncryptionConfig, args: BackupArgs) -> anyhow::Result<()> {
     let path = args.out.unwrap_or_else(|| {
         PathBuf::from(format!("shadoucmdb-backup-{}.jsonl.gz", chrono::Utc::now().format("%Y%m%dT%H%M%SZ")))
     });
@@ -36,6 +37,12 @@ pub async fn run(cfg: &DatabaseConfig, args: BackupArgs) -> anyhow::Result<()> {
         bail!("{} already exists; choose another --out", path.display());
     }
     let partial = PathBuf::from(format!("{}.partial", path.display()));
+    // The end marker is sealed with an HMAC under the server's key (GH#513).
+    // Without ENCRYPTION_KEY_FILE the backup is still written, unsealed.
+    let keyring = match encryption.key_file {
+        Some(_) => Some(Keyring::load(encryption)?),
+        None => None,
+    };
 
     let mut conn = super::connect(cfg).await?;
     let (_, place) = super::describe(&mut conn).await?;
@@ -44,13 +51,17 @@ pub async fn run(cfg: &DatabaseConfig, args: BackupArgs) -> anyhow::Result<()> {
     let file = create_private(&partial)?;
     let written = async {
         let mut out = std::io::BufWriter::new(file);
-        let header = write(&mut conn, &mut out).await?;
+        let header = write(&mut conn, &mut out, keyring.as_ref()).await?;
         let file = out.into_inner().map_err(|e| e.into_error())?;
         file.sync_all()?;
         drop(file);
         // Read the file back before calling it a backup.
-        let checked = archive::verify_file(&partial)?;
-        anyhow::ensure!(checked.total_rows() == header.total_rows(), "backup changed while it was verified");
+        let checked = archive::verify_file(&partial, keyring.as_ref())?;
+        anyhow::ensure!(checked.header.total_rows() == header.total_rows(), "backup changed while it was verified");
+        anyhow::ensure!(
+            keyring.is_none() || matches!(checked.seal, archive::Seal::Verified(_)),
+            "the HMAC of the backup did not verify"
+        );
         std::fs::rename(&partial, &path)
             .with_context(|| format!("cannot rename {} to {}", partial.display(), path.display()))?;
         anyhow::Ok(header)
@@ -72,7 +83,17 @@ pub async fn run(cfg: &DatabaseConfig, args: BackupArgs) -> anyhow::Result<()> {
         header.migration_level().unwrap_or_default(),
         std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
     );
-    println!("Verified: SHA-256 and row counts match");
+    match &keyring {
+        Some(k) => println!("Verified: SHA-256, HMAC (key {}) and row counts match", k.active_id()),
+        None => {
+            println!("Verified: SHA-256 and row counts match");
+            println!(
+                "  warning: ENCRYPTION_KEY_FILE is not set, so the backup is not sealed with an HMAC. Its SHA-256 shows \
+                 damage, not editing; `restore` accepts it only with --allow-unsigned. Run backups with the server's \
+                 ENCRYPTION_KEY_FILE."
+            );
+        }
+    }
     println!("Backup: {}", path.display());
     println!(
         "The file contains password hashes and personal data (audit log): store it encrypted and access-controlled."
@@ -119,8 +140,9 @@ fn create_private(path: &Path) -> anyhow::Result<std::fs::File> {
     o.open(path).with_context(|| format!("cannot create {}", path.display()))
 }
 
-/// Writes the backup of the connected database to `out`.
-pub async fn write<W: Write>(conn: &mut PgConnection, out: W) -> anyhow::Result<Header> {
+/// Writes the backup of the connected database to `out`, its end marker
+/// sealed under `keyring`'s active key when there is one.
+pub async fn write<W: Write>(conn: &mut PgConnection, out: W, keyring: Option<&Keyring>) -> anyhow::Result<Header> {
     super::session_settings(conn).await?;
     let mut tx = conn.begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ, READ ONLY").await?;
 
@@ -206,7 +228,7 @@ pub async fn write<W: Write>(conn: &mut PgConnection, out: W) -> anyhow::Result<
         // Same snapshot, so this cannot differ; checked because the file depends on it.
         anyhow::ensure!(written == t.rows, "table {} yielded {written} rows, counted {}", table.display(), t.rows);
     }
-    w.finish()?.flush()?;
+    w.finish(keyring)?.flush()?;
     tx.commit().await?;
     Ok(header)
 }

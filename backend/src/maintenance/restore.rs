@@ -16,10 +16,11 @@ use clap::Args;
 use sqlx::Connection;
 use sqlx::postgres::PgConnection;
 
-use super::archive::{self, Header, Reader, TableEntry};
+use super::archive::{self, Checked, Header, Reader, Seal, TableEntry};
 use super::{TYPE_TABLES_SINCE, Table, app_tables, ident, stored_columns};
 use crate::config::{DatabaseConfig, EncryptionConfig};
 use crate::db::MIGRATOR;
+use crate::secrets::Keyring;
 
 #[derive(Debug, Args)]
 pub struct RestoreArgs {
@@ -36,6 +37,12 @@ pub struct RestoreArgs {
     /// Do not ask for confirmation before replacing a database (for scripts).
     #[arg(long)]
     pub yes: bool,
+    /// Restore a backup whose end marker has no HMAC (written before this
+    /// release, or without ENCRYPTION_KEY_FILE) or one made with a key that is
+    /// not configured. Its SHA-256 only shows the file is undamaged: check
+    /// where the file came from first.
+    #[arg(long)]
+    pub allow_unsigned: bool,
 }
 
 /// Rows per INSERT; also capped by [`BATCH_BYTES`].
@@ -49,11 +56,36 @@ pub struct Report {
     pub migrations_applied_after: usize,
     /// Required fields left nullable because some assets have no value.
     pub warnings: Vec<String>,
+    /// The audit chain head the backup brought back (after any newer migrations).
+    pub restored_head: ChainLink,
+    /// The `backup.restore` entry recorded on top of it.
+    pub entry: ChainLink,
+}
+
+/// One link of the audit hash chain, as `audit-verify` and the SIEM export show it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChainLink {
+    pub chain_seq: i64,
+    /// Hex.
+    pub row_hash: String,
 }
 
 pub async fn run(cfg: &DatabaseConfig, encryption: &EncryptionConfig, args: RestoreArgs) -> anyhow::Result<()> {
     println!("Checking {} ...", args.file.display());
-    let header = archive::verify_file(&args.file)?;
+    // The key that seals backups (GH#513). A restore needs none to load the
+    // rows; without one it cannot tell an edited file from an intact one.
+    let keyring = match encryption.key_file {
+        Some(_) => match Keyring::load(encryption) {
+            Ok(k) => Some(k),
+            Err(e) => {
+                println!("  warning: {e:#}; the backup's HMAC cannot be checked");
+                None
+            }
+        },
+        None => None,
+    };
+    let checked = archive::verify_file(&args.file, keyring.as_ref())?;
+    let header = &checked.header;
     println!(
         "Backup of database \"{}\" taken {} by ShadouCMDB {}: {} rows in {} tables, migration {}",
         header.database,
@@ -63,10 +95,35 @@ pub async fn run(cfg: &DatabaseConfig, encryption: &EncryptionConfig, args: Rest
         header.tables.len(),
         header.migration_level().unwrap_or_default()
     );
-    check_compatible(&header)?;
-    println!("File is intact (SHA-256 and row counts match) and fits this release");
+    check_compatible(header)?;
+    match checked.seal {
+        Seal::Verified(key) => {
+            println!("File is intact (SHA-256, HMAC with key {key} and row counts match) and fits this release")
+        }
+        seal => {
+            let why = match seal {
+                Seal::UnknownKey(key) => format!(
+                    "its end marker is sealed with key {key}, which is not configured (ENCRYPTION_KEY_FILE or \
+                     ENCRYPTION_KEY_PREVIOUS_FILE), so the seal cannot be checked"
+                ),
+                _ => "its end marker has no HMAC (written before ShadouCMDB sealed backups, or by `backup` without \
+                      ENCRYPTION_KEY_FILE)"
+                    .to_owned(),
+            };
+            if !args.allow_unsigned {
+                bail!(
+                    "{} is undamaged (SHA-256 and row counts match), but {why}. A SHA-256 can be recomputed by \
+                     anyone who edits the file. Configure the key the backup was taken with, or make sure the file \
+                     is the one `shadoucmdb backup` wrote and re-run with --allow-unsigned.",
+                    args.file.display()
+                );
+            }
+            println!("File is undamaged (SHA-256 and row counts match) and fits this release");
+            println!("  warning: {why}; restoring it because of --allow-unsigned");
+        }
+    }
     // The restore itself needs no key (the ciphertext is copied as it is); the server does.
-    if let Some(warning) = key_warning(&header, encryption) {
+    if let Some(warning) = key_warning(header, encryption) {
         println!("  warning: {warning}");
     }
 
@@ -85,7 +142,7 @@ pub async fn run(cfg: &DatabaseConfig, encryption: &EncryptionConfig, args: Rest
     }
 
     let file = std::fs::File::open(&args.file).with_context(|| format!("cannot open {}", args.file.display()))?;
-    let report = restore(&mut conn, file, &header, populated, !args.dry_run).await;
+    let report = restore(&mut conn, file, &checked, populated, !args.dry_run).await;
     conn.close().await.ok();
     let report = report?;
 
@@ -99,7 +156,19 @@ pub async fn run(cfg: &DatabaseConfig, encryption: &EncryptionConfig, args: Rest
     }
     if args.dry_run {
         println!("Rolled back: nothing was changed");
-    } else if report.users == 0 {
+        return Ok(());
+    }
+    println!(
+        "Audit chain head restored: chainSeq {}, rowHash {}",
+        report.restored_head.chain_seq, report.restored_head.row_hash
+    );
+    println!(
+        "Recorded as a backup.restore entry in audit_log: chainSeq {}, rowHash {}. The server's AUDIT_EXPORT sends it \
+         at start-up; compare the restored head with the SIEM copy, which still holds every row written after the \
+         backup was taken.",
+        report.entry.chain_seq, report.entry.row_hash
+    );
+    if report.users == 0 {
         println!("The backup has no users: the web UI will ask for first-run setup");
     } else {
         println!("{} user(s) restored; sessions are not part of a backup, so everyone signs in again", report.users);
@@ -159,16 +228,19 @@ pub fn check_compatible(header: &Header) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Loads `source` (already checked with [`archive::verify`]) into the
-/// connected database in one transaction; `wipe` drops the existing
-/// ShadouCMDB objects first, `commit = false` rolls everything back.
+/// Loads `source` (already checked with [`archive::verify`], giving
+/// `checked`) into the connected database in one transaction; `wipe` drops
+/// the existing ShadouCMDB objects first, `commit = false` rolls everything
+/// back. Records a `backup.restore` audit entry naming the backup and the
+/// chain head it brought back (GH#513).
 pub async fn restore<R: Read>(
     conn: &mut PgConnection,
     source: R,
-    header: &Header,
+    checked: &Checked,
     wipe: bool,
     commit: bool,
 ) -> anyhow::Result<Report> {
+    let header = &checked.header;
     check_compatible(header)?;
     let level = header.migration_level().context("backup has no migrations")?;
     let (system, types): (Vec<&TableEntry>, Vec<&TableEntry>) =
@@ -221,7 +293,9 @@ pub async fn restore<R: Read>(
         tables.extend(type_tables);
     }
     // The file is read a second time here; it must still be the one that was checked.
-    reader.finish()?;
+    if reader.finish(None)?.sha256 != checked.sha256 {
+        bail!("the backup file changed after it was checked; restore nothing");
+    }
 
     for s in &header.sequences {
         let exists: bool = sqlx::query_scalar("SELECT to_regclass(format('%I.%I', $1, $2)) IS NOT NULL")
@@ -311,13 +385,60 @@ pub async fn restore<R: Read>(
         bail!("the restored data has no built-in Administrator profile");
     }
     let users: i64 = sqlx::query_scalar("SELECT count(*) FROM users").fetch_one(&mut *tx).await?;
+    let (restored_head, entry) = record(&mut tx, checked, wipe).await?;
 
     if commit {
         tx.commit().await?;
     } else {
         tx.rollback().await?;
     }
-    Ok(Report { rows: header.total_rows(), users, migrations_applied_after: (after - before) as usize, warnings })
+    Ok(Report {
+        rows: header.total_rows(),
+        users,
+        migrations_applied_after: (after - before) as usize,
+        warnings,
+        restored_head,
+        entry,
+    })
+}
+
+/// Writes the `backup.restore` audit entry (GH#513): which backup, how its
+/// seal checked out, and the chain head it brought back. The insert trigger
+/// chains it onto that head, so the SIEM copy, which holds the rows written
+/// after the backup, shows the chain going back. Triggers are on again here,
+/// and the schema is at this binary's level.
+async fn record(conn: &mut PgConnection, checked: &Checked, replaced: bool) -> anyhow::Result<(ChainLink, ChainLink)> {
+    let header = &checked.header;
+    let (seq, hash): (i64, String) =
+        sqlx::query_as("SELECT last_seq, encode(last_hash, 'hex') FROM cmdb.audit_log_chain_head")
+            .fetch_one(&mut *conn)
+            .await?;
+    let restored_head = ChainLink { chain_seq: seq, row_hash: hash };
+    let details = serde_json::json!({
+        "backup": {
+            "database": header.database,
+            "createdAt": header.created_at,
+            "appVersion": header.app_version,
+            "migration": header.migration_level(),
+            "rows": header.total_rows(),
+            "sha256": checked.sha256,
+            "seal": checked.seal.kind(),
+            "keyId": checked.seal.key_id().map(|k| k.to_string()),
+        },
+        "restoredHead": { "chainSeq": restored_head.chain_seq, "rowHash": restored_head.row_hash },
+        "replacedExisting": replaced,
+        "appVersion": env!("CARGO_PKG_VERSION"),
+    });
+    let (seq, hash): (i64, String) = sqlx::query_as(
+        "INSERT INTO cmdb.audit_log (actor_type, actor_name, action, entity_type, entity_id, new_value)
+         VALUES ('system', session_user, 'backup.restore', 'audit_log', gen_random_uuid(), $1)
+         RETURNING chain_seq, encode(row_hash, 'hex')",
+    )
+    .bind(details)
+    .fetch_one(&mut *conn)
+    .await
+    .context("recording the restore in audit_log failed")?;
+    Ok((restored_head, ChainLink { chain_seq: seq, row_hash: hash }))
 }
 
 /// Runs the DDL engine unrecorded, as the API role on a three-role install.

@@ -219,6 +219,13 @@ the database before you retire it.
 With separate database roles, `backup` connects as the API role (`DATABASE_URL`) and `restore` as the
 schema owner (`MIGRATION_DATABASE_URL`). Keep the owner's credentials out of scheduled backup jobs.
 
+Run `backup` with the server's `ENCRYPTION_KEY_FILE`: the file is then sealed with an HMAC under a key
+derived from it, and `restore` refuses a file that was edited after the backup. `restore` checks the
+seal with `ENCRYPTION_KEY_FILE` or `ENCRYPTION_KEY_PREVIOUS_FILE`; a backup without a seal (taken
+before ShadouCMDB sealed backups, or without the key) or sealed with a key that is not configured is
+restored only with `--allow-unsigned`. Each restore records a `backup.restore` audit entry with the
+audit chain head it brought back; compare it with the SIEM copy (`AUDIT_EXPORT`).
+
 ## Changing the schema
 
 Every schema change is a migration. No hand-applied DDL.
