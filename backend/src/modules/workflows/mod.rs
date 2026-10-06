@@ -762,8 +762,10 @@ pub fn runtime_routes() -> Vec<Route> {
             .description(
                 "For administrators (`workflows.manage`): the active step's approvers are resolved again from the \
                  workflow's current approver assignments and the CI's current values, for example after the CI \
-                 field that names the approver changed. Decisions already cast stand. No body. 409 CONFLICT \
-                 `not_pending`.",
+                 field that names the approver changed. Decisions already cast stand. No body. Audited on the CI \
+                 as `workflow.approval_refresh`, also when nothing changed: `oldValue` holds the step's `approvers` \
+                 (`kind`, `id`, `via`) and `eligibleCount` before, `newValue` the request, the step, `changed` and \
+                 the same two after. 409 CONFLICT `not_pending`.",
             )
             .requires(GlobalPermission::WorkflowsManage)
             .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])

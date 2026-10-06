@@ -839,6 +839,32 @@ async fn approval_lists_show_what_each_caller_may_decide() {
     assert_eq!(v["steps"][1]["eligibleCount"], 3, "a3 left CAB: {v}");
     let (status, v) = w.call(&w.admin, "POST", &format!("{REQUESTS}/{r1}/refresh"), None).await;
     assert_eq!(status, 200, "{v}");
+    // GH#663: each refresh is audited on the CI in its transaction, the
+    // approvers before and after, also when nothing changed.
+    let rows: Vec<(String, Uuid, Value, Value)> = sqlx::query_as(
+        "SELECT actor_name, entity_id, old_value, new_value FROM audit_log
+         WHERE action = 'workflow.approval_refresh' ORDER BY chain_seq",
+    )
+    .fetch_all(&w.pool)
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    let (actor, ci, old, new) = &rows[0];
+    assert_eq!((actor.as_str(), new["requestId"].as_str()), ("admin", Some(r2.to_string().as_str())), "{new}");
+    let ci_of_r2: Uuid = sqlx::query_scalar(
+        "SELECT i.ci_id FROM workflow_approval_requests r JOIN workflow_instances i ON i.id = r.instance_id WHERE r.id = $1",
+    )
+    .bind(r2)
+    .fetch_one(&w.pool)
+    .await
+    .unwrap();
+    assert_eq!(*ci, ci_of_r2);
+    assert_eq!((old["eligibleCount"].as_i64(), new["eligibleCount"].as_i64()), (Some(4), Some(3)), "{old} {new}");
+    assert_eq!((new["changed"].as_bool(), new["stepNo"].as_i64()), (Some(true), Some(2)), "{new}");
+    assert_eq!(old["approvers"], new["approvers"], "the CAB profile stays the principal; its members changed");
+    assert!(new["approvers"].as_array().is_some_and(|a| a.iter().any(|p| p["kind"] == "profile" && p["id"] == json!(cab))));
+    let (_, _, old, new) = &rows[1];
+    assert_eq!((new["changed"].as_bool(), &old["approvers"]), (Some(false), &new["approvers"]), "{new}");
     let (_, v) = w.call(&w.admin, "GET", &format!("{RUN}/{i3}/approval-requests"), None).await;
     let rejected = id(&json!({ "id": v["data"][1]["id"] }));
     let (status, v) = w.call(&w.admin, "POST", &format!("{REQUESTS}/{rejected}/refresh"), None).await;

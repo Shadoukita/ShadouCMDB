@@ -404,6 +404,10 @@ pub enum AuditAction {
     #[serde(rename = "backup.restore")]
     #[sqlx(rename = "backup.restore")]
     BackupRestore,
+    /// An administrator re-resolved who may decide a pending request's active step (approvers before and after).
+    #[serde(rename = "workflow.approval_refresh")]
+    #[sqlx(rename = "workflow.approval_refresh")]
+    WorkflowApprovalRefresh,
 }
 
 impl AuditAction {
@@ -442,6 +446,7 @@ impl AuditAction {
             AuditAction::WorkflowApprovalClose => "workflow.approval_close",
             AuditAction::WorkflowApprovalOverdue => "workflow.approval_overdue",
             AuditAction::BackupRestore => "backup.restore",
+            AuditAction::WorkflowApprovalRefresh => "workflow.approval_refresh",
         }
     }
 }

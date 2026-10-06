@@ -1234,6 +1234,8 @@ pub async fn cancel(
 /// Re-resolves the active step's approvers from the workflow's current
 /// assignments and the CI's current values (`workflows.manage`), for example
 /// after a CI field naming the approver changed. Decisions already cast stand.
+/// Audited on the CI as `workflow.approval_refresh` with the approvers before
+/// and after (GH#663).
 pub async fn refresh(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<WorkflowApprovalRequest, AppError> {
     let mut tx = pool.begin().await?;
     let (req, row) = lock_request(&mut tx, ctx, id).await?;
@@ -1243,10 +1245,46 @@ pub async fn refresh(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<Wo
     let (s, _) = active_step(&mut tx, &p, t, &req).await?;
     let model = Model::load(&mut tx).await?;
     let values = current_values(&mut tx, &model, row.ci_id).await?;
+    let before = approvers_of(&mut tx, req.id, s.step_no).await?;
     resolve(&mut tx, req.id, &row, &values, &t.key, s, &req.excluded_user_ids).await?;
+    let after = approvers_of(&mut tx, req.id, s.step_no).await?;
+    let entry = AuditEntry {
+        action: AuditAction::WorkflowApprovalRefresh,
+        entity_type: "configuration_items",
+        entity_id: row.ci_id,
+        new_value: Some(json!({ "instanceId": row.id, "requestId": req.id, "requestNo": req.request_no,
+            "transitionKey": req.transition_key, "stepNo": s.step_no, "stepKey": s.key, "changed": before != after,
+            "approvers": after["approvers"], "eligibleCount": after["eligibleCount"] })),
+        old_value: Some(before),
+    };
+    crud::write_audit(&mut tx, ctx, vec![entry]).await?;
     let out = view(&mut tx, ctx, &req, &row, &p).await?;
     tx.commit().await?;
     Ok(out)
+}
+
+/// Who may decide step `step_no` of a request, as the refresh audit row
+/// records it: the eligibility principals and the count of eligible users.
+async fn approvers_of(conn: &mut PgConnection, request: Uuid, step_no: i16) -> Result<Value, AppError> {
+    let principals: Vec<(String, Uuid, SqlJson<Value>)> = sqlx::query_as(
+        "SELECT principal_kind, principal_id, via FROM cmdb.workflow_approval_eligibility
+         WHERE request_id = $1 AND step_no = $2 AND role = 'approver' ORDER BY principal_kind, principal_id",
+    )
+    .bind(request)
+    .bind(step_no)
+    .fetch_all(&mut *conn)
+    .await?;
+    let count: Option<i32> = sqlx::query_scalar(
+        "SELECT eligible_count FROM cmdb.workflow_approval_request_steps WHERE request_id = $1 AND step_no = $2",
+    )
+    .bind(request)
+    .bind(step_no)
+    .fetch_optional(&mut *conn)
+    .await?
+    .flatten();
+    let approvers: Vec<Value> =
+        principals.into_iter().map(|(kind, id, via)| json!({ "kind": kind, "id": id, "via": via.0 })).collect();
+    Ok(json!({ "approvers": approvers, "eligibleCount": count }))
 }
 
 // ---------------------------------------------------------------------------
