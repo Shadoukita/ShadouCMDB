@@ -9,8 +9,12 @@ import LoadingState from "../../../components/LoadingState.vue";
 import { formatDateTime } from "../../../lib/format";
 import { autoLayout, CATEGORIES, describeConditions, draftFromVersion } from "../../../lib/workflowDraft";
 import WorkflowGraph from "./WorkflowGraph.vue";
+import WorkflowMigrate from "./WorkflowMigrate.vue";
 
-/** Every version of a workflow, newest first: the draft, published and retired ones. Published versions can be viewed and retired. */
+/**
+ * Every version of a workflow, newest first: the draft, published and retired ones. Published versions can be viewed and
+ * retired; the running instances of an older one can be migrated to a newer published version.
+ */
 const props = defineProps<{ workflow: WorkflowDefinitionDetail }>();
 const router = useRouter();
 const wid = computed(() => props.workflow.id);
@@ -35,6 +39,17 @@ function view(v: WorkflowVersionSummary) {
     return;
   }
   viewing.value = viewing.value === v.versionNo ? null : v.versionNo;
+}
+
+// ---------- Migrate ----------
+
+const migratingNo = ref<number | null>(null);
+const migrating = computed(() => rows.value.find((r) => r.versionNo === migratingNo.value) ?? null);
+const newestPublished = computed(() => Math.max(0, ...rows.value.filter((r) => r.status === "published").map((r) => r.versionNo)));
+/** Running instances of a published or retired version can move to a newer published one (a withheld count may hide some). */
+const canMigrate = (v: WorkflowVersionSummary) => v.status !== "draft" && v.versionNo < newestPublished.value && v.activeInstanceCount !== 0;
+function openMigrate(v: WorkflowVersionSummary) {
+  migratingNo.value = migratingNo.value === v.versionNo ? null : v.versionNo;
 }
 
 // ---------- Retire ----------
@@ -92,7 +107,7 @@ function confirmRetire() {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="v in rows" :key="v.versionNo" :class="{ disabled: v.status === 'retired', selected: viewing === v.versionNo }">
+          <tr v-for="v in rows" :key="v.versionNo" :data-testid="`wf-version-${v.versionNo}`" :class="{ disabled: v.status === 'retired', selected: viewing === v.versionNo }">
             <td class="num">{{ v.versionNo }}</td>
             <td>
               <span v-if="v.status === 'draft'" class="badge info">Draft</span>
@@ -114,6 +129,9 @@ function confirmRetire() {
               <button type="button" class="btn btn-sm" :aria-expanded="v.status === 'draft' ? undefined : viewing === v.versionNo" @click="view(v)">
                 {{ v.status === "draft" ? "Edit" : viewing === v.versionNo ? "Hide" : "View" }}
               </button>
+              <button v-if="canMigrate(v)" type="button" class="btn btn-sm" :aria-expanded="migratingNo === v.versionNo" @click="openMigrate(v)">
+                Migrate instances…
+              </button>
               <button v-if="v.status === 'published'" type="button" class="btn btn-sm btn-quiet-danger" @click="openRetire(v)">Retire…</button>
             </td>
           </tr>
@@ -121,6 +139,8 @@ function confirmRetire() {
       </table>
     </div>
   </section>
+
+  <WorkflowMigrate v-if="migrating" :key="migrating.versionNo" :workflow="workflow" :from="migrating" :versions="rows" @close="migratingNo = null" />
 
   <section v-if="viewing" class="panel" aria-labelledby="wf-version-view-title">
     <div class="panel-header"><h2 id="wf-version-view-title">Version {{ viewing }} (read-only)</h2></div>

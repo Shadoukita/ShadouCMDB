@@ -4,7 +4,8 @@ import { apiGet, apiSend, checkA11y, expect, roValue, test } from "./support";
 // Adopting an existing inventory (SHAA-1815, v0.4.0 S6 part 2): an administrator activates a workflow that drives a
 // state field, follows the UNINSTANCED_CIS warning to the bootstrap, previews it (counts per state, values no state
 // maps) and runs it. An operator who may edit the type then finds the state field locked on the CI form and on the
-// detail page, while the other fields stay editable.
+// detail page, while the other fields stay editable. Last (GH#645), a v2 that renames the open state is published and
+// the running instances of v1 are migrated to it from the Versions tab, with a state map, a preview and a confirmation.
 test.describe.configure({ mode: "serial" });
 
 const stamp = Date.now().toString(36);
@@ -117,6 +118,8 @@ test("activate, follow the warning to the bootstrap, preview it and start the in
   await expect(dialog).toContainText("2 CIs are skipped");
   await dialog.getByRole("button", { name: "Start instances" }).click();
   await expect(panel.getByTestId("wf-bootstrap-done")).toContainText("Started 2 instances on version 1.");
+  // The banner now counts the CIs the bootstrap skipped (Limbo and the one without a value), not the 4 from before.
+  await expect(warning).toContainText("2 CIs without an instance");
 
   const after = await apiGet<{ data: { ciId: string }[] }>(request, `/workflow-instances?definitionKey=e2e_adopt_${stamp}&status=active`);
   expect(after.data).toHaveLength(2);
@@ -150,6 +153,53 @@ test("the operator finds the state field locked on the form and the detail page,
   await expect(roValue(page, "attributes.phase")).toHaveText("planned");
   await expect(shown.locator("input, select, [role='combobox']")).toHaveCount(0);
   await page.context().close();
+});
+
+test("migrate the running instances of version 1 to a version 2 that renames their state", async ({ page, request }, testInfo) => {
+  const draft = await apiSend<{ checksum: string }>(request, "PUT", `/admin/workflow-definitions/${wfId}/draft`, {
+    initialState: "queued",
+    states: [
+      { key: "queued", name: "Queued", category: "open", stateValue: "planned" },
+      { key: "live", name: "Live", category: "done", terminal: true, stateValue: "live" },
+    ],
+    transitions: [{ key: "go_live", name: "Go live", from: "queued", to: "live" }],
+  });
+  await apiSend(request, "POST", `/admin/workflow-definitions/${wfId}/draft/publish`, { expectedDraftChecksum: draft.checksum });
+
+  await page.goto(`/admin/workflows/${wfId}?tab=versions`);
+  const v1 = page.getByTestId("wf-version-1");
+  await expect(v1).toContainText("2");
+  await v1.getByRole("button", { name: "Migrate instances…" }).click();
+  const panel = page.getByTestId("wf-migrate");
+  await expect(panel.getByLabel("Target version")).toHaveValue("2");
+  // v2 has no "planned": the operator must choose, and the preview says so next to the state.
+  const map = panel.getByLabel("Target state for Planned");
+  await expect(map).toHaveValue("");
+  await panel.getByRole("button", { name: "Preview migration" }).click();
+  await expect(panel.locator("#wf-migrate-map-planned-err")).toBeVisible();
+
+  await map.selectOption("queued");
+  await panel.getByRole("button", { name: "Preview migration" }).click();
+  await expect(panel.getByTestId("wf-migrate-summary")).toContainText("2 to version 2");
+  await expect(panel.getByRole("table", { name: "State map" }).getByRole("row").filter({ hasText: "Planned" })).toContainText("2");
+  await checkA11y(page, testInfo, "migration preview", { include: "[data-testid='wf-migrate']" });
+  // A dry run writes nothing.
+  const before = await apiGet<{ data: { versionNo: number }[] }>(request, `/workflow-instances?definitionKey=e2e_adopt_${stamp}&status=active`);
+  expect(before.data.map((i) => i.versionNo)).toEqual([1, 1]);
+
+  await panel.getByRole("button", { name: "Migrate 2 instances…" }).click();
+  const dialog = page.getByRole("dialog", { name: "Move 2 instances to version 2?" });
+  await expect(dialog).toContainText("2 instances in planned → Queued");
+  await dialog.getByRole("button", { name: "Migrate instances" }).click();
+  await expect(panel.getByTestId("wf-migrate-done")).toContainText("Moved 2 instances from version 1 to version 2.");
+
+  const after = await apiGet<{ data: { versionNo: number; state: { key: string } }[] }>(request, `/workflow-instances?definitionKey=e2e_adopt_${stamp}&status=active`);
+  expect(after.data.map((i) => [i.versionNo, i.state.key])).toEqual([
+    [2, "queued"],
+    [2, "queued"],
+  ]);
+  // Nothing is left on v1 to migrate.
+  await expect(v1.getByRole("button", { name: "Migrate instances…" })).toHaveCount(0);
 });
 
 test.afterAll(async ({ request }) => {
