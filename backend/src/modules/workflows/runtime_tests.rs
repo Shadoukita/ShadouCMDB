@@ -466,7 +466,7 @@ async fn workflow_instances_run_with_conditions_grants_and_audit() {
     assert_eq!(
         v["data"],
         json!([{ "definitionId": w.definition, "definitionKey": "server_lifecycle", "stateKey": "planned",
-            "stateName": "Planned", "category": "open", "count": 1 }])
+            "stateName": "Planned", "category": "open", "count": 1, "awaitingApproval": 0 }])
     );
     let (status, v) = w.call(&approver, "GET", &format!("/api/v1/configuration-items/{ci2}/workflows"), None).await;
     assert_eq!(status, 200, "{v}");

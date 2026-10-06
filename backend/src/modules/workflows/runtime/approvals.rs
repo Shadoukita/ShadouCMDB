@@ -24,7 +24,7 @@
 //!
 //! **Locks**: CI row → instance row → request row, as every runtime path.
 //! Delegation, the SLA sweep and re-resolution after a staffing change are
-//! slice A4; the inbox list is A3b.
+//! slice A4; the lists are in `approval_lists`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -456,6 +456,30 @@ struct Decider {
     via: Vec<Value>,
 }
 
+/// `(transition_key, user_id)` of everyone `excludeActorsOf` refuses on
+/// instance `instance` for the transition keys `keys` (SQL expressions), by
+/// user id only (SHAA-1872 C4): who ran those transitions (a final
+/// approval's decider is its actor), who requested them, and every approver
+/// of an approved request for them, not only the one whose vote completed the
+/// quorum (GH#635). Shared by a decision and the inbox, so both agree.
+pub(super) fn actors_of(instance: &str, keys: &str) -> String {
+    format!(
+        "SELECT e.transition_key, e.actor_id::uuid FROM cmdb.workflow_instance_events e
+         WHERE e.instance_id = {instance} AND e.kind = 'transition' AND e.transition_key = ANY({keys})
+           AND e.actor_type IN ('user', 'api_client')
+           AND e.actor_id ~ '^[0-9a-f]{{8}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{12}}$'
+         UNION
+         SELECT ar.transition_key, x.id FROM cmdb.workflow_approval_requests ar, unnest(ar.excluded_user_ids) AS x(id)
+         WHERE ar.instance_id = {instance} AND ar.transition_key = ANY({keys})
+         UNION
+         SELECT ar.transition_key, x.id FROM cmdb.workflow_approval_requests ar
+         JOIN cmdb.workflow_approval_decisions ad ON ad.request_id = ar.id AND ad.decision = 'approve'
+         CROSS JOIN LATERAL (VALUES (ad.actor_id), (ad.on_behalf_of_id)) AS x(id)
+         WHERE ar.instance_id = {instance} AND ar.transition_key = ANY({keys}) AND ar.status = 'approved'
+           AND x.id IS NOT NULL"
+    )
+}
+
 /// Whether the caller may decide step `s` of `req` now, with the reason
 /// they may not as the error a decision would get. Reads only.
 async fn check_decider(
@@ -513,21 +537,11 @@ async fn check_decider(
         }
     }
     if !s.exclude_actors_of.is_empty() {
-        // By user id only (SHAA-1872 C4): who ran those transitions on this
-        // instance (a final approval's decider is its actor), and who requested them.
-        let actors: Vec<(String, Uuid)> = sqlx::query_as(
-            "SELECT e.transition_key, e.actor_id::uuid FROM cmdb.workflow_instance_events e
-             WHERE e.instance_id = $1 AND e.kind = 'transition' AND e.transition_key = ANY($2)
-               AND e.actor_type IN ('user', 'api_client')
-               AND e.actor_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-             UNION
-             SELECT r.transition_key, x.id FROM cmdb.workflow_approval_requests r, unnest(r.excluded_user_ids) AS x(id)
-             WHERE r.instance_id = $1 AND r.transition_key = ANY($2)",
-        )
-        .bind(row.id)
-        .bind(&s.exclude_actors_of)
-        .fetch_all(&mut *conn)
-        .await?;
+        let actors: Vec<(String, Uuid)> = sqlx::query_as(sqlx::AssertSqlSafe(actors_of("$1", "$2")))
+            .bind(row.id)
+            .bind(&s.exclude_actors_of)
+            .fetch_all(&mut *conn)
+            .await?;
         if let Some((key, _)) = actors.iter().find(|(_, u)| *u == me.user_id) {
             return Err(detail(
                 SelfApproval,
@@ -1215,6 +1229,62 @@ pub async fn cancel(
     let out = outcome(&mut tx, ctx, req.id, &p).await?;
     tx.commit().await?;
     Ok(out)
+}
+
+/// Re-resolves the active step's approvers from the workflow's current
+/// assignments and the CI's current values (`workflows.manage`), for example
+/// after a CI field naming the approver changed. Decisions already cast stand.
+/// Audited on the CI as `workflow.approval_refresh` with the approvers before
+/// and after (GH#663).
+pub async fn refresh(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<WorkflowApprovalRequest, AppError> {
+    let mut tx = pool.begin().await?;
+    let (req, row) = lock_request(&mut tx, ctx, id).await?;
+    check_pending(&req)?;
+    let p = pinned(&mut tx, req.version_id).await?;
+    let t = p.transition(&req.transition_key).ok_or_else(AppError::internal)?;
+    let (s, _) = active_step(&mut tx, &p, t, &req).await?;
+    let model = Model::load(&mut tx).await?;
+    let values = current_values(&mut tx, &model, row.ci_id).await?;
+    let before = approvers_of(&mut tx, req.id, s.step_no).await?;
+    resolve(&mut tx, req.id, &row, &values, &t.key, s, &req.excluded_user_ids).await?;
+    let after = approvers_of(&mut tx, req.id, s.step_no).await?;
+    let entry = AuditEntry {
+        action: AuditAction::WorkflowApprovalRefresh,
+        entity_type: "configuration_items",
+        entity_id: row.ci_id,
+        new_value: Some(json!({ "instanceId": row.id, "requestId": req.id, "requestNo": req.request_no,
+            "transitionKey": req.transition_key, "stepNo": s.step_no, "stepKey": s.key, "changed": before != after,
+            "approvers": after["approvers"], "eligibleCount": after["eligibleCount"] })),
+        old_value: Some(before),
+    };
+    crud::write_audit(&mut tx, ctx, vec![entry]).await?;
+    let out = view(&mut tx, ctx, &req, &row, &p).await?;
+    tx.commit().await?;
+    Ok(out)
+}
+
+/// Who may decide step `step_no` of a request, as the refresh audit row
+/// records it: the eligibility principals and the count of eligible users.
+async fn approvers_of(conn: &mut PgConnection, request: Uuid, step_no: i16) -> Result<Value, AppError> {
+    let principals: Vec<(String, Uuid, SqlJson<Value>)> = sqlx::query_as(
+        "SELECT principal_kind, principal_id, via FROM cmdb.workflow_approval_eligibility
+         WHERE request_id = $1 AND step_no = $2 AND role = 'approver' ORDER BY principal_kind, principal_id",
+    )
+    .bind(request)
+    .bind(step_no)
+    .fetch_all(&mut *conn)
+    .await?;
+    let count: Option<i32> = sqlx::query_scalar(
+        "SELECT eligible_count FROM cmdb.workflow_approval_request_steps WHERE request_id = $1 AND step_no = $2",
+    )
+    .bind(request)
+    .bind(step_no)
+    .fetch_optional(&mut *conn)
+    .await?
+    .flatten();
+    let approvers: Vec<Value> =
+        principals.into_iter().map(|(kind, id, via)| json!({ "kind": kind, "id": id, "via": via.0 })).collect();
+    Ok(json!({ "approvers": approvers, "eligibleCount": count }))
 }
 
 // ---------------------------------------------------------------------------

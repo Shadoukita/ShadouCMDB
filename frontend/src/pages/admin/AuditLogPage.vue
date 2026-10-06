@@ -90,6 +90,7 @@ const ACTION_SET: Record<Action, true> = {
   "workflow.approval_decide": true,
   "workflow.approval_close": true,
   "workflow.approval_overdue": true,
+  "workflow.approval_refresh": true,
 };
 const ACTIONS = Object.keys(ACTION_SET) as Action[];
 const entityLabel = (t: string) => ENTITY_TYPES.find((e) => e.value === t)?.label ?? t;

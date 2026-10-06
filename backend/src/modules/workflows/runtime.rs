@@ -29,6 +29,7 @@
 //! migration and a CI deletion close it. The lock order gains a third link:
 //! CI row → instance row → approval request row.
 
+pub mod approval_lists;
 pub mod approvals;
 
 use std::collections::{HashMap, HashSet};
@@ -996,6 +997,12 @@ pub async fn list(
         if let Some(ci) = q.ci_id {
             w.and().push("wi.ci_id = ").push_bind(ci);
         }
+        if let Some(waiting) = q.awaiting_approval.map(bool::from) {
+            // The one-pending partial index holds exactly these instances.
+            w.and()
+                .push(if waiting { "wi.id IN" } else { "wi.id NOT IN" })
+                .push(" (SELECT instance_id FROM cmdb.workflow_approval_requests WHERE status = 'pending')");
+        }
     };
     let column = match q.sort.field.as_str() {
         "startedAt" => "wi.started_at",
@@ -1033,8 +1040,9 @@ pub async fn summary(
     // states are named and merged across versions.
     let data = sqlx::query_as::<_, WorkflowStateCount>(
         "WITH per_state AS (
-           SELECT wi.current_state_id, count(*) AS n
+           SELECT wi.current_state_id, count(*) AS n, count(r.instance_id) AS waiting
            FROM cmdb.workflow_instances wi
+           LEFT JOIN cmdb.workflow_approval_requests r ON r.instance_id = wi.id AND r.status = 'pending'
            WHERE wi.status = 'active'
              AND ($1::uuid[] IS NULL
                   OR wi.ci_id IN (SELECT id FROM cmdb.configuration_items WHERE class_id = ANY($1)))
@@ -1044,7 +1052,7 @@ pub async fn summary(
          SELECT d.id AS definition_id, d.key AS definition_key, s.key AS state_key,
                 (array_agg(s.name ORDER BY v.version_no DESC))[1] AS state_name,
                 (array_agg(s.category ORDER BY v.version_no DESC))[1] AS category,
-                sum(p.n)::bigint AS count
+                sum(p.n)::bigint AS count, sum(p.waiting)::bigint AS awaiting_approval
          FROM per_state p
          JOIN cmdb.workflow_states s ON s.id = p.current_state_id
          JOIN cmdb.workflow_versions v ON v.id = s.version_id

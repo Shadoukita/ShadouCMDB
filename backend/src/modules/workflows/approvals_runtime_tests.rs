@@ -12,27 +12,27 @@ use super::runtime_tests::{DEFS, RUN, World, details, id, pairs, world};
 use crate::db::scratch;
 use crate::modules::api_tokens::tests::{Creds, code};
 
-const REQUESTS: &str = "/api/v1/workflow-approval-requests";
+pub(super) const REQUESTS: &str = "/api/v1/workflow-approval-requests";
 
-struct People {
+pub(super) struct People {
     /// Requests: granted every transition, and also a member of Tech and CAB.
-    req: (Creds, Uuid),
+    pub(super) req: (Creds, Uuid),
     /// A second requester (granted, in no approver profile).
-    req2: (Creds, Uuid),
+    pub(super) req2: (Creds, Uuid),
     /// Tech reviewer.
-    tech: (Creds, Uuid),
+    pub(super) tech: (Creds, Uuid),
     /// CAB members.
-    a1: (Creds, Uuid),
-    a2: (Creds, Uuid),
-    a3: (Creds, Uuid),
+    pub(super) a1: (Creds, Uuid),
+    pub(super) a2: (Creds, Uuid),
+    pub(super) a3: (Creds, Uuid),
     /// Eligible for the CAB step through a profile that may not view servers.
-    blind: (Creds, Uuid),
+    pub(super) blind: (Creds, Uuid),
 }
 
 /// Version 2 of the world's workflow: `approve` needs a technical review and
 /// then two CAB approvals; `implement` one check; `review` one approval by
 /// someone who took no part in `implement`.
-async fn setup(w: &World) -> People {
+pub(super) async fn setup(w: &World) -> People {
     w.ok(
         "POST",
         "/api/v1/attribute-definitions",
@@ -688,6 +688,268 @@ async fn pending_requests_close_with_the_right_reason() {
     assert_eq!((v["migrated"].as_i64(), v["skipped"].as_i64()), (Some(2), Some(0)), "{v}");
     assert_eq!(count(&w, on_version, waiting).await, 3);
     assert_eq!(closed(waiting_request).await, ("cancelled".to_owned(), Some("instance_migrated".to_owned())));
+    audit_ok(&w).await;
+    db.drop().await;
+}
+
+/// `(total, ids)` of a list page as `creds` sees it.
+async fn listed(w: &World, creds: &Creds, query: &str) -> (i64, Vec<Uuid>) {
+    let (status, v) = w.call(creds, "GET", &format!("{REQUESTS}?{query}"), None).await;
+    assert_eq!(status, 200, "{query}: {v}");
+    let ids = v["data"].as_array().unwrap().iter().map(|r| id(&json!({ "id": r["id"] }))).collect();
+    (v["page"]["total"].as_i64().unwrap(), ids)
+}
+
+/// Slice A3b: the inbox lists exactly what each caller may decide now, the
+/// other views and filters, the totals leave out what the caller may not view,
+/// the instance's request history, `awaitingApproval`, and refresh.
+#[tokio::test]
+async fn approval_lists_show_what_each_caller_may_decide() {
+    let Some(db) = scratch::database("workflow_approvals_lists").await else { return };
+    let w = world(&db).await;
+    let p = setup(&w).await;
+    let tech_profile = profile_id(&w, "Tech").await;
+    let cab = profile_id(&w, "CAB").await;
+    // In both approver profiles: may decide step 1 or step 2, never both of one request.
+    let both = w.user("both", &[tech_profile, cab]).await;
+    let fields = json!({ "owner_team": "ops" });
+    let (c1, i1) = started(&w).await;
+    let (_, i2) = started(&w).await;
+    let (_, i3) = started(&w).await;
+    let (c_idle, _) = started(&w).await;
+    for (creds, instance) in [(&p.req.0, i1), (&p.req.0, i2), (&p.req2.0, i3)] {
+        let (status, v) = request(&w, creds, instance, "approve", fields.clone()).await;
+        assert_eq!(status, 202, "{v}");
+    }
+    let (r1, _, _) = pending(&w, i1).await;
+    let (r2, _, _) = pending(&w, i2).await;
+    let (r3, _, _) = pending(&w, i3).await;
+
+    // Step 1 (tech) of all three: tech and both see them; the requester and CAB do not.
+    assert_eq!(listed(&w, &p.tech.0, "").await.0, 3);
+    assert_eq!(listed(&w, &both.0, "view=actionable").await.0, 3);
+    assert_eq!(listed(&w, &p.req.0, "").await, (1, vec![r3]), "a tech member: req2's request, never their own");
+    assert_eq!(listed(&w, &p.a1.0, "").await.0, 0, "CAB's step is not active yet");
+
+    // tech decides i1, both decides i2: both moves to CAB.
+    assert_eq!(decide(&w, &p.tech.0, i1, "approve", None).await.0, 200);
+    assert_eq!(decide(&w, &both.0, i2, "approve", None).await.0, 200);
+    let (total, ids) = listed(&w, &p.tech.0, "").await;
+    assert_eq!((total, ids), (1, vec![r3]));
+    assert_eq!(listed(&w, &p.tech.0, "view=decided").await, (1, vec![r1]));
+    let (total, mut ids) = listed(&w, &p.a1.0, "").await;
+    ids.sort();
+    let mut expected = vec![r1, r2];
+    expected.sort();
+    assert_eq!((total, ids), (2, expected));
+    // distinctFromEarlier: both approved step 1 of r2, so only r1 waits for them at CAB (and r3 at tech).
+    let (total, mut ids) = listed(&w, &both.0, "").await;
+    ids.sort();
+    let mut expected = vec![r1, r3];
+    expected.sort();
+    assert_eq!((total, ids), (2, expected));
+    // A user eligible for CAB through a profile that may not view servers: nothing, in no view, in no total.
+    assert_eq!(listed(&w, &p.blind.0, "").await, (0, vec![]));
+    assert_eq!(listed(&w, &p.blind.0, "view=all").await, (0, vec![]));
+    assert_eq!(listed(&w, &w.admin, "view=all").await.0, 3);
+
+    // Tokens (C1): a token someone else minted has no inbox; a self-minted one lists only steps that allow tokens.
+    let (lent, _) = token(&w, p.a1.1, cab, Some(admin_id(&w).await)).await;
+    assert_eq!(listed(&w, &lent, "").await.0, 0);
+    let (own, _) = token(&w, p.a1.1, cab, Some(p.a1.1)).await;
+    assert_eq!(listed(&w, &own, "").await.0, 2, "the CAB step allows tokens");
+    let (tech_token, _) = token(&w, p.tech.1, tech_profile, Some(p.tech.1)).await;
+    assert_eq!(listed(&w, &tech_token, "").await.0, 0, "the tech step needs a session");
+    // What the inbox lists, the request detail lets decide.
+    for r in [r1, r2] {
+        let (_, v) = w.call(&p.a1.0, "GET", &format!("{REQUESTS}/{r}"), None).await;
+        assert_eq!(v["myEligibility"]["canDecide"], true, "{v}");
+    }
+
+    // One vote per person: after a1 approves r1, it leaves a1's inbox and stays in a2's.
+    assert_eq!(decide(&w, &p.a1.0, i1, "approve", None).await.0, 200);
+    assert_eq!(listed(&w, &p.a1.0, "").await, (1, vec![r2]));
+    assert_eq!(listed(&w, &p.a2.0, "").await.0, 2);
+
+    // The item, as a list shows it.
+    let (_, v) = w.call(&p.a2.0, "GET", &format!("{REQUESTS}?ciId={c1}"), None).await;
+    let item = &v["data"][0];
+    assert_eq!(item["id"], json!(r1), "{v}");
+    assert_eq!(item["requestedBy"], json!({ "id": p.req.1, "name": "req" }));
+    assert_eq!((item["transitionKey"].as_str(), item["toState"].as_str()), (Some("approve"), Some("approved")));
+    assert_eq!(item["stepCount"], 2);
+    let step = &item["currentStep"];
+    assert_eq!(
+        (step["key"].as_str(), step["approvals"].as_i64(), step["requiredApprovals"].as_i64(), step["status"].as_str()),
+        (Some("cab"), Some(1), Some(2), Some("active"))
+    );
+    assert!(item.get("stagedFields").is_none(), "a list carries no staged values");
+
+    // Views and filters.
+    assert_eq!(listed(&w, &p.req.0, "view=requested").await.0, 2);
+    assert_eq!(listed(&w, &p.req2.0, "view=requested").await, (1, vec![r3]));
+    let runbook = format!("view=all&status=pending&requestedBy={}", p.req.1);
+    assert_eq!(listed(&w, &w.admin, &runbook).await.0, 2, "the incident runbook's query");
+    assert_eq!(listed(&w, &w.admin, "view=all&status=approved").await.0, 0);
+    assert_eq!(listed(&w, &w.admin, "view=all&overdue=true").await.0, 0);
+    assert_eq!(listed(&w, &w.admin, "view=all&overdue=false").await.0, 3);
+    assert_eq!(listed(&w, &w.admin, "view=all&definitionKey=nope").await.0, 0);
+    let (_, sorted) = listed(&w, &w.admin, "view=all&sort=-requestedAt").await;
+    assert_eq!(sorted, vec![r3, r2, r1]);
+    let (status, v) = w.call(&w.admin, "GET", &format!("{REQUESTS}?view=mine"), None).await;
+    assert_eq!((status, code(&v)), (400, "VALIDATION_ERROR"), "{v}");
+
+    // The instance list and summary know who waits for approval.
+    let (_, v) = w.call(&w.admin, "GET", &format!("{RUN}?awaitingApproval=true"), None).await;
+    assert_eq!(v["page"]["total"], 3, "{v}");
+    let (_, v) = w.call(&w.admin, "GET", &format!("{RUN}?awaitingApproval=false&ciId={c_idle}"), None).await;
+    assert_eq!(v["page"]["total"], 1, "{v}");
+    let (_, v) = w.call(&w.admin, "GET", &format!("{RUN}/summary"), None).await;
+    let planned = v["data"].as_array().unwrap().iter().find(|s| s["stateKey"] == "planned").unwrap().clone();
+    assert_eq!((planned["count"].as_i64(), planned["awaitingApproval"].as_i64()), (Some(4), Some(3)), "{v}");
+
+    // History of an instance: newest first, whatever became of each.
+    assert_eq!(decide(&w, &p.tech.0, i3, "reject", Some("no")).await.0, 200);
+    assert_eq!(request(&w, &p.req2.0, i3, "approve", fields.clone()).await.0, 202);
+    let (status, v) = w.call(&p.a1.0, "GET", &format!("{RUN}/{i3}/approval-requests"), None).await;
+    assert_eq!(status, 200, "{v}");
+    let history: Vec<(i64, &str)> = v["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| (r["requestNo"].as_i64().unwrap(), r["status"].as_str().unwrap()))
+        .collect();
+    assert_eq!((v["page"]["total"].as_i64(), history), (Some(2), vec![(2, "pending"), (1, "rejected")]));
+    let (status, _) = w.call(&p.blind.0, "GET", &format!("{RUN}/{i3}/approval-requests"), None).await;
+    assert_eq!(status, 404);
+
+    // Refresh: managers only, pending only; it picks up a change of approvers.
+    let (status, v) = w.call(&p.a1.0, "POST", &format!("{REQUESTS}/{r2}/refresh"), None).await;
+    assert_eq!((status, code(&v)), (403, "FORBIDDEN"), "{v}");
+    let (_, v) = w.call(&w.admin, "GET", &format!("{REQUESTS}/{r2}"), None).await;
+    assert_eq!(v["steps"][1]["eligibleCount"], 4, "a1, a2, a3 and both: {v}");
+    sqlx::query("DELETE FROM user_permission_profiles WHERE user_id = $1 AND profile_id = $2")
+        .bind(p.a3.1)
+        .bind(cab)
+        .execute(&w.pool)
+        .await
+        .unwrap();
+    let (status, v) = w.call(&w.admin, "POST", &format!("{REQUESTS}/{r2}/refresh"), None).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(v["steps"][1]["eligibleCount"], 3, "a3 left CAB: {v}");
+    let (status, v) = w.call(&w.admin, "POST", &format!("{REQUESTS}/{r1}/refresh"), None).await;
+    assert_eq!(status, 200, "{v}");
+    let (status, v) = w.call(&w.admin, "POST", &format!("{REQUESTS}/{r2}/refresh"), None).await;
+    assert_eq!(status, 200, "{v}");
+    // GH#663: each refresh is audited on the CI in its transaction, the
+    // approvers before and after, also when nothing changed.
+    let rows: Vec<(String, Uuid, Value, Value)> = sqlx::query_as(
+        "SELECT actor_name, entity_id, old_value, new_value FROM audit_log
+         WHERE action = 'workflow.approval_refresh' ORDER BY chain_seq",
+    )
+    .fetch_all(&w.pool)
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 3, "{rows:?}");
+    let (actor, ci, old, new) = &rows[0];
+    assert_eq!((actor.as_str(), new["requestId"].as_str()), ("admin", Some(r2.to_string().as_str())), "{new}");
+    let ci_of_r2: Uuid = sqlx::query_scalar(
+        "SELECT i.ci_id FROM workflow_approval_requests r JOIN workflow_instances i ON i.id = r.instance_id WHERE r.id = $1",
+    )
+    .bind(r2)
+    .fetch_one(&w.pool)
+    .await
+    .unwrap();
+    assert_eq!(*ci, ci_of_r2);
+    assert_eq!((old["eligibleCount"].as_i64(), new["eligibleCount"].as_i64()), (Some(4), Some(3)), "{old} {new}");
+    assert_eq!((new["changed"].as_bool(), new["stepNo"].as_i64()), (Some(true), Some(2)), "{new}");
+    assert_eq!(old["approvers"], new["approvers"], "the CAB profile stays the principal; its members changed");
+    assert!(
+        new["approvers"].as_array().is_some_and(|a| a.iter().any(|p| p["kind"] == "profile" && p["id"] == json!(cab)))
+    );
+    // r1 sits at the same CAB step, so a3 leaving changed it as well.
+    let (_, _, _, new) = &rows[1];
+    assert_eq!((new["requestId"].as_str(), new["changed"].as_bool()), (Some(r1.to_string().as_str()), Some(true)));
+    // r2 again: nothing changed, still recorded.
+    let (_, _, old, new) = &rows[2];
+    assert_eq!((new["requestId"].as_str(), new["changed"].as_bool()), (Some(r2.to_string().as_str()), Some(false)));
+    assert_eq!((&old["approvers"], old["eligibleCount"].as_i64()), (&new["approvers"], Some(3)), "{old} {new}");
+    audit_ok(&w).await;
+    let (_, v) = w.call(&w.admin, "GET", &format!("{RUN}/{i3}/approval-requests"), None).await;
+    let rejected = id(&json!({ "id": v["data"][1]["id"] }));
+    let (status, v) = w.call(&w.admin, "POST", &format!("{REQUESTS}/{rejected}/refresh"), None).await;
+    assert_eq!((status, details(&v)), (409, pairs(&[("id", "not_pending")])), "{v}");
+    audit_ok(&w).await;
+    db.drop().await;
+}
+
+/// GH#635: `excludeActorsOf` refuses every approver of the excluded
+/// transition, not only the one whose vote completed its quorum.
+#[tokio::test]
+async fn exclude_actors_of_refuses_every_approver_of_the_excluded_transition() {
+    let Some(db) = scratch::database("workflow_approvals_actors").await else { return };
+    let w = world(&db).await;
+    let p = setup(&w).await;
+    let mut g = graph();
+    g["transitions"][1]["approval"]["steps"][0]["requiredApprovals"] = json!(2);
+    publish(&w, g).await;
+    let (_, instance) = started(&w).await;
+    assert_eq!(request(&w, &p.req.0, instance, "approve", json!({ "owner_team": "ops" })).await.0, 202);
+    assert_eq!(decide(&w, &p.tech.0, instance, "approve", None).await.0, 200);
+    assert_eq!(decide(&w, &p.a3.0, instance, "approve", None).await.0, 200);
+    assert_eq!(decide(&w, &p.a2.0, instance, "approve", None).await.0, 200);
+    // implement: a1 votes first, a2 completes the quorum.
+    assert_eq!(request(&w, &p.req.0, instance, "implement", json!({})).await.0, 202);
+    assert_eq!(decide(&w, &p.a1.0, instance, "approve", None).await.0, 200);
+    let (status, v) = decide(&w, &p.a2.0, instance, "approve", None).await;
+    assert_eq!((status, v["instance"]["state"]["key"].as_str()), (200, Some("implemented")), "{v}");
+    assert_eq!(request(&w, &p.req2.0, instance, "review", json!({})).await.0, 202);
+    let (review, _, _) = pending(&w, instance).await;
+    for (who, creds) in [("a2", &p.a2.0), ("a1", &p.a1.0)] {
+        let (status, v) = decide(&w, creds, instance, "approve", None).await;
+        assert_eq!((status, reason(&v)), (403, refused("WORKFLOW_APPROVAL_SELF", "actor_of:implement")), "{who}: {v}");
+        assert_eq!(listed(&w, creds, "").await.0, 0, "{who}'s inbox agrees");
+    }
+    assert_eq!(listed(&w, &p.a3.0, "").await, (1, vec![review]));
+    let (status, v) = decide(&w, &p.a3.0, instance, "approve", None).await;
+    assert_eq!((status, v["instance"]["state"]["key"].as_str()), (200, Some("done")), "{v}");
+    audit_ok(&w).await;
+    db.drop().await;
+}
+
+/// GH#635: so does an approver of an earlier step of the excluded transition,
+/// not only the approvers of its final step.
+#[tokio::test]
+async fn exclude_actors_of_refuses_an_approver_of_an_earlier_step() {
+    let Some(db) = scratch::database("workflow_approvals_actors_steps").await else { return };
+    let w = world(&db).await;
+    let p = setup(&w).await;
+    let mut g = graph();
+    g["transitions"][2]["approval"]["steps"][0]["excludeActorsOf"] = json!(["implement", "approve"]);
+    publish(&w, g).await;
+    let (tech, cab) = (profile_id(&w, "Tech").await, profile_id(&w, "CAB").await);
+    // t2 does the technical review of `approve` and, as a CAB member, could decide `review`.
+    let t2 = w.user("t2", &[tech, cab]).await;
+    let a4 = w.user("a4", &[cab]).await;
+    let (_, instance) = started(&w).await;
+    assert_eq!(request(&w, &p.req.0, instance, "approve", json!({ "owner_team": "ops" })).await.0, 202);
+    assert_eq!(decide(&w, &t2.0, instance, "approve", None).await.0, 200);
+    assert_eq!(decide(&w, &p.a1.0, instance, "approve", None).await.0, 200);
+    let (status, v) = decide(&w, &p.a2.0, instance, "approve", None).await;
+    assert_eq!((status, v["instance"]["state"]["key"].as_str()), (200, Some("approved")), "{v}");
+    assert_eq!(request(&w, &p.req.0, instance, "implement", json!({})).await.0, 202);
+    assert_eq!(decide(&w, &p.a3.0, instance, "approve", None).await.0, 200);
+    assert_eq!(request(&w, &p.req2.0, instance, "review", json!({})).await.0, 202);
+    let (review, _, _) = pending(&w, instance).await;
+    for (who, creds, key) in [("t2", &t2.0, "approve"), ("a1", &p.a1.0, "approve"), ("a3", &p.a3.0, "implement")] {
+        let (status, v) = decide(&w, creds, instance, "approve", None).await;
+        let expected = refused("WORKFLOW_APPROVAL_SELF", &format!("actor_of:{key}"));
+        assert_eq!((status, reason(&v)), (403, expected), "{who}: {v}");
+        assert_eq!(listed(&w, creds, "").await.0, 0, "{who}'s inbox agrees");
+    }
+    assert_eq!(listed(&w, &a4.0, "").await, (1, vec![review]));
+    let (status, v) = decide(&w, &a4.0, instance, "approve", None).await;
+    assert_eq!((status, v["instance"]["state"]["key"].as_str()), (200, Some("done")), "{v}");
     audit_ok(&w).await;
     db.drop().await;
 }

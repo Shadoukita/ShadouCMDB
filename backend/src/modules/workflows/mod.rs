@@ -653,6 +653,24 @@ pub fn runtime_routes() -> Vec<Route> {
                     Ok(Json(runtime::force(&api.pool, &api.ctx, id, &b).await?))
                 },
             ),
+        route(Method::GET, "/api/v1/workflow-approval-requests", "listWorkflowApprovalRequests")
+            .tag(APPROVAL_TAG)
+            .summary("List approval requests: your inbox, the ones you made or decided, or all (paginated, filterable)")
+            .description(
+                "`view=actionable` (the default) is the inbox: pending requests whose active step you may decide \
+                 now, in person, by the same rules as a decision (an approver of the step, not the requester or \
+                 the requesting token's creator, not yet decided by you, and the step's separation of duties and \
+                 API token rules). `requested` and `decided` are the requests you made, and those you approved or \
+                 rejected a step of; `all` is every request. Requests on CIs of types the caller may not view are \
+                 left out of the page and of `page.total`. `requestedBy` lists one user's requests, for example to \
+                 cancel the pending requests of a disabled account (`view=all&status=pending&requestedBy=…`). \
+                 Sorted by the active step's due date, the earliest first, unless `sort` says otherwise.",
+            )
+            .handle(
+                |api, In(NoPath, Query(q), NoBody): In<NoPath, Query<WorkflowApprovalRequestList>, NoBody>| async move {
+                    Ok(Json(runtime::approval_lists::list(&api.pool, &api.ctx, &q).await?))
+                },
+            ),
         route(Method::GET, APPROVAL, "getWorkflowApprovalRequest")
             .tag(APPROVAL_TAG)
             .summary("Get an approval request with its steps, decisions and requester, and whether you may decide it")
@@ -679,7 +697,8 @@ pub fn runtime_routes() -> Vec<Route> {
                  `not_eligible`). **Four-eyes** (403 WORKFLOW_APPROVAL_SELF): the requester never decides their \
                  own request, whichever profile or credential they use (`requester`), nor does a token the \
                  requester minted (`token_creator`); a step can also refuse whoever approved an earlier step \
-                 (`earlier_step`) and the actors of other transitions of the instance (`actor_of:<key>`). API \
+                 (`earlier_step`) and whoever ran, requested or approved other transitions of the instance \
+                 (`actor_of:<key>`). API \
                  tokens decide only on a step that allows them (403 FORBIDDEN `session_required`), and only a \
                  token its owner minted for themselves (403 FORBIDDEN `token_not_self_minted`). A comment is \
                  required to reject. Any rejection rejects the request and the instance stays where it is. When \
@@ -735,6 +754,36 @@ pub fn runtime_routes() -> Vec<Route> {
             .handle(
                 |api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<WorkflowApprovalCancel>>| async move {
                     Ok(Json(runtime::approvals::cancel(&api.pool, &api.ctx, id, &b).await?))
+                },
+            ),
+        route(Method::POST, "/api/v1/workflow-approval-requests/{id}/refresh", "refreshWorkflowApprovalRequest")
+            .tag(APPROVAL_TAG)
+            .summary("Re-resolve who may decide the active step of a pending request")
+            .description(
+                "For administrators (`workflows.manage`): the active step's approvers are resolved again from the \
+                 workflow's current approver assignments and the CI's current values, for example after the CI \
+                 field that names the approver changed. Decisions already cast stand. No body. Audited on the CI \
+                 as `workflow.approval_refresh`, also when nothing changed: `oldValue` holds the step's `approvers` \
+                 (`kind`, `id`, `via`) and `eligibleCount` before, `newValue` the request, the step, `changed` and \
+                 the same two after. 409 CONFLICT `not_pending`.",
+            )
+            .requires(GlobalPermission::WorkflowsManage)
+            .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])
+            .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
+                Ok(Json(runtime::approvals::refresh(&api.pool, &api.ctx, id).await?))
+            }),
+        route(Method::GET, "/api/v1/workflow-instances/{id}/approval-requests", "listWorkflowInstanceApprovalRequests")
+            .tag(APPROVAL_TAG)
+            .summary("The approval requests of a workflow instance, newest first (paginated)")
+            .description(
+                "Every request the instance had, whatever became of it: approved, rejected, withdrawn or \
+                 cancelled, and the pending one. Kept for the life of the CI. 404 for an instance on a CI of a type \
+                 the caller may not view.",
+            )
+            .errors(&[ErrorCode::NotFound])
+            .handle(
+                |api, In(IdPath(id), Query(q), NoBody): In<IdPath, Query<WorkflowApprovalHistoryList>, NoBody>| async move {
+                    Ok(Json(runtime::approval_lists::of_instance(&api.pool, &api.ctx, id, &q).await?))
                 },
             ),
         route(Method::GET, "/api/v1/configuration-items/{id}/workflows", "getConfigurationItemWorkflows")

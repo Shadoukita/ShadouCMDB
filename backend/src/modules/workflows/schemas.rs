@@ -474,8 +474,8 @@ fn exclude_actors_schema() -> Schema {
         .items(utoipa::openapi::RefOr::T(key_schema()))
         .max_items(Some(20))
         .description(Some(
-            "Transition keys of this version: whoever ran one of them on the instance (and whoever requested it) may \
-             not approve this step",
+            "Transition keys of this version: whoever ran, requested or approved one of them on the instance may not \
+             approve this step",
         ))
         .into()
 }
