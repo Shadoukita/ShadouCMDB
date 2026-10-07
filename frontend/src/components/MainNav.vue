@@ -148,7 +148,7 @@ function active(item: NavLinkItem): (r: RouteLocationNormalizedLoaded) => boolea
           <Icon :name="PAGE_ICONS[item.page]" :size="collapsed ? 20 : 16" />
           <span class="nav-label">{{ item.label }}</span>
         </NavLink>
-        <AdminNav v-if="item.page === 'administration' && adminSub" placement="rail" />
+        <AdminNav v-if="item.page === 'administration' && adminSub" placement="rail" :rail-items="items.length" />
         <!-- Bulk import sits under Inventory, only while it is switched on and the user holds cis.import. -->
         <NavLink
           v-if="item.page === 'inventory' && importAccess.available.value"
