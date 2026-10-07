@@ -313,6 +313,7 @@ export const de: { [K in MessageKey]: string } = {
   "record.actions.impact": "Auswirkungsanalyse",
   "record.actions.map": "Beziehungskarte",
   "record.actions.history": "Verlauf",
+  "record.meta.created": "Angelegt {when}",
   "record.meta.updated": "Geändert {when}",
   "record.meta.version": "Version {n}",
   "record.save.unsaved": "Ungespeicherte Änderungen",

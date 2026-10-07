@@ -24,7 +24,7 @@ import SaveBar from "../../components/SaveBar.vue";
 import { changedFields } from "../../lib/changes";
 import { useDocumentTitle, useUnsavedGuard } from "../../lib/composables";
 import { vAutofocus } from "../../lib/directives";
-import { formatDateTime, formatRelative } from "../../lib/format";
+import { formatDate, formatDateTime, formatRelative } from "../../lib/format";
 import { GLOBAL_PERMISSIONS, type ClassRight } from "../../lib/permissions";
 import { useFlashStore } from "../../stores/flash";
 import { useSessionStore } from "../../stores/session";
@@ -254,6 +254,10 @@ const notFound = computed(() => {
             {{ t("admin.profile.users", { n: profile.data.value.userCount }) }}
           </RouterLink>
           <span v-else>{{ t("admin.profile.users", { n: profile.data.value.userCount }) }}</span>
+          <span class="sep" aria-hidden="true">·</span>
+          <time :datetime="profile.data.value.createdAt" :title="formatDateTime(profile.data.value.createdAt)">
+            {{ t("record.meta.created", { when: formatDate(profile.data.value.createdAt) }) }}
+          </time>
           <span class="sep" aria-hidden="true">·</span>
           <time :datetime="profile.data.value.updatedAt" :title="formatDateTime(profile.data.value.updatedAt)">
             {{ t("record.meta.updated", { when: formatRelative(profile.data.value.updatedAt) }) }}
