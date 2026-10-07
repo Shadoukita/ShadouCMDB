@@ -243,7 +243,7 @@ const ruleMenu = (r: Rule): RowMenuItem[] => [{ label: t("common.delete"), actio
       </template>
     </EmptyState>
     <div v-if="rows.length > 0" class="table-wrap">
-      <table class="data reorderable">
+      <table class="data reorderable relationship-types">
         <thead>
           <tr>
             <th scope="col" class="drag-col"><span class="sr-only">{{ t("dm.lookup.col.drag") }}</span></th>

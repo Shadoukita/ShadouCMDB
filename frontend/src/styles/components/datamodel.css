@@ -43,6 +43,10 @@ table.attributes tr.section-row th {
   align-items: center;
   gap: var(--space-2);
 }
+/* The "symmetric" badge after a relationship type's name. */
+table.relationship-types td a + .badge {
+  margin-left: var(--space-2);
+}
 /* ---- 9a/C end ---- */
 
 /* ---- 9a/D begin: areas and schema changes ---- */
