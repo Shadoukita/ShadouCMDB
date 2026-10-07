@@ -17,6 +17,8 @@ import FormField from "../form/FormField.vue";
  * are not reset here either (the API answers 409): My account changes them and asks for the current password.
  */
 const props = defineProps<{ user: User; isSelf: boolean }>();
+/** Emitted just before the page leaves for the users list after a delete. */
+const emit = defineEmits<{ deleted: [] }>();
 const provider = computed(() => props.user.identityProvider);
 const router = useRouter();
 const update = useUpdateUser();
@@ -72,6 +74,7 @@ function confirmDelete() {
       const n = res?.affectedServices;
       const services = typeof n === "number" ? t("users.deleted.services", { n }) : t("users.deleted.servicesWithheld");
       flash.show(`${t("users.deleted", { name: username })} ${services}`);
+      emit("deleted");
       router.replace("/admin/users");
     },
   });
@@ -91,8 +94,8 @@ function resetPassword() {
   pwDone.value = false;
   setPassword.reset();
   const errs: Record<string, string> = {};
-  if ([...pw.value].length < 12) errs.password = "Too short";
-  if (pw.value !== pw2.value) errs.confirm = "The passwords do not match";
+  if ([...pw.value].length < 12) errs.password = t("admin.password.tooShort");
+  if (pw.value !== pw2.value) errs.confirm = t("admin.password.mismatch");
   pwLocal.value = errs;
   if (Object.keys(errs).length > 0) return;
   setPassword.mutate(
@@ -106,139 +109,112 @@ function resetPassword() {
     },
   );
 }
+
+/** Delete is offered in the page's `⋯` menu; the dialog stays here, with the other account actions. */
+defineExpose({ openDelete });
 </script>
 
 <template>
   <section v-if="provider" class="panel" aria-labelledby="pw-title">
-    <div class="panel-header"><h2 id="pw-title">Password and two-factor</h2></div>
+    <div class="panel-header"><h2 id="pw-title">{{ t("admin.account.providerTitle") }}</h2></div>
     <div class="panel-body">
-      <p class="muted no-margin" data-testid="provider-credentials">
-        {{ user.username }} signs in through <strong>{{ provider.name }}</strong> and has no password in ShadouCMDB.
-        Passwords and two-factor authentication are managed there.
-      </p>
+      <p class="muted no-margin" data-testid="provider-credentials">{{ t("admin.account.providerBody", { user: user.username, name: provider.name }) }}</p>
     </div>
   </section>
   <section v-if="!provider && isSelf" class="panel" aria-labelledby="pw-title">
-    <div class="panel-header"><h2 id="pw-title">Password</h2></div>
+    <div class="panel-header"><h2 id="pw-title">{{ t("admin.password.label") }}</h2></div>
     <div class="panel-body">
       <p class="muted no-margin" data-testid="self-password">
-        This is you: change your own password under <RouterLink to="/account">My account</RouterLink>. It asks for your
-        current password.
+        {{ t("admin.account.selfPassword") }} <RouterLink to="/account">{{ t("admin.account.myAccount") }}</RouterLink>.
       </p>
     </div>
   </section>
   <section v-if="!provider && !isSelf" class="panel" aria-labelledby="pw-title">
-    <div class="panel-header"><h2 id="pw-title">Reset password</h2></div>
+    <div class="panel-header"><h2 id="pw-title">{{ t("admin.account.resetPassword") }}</h2></div>
     <form class="panel-body stack" novalidate @submit.prevent="resetPassword">
-      <p class="muted" style="margin: 0">
-        Sets a new password for {{ user.username }}, signs them out everywhere and revokes their API tokens.
-      </p>
-      <div v-if="pwDone" class="alert alert-success" role="status">Password changed. {{ user.username }}'s sessions were ended.</div>
-      <ErrorAlert v-if="setPassword.isError.value && !pwFieldErrors.password" :error="setPassword.error.value" title="Password not changed" />
+      <p class="muted no-margin">{{ t("admin.account.resetPasswordHint", { user: user.username }) }}</p>
+      <div v-if="pwDone" class="alert alert-success" role="status">{{ t("admin.account.passwordChanged", { user: user.username }) }}</div>
+      <ErrorAlert v-if="setPassword.isError.value && !pwFieldErrors.password" :error="setPassword.error.value" :title="t('admin.account.passwordNotChanged')" />
       <div class="form-grid">
-        <FormField id="reset-password" label="New password" required :error="pwFieldErrors.password" hint="At least 12 characters">
+        <FormField id="reset-password" :label="t('admin.account.newPassword')" required :error="pwFieldErrors.password" :hint="t('admin.password.hint')">
           <template #default="{ id, invalid, describedBy }">
             <input :id="id" v-model="pw" type="password" autocomplete="new-password" :aria-invalid="invalid" :aria-describedby="describedBy" />
           </template>
         </FormField>
-        <FormField id="reset-confirm" label="Repeat new password" required :error="pwFieldErrors.confirm">
+        <FormField id="reset-confirm" :label="t('admin.account.repeatNewPassword')" required :error="pwFieldErrors.confirm">
           <template #default="{ id, invalid, describedBy }">
             <input :id="id" v-model="pw2" type="password" autocomplete="new-password" :aria-invalid="invalid" :aria-describedby="describedBy" />
           </template>
         </FormField>
       </div>
-      <div><button type="submit" class="btn" :disabled="setPassword.isPending.value">Set new password</button></div>
+      <div><button type="submit" class="btn" :disabled="setPassword.isPending.value">{{ t("admin.account.setPassword") }}</button></div>
     </form>
   </section>
 
   <section v-if="!provider || user.mfaEnabled" class="panel" aria-labelledby="mfa-admin-title">
-    <div class="panel-header"><h2 id="mfa-admin-title">Two-factor authentication</h2></div>
+    <div class="panel-header"><h2 id="mfa-admin-title">{{ t("admin.user.mfa") }}</h2></div>
     <div class="panel-body stack">
-      <div v-if="mfaDone" class="alert alert-success" role="status">
-        Two-factor authentication reset. {{ user.username }} signs in with their password only, or sets it up again if a profile requires it.
-      </div>
-      <p class="muted" style="margin: 0">
-        <template v-if="user.mfaEnabled">
-          {{ user.username }} signs in with a password and a code from an authenticator app. If they lost their device and
-          their recovery codes, reset it.
-        </template>
-        <template v-else>{{ user.username }} has not set up two-factor authentication.</template>
+      <div v-if="mfaDone" class="alert alert-success" role="status">{{ t("admin.account.mfaResetDone", { user: user.username }) }}</div>
+      <p class="muted no-margin">
+        {{ user.mfaEnabled ? t("admin.account.mfaOn", { user: user.username }) : t("admin.account.mfaOff", { user: user.username }) }}
       </p>
-      <p v-if="isSelf && user.mfaEnabled" class="muted" style="margin: 0">
-        This is you: manage your own authenticator under <RouterLink to="/account">My account</RouterLink>.
+      <p v-if="isSelf && user.mfaEnabled" class="muted no-margin">
+        {{ t("admin.account.selfMfa") }} <RouterLink to="/account">{{ t("admin.account.myAccount") }}</RouterLink>.
       </p>
-      <div><button type="button" class="btn" :disabled="!user.mfaEnabled || isSelf" @click="openResetMfa">Reset two-factor</button></div>
+      <div><button type="button" class="btn" :disabled="!user.mfaEnabled || isSelf" @click="openResetMfa">{{ t("admin.account.resetMfa") }}</button></div>
     </div>
   </section>
 
-  <section class="panel" aria-labelledby="danger-title">
-    <div class="panel-header"><h2 id="danger-title">Access</h2></div>
+  <section class="panel" aria-labelledby="access-title">
+    <div class="panel-header"><h2 id="access-title">{{ t("admin.account.access") }}</h2></div>
     <div class="panel-body stack">
-      <p v-if="isSelf" class="muted" style="margin: 0">
-        This is your own account. Another user manager has to disable or delete it, so you cannot lock yourself out.
-      </p>
+      <p v-if="isSelf" class="muted no-margin">{{ t("admin.account.selfAccess") }}</p>
       <div class="actions">
-        <button v-if="user.isActive" type="button" class="btn" :disabled="isSelf" @click="openToggle">Disable account</button>
-        <button v-else type="button" class="btn" @click="openToggle">Enable account</button>
-        <button type="button" class="btn btn-danger" :disabled="isSelf" @click="openDelete">Delete user</button>
+        <button v-if="user.isActive" type="button" class="btn" :disabled="isSelf" @click="openToggle">{{ t("admin.account.disable") }}</button>
+        <button v-else type="button" class="btn" @click="openToggle">{{ t("admin.account.enable") }}</button>
       </div>
-      <p class="muted" style="margin: 0">Prefer disabling: a disabled user keeps their name on past changes and can be enabled again.</p>
+      <p class="muted no-margin">{{ isSelf ? t("admin.account.preferDisable") : t("admin.account.preferDisableDelete") }}</p>
     </div>
   </section>
 
   <ConfirmDialog
     :open="confirming === 'toggle'"
-    :title="user.isActive ? `Disable ${user.username}?` : `Enable ${user.username}?`"
-    :confirm-label="user.isActive ? 'Disable account' : 'Enable account'"
+    :title="user.isActive ? t('admin.account.disableTitle', { user: user.username }) : t('admin.account.enableTitle', { user: user.username })"
+    :confirm-label="user.isActive ? t('admin.account.disable') : t('admin.account.enable')"
     :busy="update.isPending.value"
     @cancel="confirming = null"
     @confirm="confirmToggle"
   >
-    <ErrorAlert v-if="toggleError" :error="toggleError" :title="user.isActive ? 'Not disabled' : 'Not enabled'" />
-    <p v-if="user.isActive">
-      <strong>{{ user.displayName }}</strong> ({{ user.username }}) will be signed out everywhere and cannot sign in until
-      the account is enabled again. Their profiles and history are kept.
-    </p>
-    <p v-else-if="provider">
-      <strong>{{ user.displayName }}</strong> ({{ user.username }}) will be able to sign in again through {{ provider.name }},
-      as long as their groups there still map to a profile.
-    </p>
-    <p v-else><strong>{{ user.displayName }}</strong> ({{ user.username }}) will be able to sign in again with their current password.</p>
+    <ErrorAlert v-if="toggleError" :error="toggleError" :title="user.isActive ? t('admin.account.notDisabled') : t('admin.account.notEnabled')" />
+    <p v-if="user.isActive"><strong dir="auto">{{ user.displayName }}</strong> ({{ user.username }}) {{ t("admin.account.disableBody") }}</p>
+    <p v-else-if="provider"><strong dir="auto">{{ user.displayName }}</strong> ({{ user.username }}) {{ t("admin.account.enableBodyProvider", { name: provider.name }) }}</p>
+    <p v-else><strong dir="auto">{{ user.displayName }}</strong> ({{ user.username }}) {{ t("admin.account.enableBody") }}</p>
   </ConfirmDialog>
 
   <ConfirmDialog
     :open="confirming === 'mfa'"
-    :title="`Reset two-factor authentication for ${user.username}?`"
-    confirm-label="Reset two-factor"
+    :title="t('admin.account.resetMfaTitle', { user: user.username })"
+    :confirm-label="t('admin.account.resetMfa')"
     :busy="resetMfa.isPending.value"
     @cancel="confirming = null"
     @confirm="confirmResetMfa"
   >
-    <ErrorAlert v-if="resetMfa.isError.value" :error="resetMfa.error.value" title="Two-factor authentication not reset" />
-    <p>
-      Deletes the authenticator and the recovery codes of <strong>{{ user.displayName }}</strong> ({{ user.username }}). They
-      then sign in with their password only. If a permission profile they hold requires two-factor authentication, they
-      must set it up again before they can continue working.
-    </p>
-    <p>Only do this after you have confirmed their identity: it removes the second sign-in factor. The reset is audited.</p>
+    <ErrorAlert v-if="resetMfa.isError.value" :error="resetMfa.error.value" :title="t('admin.account.mfaNotReset')" />
+    <p>{{ t("admin.account.resetMfaBody", { name: user.displayName, user: user.username }) }}</p>
+    <p>{{ t("admin.account.resetMfaWarning") }}</p>
   </ConfirmDialog>
 
   <ConfirmDialog
     :open="confirming === 'delete'"
-    :title="`Delete user ${user.username}?`"
-    confirm-label="Delete user"
+    :title="t('admin.account.deleteTitle', { user: user.username })"
+    :confirm-label="t('admin.user.delete')"
     :busy="del.isPending.value"
     @cancel="confirming = null"
     @confirm="confirmDelete"
   >
-    <ErrorAlert v-if="del.isError.value" :error="del.error.value" title="Delete failed" />
-    <p>
-      <strong>{{ user.displayName }}</strong> ({{ user.username }}) will be removed and signed out everywhere. This cannot be
-      undone. The audit log keeps their name on the changes they made.
-    </p>
-    <p v-if="user.profiles.length > 0">
-      They hold: <strong>{{ user.profiles.map((p) => p.name).join(", ") }}</strong>. The profiles themselves are not deleted.
-    </p>
+    <ErrorAlert v-if="del.isError.value" :error="del.error.value" :title="t('groups.delete.failed')" />
+    <p><strong dir="auto">{{ user.displayName }}</strong> ({{ user.username }}) {{ t("admin.account.deleteBody") }}</p>
+    <p v-if="user.profiles.length > 0">{{ t("admin.account.deleteProfiles", { profiles: user.profiles.map((p) => p.name).join(", ") }) }}</p>
     <p data-testid="user-delete-services">{{ t("users.delete.services") }}</p>
   </ConfirmDialog>
 </template>

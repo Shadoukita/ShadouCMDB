@@ -7,11 +7,14 @@ import { ApiError } from "../../api/client";
 import Breadcrumbs from "../../components/Breadcrumbs.vue";
 import EmptyState from "../../components/EmptyState.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
+import Icon from "../../components/Icon.vue";
 import LoadingState from "../../components/LoadingState.vue";
+import RowMenu, { type RowMenuItem } from "../../components/RowMenu.vue";
+import SaveBar from "../../components/SaveBar.vue";
 import { t } from "../../i18n";
-import { useDocumentTitle } from "../../lib/composables";
+import { useDocumentTitle, useUnsavedGuard } from "../../lib/composables";
 import { vAutofocus } from "../../lib/directives";
-import { formatDateTime } from "../../lib/format";
+import { formatDateTime, formatRelative } from "../../lib/format";
 import { emailErrorMessage, signInStatusLabel, userEmailError } from "../../lib/people";
 import { useFlashStore } from "../../stores/flash";
 import { useSessionStore } from "../../stores/session";
@@ -20,7 +23,12 @@ import FormField from "../form/FormField.vue";
 import ProfilePicker from "./ProfilePicker.vue";
 import UserAccountActions from "./UserAccountActions.vue";
 
-/** Administration › Users › new / one user: profile fields and profiles; the account actions sit beside the form. */
+/**
+ * Administration › Users › new / one user: profile fields and profiles; the account actions sit beside the form.
+ * The title row is the record page's (design §2.7, audit A3): name, a meta line with the account's state, the
+ * related views as secondary buttons and Delete in the `⋯` menu. Saving is the admin pages' one pattern: the
+ * docked save bar, a toast on success, errors inline.
+ */
 const route = useRoute();
 const router = useRouter();
 const session = useSessionStore();
@@ -31,7 +39,7 @@ const user = useUser(id);
 const create = useCreateUser();
 const update = useUpdateUser();
 const pending = computed(() => create.isPending.value || update.isPending.value);
-useDocumentTitle(() => (isNew.value ? "New user" : user.data.value?.username));
+useDocumentTitle(() => (isNew.value ? t("admin.users.new") : user.data.value?.username));
 
 interface Form {
   username: string;
@@ -54,7 +62,6 @@ const fromUser = (u: User): Form => ({
 const form = ref<Form>(blank());
 const error = ref<unknown>(null);
 const local = ref<Record<string, string>>({});
-const saved = ref<string | null>(null);
 
 // Seed the form from the record (and again after another save replaced it).
 watch(
@@ -68,7 +75,6 @@ watch(id, () => {
   if (!id.value) form.value = blank();
   error.value = null;
   local.value = {};
-  saved.value = null;
 });
 
 const FIELDS = ["username", "displayName", "email", "password", "isActive", "profileIds"];
@@ -82,20 +88,29 @@ const isSelf = computed(() => !!id.value && id.value === session.user?.id);
 /** Set for an account created by an identity provider: its name, e-mail and profiles are overwritten at every sign-in. */
 const provider = computed(() => (isNew.value ? null : (user.data.value?.identityProvider ?? null)));
 
+/** The fields that differ from the stored user (on a new user: those filled in). */
+const changes = computed(() => {
+  const f = form.value;
+  const b = isNew.value || !user.data.value ? blank() : fromUser(user.data.value);
+  return (["username", "displayName", "email", "password", "confirm", "isActive"] as const).filter((k) => f[k] !== b[k]).length +
+    (f.profileIds.slice().sort().join() !== b.profileIds.slice().sort().join() ? 1 : 0);
+});
+const dirty = computed(() => changes.value > 0);
+const guard = useUnsavedGuard(() => dirty.value, () => t("admin.unsaved.leave"));
+
 async function submit() {
   error.value = null;
-  saved.value = null;
   const f = form.value;
   const errs: Record<string, string> = {};
-  if (!f.username.trim()) errs.username = "Required";
-  if (!f.displayName.trim()) errs.displayName = "Required";
+  if (!f.username.trim()) errs.username = t("common.required");
+  if (!f.displayName.trim()) errs.displayName = t("common.required");
   // Required since SHAA-1505: it links the account to its Person CI. An account from before then may stay
   // without one here (its owner enters it at their next sign-in), so its other fields can still be changed.
   const emailError = userEmailError(f.email, !isNew.value && user.data.value?.email === null);
   if (emailError) errs.email = emailError;
   if (isNew.value) {
-    if ([...f.password].length < 12) errs.password = "Too short";
-    if (f.password !== f.confirm) errs.confirm = "The passwords do not match";
+    if ([...f.password].length < 12) errs.password = t("admin.password.tooShort");
+    if (f.password !== f.confirm) errs.confirm = t("admin.password.mismatch");
   }
   local.value = errs;
   if (Object.keys(errs).length > 0) {
@@ -113,7 +128,8 @@ async function submit() {
         isActive: f.isActive,
         profileIds: f.profileIds,
       });
-      flash.show(`Created user ${created.username}.`);
+      flash.show(t("admin.user.created", { name: created.username }));
+      guard.allow();
       await router.push(`/admin/users/${created.id}`);
       return;
     }
@@ -127,17 +143,30 @@ async function submit() {
     const after = [...f.profileIds].sort();
     if (before.join() !== after.join()) body.profileIds = f.profileIds;
     if (Object.keys(body).length === 0) {
-      saved.value = "Nothing changed.";
+      flash.show(t("common.nothingChanged"));
       return;
     }
     const next = await update.mutateAsync({ id: u.id, body });
-    saved.value = `Saved ${next.username}.`;
+    flash.show(t("admin.user.saved", { name: next.username }));
     // Editing yourself can change what you may do.
     if (isSelf.value) await session.refresh();
   } catch (e) {
     error.value = e;
   }
 }
+
+/** Back to the stored values. */
+function discard() {
+  form.value = isNew.value || !user.data.value ? blank() : fromUser(user.data.value);
+  error.value = null;
+  local.value = {};
+}
+
+// Delete sits in the `⋯` menu; its dialog is the account actions'. Your own account cannot be deleted here.
+const accountActions = ref<InstanceType<typeof UserAccountActions>>();
+const moreActions = computed<RowMenuItem[]>(() =>
+  isSelf.value ? [] : [{ label: t("admin.user.delete"), danger: true, action: () => accountActions.value?.openDelete() }],
+);
 
 const crumbs = computed(() => adminCrumbs("users", { label: isNew.value ? t("admin.crumb.new") : (user.data.value?.username ?? "…") }));
 const notFound = computed(() => {
@@ -148,25 +177,33 @@ const notFound = computed(() => {
 
 <template>
   <Breadcrumbs :items="crumbs" />
-  <LoadingState v-if="!isNew && user.isLoading.value" label="Loading user…" />
+  <LoadingState v-if="!isNew && user.isLoading.value" :label="t('admin.user.loading')" />
   <template v-else-if="!isNew && user.isError.value">
-    <EmptyState v-if="notFound" title="User not found">
-      No user has the id <code>{{ id }}</code>. It may have been deleted.
-      <template #actions><RouterLink class="btn" to="/admin/users">Back to users</RouterLink></template>
+    <EmptyState v-if="notFound" :title="t('admin.user.notFound.title')">
+      {{ t("admin.user.notFound.body", { id: id ?? "" }) }}
+      <template #actions><RouterLink class="btn" to="/admin/users">{{ t("admin.user.back") }}</RouterLink></template>
     </EmptyState>
     <ErrorAlert v-else :error="user.error.value" :on-retry="() => user.refetch()" />
   </template>
   <template v-else>
-    <div class="page-header">
-      <div class="title">
-        <h1>{{ isNew ? "New user" : user.data.value?.username }}</h1>
-        <template v-if="user.data.value && !isNew">
-          <span v-if="user.data.value.isActive" class="badge ok">Active</span>
-          <span v-else class="badge off">Disabled</span>
-          <span v-if="user.data.value.isAdministrator" class="badge">Administrator</span>
-          <span v-if="user.data.value.mfaEnabled" class="badge ok" title="Signs in with a password and an authenticator code">Two-factor on</span>
-          <span v-if="provider" class="badge" data-testid="user-provider">Signs in with {{ provider.name }}</span>
-          <span v-if="isSelf" class="badge">You</span>
+    <div class="page-header record-header">
+      <div class="record-heading">
+        <div class="title">
+          <Icon name="user" class="class-icon" />
+          <h1 dir="auto">{{ isNew ? t("admin.users.new") : user.data.value?.username }}</h1>
+        </div>
+        <p v-if="user.data.value && !isNew" class="record-meta" data-testid="record-meta">
+          <span class="status">
+            <span :class="['status-dot', user.data.value.isActive ? 'ok' : 'off']" aria-hidden="true" />{{
+              user.data.value.isActive ? t("common.active") : t("common.disabled")
+            }}
+          </span>
+          <span class="sep" aria-hidden="true">·</span>
+          <span dir="auto">{{ user.data.value.displayName }}</span>
+          <span v-if="user.data.value.isAdministrator" class="badge">{{ t("admin.user.administrator") }}</span>
+          <span v-if="user.data.value.mfaEnabled" class="badge ok" :title="t('admin.user.mfaOnTitle')">{{ t("admin.user.mfaOn") }}</span>
+          <span v-if="provider" class="badge" data-testid="user-provider">{{ t("admin.user.signsInWith", { name: provider.name }) }}</span>
+          <span v-if="isSelf" class="badge">{{ t("admin.user.you") }}</span>
           <span
             v-if="user.data.value.signInStatus !== 'ready'"
             :class="['badge', user.data.value.signInStatus === 'person_missing' ? 'danger' : 'warn']"
@@ -175,46 +212,51 @@ const notFound = computed(() => {
           >
             {{ signInStatusLabel(user.data.value.signInStatus) }}
           </span>
-        </template>
+          <span class="sep" aria-hidden="true">·</span>
+          <time v-if="user.data.value.lastLoginAt" :datetime="user.data.value.lastLoginAt" :title="formatDateTime(user.data.value.lastLoginAt)">
+            {{ t("admin.user.lastSignIn", { when: formatRelative(user.data.value.lastLoginAt) }) }}
+          </time>
+          <span v-else>{{ t("admin.user.neverSignedIn") }}</span>
+        </p>
       </div>
       <div v-if="user.data.value && !isNew" class="actions">
-        <RouterLink class="btn" :to="{ path: '/admin/api-tokens', query: { userId: user.data.value.id } }">API tokens of this user</RouterLink>
+        <RouterLink class="btn" :to="{ path: '/admin/api-tokens', query: { userId: user.data.value.id } }">{{ t("admin.users.row.tokens") }}</RouterLink>
         <RouterLink v-if="session.can('audit.view')" class="btn" :to="{ path: '/admin/audit', query: { actorId: user.data.value.id } }">
-          Changes by this user
+          {{ t("admin.users.row.audit") }}
         </RouterLink>
+        <RowMenu v-if="moreActions.length > 0" :label="t('record.actions.more')" :items="moreActions" large />
       </div>
     </div>
 
+    <FormErrorBanner v-if="error" :error="error" :unplaced="unplaced" />
     <div class="grid-2">
-      <form class="panel" aria-labelledby="user-form-title" novalidate @submit.prevent="submit">
-        <div class="panel-header"><h2 id="user-form-title">Account</h2></div>
+      <form id="user-form" class="panel" aria-labelledby="user-form-title" novalidate @submit.prevent="submit">
+        <div class="panel-header"><h2 id="user-form-title">{{ t("admin.user.account") }}</h2></div>
         <div class="panel-body stack">
-          <FormErrorBanner v-if="error" :error="error" :unplaced="unplaced" />
-          <div v-if="saved" class="alert alert-success" role="status">{{ saved }}</div>
           <div v-if="provider" class="alert alert-warn" role="note" data-testid="provider-notice">
-            <strong>This account belongs to {{ provider.name }}.</strong>
+            <strong>{{ t("admin.user.provider.title", { name: provider.name }) }}</strong>
             <div>
-              Its display name, e-mail and permission profiles are overwritten from {{ provider.name }} at the account's
-              next sign-in, so changes made here are temporary. To change its profiles for good, change the group mappings
+              {{ t("admin.user.provider.body", { name: provider.name }) }}
               <template v-if="session.isAdministrator">
-                of <RouterLink :to="`/admin/identity-providers/${provider.id}`">{{ provider.name }}</RouterLink></template
-              ><template v-else> of the identity provider (an administrator's task)</template>.
+                <RouterLink :to="`/admin/identity-providers/${provider.id}`">{{ t("admin.user.provider.link", { name: provider.name }) }}</RouterLink>.
+              </template>
+              <template v-else>{{ t("admin.user.provider.adminTask") }}</template>
             </div>
           </div>
           <div class="form-grid">
-            <FormField id="user-username" label="Username" required :error="fieldErrors.username" hint="Used to sign in; letters, digits and . _ @ -">
+            <FormField id="user-username" :label="t('admin.users.col.username')" required :error="fieldErrors.username" :hint="t('admin.user.usernameHint')">
               <template #default="{ id: fid, invalid, describedBy }">
                 <input :id="fid" v-model="form.username" v-autofocus="isNew" type="text" autocomplete="off" :aria-invalid="invalid" :aria-describedby="describedBy" />
               </template>
             </FormField>
-            <FormField id="user-displayName" label="Display name" required :error="fieldErrors.displayName" hint="Shown in the audit log">
+            <FormField id="user-displayName" :label="t('admin.users.col.displayName')" required :error="fieldErrors.displayName" :hint="t('admin.user.displayNameHint')">
               <template #default="{ id: fid, invalid, describedBy }">
                 <input :id="fid" v-model="form.displayName" type="text" autocomplete="off" :aria-invalid="invalid" :aria-describedby="describedBy" />
               </template>
             </FormField>
             <FormField
               id="user-email"
-              label="Email"
+              :label="t('admin.users.col.email')"
               :required="isNew || user.data.value?.email !== null"
               :error="fieldErrors.email"
               :hint="user.data.value?.email === null && !isNew ? t('people.users.emailLegacyHint') : t('people.users.emailHint')"
@@ -225,15 +267,15 @@ const notFound = computed(() => {
             </FormField>
             <template v-if="isNew">
               <div class="field">
-                <span class="label">Status</span>
-                <label class="checkbox-row"><input v-model="form.isActive" type="checkbox" /> Active (can sign in)</label>
+                <span class="label">{{ t("admin.col.status") }}</span>
+                <label class="checkbox-row"><input v-model="form.isActive" type="checkbox" /> {{ t("admin.user.activeCheckbox") }}</label>
               </div>
-              <FormField id="user-password" label="Password" required :error="fieldErrors.password" hint="At least 12 characters">
+              <FormField id="user-password" :label="t('admin.password.label')" required :error="fieldErrors.password" :hint="t('admin.password.hint')">
                 <template #default="{ id: fid, invalid, describedBy }">
                   <input :id="fid" v-model="form.password" type="password" autocomplete="new-password" :aria-invalid="invalid" :aria-describedby="describedBy" />
                 </template>
               </FormField>
-              <FormField id="user-confirm" label="Repeat password" required :error="fieldErrors.confirm">
+              <FormField id="user-confirm" :label="t('admin.password.repeat')" required :error="fieldErrors.confirm">
                 <template #default="{ id: fid, invalid, describedBy }">
                   <input :id="fid" v-model="form.confirm" type="password" autocomplete="new-password" :aria-invalid="invalid" :aria-describedby="describedBy" />
                 </template>
@@ -242,17 +284,11 @@ const notFound = computed(() => {
           </div>
           <ProfilePicker v-model="form.profileIds" :error="fieldErrors.profileIds" />
         </div>
-        <div class="form-footer">
-          <button type="submit" class="btn btn-primary" :disabled="pending">
-            {{ pending ? "Saving…" : isNew ? "Create user" : "Save changes" }}
-          </button>
-          <RouterLink class="btn" to="/admin/users">{{ isNew ? "Cancel" : "Back to users" }}</RouterLink>
-        </div>
       </form>
 
       <div v-if="user.data.value && !isNew" class="stack">
         <section class="panel" aria-labelledby="user-facts-title">
-          <div class="panel-header"><h2 id="user-facts-title">Activity</h2></div>
+          <div class="panel-header"><h2 id="user-facts-title">{{ t("admin.user.activity") }}</h2></div>
           <div class="panel-body">
             <dl class="props">
               <dt>{{ t("people.users.col.person") }}</dt>
@@ -261,27 +297,35 @@ const notFound = computed(() => {
                 <template v-else-if="user.data.value.signInStatus === 'email_required'">{{ t("people.users.personAfterEmail") }}</template>
                 <template v-else>{{ t("people.users.incompleteTitle") }}</template>
               </dd>
-              <dt>Last sign-in</dt>
-              <dd>{{ user.data.value.lastLoginAt ? formatDateTime(user.data.value.lastLoginAt) : "Never" }}</dd>
-              <dt>Two-factor authentication</dt>
-              <dd>{{ user.data.value.mfaEnabled ? "On (authenticator app)" : "Off" }}</dd>
+              <dt>{{ t("admin.users.col.lastLogin") }}</dt>
+              <dd>{{ user.data.value.lastLoginAt ? formatDateTime(user.data.value.lastLoginAt) : t("admin.never") }}</dd>
+              <dt>{{ t("admin.user.mfa") }}</dt>
+              <dd>{{ user.data.value.mfaEnabled ? t("admin.user.mfaApp") : t("admin.users.mfaOff") }}</dd>
               <template v-if="provider">
-                <dt>Signs in with</dt>
-                <dd>{{ provider.name }} ({{ provider.kind === "ldap" ? "LDAP / Active Directory" : "OpenID Connect" }})</dd>
+                <dt>{{ t("admin.users.col.signIn") }}</dt>
+                <dd>{{ provider.name }} ({{ provider.kind === "ldap" ? t("admin.user.kind.ldap") : t("admin.user.kind.oidc") }})</dd>
               </template>
               <template v-else>
-                <dt>Password changed</dt>
+                <dt>{{ t("admin.user.passwordChanged") }}</dt>
                 <dd>{{ formatDateTime(user.data.value.passwordChangedAt) }}</dd>
               </template>
-              <dt>Created</dt>
+              <dt>{{ t("common.created") }}</dt>
               <dd>{{ formatDateTime(user.data.value.createdAt) }}</dd>
-              <dt>Updated</dt>
+              <dt>{{ t("common.updated") }}</dt>
               <dd>{{ formatDateTime(user.data.value.updatedAt) }}</dd>
             </dl>
           </div>
         </section>
-        <UserAccountActions :user="user.data.value" :is-self="isSelf" />
+        <UserAccountActions ref="accountActions" :user="user.data.value" :is-self="isSelf" @deleted="guard.allow()" />
       </div>
     </div>
+
+    <SaveBar :label="t('record.save.region')" :dirty="!isNew && dirty" :changes="isNew ? 0 : changes">
+      <RouterLink class="btn" to="/admin/users">{{ t("common.cancel") }}</RouterLink>
+      <button v-if="!isNew && dirty" type="button" class="btn" :disabled="pending" @click="discard">{{ t("record.save.discard") }}</button>
+      <button type="submit" form="user-form" class="btn btn-primary" :disabled="pending">
+        {{ pending ? t("common.saving") : isNew ? t("admin.user.create") : t("common.saveChanges") }}
+      </button>
+    </SaveBar>
   </template>
 </template>

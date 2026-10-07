@@ -259,31 +259,8 @@ dl.props .group-title:first-child {
   font-size: var(--fs-xs);
   color: var(--c-text-muted);
 }
-table.matrix td.check,
-table.matrix th.check {
-  width: 72px;
-  text-align: center;
-}
-table.matrix input[type="checkbox"] {
-  margin: 0;
-  vertical-align: middle;
-}
-table.matrix tr.wildcard td {
-  background: var(--c-surface-alt);
-  font-weight: 600;
-}
 table.data tr.disabled td {
   color: var(--c-text-muted);
-}
-table.matrix tbody th {
-  position: static;
-  background: none;
-  color: inherit;
-  font-size: inherit;
-  font-weight: 400;
-}
-table.matrix tr.wildcard th {
-  font-weight: 600;
 }
 
 /* ---------- Administration › Data model, Lookups, Templates ---------- */

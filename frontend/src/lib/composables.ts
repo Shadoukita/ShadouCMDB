@@ -1,5 +1,6 @@
 import { onBeforeUnmount, ref, toValue, watch, watchEffect, type MaybeRefOrGetter, type Ref } from "vue";
 import { useBrandingStore } from "../stores/branding";
+import { onBeforeRouteLeave, onBeforeRouteUpdate } from "vue-router";
 
 export function useDebounced<T>(source: MaybeRefOrGetter<T>, ms = 250): Ref<T> {
   const v = ref(toValue(source)) as Ref<T>;
@@ -32,4 +33,30 @@ export function useMediaQuery(query: string): Ref<boolean> {
   mql.addEventListener("change", onChange);
   onBeforeUnmount(() => mql.removeEventListener("change", onChange));
   return matches;
+}
+
+/**
+ * Unsaved changes on an edit page: confirm before leaving it in the app (another route, or the same page for
+ * another record), and let the browser ask before a reload or closing the tab. `allow()` lets the next
+ * navigation through without asking, for the page's own redirect after a create or a delete.
+ */
+export function useUnsavedGuard(dirty: () => boolean, message: () => string): { allow: () => void } {
+  let allowed = false;
+  const keep = () => {
+    if (allowed) {
+      allowed = false;
+      return true;
+    }
+    return !dirty() || window.confirm(message());
+  };
+  onBeforeRouteLeave(keep);
+  onBeforeRouteUpdate((to, from) => to.path === from.path || keep());
+  const onBeforeUnload = (e: BeforeUnloadEvent) => {
+    if (!dirty()) return;
+    e.preventDefault();
+    e.returnValue = "";
+  };
+  window.addEventListener("beforeunload", onBeforeUnload);
+  onBeforeUnmount(() => window.removeEventListener("beforeunload", onBeforeUnload));
+  return { allow: () => (allowed = true) };
 }

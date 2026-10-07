@@ -17,23 +17,28 @@ import { useCiClasses } from "../../api/queries";
 import Breadcrumbs from "../../components/Breadcrumbs.vue";
 import EmptyState from "../../components/EmptyState.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
+import Icon from "../../components/Icon.vue";
 import LoadingState from "../../components/LoadingState.vue";
+import RowMenu, { type RowMenuItem } from "../../components/RowMenu.vue";
+import SaveBar from "../../components/SaveBar.vue";
 import { changedFields } from "../../lib/changes";
-import { useDocumentTitle } from "../../lib/composables";
+import { useDocumentTitle, useUnsavedGuard } from "../../lib/composables";
 import { vAutofocus } from "../../lib/directives";
-import { formatDateTime, plural } from "../../lib/format";
-import { CLASS_RIGHTS, GLOBAL_PERMISSIONS, type ClassRight } from "../../lib/permissions";
+import { formatDateTime, formatRelative } from "../../lib/format";
+import { GLOBAL_PERMISSIONS, type ClassRight } from "../../lib/permissions";
 import { useFlashStore } from "../../stores/flash";
 import { useSessionStore } from "../../stores/session";
 import FormErrorBanner from "../form/FormErrorBanner.vue";
 import FormField from "../form/FormField.vue";
 import CloneProfileDialog from "./CloneProfileDialog.vue";
-import DeleteProfileButton from "./DeleteProfileButton.vue";
+import DeleteProfileDialog from "./DeleteProfileDialog.vue";
 
 /**
  * Create or edit a permission profile: name, global permissions and the class
  * matrix (view/create/edit/delete per class, plus an "all classes" row that also
- * covers classes created later). The matrix rows come from the API's class list.
+ * covers classes created later). The matrix rows come from the API's class list; its columns are grouped
+ * into Read (view) and Change (create, edit, delete), with the class column and the header kept in view
+ * while it scrolls (audit A7). Title row, `⋯` menu and save bar as on the other admin edit pages (A3).
  */
 type Rights = Record<ClassRight, boolean>;
 const WILDCARD = "*";
@@ -50,7 +55,7 @@ const classes = useCiClasses();
 const create = useCreateProfile();
 const update = useUpdateProfile();
 const pending = computed(() => create.isPending.value || update.isPending.value);
-useDocumentTitle(() => (isNew.value ? "New profile" : profile.data.value?.name));
+useDocumentTitle(() => (isNew.value ? t("admin.profile.new") : profile.data.value?.name));
 
 const builtin = computed(() => !!profile.data.value?.isBuiltin);
 const canManage = computed(() => session.can("profiles.manage"));
@@ -65,7 +70,6 @@ const requireMfa = ref(false);
 const grants = ref<Record<string, Rights>>({});
 const error = ref<unknown>(null);
 const local = ref<Record<string, string>>({});
-const saved = ref<string | null>(null);
 const cloning = ref<PermissionProfile | null>(null);
 
 function seed(p: PermissionProfile | undefined) {
@@ -85,7 +89,6 @@ watch(id, () => {
   if (!id.value) seed(undefined);
   error.value = null;
   local.value = {};
-  saved.value = null;
 });
 
 /** Matrix rows: every concrete class, plus any other class this profile already grants on. */
@@ -142,21 +145,37 @@ function formBody(): ProfileUpdateBody {
   };
 }
 
+/** The fields that differ from the stored profile (on a new profile: from an empty one). */
+const changes = computed(() => {
+  // formBody() reads the form's refs; `initial` is replaced together with them in seed().
+  const base: ProfileUpdateBody = isNew.value ? { name: "", description: null, globalPermissions: [], classPermissions: [], requireMfa: false } : initial;
+  const changed = Object.keys(changedFields(formBody(), base));
+  return builtin.value ? changed.filter((k) => k === "requireMfa").length : changed.length;
+});
+const dirty = computed(() => canManage.value && changes.value > 0);
+const guard = useUnsavedGuard(() => dirty.value, () => t("admin.unsaved.leave"));
+
+/** Back to the stored values. */
+function discard() {
+  seed(isNew.value ? undefined : profile.data.value);
+  error.value = null;
+  local.value = {};
+}
+
 async function submit() {
   if (!canManage.value) return;
   error.value = null;
-  saved.value = null;
   if (builtin.value) {
     try {
       const next = await update.mutateAsync({ id: id.value!, body: { requireMfa: requireMfa.value } });
-      saved.value = `Saved ${next?.name ?? "the profile"}. Users holding it are affected on their next request.`;
+      flash.show(t("admin.profile.saved", { name: next?.name ?? "" }));
       if (holdsThis.value) await session.refresh();
     } catch (e) {
       error.value = e;
     }
     return;
   }
-  local.value = name.value.trim() ? {} : { name: "Required" };
+  local.value = name.value.trim() ? {} : { name: t("common.required") };
   if (local.value.name) {
     document.getElementById("profile-name")?.focus();
     return;
@@ -166,23 +185,43 @@ async function submit() {
     if (isNew.value) {
       const created = await create.mutateAsync({ ...body, name: body.name! });
       if (created) {
-        flash.show(`Created profile ${created.name}.`);
+        flash.show(t("admin.profile.created", { name: created.name }));
+        guard.allow();
         await router.push(`/admin/profiles/${created.id}`);
       }
       return;
     }
     const changed = changedFields(body, initial);
     if (Object.keys(changed).length === 0) {
-      saved.value = "Nothing changed.";
+      flash.show(t("common.nothingChanged"));
       return;
     }
     const next = await update.mutateAsync({ id: id.value!, body: changed });
-    saved.value = `Saved ${next?.name ?? "the profile"}. Users holding it have the new permissions on their next request.`;
+    flash.show(t("admin.profile.saved", { name: next?.name ?? "" }));
     if (holdsThis.value) await session.refresh();
   } catch (e) {
     error.value = e;
   }
 }
+
+const deleting = ref(false);
+const moreActions = computed<RowMenuItem[]>(() =>
+  canManage.value && !builtin.value ? [{ label: t("admin.profile.delete.confirm"), danger: true, action: () => (deleting.value = true) }] : [],
+);
+function onDeleted() {
+  guard.allow();
+  void router.replace("/admin/profiles");
+}
+
+/** The class matrix's column groups: reading, and the rights that change CIs. */
+const RIGHT_GROUPS: { key: "read" | "change"; rights: ClassRight[] }[] = [
+  { key: "read", rights: ["view"] },
+  { key: "change", rights: ["create", "edit", "delete"] },
+];
+const rightLabel = (r: ClassRight) => t(`admin.profile.right.${r}`);
+/** Per cell: "edit on Server", "delete on all classes" (the labels the specs and screen readers use). */
+const cellLabel = (r: ClassRight, cls: string | null) =>
+  cls === null ? t("admin.profile.cell.all", { right: t(`admin.right.${r}`) }) : t("admin.profile.cell", { right: t(`admin.right.${r}`), name: cls });
 
 const crumbs = computed(() => adminCrumbs("profiles", { label: isNew.value ? t("admin.crumb.new") : (profile.data.value?.name ?? "…") }));
 const notFound = computed(() => {
@@ -193,155 +232,174 @@ const notFound = computed(() => {
 
 <template>
   <Breadcrumbs :items="crumbs" />
-  <LoadingState v-if="!isNew && profile.isLoading.value" label="Loading profile…" />
+  <LoadingState v-if="!isNew && profile.isLoading.value" :label="t('admin.profile.loading')" />
   <template v-else-if="!isNew && profile.isError.value">
-    <EmptyState v-if="notFound" title="Permission profile not found">
-      No profile has the id <code>{{ id }}</code>. It may have been deleted.
-      <template #actions><RouterLink class="btn" to="/admin/profiles">Back to profiles</RouterLink></template>
+    <EmptyState v-if="notFound" :title="t('admin.profile.notFound.title')">
+      {{ t("admin.profile.notFound.body", { id: id ?? "" }) }}
+      <template #actions><RouterLink class="btn" to="/admin/profiles">{{ t("admin.profile.back") }}</RouterLink></template>
     </EmptyState>
     <ErrorAlert v-else :error="profile.error.value" :on-retry="() => profile.refetch()" />
   </template>
-  <form v-else novalidate @submit.prevent="submit">
-    <div class="page-header">
-      <div class="title">
-        <h1>{{ isNew ? "New permission profile" : profile.data.value?.name }}</h1>
-        <span v-if="builtin" class="badge">Built-in</span>
-        <span v-if="profile.data.value" class="muted">
-          {{ plural(profile.data.value.userCount, "user") }}
-        </span>
-      </div>
-      <div v-if="profile.data.value && !isNew && session.can('profiles.manage')" class="actions">
-        <button type="button" class="btn" @click="cloning = profile.data.value">Clone</button>
-        <DeleteProfileButton v-if="!builtin" :profile="profile.data.value" />
-      </div>
-    </div>
-    <div v-if="builtin" class="alert" role="note">
-      The built-in Administrator profile holds every permission, on every class, and cannot be deleted. Only its two-factor
-      requirement can be changed. Clone it to start an editable profile from it.
-    </div>
-    <div v-else-if="readOnly" class="alert" role="note">You can view this profile. Changing it needs the <code>profiles.manage</code> permission.</div>
-    <FormErrorBanner v-if="error" :error="error" :unplaced="unplaced" />
-    <div v-if="saved" class="alert alert-success" role="status">{{ saved }}</div>
-
-    <section class="panel">
-      <div class="panel-header"><h2>Profile</h2></div>
-      <div class="panel-body form-grid">
-        <FormField id="profile-name" label="Name" required :error="fieldErrors.name">
-          <template #default="{ id: fid, invalid, describedBy }">
-            <input :id="fid" v-model="name" v-autofocus="isNew" type="text" :readonly="readOnly" :aria-invalid="invalid" :aria-describedby="describedBy" />
-          </template>
-        </FormField>
-        <FormField id="profile-description" label="Description" wide :error="fieldErrors.description">
-          <template #default="{ id: fid, invalid, describedBy }">
-            <textarea :id="fid" v-model="description" rows="2" :readonly="readOnly" :aria-invalid="invalid" :aria-describedby="describedBy" />
-          </template>
-        </FormField>
-      </div>
-    </section>
-
-    <section class="panel" aria-labelledby="signin-title">
-      <div class="panel-header"><h2 id="signin-title">Sign-in</h2></div>
-      <div class="panel-body stack">
-        <label class="checkbox-row">
-          <input id="profile-requireMfa" v-model="requireMfa" type="checkbox" :disabled="!canManage" />
-          Require two-factor authentication
-        </label>
-        <p class="hint" style="margin: 0">
-          Users holding this profile must set up an authenticator app. Until they do, they can only sign in and set it up;
-          everything else is refused. Their API tokens are refused too, unless the token was created from a session that
-          completed two-factor sign-in.
-        </p>
-        <div v-if="locksSelf" class="alert alert-warn" role="note">
-          You hold this profile and have not set up two-factor authentication. After saving you will be asked to set it up
-          before you can continue.
+  <template v-else>
+    <div class="page-header record-header">
+      <div class="record-heading">
+        <div class="title">
+          <Icon name="shield" class="class-icon" />
+          <h1 dir="auto">{{ isNew ? t("admin.profile.newTitle") : profile.data.value?.name }}</h1>
         </div>
-        <span v-if="fieldErrors.requireMfa" class="error">{{ fieldErrors.requireMfa }}</span>
-      </div>
-    </section>
-
-    <section class="panel" aria-labelledby="global-title">
-      <div class="panel-header"><h2 id="global-title">Global permissions</h2></div>
-      <div class="panel-body">
-        <ul class="check-list">
-          <li v-for="g in GLOBAL_PERMISSIONS" :key="g.key">
-            <label>
-              <input
-                type="checkbox"
-                :checked="builtin || globals.includes(g.key)"
-                :disabled="readOnly"
-                @change="setGlobal(g.key, ($event.target as HTMLInputElement).checked)"
-              />
-              <span>{{ g.label }} <code class="muted">{{ g.key }}</code><span class="hint">{{ g.hint }}</span></span>
-            </label>
-          </li>
-        </ul>
-      </div>
-    </section>
-
-    <section class="panel" aria-labelledby="class-title">
-      <div class="panel-header">
-        <h2 id="class-title">Configuration item permissions by class</h2>
-        <span class="muted">Create, edit and delete include view. A grant applies to exactly that class.</span>
-      </div>
-      <LoadingState v-if="classes.isLoading.value" label="Loading classes…" />
-      <div v-else-if="classes.isError.value" class="panel-body">
-        <ErrorAlert :error="classes.error.value" :on-retry="() => classes.refetch()" />
-      </div>
-      <div v-else class="table-wrap">
-        <table class="data matrix">
-          <thead>
-            <tr>
-              <th scope="col">Class</th>
-              <th v-for="r in CLASS_RIGHTS" :key="r" scope="col" class="check">{{ r[0].toUpperCase() + r.slice(1) }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr class="wildcard">
-              <th scope="row">
-                All classes <span class="muted" style="font-weight: 400">— including classes added later</span>
-              </th>
-              <td v-for="r in CLASS_RIGHTS" :key="r" class="check">
-                <input
-                  type="checkbox"
-                  :aria-label="`${r} on all classes`"
-                  :checked="effective(WILDCARD, r)"
-                  :disabled="readOnly"
-                  @change="setRight(WILDCARD, r, ($event.target as HTMLInputElement).checked)"
-                />
-              </td>
-            </tr>
-            <tr v-for="c in rows" :key="c.id">
-              <th scope="row">
-                {{ c.name }}
-                <span v-if="!c.isActive" class="badge off">inactive</span>
-                <span v-if="c.isAbstract" class="badge warn" title="Abstract classes hold no CIs; grants do not pass to subclasses">abstract</span>
-              </th>
-              <td v-for="r in CLASS_RIGHTS" :key="r" class="check">
-                <input
-                  type="checkbox"
-                  :aria-label="`${r} on ${c.name}`"
-                  :checked="effective(c.id, r)"
-                  :disabled="readOnly || inherited(c.id, r)"
-                  :title="inherited(c.id, r) ? 'Granted by All classes' : undefined"
-                  @change="setRight(c.id, r, ($event.target as HTMLInputElement).checked)"
-                />
-              </td>
-            </tr>
-          </tbody>
-        </table>
-        <p v-if="unknownGrants.length > 0" class="panel-body muted" style="margin: 0">
-          This profile also grants rights on {{ unknownGrants.length }} class(es) not in the class list; saving keeps them.
+        <p v-if="profile.data.value && !isNew" class="record-meta" data-testid="record-meta">
+          <span v-if="builtin" class="badge">{{ t("admin.profiles.builtin") }}</span>
+          <span v-if="profile.data.value.requireMfa" class="badge" :title="t('admin.profiles.mfaRequiredTitle')">{{ t("admin.profiles.mfaRequired") }}</span>
+          <RouterLink v-if="session.can('users.manage')" :to="{ path: '/admin/users', query: { profileId: profile.data.value.id } }">
+            {{ t("admin.profile.users", { n: profile.data.value.userCount }) }}
+          </RouterLink>
+          <span v-else>{{ t("admin.profile.users", { n: profile.data.value.userCount }) }}</span>
+          <span class="sep" aria-hidden="true">·</span>
+          <time :datetime="profile.data.value.updatedAt" :title="formatDateTime(profile.data.value.updatedAt)">
+            {{ t("record.meta.updated", { when: formatRelative(profile.data.value.updatedAt) }) }}
+          </time>
         </p>
       </div>
-    </section>
+      <div v-if="profile.data.value && !isNew && canManage" class="actions">
+        <button type="button" class="btn" @click="cloning = profile.data.value">{{ t("admin.profiles.row.clone") }}</button>
+        <RowMenu v-if="moreActions.length > 0" :label="t('record.actions.more')" :items="moreActions" large />
+        <DeleteProfileDialog v-if="moreActions.length > 0" v-model:open="deleting" :profile="profile.data.value" @deleted="onDeleted" />
+      </div>
+    </div>
+    <div v-if="builtin" class="alert" role="note">{{ t("admin.profile.builtinNote") }}</div>
+    <div v-else-if="readOnly" class="alert" role="note">{{ t("admin.profile.readOnlyNote") }}</div>
+    <FormErrorBanner v-if="error" :error="error" :unplaced="unplaced" />
 
-    <div v-if="profile.data.value && !isNew" class="muted" style="font-size: var(--fs-sm); margin-bottom: var(--sp-4)">
-      Created {{ formatDateTime(profile.data.value.createdAt) }} · updated {{ formatDateTime(profile.data.value.updatedAt) }}
-    </div>
-    <div v-if="canManage" class="form-footer panel">
-      <button type="submit" class="btn btn-primary" :disabled="pending">{{ pending ? "Saving…" : isNew ? "Create profile" : "Save changes" }}</button>
-      <RouterLink class="btn" to="/admin/profiles">Cancel</RouterLink>
-    </div>
-  </form>
+    <form id="profile-form" class="stack" novalidate @submit.prevent="submit">
+      <section class="panel" aria-labelledby="profile-title">
+        <div class="panel-header"><h2 id="profile-title">{{ t("admin.profile.section.profile") }}</h2></div>
+        <div class="panel-body form-grid">
+          <FormField id="profile-name" :label="t('admin.profiles.col.name')" required :error="fieldErrors.name">
+            <template #default="{ id: fid, invalid, describedBy }">
+              <input :id="fid" v-model="name" v-autofocus="isNew" type="text" :readonly="readOnly" :aria-invalid="invalid" :aria-describedby="describedBy" />
+            </template>
+          </FormField>
+          <FormField id="profile-description" :label="t('groups.field.description')" wide :error="fieldErrors.description">
+            <template #default="{ id: fid, invalid, describedBy }">
+              <textarea :id="fid" v-model="description" rows="2" :readonly="readOnly" :aria-invalid="invalid" :aria-describedby="describedBy" />
+            </template>
+          </FormField>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="signin-title">
+        <div class="panel-header"><h2 id="signin-title">{{ t("admin.profile.section.signIn") }}</h2></div>
+        <div class="panel-body stack">
+          <label class="checkbox-row">
+            <input id="profile-requireMfa" v-model="requireMfa" type="checkbox" :disabled="!canManage" aria-describedby="profile-requireMfa-hint" />
+            {{ t("admin.profile.requireMfa") }}
+          </label>
+          <p id="profile-requireMfa-hint" class="hint no-margin">{{ t("admin.profile.requireMfaHint") }}</p>
+          <div v-if="locksSelf" class="alert alert-warn" role="note">{{ t("admin.profile.locksSelf") }}</div>
+          <span v-if="fieldErrors.requireMfa" class="error">{{ fieldErrors.requireMfa }}</span>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="global-title">
+        <div class="panel-header"><h2 id="global-title">{{ t("admin.profile.section.global") }}</h2></div>
+        <div class="panel-body">
+          <ul class="check-list">
+            <li v-for="g in GLOBAL_PERMISSIONS" :key="g.key">
+              <label>
+                <input
+                  type="checkbox"
+                  :checked="builtin || globals.includes(g.key)"
+                  :disabled="readOnly"
+                  @change="setGlobal(g.key, ($event.target as HTMLInputElement).checked)"
+                />
+                <span>{{ g.label }} <code class="muted">{{ g.key }}</code><span class="hint">{{ g.hint }}</span></span>
+              </label>
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="class-title">
+        <div class="panel-header">
+          <h2 id="class-title">{{ t("admin.profile.section.classes") }}</h2>
+          <span class="muted">{{ t("admin.profile.classesHint") }}</span>
+        </div>
+        <LoadingState v-if="classes.isLoading.value" :label="t('admin.profile.loadingClasses')" />
+        <div v-else-if="classes.isError.value" class="panel-body">
+          <ErrorAlert :error="classes.error.value" :on-retry="() => classes.refetch()" />
+        </div>
+        <template v-else>
+          <div class="table-wrap matrix-wrap">
+            <table class="data matrix">
+              <caption class="sr-only">{{ t("admin.profile.section.classes") }}</caption>
+              <colgroup><col class="matrix-name" /></colgroup>
+              <colgroup v-for="g in RIGHT_GROUPS" :key="g.key" :span="g.rights.length" class="matrix-group" />
+              <thead>
+                <tr>
+                  <th scope="col" rowspan="2" class="matrix-corner">{{ t("admin.profile.col.class") }}</th>
+                  <th v-for="g in RIGHT_GROUPS" :key="g.key" scope="colgroup" :colspan="g.rights.length" class="matrix-group-head">
+                    {{ t(`admin.profile.group.${g.key}`) }}
+                  </th>
+                </tr>
+                <tr>
+                  <template v-for="g in RIGHT_GROUPS" :key="g.key">
+                    <th v-for="(r, i) in g.rights" :key="r" scope="col" :class="['check', { 'group-start': i === 0 }]">{{ rightLabel(r) }}</th>
+                  </template>
+                </tr>
+              </thead>
+              <tbody>
+                <tr class="wildcard">
+                  <th scope="row">
+                    {{ t("admin.profile.allClasses") }} <span class="muted matrix-note">{{ t("admin.profile.allClassesNote") }}</span>
+                  </th>
+                  <template v-for="g in RIGHT_GROUPS" :key="g.key">
+                    <td v-for="(r, i) in g.rights" :key="r" :class="['check', { 'group-start': i === 0 }]">
+                      <input
+                        type="checkbox"
+                        :aria-label="cellLabel(r, null)"
+                        :checked="effective(WILDCARD, r)"
+                        :disabled="readOnly"
+                        @change="setRight(WILDCARD, r, ($event.target as HTMLInputElement).checked)"
+                      />
+                    </td>
+                  </template>
+                </tr>
+                <tr v-for="c in rows" :key="c.id">
+                  <th scope="row">
+                    <span class="name-badges">
+                      <span dir="auto">{{ c.name }}</span>
+                      <span v-if="!c.isActive" class="badge off">{{ t("admin.profile.inactive") }}</span>
+                      <span v-if="c.isAbstract" class="badge warn" :title="t('admin.profile.abstractTitle')">{{ t("admin.profile.abstract") }}</span>
+                    </span>
+                  </th>
+                  <template v-for="g in RIGHT_GROUPS" :key="g.key">
+                    <td v-for="(r, i) in g.rights" :key="r" :class="['check', { 'group-start': i === 0 }]">
+                      <input
+                        type="checkbox"
+                        :aria-label="cellLabel(r, c.name)"
+                        :checked="effective(c.id, r)"
+                        :disabled="readOnly || inherited(c.id, r)"
+                        :title="inherited(c.id, r) ? t('admin.profile.inherited') : undefined"
+                        @change="setRight(c.id, r, ($event.target as HTMLInputElement).checked)"
+                      />
+                    </td>
+                  </template>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p v-if="unknownGrants.length > 0" class="panel-body muted no-margin">{{ t("admin.profile.unknownGrants", { n: unknownGrants.length }) }}</p>
+        </template>
+      </section>
+    </form>
+
+    <SaveBar v-if="canManage" :label="t('record.save.region')" :dirty="!isNew && dirty" :changes="isNew ? 0 : changes">
+      <RouterLink class="btn" to="/admin/profiles">{{ t("common.cancel") }}</RouterLink>
+      <button v-if="!isNew && dirty" type="button" class="btn" :disabled="pending" @click="discard">{{ t("record.save.discard") }}</button>
+      <button type="submit" form="profile-form" class="btn btn-primary" :disabled="pending">
+        {{ pending ? t("common.saving") : isNew ? t("admin.profile.create") : t("common.saveChanges") }}
+      </button>
+    </SaveBar>
+  </template>
   <CloneProfileDialog :profile="cloning" @close="cloning = null" />
 </template>

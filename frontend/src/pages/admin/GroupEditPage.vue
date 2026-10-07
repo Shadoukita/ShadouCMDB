@@ -20,10 +20,13 @@ import Breadcrumbs from "../../components/Breadcrumbs.vue";
 import ConfirmDialog from "../../components/ConfirmDialog.vue";
 import EmptyState from "../../components/EmptyState.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
+import Icon from "../../components/Icon.vue";
 import LoadingState from "../../components/LoadingState.vue";
 import PaginationBar from "../../components/PaginationBar.vue";
+import RowMenu, { type RowMenuItem } from "../../components/RowMenu.vue";
+import SaveBar from "../../components/SaveBar.vue";
 import { t } from "../../i18n";
-import { useDebounced, useDocumentTitle } from "../../lib/composables";
+import { useDebounced, useDocumentTitle, useUnsavedGuard } from "../../lib/composables";
 import { vAutofocus } from "../../lib/directives";
 import { formatDateTime, formatRelative } from "../../lib/format";
 import { useListQuery } from "../../lib/listQuery";
@@ -36,7 +39,8 @@ import SortIcon from "../../components/SortIcon.vue";
 /**
  * Administration › Groups › new / one group: name and description, the members (a replace of the
  * whole set behind each add and remove) and the delete, which first says how many business
- * services lose the group as owner.
+ * services lose the group as owner. Title row, `⋯` menu and save bar as on the other admin edit
+ * pages (design §2.7, audit A3); the members are saved one change at a time, outside the save bar.
  */
 const route = useRoute();
 const router = useRouter();
@@ -61,8 +65,13 @@ const base = ref<Base | null>(null);
 const form = ref({ name: "", description: "" });
 const error = ref<unknown>(null);
 const local = ref<Record<string, string>>({});
-const saved = ref<string | null>(null);
-const dirty = computed(() => !!base.value && (form.value.name !== base.value.name || form.value.description !== base.value.description));
+/** Changed fields: against the stored group, or on a new group the ones filled in. */
+const changes = computed(() => {
+  const b = base.value ?? { name: "", description: "" };
+  return (form.value.name !== b.name ? 1 : 0) + (form.value.description !== b.description ? 1 : 0);
+});
+const dirty = computed(() => changes.value > 0);
+const guard = useUnsavedGuard(() => dirty.value, () => t("admin.unsaved.leave"));
 
 function seed(g: UserGroupDetail) {
   base.value = { id: g.id, name: g.name, description: g.description ?? "", version: g.version };
@@ -84,7 +93,6 @@ watch(id, () => {
   }
   error.value = null;
   local.value = {};
-  saved.value = null;
 });
 
 const FIELDS = ["name", "description"];
@@ -94,7 +102,6 @@ const unplaced = computed(() => (error.value instanceof ApiError ? error.value.d
 
 async function submit() {
   error.value = null;
-  saved.value = null;
   const name = form.value.name.trim();
   const description = form.value.description.trim() || null;
   local.value = name ? {} : { name: t("common.required") };
@@ -106,6 +113,7 @@ async function submit() {
     if (isNew.value) {
       const created = await create.mutateAsync({ name, description });
       flash.show(t("groups.created", { name: created.name }));
+      guard.allow();
       await router.push(`/admin/groups/${created.id}`);
       return;
     }
@@ -114,15 +122,22 @@ async function submit() {
     if (name !== b.name) body.name = name;
     if (description !== (b.description || null)) body.description = description;
     if (body.name === undefined && body.description === undefined) {
-      saved.value = t("common.nothingChanged");
+      flash.show(t("common.nothingChanged"));
       return;
     }
     const next = await update.mutateAsync({ id: b.id, body });
     seed({ ...group.data.value!, ...next });
-    saved.value = t("groups.saved", { name: next.name });
+    flash.show(t("groups.saved", { name: next.name }));
   } catch (e) {
     error.value = e;
   }
+}
+
+/** Back to the stored values. */
+function discard() {
+  form.value = base.value ? { name: base.value.name, description: base.value.description } : { name: "", description: "" };
+  error.value = null;
+  local.value = {};
 }
 
 /** After a 409: drop the edits and show what is stored now. */
@@ -215,10 +230,13 @@ function confirmDelete() {
       const n = res?.affectedServices;
       const services = typeof n === "number" ? t("groups.deleted.services", { n }) : "";
       flash.show(`${t("groups.deleted", { name: g.name })} ${services}`.trim());
+      guard.allow();
       router.replace("/admin/groups");
     },
   });
 }
+
+const moreActions = computed<RowMenuItem[]>(() => [{ label: t("groups.delete.button"), danger: true, action: openDelete }]);
 
 const crumbs = computed(() => adminCrumbs("groups", { label: isNew.value ? t("groups.new") : (group.data.value?.name ?? "…") }));
 const notFound = computed(() => {
@@ -238,23 +256,34 @@ const notFound = computed(() => {
     <ErrorAlert v-else :error="group.error.value" :on-retry="() => group.refetch()" />
   </template>
   <template v-else>
-    <div class="page-header">
-      <div class="title">
-        <h1>{{ isNew ? t("groups.new") : group.data.value?.name }}</h1>
-        <span v-if="group.data.value && !isNew" class="muted">{{ t("groups.members.count", { n: memberCount }) }}</span>
+    <div class="page-header record-header">
+      <div class="record-heading">
+        <div class="title">
+          <Icon name="users" class="class-icon" />
+          <h1 dir="auto">{{ isNew ? t("groups.new") : group.data.value?.name }}</h1>
+        </div>
+        <p v-if="group.data.value && !isNew" class="record-meta" data-testid="record-meta">
+          <span>{{ t("groups.members.count", { n: memberCount }) }}</span>
+          <span class="sep" aria-hidden="true">·</span>
+          <time :datetime="group.data.value.updatedAt" :title="formatDateTime(group.data.value.updatedAt)">
+            {{ t("record.meta.updated", { when: formatRelative(group.data.value.updatedAt) }) }}
+          </time>
+        </p>
+      </div>
+      <div v-if="group.data.value && !isNew" class="actions">
+        <RowMenu :label="t('record.actions.more')" :items="moreActions" large />
       </div>
     </div>
 
+    <div v-if="conflict" class="alert alert-warn" role="alert" data-testid="group-conflict">
+      <div>{{ t("groups.conflict") }}</div>
+      <div><button type="button" class="btn btn-sm" @click="reloadAfterConflict">{{ t("groups.conflictReload") }}</button></div>
+    </div>
+    <FormErrorBanner v-else-if="error" :error="error" :unplaced="unplaced" />
     <div class="grid-2">
-      <form class="panel" aria-labelledby="group-form-title" novalidate @submit.prevent="submit">
+      <form id="group-form" class="panel" aria-labelledby="group-form-title" novalidate @submit.prevent="submit">
         <div class="panel-header"><h2 id="group-form-title">{{ t("groups.form.title") }}</h2></div>
-        <div class="panel-body stack">
-          <div v-if="conflict" class="alert alert-warn" role="alert" data-testid="group-conflict">
-            <div>{{ t("groups.conflict") }}</div>
-            <div><button type="button" class="btn btn-sm" @click="reloadAfterConflict">{{ t("groups.conflictReload") }}</button></div>
-          </div>
-          <FormErrorBanner v-else-if="error" :error="error" :unplaced="unplaced" />
-          <div v-if="saved" class="alert alert-success" role="status">{{ saved }}</div>
+        <div class="panel-body">
           <div class="form-grid">
             <FormField id="group-name" :label="t('groups.field.name')" required :error="fieldErrors.name" :hint="t('groups.field.nameHint')">
               <template #default="{ id: fid, invalid, describedBy }">
@@ -268,40 +297,33 @@ const notFound = computed(() => {
             </FormField>
           </div>
         </div>
-        <div class="form-footer">
-          <button type="submit" class="btn btn-primary" :disabled="pending">
-            {{ pending ? t("common.saving") : isNew ? t("groups.create") : t("common.saveChanges") }}
-          </button>
-          <RouterLink class="btn" to="/admin/groups">{{ isNew ? t("common.cancel") : t("groups.back") }}</RouterLink>
-        </div>
       </form>
 
-      <div v-if="group.data.value && !isNew" class="stack">
-        <section class="panel" aria-labelledby="group-facts-title">
-          <div class="panel-header"><h2 id="group-facts-title">{{ t("groups.facts.title") }}</h2></div>
-          <div class="panel-body">
-            <dl class="props">
-              <dt>{{ t("groups.members") }}</dt>
-              <dd>{{ memberCount.toLocaleString() }}</dd>
-              <dt>{{ t("groups.facts.ownedServices") }}</dt>
-              <dd v-if="group.data.value.ownedServiceCount === null" class="muted">{{ t("groups.facts.withheld") }}</dd>
-              <dd v-else>{{ group.data.value.ownedServiceCount.toLocaleString() }}</dd>
-              <dt>{{ t("common.created") }}</dt>
-              <dd>{{ formatDateTime(group.data.value.createdAt) }}</dd>
-              <dt>{{ t("common.updated") }}</dt>
-              <dd>{{ formatDateTime(group.data.value.updatedAt) }}</dd>
-            </dl>
-          </div>
-        </section>
-        <section class="panel" aria-labelledby="group-danger-title">
-          <div class="panel-header"><h2 id="group-danger-title">{{ t("groups.danger.title") }}</h2></div>
-          <div class="panel-body stack">
-            <p class="muted no-margin">{{ t("groups.danger.hint") }}</p>
-            <div><button type="button" class="btn btn-danger" @click="openDelete">{{ t("groups.delete.button") }}</button></div>
-          </div>
-        </section>
-      </div>
+      <section v-if="group.data.value && !isNew" class="panel" aria-labelledby="group-facts-title">
+        <div class="panel-header"><h2 id="group-facts-title">{{ t("groups.facts.title") }}</h2></div>
+        <div class="panel-body">
+          <dl class="props">
+            <dt>{{ t("groups.members") }}</dt>
+            <dd>{{ memberCount.toLocaleString() }}</dd>
+            <dt>{{ t("groups.facts.ownedServices") }}</dt>
+            <dd v-if="group.data.value.ownedServiceCount === null" class="muted">{{ t("groups.facts.withheld") }}</dd>
+            <dd v-else>{{ group.data.value.ownedServiceCount.toLocaleString() }}</dd>
+            <dt>{{ t("common.created") }}</dt>
+            <dd>{{ formatDateTime(group.data.value.createdAt) }}</dd>
+            <dt>{{ t("common.updated") }}</dt>
+            <dd>{{ formatDateTime(group.data.value.updatedAt) }}</dd>
+          </dl>
+        </div>
+      </section>
     </div>
+
+    <SaveBar :label="t('record.save.region')" :dirty="!isNew && dirty" :changes="isNew ? 0 : changes">
+      <RouterLink class="btn" to="/admin/groups">{{ t("common.cancel") }}</RouterLink>
+      <button v-if="!isNew && dirty" type="button" class="btn" :disabled="pending" @click="discard">{{ t("record.save.discard") }}</button>
+      <button type="submit" form="group-form" class="btn btn-primary" :disabled="pending">
+        {{ pending ? t("common.saving") : isNew ? t("groups.create") : t("common.saveChanges") }}
+      </button>
+    </SaveBar>
 
     <section v-if="group.data.value && !isNew" class="panel" aria-labelledby="group-members-title">
       <div class="panel-header">
