@@ -101,20 +101,31 @@ pub async fn run(cfg: &DatabaseConfig, encryption: &EncryptionConfig, args: Rest
             println!("File is intact (SHA-256, HMAC with key {key} and row counts match) and fits this release")
         }
         seal => {
-            let why = match seal {
-                Seal::UnknownKey(key) => format!(
-                    "its end marker is sealed with key {key}, which is not configured (ENCRYPTION_KEY_FILE or \
-                     ENCRYPTION_KEY_PREVIOUS_FILE), so the seal cannot be checked"
+            // GH#678: each refusal gets its own remedy. No key can verify an
+            // unsigned file, so key advice is only for a seal under an unknown key.
+            let (why, remedy) = match seal {
+                Seal::UnknownKey(key) => (
+                    format!(
+                        "its end marker is sealed with key {key}, which is not configured (ENCRYPTION_KEY_FILE or \
+                         ENCRYPTION_KEY_PREVIOUS_FILE), so the seal cannot be checked"
+                    ),
+                    "Configure the key the backup was taken with (as ENCRYPTION_KEY_FILE or \
+                     ENCRYPTION_KEY_PREVIOUS_FILE), or make sure the file is the one `shadoucmdb backup` wrote and \
+                     re-run with --allow-unsigned.",
                 ),
-                _ => "its end marker has no HMAC (written before ShadouCMDB sealed backups, or by `backup` without \
-                      ENCRYPTION_KEY_FILE)"
-                    .to_owned(),
+                _ => (
+                    "its end marker has no HMAC (written before ShadouCMDB sealed backups, or by `backup` without \
+                     ENCRYPTION_KEY_FILE)"
+                        .to_owned(),
+                    "An unsigned backup cannot be verified with any key. Check where the file came from (for \
+                     example, compare its SHA-256 with your backup system's record), then re-run with \
+                     --allow-unsigned.",
+                ),
             };
             if !args.allow_unsigned {
                 bail!(
                     "{} is undamaged (SHA-256 and row counts match), but {why}. A SHA-256 can be recomputed by \
-                     anyone who edits the file. Configure the key the backup was taken with, or make sure the file \
-                     is the one `shadoucmdb backup` wrote and re-run with --allow-unsigned.",
+                     anyone who edits the file. {remedy}",
                     args.file.display()
                 );
             }
