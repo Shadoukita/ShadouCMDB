@@ -799,6 +799,103 @@ async fn starting_again_where_a_workflow_ended_needs_the_start_grant() {
     db.drop().await;
 }
 
+/// GH#673: after a manager replaces the workflow that drives a state field
+/// (deactivate A, activate B on the same field), the first start of B on a CI
+/// where A ran also sets the field back, so it needs `workflows.manage` or
+/// B's `_start` grant too. On a CI no workflow of the field ran on, the edit
+/// right is still enough.
+#[tokio::test]
+async fn starting_a_replacement_driver_where_the_old_one_ran_needs_the_start_grant() {
+    let Some(db) = scratch::database("workflow_replaced_driver_grant").await else { return };
+    let w = world(&db).await;
+    let (approver, _) = w.user("approver", &[w.approvers]).await;
+    let (editor, _) = w.user("editor", &[w.editors]).await;
+    let live = json!(w.value("live").to_string());
+    let planned = json!(w.value("planned").to_string());
+
+    // A takes ci live; A is still running on ci2 when it is replaced.
+    let ci = w.ci(w.server).await;
+    w.ok("PATCH", &format!("/api/v1/configuration-items/{ci}"), json!({ "attributes": { "environment": "prod" } }))
+        .await;
+    let (_, v) = w.start(&editor, ci).await;
+    let instance = id(&v["instance"]);
+    let body = json!({ "transitionKey": "approve", "expectedVersion": 1, "fields": { "owner_team": "ops" },
+        "comment": "CAB ok" });
+    let (status, v) = w.transition(&approver, instance, body).await;
+    assert_eq!(status, 200, "{v}");
+    let (status, v) =
+        w.transition(&approver, instance, json!({ "transitionKey": "go_live", "expectedVersion": 2 })).await;
+    assert_eq!((status, v["status"].as_str()), (200, Some("completed")), "{v}");
+    let ci2 = w.ci(w.server).await;
+    let (status, v) = w.start(&editor, ci2).await;
+    assert_eq!(status, 201, "{v}");
+
+    // The manager replaces A with B on the same lifecycle field.
+    let def = w.ok("GET", &format!("{DEFS}/{}", w.definition), json!(null)).await;
+    w.ok("PATCH", &format!("{DEFS}/{}", w.definition), json!({ "version": def["version"], "isActive": false })).await;
+    let lifecycle = def["stateAttributeId"].clone();
+    let b = id(&w
+        .ok(
+            "POST",
+            DEFS,
+            json!({ "key": "server_lifecycle_v2", "name": "Server lifecycle v2", "classId": w.server,
+                "stateAttributeId": lifecycle }),
+        )
+        .await);
+    let graph = json!({
+        "initialState": "planned",
+        "states": [
+            { "key": "planned", "name": "Planned", "category": "open", "stateValue": "planned" },
+            { "key": "done", "name": "In production", "category": "done", "terminal": true, "stateValue": "live" }
+        ],
+        "transitions": [ { "key": "go_live", "name": "Go live", "from": "planned", "to": "done" } ]
+    });
+    let draft = w.ok("PUT", &format!("{DEFS}/{b}/draft"), graph).await;
+    w.ok(
+        "POST",
+        &format!("{DEFS}/{b}/draft/publish"),
+        json!({ "expectedDraftChecksum": draft["checksum"], "changeNote": "v1" }),
+    )
+    .await;
+    let v = w.ok("GET", &format!("{DEFS}/{b}"), json!(null)).await;
+    w.ok("PATCH", &format!("{DEFS}/{b}"), json!({ "version": v["version"], "isActive": true })).await;
+    let start_b = |ci: Uuid| json!({ "definitionKey": "server_lifecycle_v2", "ciId": ci });
+
+    // The repro: the editor may not reset the approved lifecycle through B.
+    let (status, v) = w.call(&editor, "POST", RUN, Some(start_b(ci))).await;
+    assert_eq!((status, code(&v)), (403, "FORBIDDEN"), "{v}");
+    assert_eq!(w.ci_values(ci).await["attributes"]["lifecycle"], live, "nothing changed");
+    let (_, v) = w.call(&editor, "GET", &format!("/api/v1/configuration-items/{ci}/workflows"), None).await;
+    assert_eq!(v["startable"], json!([]), "not offered to the editor: {v}");
+    // Nor where A is still running.
+    let (status, v) = w.call(&editor, "POST", RUN, Some(start_b(ci2))).await;
+    assert_eq!((status, code(&v)), (403, "FORBIDDEN"), "{v}");
+
+    // A CI the field's workflows never ran on: the edit right is enough.
+    let fresh = w.ci(w.server).await;
+    let (_, v) = w.call(&editor, "GET", &format!("/api/v1/configuration-items/{fresh}/workflows"), None).await;
+    assert_eq!(v["startable"][0]["definitionKey"], "server_lifecycle_v2", "{v}");
+    let (status, v) = w.call(&editor, "POST", RUN, Some(start_b(fresh))).await;
+    assert_eq!(status, 201, "the first start on a fresh CI: {v}");
+
+    // B's _start grant (or workflows.manage) allows it.
+    let v = w.ok("GET", &format!("{DEFS}/{b}"), json!(null)).await;
+    w.ok(
+        "PUT",
+        &format!("{DEFS}/{b}/grants"),
+        json!({ "version": v["version"], "grants": [ { "transitionKey": "_start", "profiles": ["Approvers"] } ] }),
+    )
+    .await;
+    let (_, v) = w.call(&approver, "GET", &format!("/api/v1/configuration-items/{ci}/workflows"), None).await;
+    assert_eq!(v["startable"][0]["definitionKey"], "server_lifecycle_v2", "{v}");
+    let (status, v) = w.call(&approver, "POST", RUN, Some(start_b(ci))).await;
+    assert_eq!((status, v["instance"]["state"]["key"].as_str()), (201, Some("planned")), "{v}");
+    assert_eq!(w.ci_values(ci).await["attributes"]["lifecycle"], planned);
+    let (status, v) = w.call(&w.admin, "POST", RUN, Some(start_b(ci2))).await;
+    assert_eq!(status, 201, "workflows.manage: {v}");
+    db.drop().await;
+}
+
 /// Amendment 1: a transition and a delete of the same CI, in parallel, many
 /// times. Both lock the CI row first, so neither deadlocks (no 40P01, which
 /// would surface as a 500), and the end state is always consistent: the CI

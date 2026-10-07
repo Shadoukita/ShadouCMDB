@@ -11,9 +11,10 @@
 //!
 //! **Rights** (§4.1). Viewing an instance needs the view right on its CI's
 //! type, else it does not exist (404). Starting needs the edit right on the
-//! type; starting again on a CI where an instance of the workflow ended also
-//! needs `workflows.manage` or the `_start` grant (GH#666). A transition needs the edit right and a grant of its key to one of
-//! the caller's profiles; for an API token, also to the token's narrowing
+//! type; starting again on a CI where an instance of the workflow ended, or
+//! where another workflow on the same state field ran, also needs
+//! `workflows.manage` or the `_start` grant (GH#666, GH#673). A transition
+//! needs the edit right and a grant of its key to one of the caller's profiles; for an API token, also to the token's narrowing
 //! profile (Q6). The Administrator profile is granted every transition.
 //! Cancelling needs `workflows.manage`, or the `_cancel` grant and the edit
 //! right; forcing a state needs `workflows.manage` and the edit right.
@@ -62,8 +63,25 @@ const CI: &str = "Configuration item";
 /// The `_cancel` pseudo transition key of the grants.
 const CANCEL_KEY: &str = "_cancel";
 /// The `_start` pseudo transition key of the grants: starting a workflow again
-/// on a CI where an instance of it ended.
+/// on a CI where an instance of it, or of another workflow on its state field,
+/// ran (`ran!`).
 const START_KEY: &str = "_start";
+
+/// Whether starting definition `d` on CI `$2` sets back a state field that a
+/// workflow already moved, so the edit right is not enough (`START_KEY`): an
+/// instance of `d` ended there (GH#666), or any instance of another workflow
+/// on the same state field ran there, as after a manager replaced the field's
+/// driving workflow (GH#673). An SQL predicate over `d`, a literal for `concat!`.
+macro_rules! ran {
+    () => {
+        "EXISTS (SELECT 1 FROM cmdb.workflow_instances wi
+                 JOIN cmdb.workflow_definitions o ON o.id = wi.definition_id
+                 WHERE wi.ci_id = $2
+                   AND ((wi.definition_id = d.id AND wi.status <> 'active')
+                        OR (wi.definition_id <> d.id AND o.state_attribute_id = d.state_attribute_id)))"
+    };
+}
+
 /// Ended instances `GET /configuration-items/{id}/workflows` lists.
 const RECENT_ENDED: i64 = 20;
 
@@ -856,10 +874,13 @@ pub async fn start(
             "inactive",
         ));
     }
-    let (running, ran): (bool, bool) = sqlx::query_as(
-        "SELECT coalesce(bool_or(status = 'active'), false), coalesce(bool_or(status <> 'active'), false)
-         FROM cmdb.workflow_instances WHERE definition_id = $1 AND ci_id = $2",
-    )
+    let (running, ran): (bool, bool) = sqlx::query_as(concat!(
+        "SELECT EXISTS (SELECT 1 FROM cmdb.workflow_instances
+                        WHERE definition_id = $1 AND ci_id = $2 AND status = 'active'),
+                EXISTS (SELECT 1 FROM cmdb.workflow_definitions d WHERE d.id = $1 AND ",
+        ran!(),
+        ")"
+    ))
     .bind(d.id)
     .bind(b.ci_id)
     .fetch_one(&mut *tx)
@@ -873,13 +894,14 @@ pub async fn start(
         ));
     }
     // A restart sets the state field back to the initial state, undoing a
-    // lifecycle whose transitions the editor may not run (GH#666).
+    // lifecycle whose transitions the editor may not run (GH#666), and so does
+    // the first start of a workflow that replaced the field's driver (GH#673).
     if ran && !may_manage(ctx) && !granted(&mut tx, ctx, d.id).await?.has(START_KEY) {
         return Err(AppError::new(
             ErrorCode::Forbidden,
             format!(
-                "Workflow {} already ran on this configuration item: starting it again needs the workflows.manage \
-                 permission or its _start grant",
+                "Workflow {} or another workflow on its state field already ran on this configuration item: \
+                 starting it needs the workflows.manage permission or its _start grant",
                 d.key
             ),
         ));
@@ -1133,13 +1155,17 @@ pub async fn of_ci(pool: &PgPool, ctx: &RequestContext, ci: Uuid) -> Result<CiWo
         .fetch_all(&mut *conn)
         .await?
     };
-    // Starting again where an instance ended needs the `_start` grant (GH#666).
+    // Starting again where an instance ended, or after another workflow on the
+    // same state field ran, needs the `_start` grant (GH#666, GH#673).
     let mut startable = startable;
     if !startable.is_empty() && !may_manage(ctx) {
         // Not from `rows`: those are only the latest ended instances.
-        let ran: HashSet<Uuid> = sqlx::query_scalar(
-            "SELECT DISTINCT definition_id FROM cmdb.workflow_instances WHERE ci_id = $1 AND status <> 'active'",
-        )
+        let ids: Vec<Uuid> = startable.iter().map(|s| s.definition_id).collect();
+        let ran: HashSet<Uuid> = sqlx::query_scalar(concat!(
+            "SELECT d.id FROM cmdb.workflow_definitions d WHERE d.id = ANY($1) AND ",
+            ran!()
+        ))
+        .bind(&ids)
         .bind(ci)
         .fetch_all(&mut *conn)
         .await?

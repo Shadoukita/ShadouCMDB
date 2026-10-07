@@ -516,8 +516,9 @@ pub fn runtime_routes() -> Vec<Route> {
             .summary("Start a workflow on a CI")
             .description(
                 "Needs the edit right on the CI's type. Starting the workflow again on a CI where an instance of it \
-                 completed or was cancelled also needs `workflows.manage` or the workflow's `_start` grant (else 403 \
-                 FORBIDDEN), since it sets the state field back to the initial state. The instance starts in the initial state of the workflow's \
+                 completed or was cancelled, or where another workflow on the same state field ran (the workflow \
+                 replaced the field's driver), also needs `workflows.manage` or the workflow's `_start` grant (else \
+                 403 FORBIDDEN), since it sets the state field back to the initial state. The instance starts in the initial state of the workflow's \
                  current version and stays on that version. When the workflow drives a state field and the initial \
                  state maps to one of its values, the CI's field is set (a CI `update` audit row). 404 when the CI \
                  or the workflow does not exist or is of a type the caller may not view. 400 VALIDATION_ERROR \

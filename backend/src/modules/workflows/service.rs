@@ -28,7 +28,8 @@ const TABLE: &str = "workflow_definitions";
 const LABEL: &str = "Workflow definition";
 /// The grant key for cancelling an instance; never a transition key.
 const CANCEL_KEY: &str = "_cancel";
-/// The grant key for starting a workflow again on a CI where it ended (GH#666).
+/// The grant key for starting a workflow again on a CI where it, or another
+/// workflow on its state field, ran (GH#666, GH#673).
 const START_KEY: &str = "_start";
 
 const COLUMNS: &str = "d.id, d.key, d.name, d.description, d.class_id, c.key AS class_key, d.include_subclasses, \
