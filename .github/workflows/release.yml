@@ -173,6 +173,7 @@ jobs:
     name: Linux ${{ matrix.arch }} (static musl)
     needs: [meta, ui]
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -271,6 +272,7 @@ jobs:
     name: Windows x64
     needs: [meta, ui]
     runs-on: windows-latest
+    timeout-minutes: 45
     defaults:
       run:
         shell: pwsh
@@ -362,6 +364,7 @@ jobs:
     # not run unless every binary passed, just like the GitHub Release.
     needs: [meta, sbom, linux, windows]
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: write
