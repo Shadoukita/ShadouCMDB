@@ -1498,3 +1498,291 @@ async fn a_field_without_audit_history_keeps_its_approvers() {
     assert_eq!((status, v["instance"]["state"]["key"].as_str()), (200, Some("approved")), "{v}");
     db.drop().await;
 }
+
+// ---------------------------------------------------------------------------
+// GH#709: an edit through a token the requester minted for someone else
+// ---------------------------------------------------------------------------
+
+/// GH#709 as reported: req mints a token for ed, sets the owner field with
+/// it, and requests in their own session. The edit is req's too.
+#[tokio::test]
+async fn an_edit_through_a_token_the_requester_minted_for_someone_else_is_theirs() {
+    let Some(db) = scratch::database("workflow_approvals_field_lent_token").await else { return };
+    let o = owners(&db).await;
+    let w = &o.w;
+    let (ci, instance) = o.ready().await;
+    let (lent, _) = token(w, o.ed.1, o.editor_profile, Some(o.req.1)).await;
+    o.set_owner(&lent, ci, o.pal_person).await;
+    assert_eq!(request(w, &o.req.0, instance, "approve", json!({})).await.0, 202);
+    let (status, v) = decide(w, &o.pal.0, instance, "approve", None).await;
+    assert_eq!((status, reason(&v)), (403, refused("FORBIDDEN", "not_eligible")), "{v}");
+    let v = o.view(instance).await;
+    assert_eq!(dropped(&v["steps"][0]), by("field_set_by_requester", "ed"), "{v}");
+    let d = &v["steps"][0]["droppedSources"][0];
+    assert_eq!(
+        (d["fieldLastChanged"]["actorType"].as_str(), d["fieldLastChanged"]["tokenCreatedBy"].clone()),
+        (Some("api_client"), json!([o.req.1])),
+        "{d}"
+    );
+    assert!(d["message"].as_str().unwrap().contains("with an API token minted for them"), "{d}");
+
+    // The approver preview for req says the same; for req2 the field names pal.
+    let preview = format!("{DEFS}/{}/approvers/preview?transition=approve&step=owner&ciId={ci}", w.definition);
+    let (_, v) = w.call(&w.admin, "GET", &format!("{preview}&requestedBy={}", o.req.1), None).await;
+    assert_eq!(
+        (v["sources"][0]["dropped"].as_str(), v["eligibleCount"].as_i64()),
+        (Some("field_set_by_requester"), Some(0))
+    );
+    let (_, v) = w.call(&w.admin, "GET", &format!("{preview}&requestedBy={}", o.req2.1), None).await;
+    assert_eq!((v["sources"][0]["dropped"].clone(), v["eligibleCount"].as_i64()), (Value::Null, Some(1)), "{v}");
+    audit_ok(w).await;
+    db.drop().await;
+}
+
+/// The token is the one the edit's request used: another token of the same
+/// owner that req minted does not taint an edit made with a token req did not
+/// mint. Without the `token.use` row (pruned), every minter of the owner's
+/// tokens counts.
+#[tokio::test]
+async fn the_token_used_decides_and_a_pruned_token_use_row_fails_closed() {
+    use crate::api::context::RequestContext;
+    use crate::auth::{Credential, Principal};
+    let Some(db) = scratch::database("workflow_approvals_field_token_pick").await else { return };
+    let o = owners(&db).await;
+    let w = &o.w;
+    let (_lent, lent_id) = token(w, o.ed.1, o.editor_profile, Some(o.req.1)).await;
+    let (own, _) = token(w, o.ed.1, o.editor_profile, None).await;
+
+    // Through ed's other token: the token.use row names it, so req is not involved.
+    let (ci, instance) = o.ready().await;
+    o.set_owner(&own, ci, o.pal_person).await;
+    assert_eq!(request(w, &o.req.0, instance, "approve", json!({})).await.0, 202);
+    let v = o.view(instance).await;
+    assert_eq!(v["steps"][0]["droppedSources"], json!([]), "{v}");
+    assert_eq!(v["approvers"][0]["fieldLastChanged"].get("tokenCreatedBy"), None, "{v}");
+    let (status, v) = decide(w, &o.pal.0, instance, "approve", None).await;
+    assert_eq!((status, v["instance"]["state"]["key"].as_str()), (200, Some("approved")), "{v}");
+
+    // A token edit whose token.use row is gone (as after `prune-audit --scope auth`).
+    let (ci, instance) = o.ready().await;
+    let mut conn = w.pool.acquire().await.unwrap();
+    let permissions = crate::data::auth::load_permissions(&mut conn, o.ed.1).await.unwrap();
+    drop(conn);
+    let principal = Principal {
+        user_id: o.ed.1,
+        username: "ed".into(),
+        credential: Credential::Token {
+            profile_id: Some(o.editor_profile),
+            creator_id: Some(o.req.1),
+            token_id: Some(lent_id),
+            minted_by: Some(o.req.1),
+        },
+        permissions,
+    };
+    let ctx = RequestContext::token(std::sync::Arc::new(principal), "no-token-use-row".into());
+    let body: crate::modules::items::schemas::UpdateItemBody =
+        serde_json::from_value(json!({ "attributes": { "owner": o.pal_person } })).unwrap();
+    crate::modules::items::service::update(&w.pool, &ctx, ci, &body).await.unwrap();
+    assert_eq!(request(w, &o.req.0, instance, "approve", json!({})).await.0, 202);
+    let (status, v) = decide(w, &o.pal.0, instance, "approve", None).await;
+    assert_eq!((status, reason(&v)), (403, refused("FORBIDDEN", "not_eligible")), "{v}");
+    let v = o.view(instance).await;
+    assert_eq!(dropped(&v["steps"][0]), by("field_set_by_requester", "ed"), "{v}");
+    assert_eq!(v["steps"][0]["droppedSources"][0]["fieldLastChanged"]["tokenCreatedBy"], json!([o.req.1]));
+    db.drop().await;
+}
+
+// ---------------------------------------------------------------------------
+// GH#708: a requester does not pick the approver of a service owner step
+// ---------------------------------------------------------------------------
+
+/// Staffs `approve`'s owner step with the technical owners of the server's
+/// business services and lets req edit business services; returns the
+/// business service type.
+async fn service_owner_step(o: &Owners) -> Uuid {
+    let w = &o.w;
+    let bs: Uuid = sqlx::query_scalar("SELECT id FROM ci_classes WHERE system_role = 'business_service'")
+        .fetch_one(&w.pool)
+        .await
+        .unwrap();
+    let def = w.ok("GET", &format!("{DEFS}/{}", w.definition), json!(null)).await;
+    w.ok(
+        "PUT",
+        &format!("{DEFS}/{}/approvers", w.definition),
+        json!({ "version": def["version"], "approvers": [
+            { "transitionKey": "approve", "stepKey": "owner", "source": "service_owner", "serviceOwnerRole": "technical" }
+        ] }),
+    )
+    .await;
+    let managers = w.profile("Service managers", &[(bs, true)]).await;
+    sqlx::query("INSERT INTO user_permission_profiles (user_id, profile_id) VALUES ($1, $2)")
+        .bind(o.req.1)
+        .bind(managers)
+        .execute(&w.pool)
+        .await
+        .unwrap();
+    bs
+}
+
+impl Owners {
+    /// A business service, created by the administrator.
+    async fn service(&self, bs: Uuid) -> Uuid {
+        let body = json!({ "classId": bs, "attributes": { "name": "Shop" } });
+        id(&self.w.ok("POST", "/api/v1/configuration-items", body).await)
+    }
+
+    /// Sets the technical owners of business service `service` as `creds`.
+    async fn set_owners(&self, creds: &Creds, service: Uuid, users: &[Uuid]) {
+        let w = &self.w;
+        let path = format!("/api/v1/business-services/{service}");
+        let version = w.ok("GET", &path, json!(null)).await["version"].clone();
+        let technical: Vec<Value> = users.iter().map(|u| json!({ "kind": "user", "id": u })).collect();
+        let body = json!({ "version": version, "technical": technical, "business": [] });
+        let (status, v) = w.call(creds, "PUT", &format!("{path}/owners"), Some(body)).await;
+        assert_eq!(status, 200, "{v}");
+    }
+
+    /// Adds CI `ci` to business service `service` as `creds`.
+    async fn add_member(&self, creds: &Creds, service: Uuid, ci: Uuid) {
+        let path = format!("/api/v1/business-services/{service}/members");
+        let (status, v) = self.w.call(creds, "POST", &path, Some(json!({ "memberIds": [ci] }))).await;
+        assert_eq!(status, 200, "{v}");
+    }
+}
+
+/// The `(reason, label)` of each source or part a step dropped.
+fn dropped_labels(step: &Value) -> Vec<(String, String)> {
+    step["droppedSources"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no droppedSources: {step}"))
+        .iter()
+        .map(|d| (d["reason"].as_str().unwrap().to_owned(), d["label"].as_str().unwrap().to_owned()))
+        .collect()
+}
+
+/// GH#708 as reported, first half: req names pal the technical owner of a
+/// service the CI is in. pal may not decide; the request and the preview say
+/// why.
+#[tokio::test]
+async fn a_requester_who_named_the_service_owner_does_not_pick_the_approver() {
+    let Some(db) = scratch::database("workflow_approvals_owner_named").await else { return };
+    let o = owners(&db).await;
+    let w = &o.w;
+    let bs = service_owner_step(&o).await;
+    let (ci, instance) = o.ready().await;
+    let service = o.service(bs).await;
+    let name = w.ci_values(service).await["label"].as_str().unwrap().to_owned();
+    o.add_member(&w.admin, service, ci).await;
+    o.set_owners(&o.req.0, service, &[o.pal.1]).await;
+    assert_eq!(request(w, &o.req.0, instance, "approve", json!({})).await.0, 202);
+    let (status, v) = decide(w, &o.pal.0, instance, "approve", None).await;
+    assert_eq!((status, reason(&v)), (403, refused("FORBIDDEN", "not_eligible")), "{v}");
+    let v = o.view(instance).await;
+    let step = &v["steps"][0];
+    assert_eq!(
+        dropped_labels(step),
+        vec![("field_set_by_requester".to_owned(), format!("technical owner pal of business service {name}"))],
+        "{v}"
+    );
+    assert_eq!(dropped(step), by("field_set_by_requester", "req"));
+    assert_eq!(step["droppedSources"][0]["source"], "service_owner");
+    assert!(step["droppedSources"][0]["message"].as_str().unwrap().contains("req made pal a technical owner"), "{v}");
+    assert_eq!((step["eligibleCount"].as_i64(), v["approvers"].clone()), (Some(0), json!([])), "{v}");
+
+    let preview = format!("{DEFS}/{}/approvers/preview?transition=approve&step=owner&ciId={ci}", w.definition);
+    let (status, v) = w.call(&w.admin, "GET", &format!("{preview}&requestedBy={}", o.req.1), None).await;
+    assert_eq!(status, 200, "{v}");
+    let source = &v["sources"][0];
+    assert_eq!(
+        (source["dropped"].as_str(), source["userCount"].as_i64(), v["eligibleCount"].as_i64()),
+        (Some("field_set_by_requester"), Some(0), Some(0)),
+        "{v}"
+    );
+    assert_eq!(source["droppedParts"].as_array().map(Vec::len), Some(1), "{v}");
+    assert!(source["note"].as_str().unwrap().contains("Separation of duties"), "{source}");
+    let (_, v) = w.call(&w.admin, "GET", &format!("{preview}&requestedBy={}", o.req2.1), None).await;
+    assert_eq!(
+        (v["sources"][0]["dropped"].clone(), v["sources"][0]["droppedParts"].clone(), v["eligibleCount"].as_i64()),
+        (Value::Null, json!([]), Some(1)),
+        "{v}"
+    );
+    audit_ok(w).await;
+    db.drop().await;
+}
+
+/// GH#708 second half: pal owns a service (set by the administrator) and req
+/// adds the CI to it. The service's owners are not used.
+#[tokio::test]
+async fn a_requester_who_added_the_ci_to_a_service_does_not_pick_its_owners() {
+    let Some(db) = scratch::database("workflow_approvals_owner_member").await else { return };
+    let o = owners(&db).await;
+    let w = &o.w;
+    let bs = service_owner_step(&o).await;
+    let (ci, instance) = o.ready().await;
+    let service = o.service(bs).await;
+    let name = w.ci_values(service).await["label"].as_str().unwrap().to_owned();
+    o.set_owners(&w.admin, service, &[o.pal.1]).await;
+    o.add_member(&o.req.0, service, ci).await;
+    assert_eq!(request(w, &o.req.0, instance, "approve", json!({})).await.0, 202);
+    let (status, v) = decide(w, &o.pal.0, instance, "approve", None).await;
+    assert_eq!((status, reason(&v)), (403, refused("FORBIDDEN", "not_eligible")), "{v}");
+    let v = o.view(instance).await;
+    assert_eq!(
+        dropped_labels(&v["steps"][0]),
+        vec![("field_set_by_requester".to_owned(), format!("technical owners of business service {name}"))],
+        "{v}"
+    );
+    assert!(
+        v["steps"][0]["droppedSources"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("req added the CI to business service"),
+        "{v}"
+    );
+
+    // The same through a token req minted for ed (GH#709 on the membership).
+    let (ci, instance) = o.ready().await;
+    let both = w.profile("Servers and services", &[(w.server, true), (bs, true)]).await;
+    sqlx::query("INSERT INTO user_permission_profiles (user_id, profile_id) VALUES ($1, $2)")
+        .bind(o.ed.1)
+        .bind(both)
+        .execute(&w.pool)
+        .await
+        .unwrap();
+    let (lent, _) = token(w, o.ed.1, both, Some(o.req.1)).await;
+    o.add_member(&lent, service, ci).await;
+    assert_eq!(request(w, &o.req.0, instance, "approve", json!({})).await.0, 202);
+    let (status, v) = decide(w, &o.pal.0, instance, "approve", None).await;
+    assert_eq!((status, reason(&v)), (403, refused("FORBIDDEN", "not_eligible")), "{v}");
+    assert_eq!(dropped(&o.view(instance).await["steps"][0]), by("field_set_by_requester", "ed"));
+    audit_ok(w).await;
+    db.drop().await;
+}
+
+/// Control: owners and memberships the administrator set name the approver
+/// as before; an owner req adds next to them is dropped alone.
+#[tokio::test]
+async fn service_owners_and_memberships_set_by_someone_else_still_name_the_approver() {
+    let Some(db) = scratch::database("workflow_approvals_owner_other").await else { return };
+    let o = owners(&db).await;
+    let w = &o.w;
+    let bs = service_owner_step(&o).await;
+    let (ci, instance) = o.ready().await;
+    let service = o.service(bs).await;
+    o.set_owners(&w.admin, service, &[o.pal.1]).await;
+    o.add_member(&w.admin, service, ci).await;
+    o.set_owners(&o.req.0, service, &[o.pal.1, o.owner.1]).await;
+    assert_eq!(request(w, &o.req.0, instance, "approve", json!({})).await.0, 202);
+    let v = o.view(instance).await;
+    let step = &v["steps"][0];
+    assert_eq!(step["eligibleCount"], 1, "pal only: {v}");
+    let labels = dropped_labels(step);
+    assert_eq!(labels.len(), 1, "{v}");
+    assert!(labels[0].1.starts_with("technical owner owner of business service"), "{v}");
+    let (status, v) = decide(w, &o.owner.0, instance, "approve", None).await;
+    assert_eq!((status, reason(&v)), (403, refused("FORBIDDEN", "not_eligible")), "{v}");
+    let (status, v) = decide(w, &o.pal.0, instance, "approve", None).await;
+    assert_eq!((status, v["instance"]["state"]["key"].as_str()), (200, Some("approved")), "{v}");
+    audit_ok(w).await;
+    db.drop().await;
+}

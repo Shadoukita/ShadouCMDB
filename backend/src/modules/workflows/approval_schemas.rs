@@ -227,8 +227,9 @@ pub struct WorkflowApprovalRequestStep {
     pub eligible_count: Option<i32>,
     /// Active, and fewer users could decide it than approvals are still needed
     pub understaffed: bool,
-    /// Approver sources not used at the last resolution, with why: a CI field naming the approvers that the
-    /// requester set (GH#664)
+    /// Approver sources, or parts of one, not used at the last resolution, with why: a CI field naming the
+    /// approvers that the requester set (GH#664), a business service owner the requester made an owner, or the
+    /// owners of a service the requester added the CI to (GH#708)
     pub dropped_sources: Vec<WorkflowApprovalDroppedSource>,
     pub decisions: Vec<WorkflowApprovalDecision>,
 }

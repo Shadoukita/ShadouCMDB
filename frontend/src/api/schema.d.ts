@@ -3072,7 +3072,7 @@ export interface paths {
         };
         /**
          * Who may decide each step of the workflow's approval policies
-         * @description Requires `workflows.manage`. Assignments are per transition key, step key and role, for every version of the workflow; the policy itself (steps, quorum, due interval) is part of each version's graph. Sources: a permission profile, a user group, a named user, a reference field of the CI that points at the Person type (the user linked to that Person), or the technical or business owners of the business services the CI is a direct member of. Role `escalation` applies only once the step is overdue. `problems` holds the lint's warnings against the current version and the draft: `no_approvers`, `approvers_cannot_view`, `understaffed`, `inactive_attribute`, `unknown_step`. Administrators are not approvers unless assigned.
+         * @description Requires `workflows.manage`. Assignments are per transition key, step key and role, for every version of the workflow; the policy itself (steps, quorum, due interval) is part of each version's graph. Sources: a permission profile, a user group, a named user, a reference field of the CI that points at the Person type (the user linked to that Person), or the technical or business owners of the business services the CI is a direct member of. Separation of duties: when a request is made, a field source is not used if the requester (or the creator of the requesting token) set the field's current value, nor a service owner they made an owner, nor the owners of a service they added the CI to; an edit through an API token counts as both its owner's and its creator's, and one through a token or import that recorded no user is not trusted (the request's `droppedSources`). Role `escalation` applies only once the step is overdue. `problems` holds the lint's warnings against the current version and the draft: `no_approvers`, `approvers_cannot_view`, `understaffed`, `inactive_attribute`, `unknown_step`. Administrators are not approvers unless assigned.
          */
         get: operations["getWorkflowApprovers"];
         /**
@@ -3096,7 +3096,7 @@ export interface paths {
         };
         /**
          * Who could decide one approval step, and why each user is in or out
-         * @description Requires `workflows.manage`. Resolves the step's assignments to users, for the CI `ciId` or, without it, in general (the field and service owner sources are then not resolved). Each user is `eligible`, or out with a reason: `inactive` (the account is disabled), `no_view_right` (no profile of theirs lets them view the CI's type, so they would never see the request), `excluded` (the `requestedBy` user: four-eyes), or `escalation_only`. Each source tells how many users it resolved to, and why none when it is empty. Membership is read now; a running request reads it when each decision is made. 400 `unknown_step` for a step no version or draft has; 400 `not_covered` when the workflow does not run on the CI's type; 404 for a CI that does not exist or that the caller may not view.
+         * @description Requires `workflows.manage`. Resolves the step's assignments to users, for the CI `ciId` or, without it, in general (the field and service owner sources are then not resolved). Each user is `eligible`, or out with a reason: `inactive` (the account is disabled), `no_view_right` (no profile of theirs lets them view the CI's type, so they would never see the request), `excluded` (the `requestedBy` user: four-eyes), or `escalation_only`. Each source tells how many users it resolved to, and why none when it is empty. With `ciId` and `requestedBy`, the sources and parts a request by that user would not use are marked: `dropped` on a field source (or on a service owner source none of whose owners is left), and `droppedParts` listing each service owner or membership left out, with who made the change. Membership is read now; a running request reads it when each decision is made. 400 `unknown_step` for a step no version or draft has; 400 `not_covered` when the workflow does not run on the CI's type; 404 for a CI that does not exist or that the caller may not view.
          */
         get: operations["previewWorkflowApprovers"];
         put?: never;
@@ -6987,8 +6987,9 @@ export interface components {
             decidedAt: string;
         };
         /**
-         * @description An approver source of a step that was not used: its field was set by someone who may not decide the request
-         *     (GH#664). The step falls back on its other sources.
+         * @description An approver source of a step, or part of one, that was not used: someone who may not decide the request set
+         *     the field that names the approvers (GH#664), made a service owner an owner, or added the CI to the service
+         *     (GH#708). The step falls back on its other sources.
          */
         WorkflowApprovalDroppedSource: {
             /**
@@ -6999,15 +7000,19 @@ export interface components {
              * @enum {string}
              */
             source: "profile" | "group" | "user" | "ci_attribute" | "service_owner";
-            /** @description e.g. `field server.owner` */
+            /**
+             * @description e.g. `field server.owner`, `technical owner pal of business service Shop`, `technical owners of business
+             *     service Shop`
+             */
             label: string;
             /**
-             * @description Why an approver source that names its approvers through a CI field may not decide a request
+             * @description Why an approver source (a CI field, or a business service's owner or membership) may not decide a request
              * @enum {string}
              */
             reason: "field_set_by_requester" | "field_set_by_unattributed";
             /** @description The reason, in words */
             message: string;
+            /** @description The audited change that named the approvers: the field's, the owner's or the membership's */
             fieldLastChanged: components["schemas"]["WorkflowFieldChange"];
         };
         /** @description Whether the caller may decide the active step now, and why not */
@@ -7178,8 +7183,9 @@ export interface components {
             /** @description Active, and fewer users could decide it than approvals are still needed */
             understaffed: boolean;
             /**
-             * @description Approver sources not used at the last resolution, with why: a CI field naming the approvers that the
-             *     requester set (GH#664)
+             * @description Approver sources, or parts of one, not used at the last resolution, with why: a CI field naming the
+             *     approvers that the requester set (GH#664), a business service owner the requester made an owner, or the
+             *     owners of a service the requester added the CI to (GH#708)
              */
             droppedSources: components["schemas"]["WorkflowApprovalDroppedSource"][];
             decisions: components["schemas"]["WorkflowApprovalDecision"][];
@@ -7317,9 +7323,15 @@ export interface components {
             fieldLastChanged: components["schemas"]["WorkflowFieldChange"] | null;
             /**
              * @description Set when the source would be dropped for a request by `requestedBy` (see `WorkflowApprovalDroppedSource`);
-             *     it then resolves to nobody and `note` says why
+             *     it then resolves to nobody and `note` says why. For business service owners: set when every owner the CI's
+             *     services name is dropped
              */
             dropped: ("field_set_by_requester" | "field_set_by_unattributed") | null;
+            /**
+             * @description Business service owners with `ciId` and `requestedBy`: the owners and memberships a request by
+             *     `requestedBy` would not use, and why (GH#708). Empty otherwise
+             */
+            droppedParts: components["schemas"]["WorkflowApprovalDroppedSource"][];
         };
         /** @description One user an assignment resolves to */
         WorkflowApproverPreviewUser: {
@@ -7665,6 +7677,12 @@ export interface components {
             actorName: string | null;
             /** Format: date-time */
             changedAt: string;
+            /**
+             * @description A change made with an API token (`api_client`): the user who minted that token for its owner, when it
+             *     was not the owner (GH#709). Several when the token's `token.use` row was pruned: then every user who
+             *     minted one of the owner's tokens before the change counts. Left out when there is none.
+             */
+            tokenCreatedBy?: string[];
         };
         /** @description The profiles that may run one transition */
         WorkflowGrant: {
