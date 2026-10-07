@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useRecentChanges, useRelationships, type Ci } from "../../api/queries";
-import { useServiceSettings, useServicesOfCi } from "../../api/services";
+import { useServiceSettings, useServicesOfCi, type Service } from "../../api/services";
 import { t } from "../../i18n";
 import { formatRelative } from "../../lib/format";
 import { describeEdge } from "../../lib/relationships";
@@ -11,13 +11,15 @@ import { useSessionStore } from "../../stores/session";
  * The stat tiles under a CI's title (design §2.7, record page): its relationships, the business services it
  * is part of, and its changes in the last 30 days. A tile shows only what is known: one the caller may not
  * see (no audit.view, no business services) or whose request failed is left out, never shown as 0.
+ * On a business service's page (`service`) the first tile is its members instead of its relationships,
+ * which are mostly those memberships.
  */
-const props = defineProps<{ ci: Ci }>();
+const props = defineProps<{ ci: Ci; service?: Service }>();
 const DAYS = 30;
 const session = useSessionStore();
 const live = computed(() => !props.ci.deletedAt);
 
-const rels = useRelationships(() => props.ci.id);
+const rels = useRelationships(() => props.ci.id, () => !props.service);
 const relTotal = computed(() => rels.data.value?.page.total);
 /** Outgoing and incoming, when the whole list was fetched. */
 const relSplit = computed(() => {
@@ -44,7 +46,16 @@ interface Tile {
 }
 const tiles = computed<Tile[]>(() => {
   const out: Tile[] = [];
-  if (!rels.isError.value) {
+  const svc = props.service;
+  if (svc) {
+    out.push({
+      key: "members",
+      label: t("record.stat.members"),
+      value: svc.memberCount.toLocaleString(),
+      note: svc.serviceMemberCount > 0 ? t("record.stat.members.note", { n: svc.serviceMemberCount }) : undefined,
+      pending: false,
+    });
+  } else if (!rels.isError.value) {
     out.push({
       key: "relationships",
       label: t("record.stat.relationships"),

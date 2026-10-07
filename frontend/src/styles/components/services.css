@@ -1,0 +1,18 @@
+/*
+ * Business services (SHAA-1670 design document, rollout 7b; audit B1, B2, R2): the service list as an explorer
+ * (explorer.css) and the service page in the record layout (record.css). Only what those two do not cover is here.
+ */
+
+/* ---------- List ---------- */
+.service-table .owner-cell {
+  white-space: normal;
+}
+/* Owners past the first two: a count badge, the names in its tooltip and in the screen-reader text. */
+.service-table .owner-cell .badge.more {
+  margin-left: var(--space-1);
+  font-family: var(--font-mono);
+}
+/* The chosen owner filter: a chip at the control height, so it lines up with the toolbar's inputs. */
+.toolbar .owner-chip {
+  min-height: var(--control-h);
+}

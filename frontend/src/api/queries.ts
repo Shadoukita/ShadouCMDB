@@ -268,11 +268,12 @@ export function useRecentChanges(entityId: MaybeRefOrGetter<string>, days: numbe
 
 // ---------- Relationships ----------
 
-export function useRelationships(ciId: MaybeRefOrGetter<string>) {
+export function useRelationships(ciId: MaybeRefOrGetter<string>, enabled: MaybeRefOrGetter<boolean> = true) {
   return useQuery(() => {
     const id = toValue(ciId);
     return {
       queryKey: keys.relationships(id),
+      enabled: toValue(enabled),
       queryFn: ({ signal }: { signal: AbortSignal }) =>
         unwrap(api.GET("/api/v1/relationships", { params: { query: { ciId: id, limit: MAX_PAGE, sort: "typeName" } }, signal })),
     };

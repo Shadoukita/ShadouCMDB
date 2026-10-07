@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed } from "vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import { useRouter } from "vue-router";
 import { useDeleteCi } from "../../api/queries";
@@ -15,11 +15,12 @@ import ServiceError from "./ServiceError.vue";
  * Deleting a business service is a CI delete (spec §1.1): the service and its membership edges go, the
  * member CIs stay. The confirmation names the memberships the caller can see, says when there may be
  * others (a restricted profile; static, so it reveals nothing) and which services it is nested in.
+ * Opened from the service page's actions menu (audit R2).
  */
 const props = defineProps<{ service: Service }>();
+const open = defineModel<boolean>("open", { required: true });
 const router = useRouter();
 const qc = useQueryClient();
-const open = ref(false);
 const del = useDeleteCi();
 const parents = useServicesOfCi(() => props.service.id, open);
 const parentCount = computed(() => directParentCount(parents.data.value?.data));
@@ -42,7 +43,6 @@ function confirm() {
 </script>
 
 <template>
-  <button type="button" class="btn btn-danger" @click="open = true">{{ t("common.delete") }}</button>
   <ConfirmDialog
     :open="open"
     :title="t('services.delete.title', { name: service.name })"
