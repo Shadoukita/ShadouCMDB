@@ -667,7 +667,7 @@ and the one row of `audit_log_chain_head` holds the last sequence number and has
 on it. Since 0040 the head is written once per transaction, at commit, by a deferred trigger, and only
 those triggers write it; the API role may read it (0038), so `shadoucmdb backup` can copy it. Since 0053 `audit_log_verify()` also checks
 that the head's hash is the `row_hash` of the row it points to, and tells gaps a `prune-audit` run
-(`audit.purge`) accounts for (`retention`) from any other (`deleted`). `server_keys` has no relationships: it holds the keys the server generates for itself.
+(`audit.purge`) accounts for (`retention`) from any other (`deleted`). Since 0060 a `prune-audit` run records the `chain_seq` ranges it deleted (`deletedRanges`), a gap is `retention` only when such ranges cover every missing row, and only the owner of `audit_log` (that is, `prune_audit_log()`) may insert an `audit.purge` row. `server_keys` has no relationships: it holds the keys the server generates for itself.
 
 Workflows (0046): a version's graph (`workflow_states`, `workflow_transitions`,
 `workflow_transition_fields`, `workflow_version_attribute_refs`) can change only while the version is

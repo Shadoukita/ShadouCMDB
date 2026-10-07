@@ -412,4 +412,194 @@ mod tests {
         );
         db.drop().await;
     }
+
+    /// Problems as (chainSeq, problem), without the detail.
+    async fn kinds(pool: &sqlx::PgPool) -> Vec<(i64, String)> {
+        problems(pool).await.into_iter().map(|(s, p, _)| (s, p)).collect()
+    }
+
+    async fn prune(pool: &sqlx::PgPool, days: i32, scope: &str) {
+        sqlx::query("SELECT * FROM prune_audit_log(make_interval(days => $1), $2, false, 'test')")
+            .bind(days)
+            .bind(scope)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    /// GH#683, case 1: a prune-audit run that deleted nothing does not excuse
+    /// rows deleted from the start of the chain, where no row precedes the gap.
+    #[tokio::test]
+    async fn a_purge_that_deleted_nothing_does_not_excuse_the_oldest_rows() {
+        let Some(db) = scratch::database("a_purge_that_deleted_nothing_does_not_excuse_the_oldest_rows").await else {
+            return;
+        };
+        empty_chain(&db.pool).await;
+        insert_dated(&db.pool, 5, 0).await; // 1..=5
+        prune(&db.pool, 400, "auth").await; // deletes nothing, audit.purge as 6
+        behind_the_trigger(&db.pool, "DELETE FROM audit_log WHERE chain_seq IN (1, 2, 3)").await;
+        assert_eq!(
+            problems(&db.pool).await,
+            vec![(
+                4,
+                "deleted".into(),
+                "rows 1 to 3 missing; no prune-audit run (audit.purge) accounts for them".into()
+            )]
+        );
+        let err = super::check(&db.pool, true).await.unwrap_err().to_string();
+        assert!(err.contains("chain is broken"), "{err}");
+        db.drop().await;
+    }
+
+    /// GH#683, case 2: recent rows deleted next to rows a prune-audit run
+    /// removed are not covered by that run.
+    #[tokio::test]
+    async fn a_purge_does_not_excuse_recent_rows_deleted_next_to_its_own() {
+        let Some(db) = scratch::database("a_purge_does_not_excuse_recent_rows_deleted_next_to_its_own").await else {
+            return;
+        };
+        empty_chain(&db.pool).await;
+        insert_dated(&db.pool, 3, 60).await; // 1..=3
+        insert_dated(&db.pool, 3, 0).await; // 4..=6
+        prune(&db.pool, 40, "changes").await; // removes 1..=3, audit.purge as 7
+        insert_dated(&db.pool, 2, 0).await; // 8..=9
+        super::check(&db.pool, true).await.unwrap();
+        behind_the_trigger(&db.pool, "DELETE FROM audit_log WHERE chain_seq IN (4, 5)").await;
+        assert_eq!(kinds(&db.pool).await, vec![(6, "deleted".into())]);
+        let err = super::check(&db.pool, true).await.unwrap_err().to_string();
+        assert!(err.contains("chain is broken"), "{err}");
+        db.drop().await;
+    }
+
+    /// GH#684: the API role cannot write an audit.purge row, and one dated in
+    /// the future (or after the row that follows it) excuses nothing, even
+    /// with ranges and counts that match the deleted rows.
+    #[tokio::test]
+    async fn a_forged_or_future_dated_purge_row_excuses_nothing() {
+        let Some(roles) = scratch::Roles::create("a_forged_or_future_dated_purge_row_excuses_nothing").await else {
+            return;
+        };
+        let db = roles.database().await;
+        empty_chain(&db.pool).await;
+        insert_dated(&db.pool, 3, 0).await; // 1..=3
+        let forged = |at: &str| {
+            format!(
+                "INSERT INTO audit_log (occurred_at, actor_type, actor_name, action, entity_type, entity_id, new_value)
+                 VALUES ({at}, 'system', 'shadoucmdb_maintenance', 'audit.purge', 'audit_log', gen_random_uuid(),
+                         jsonb_build_object('scope', 'changes', 'cutoff', {at} - interval '31 days',
+                                            'deleted', jsonb_build_object('create', 1), 'deletedRanges', '[[2, 2]]'::jsonb))"
+            )
+        };
+        let api = roles.api_pool(&db).await;
+        let err =
+            sqlx::query(sqlx::AssertSqlSafe(forged("now() + interval '31 days'"))).execute(&api).await.unwrap_err();
+        assert_eq!(err.as_database_error().and_then(|e| e.code()).as_deref(), Some("42501"), "{err}");
+        api.close().await;
+
+        // The same row with the owner's rights: in the future, it excuses nothing.
+        sqlx::query(sqlx::AssertSqlSafe(forged("now() + interval '31 days'"))).execute(&db.pool).await.unwrap(); // 4
+        behind_the_trigger(&db.pool, "DELETE FROM audit_log WHERE chain_seq = 2").await;
+        assert_eq!(kinds(&db.pool).await, vec![(3, "deleted".into())]);
+        let err = super::check(&db.pool, true).await.unwrap_err().to_string();
+        assert!(err.contains("chain is broken"), "{err}");
+
+        // Dated after the row that follows it in the chain: nor does it. Until
+        // that row is written, the same purge row (with the owner's rights,
+        // which can delete rows anyway) covers row 2 of a fresh chain.
+        empty_chain(&db.pool).await;
+        insert_dated(&db.pool, 2, 60).await; // 1..=2
+        sqlx::query(sqlx::AssertSqlSafe(forged("now()"))).execute(&db.pool).await.unwrap(); // 3
+        behind_the_trigger(&db.pool, "DELETE FROM audit_log WHERE chain_seq = 2").await;
+        assert_eq!(kinds(&db.pool).await, vec![(3, "retention".into())]);
+        insert_dated(&db.pool, 1, 2).await; // 4, dated two days before 3
+        assert_eq!(kinds(&db.pool).await, vec![(3, "deleted".into())]);
+        db.drop().await;
+        roles.drop().await;
+    }
+
+    /// A genuine prune-audit run still verifies: interleaved scopes, two runs,
+    /// several ranges each, and the purge rows' own records.
+    #[tokio::test]
+    async fn genuine_prune_audit_runs_still_verify() {
+        let Some(db) = scratch::database("genuine_prune_audit_runs_still_verify").await else { return };
+        empty_chain(&db.pool).await;
+        for i in 0..12 {
+            let action = if i % 3 == 0 { "login.failure" } else { "create" };
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "INSERT INTO audit_log (occurred_at, actor_type, action, entity_type, entity_id, new_value)
+                 VALUES (now() - interval '200 days', 'system', '{action}', 'lookup_list', gen_random_uuid(), '{{}}')"
+            )))
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        }
+        insert_dated(&db.pool, 2, 0).await; // 13..=14
+        prune(&db.pool, 180, "auth").await; // 1, 4, 7, 10; audit.purge as 15
+        let ranges: serde_json::Value = sqlx::query_scalar(
+            "SELECT new_value->'deletedRanges' FROM audit_log WHERE action = 'audit.purge' ORDER BY chain_seq DESC LIMIT 1",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(ranges, serde_json::json!([[1, 1], [4, 4], [7, 7], [10, 10]]));
+        super::check(&db.pool, true).await.unwrap();
+        prune(&db.pool, 180, "changes").await; // the rest of 1..=12; audit.purge as 16
+        assert_eq!(
+            problems(&db.pool).await,
+            vec![(
+                13,
+                "retention".into(),
+                "rows 1 to 12 missing; pruned by the prune-audit run recorded at chainSeq 15, 16".into()
+            )]
+        );
+        super::check(&db.pool, true).await.unwrap();
+        db.drop().await;
+    }
+
+    /// Upgrade: gaps a prune-audit run left before migration 0060, whose
+    /// audit.purge rows record no ranges, still verify through the legacy row
+    /// it writes; a deletion after the upgrade does not.
+    #[tokio::test]
+    async fn retention_gaps_from_before_the_upgrade_still_verify() {
+        let Some(db) = scratch::empty("retention_gaps_from_before_the_upgrade_still_verify").await else { return };
+        let before = sqlx::migrate::Migrator {
+            migrations: std::borrow::Cow::Owned(
+                crate::db::MIGRATOR.iter().filter(|m| m.version <= 59).cloned().collect(),
+            ),
+            table_name: std::borrow::Cow::Borrowed("public._sqlx_migrations"),
+            ..sqlx::migrate!("../sql/migrations")
+        };
+        before.run(&db.pool).await.unwrap();
+        empty_chain(&db.pool).await;
+        insert_dated(&db.pool, 3, 60).await; // 1..=3
+        insert_dated(&db.pool, 3, 0).await; // 4..=6
+        prune(&db.pool, 40, "changes").await; // 1..=3 removed; audit.purge as 7, no ranges
+        insert_dated(&db.pool, 1, 0).await; // 8
+        // A future-dated purge row only 0053 trusted, and the recent row it hid.
+        sqlx::query(
+            "INSERT INTO audit_log (occurred_at, actor_type, action, entity_type, entity_id, new_value)
+             VALUES (now() + interval '31 days', 'system', 'audit.purge', 'audit_log', gen_random_uuid(),
+                     jsonb_build_object('cutoff', now() + interval '1 day'))",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap(); // 9
+        behind_the_trigger(&db.pool, "DELETE FROM audit_log WHERE chain_seq = 5").await;
+        assert_eq!(kinds(&db.pool).await, vec![(4, "retention".into()), (6, "retention".into())]);
+
+        crate::db::MIGRATOR.run(&db.pool).await.unwrap();
+        let legacy: serde_json::Value = sqlx::query_scalar(
+            "SELECT new_value->'deletedRanges' FROM audit_log WHERE action = 'audit.purge' AND new_value->>'scope' = 'legacy'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(legacy, serde_json::json!([[1, 3]]), "only the gap a purge dated in the past accounts for");
+        assert_eq!(kinds(&db.pool).await, vec![(4, "retention".into()), (6, "deleted".into())]);
+
+        // Old rows deleted after the upgrade are not covered by the legacy row.
+        behind_the_trigger(&db.pool, "DELETE FROM audit_log WHERE chain_seq = 4").await;
+        assert_eq!(kinds(&db.pool).await, vec![(6, "deleted".into())]);
+        db.drop().await;
+    }
 }
