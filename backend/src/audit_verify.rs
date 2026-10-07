@@ -602,4 +602,81 @@ mod tests {
         assert_eq!(kinds(&db.pool).await, vec![(6, "deleted".into())]);
         db.drop().await;
     }
+
+    /// Rows 1..=8 dated 200 days ago, 2..=4 and 6..=7 sign-in failures between
+    /// changes; a recent row 9, then an `auth` prune-audit run recording
+    /// [[2, 4], [6, 7]] as row 10, and a recent row 11.
+    async fn two_pruned_ranges(pool: &sqlx::PgPool) {
+        empty_chain(pool).await;
+        let actions = [
+            "create",
+            "login.failure",
+            "login.failure",
+            "login.failure",
+            "create",
+            "login.failure",
+            "login.failure",
+            "create",
+        ];
+        for action in actions {
+            sqlx::query(
+                "INSERT INTO audit_log (occurred_at, actor_type, action, entity_type, entity_id, new_value)
+                 VALUES (now() - interval '200 days', 'system', $1, 'lookup_list', gen_random_uuid(), '{}')",
+            )
+            .bind(action)
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+        insert_dated(pool, 1, 0).await; // 9
+        prune(pool, 180, "auth").await; // 10
+        insert_dated(pool, 1, 0).await; // 11
+        let ranges: serde_json::Value =
+            sqlx::query_scalar("SELECT new_value->'deletedRanges' FROM audit_log WHERE chain_seq = 10")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        assert_eq!(ranges, serde_json::json!([[2, 4], [6, 7]]));
+    }
+
+    /// SHAA-2208: a row deleted by hand right next to a recorded range, on
+    /// either side or between two ranges of the same run, is `deleted`; the
+    /// run still accounts for its other range.
+    #[tokio::test]
+    async fn a_row_deleted_next_to_a_recorded_range_is_not_retention() {
+        let Some(db) = scratch::database("a_row_deleted_next_to_a_recorded_range_is_not_retention").await else {
+            return;
+        };
+        let pool = &db.pool;
+        two_pruned_ranges(pool).await;
+        assert_eq!(kinds(pool).await, vec![(5, "retention".into()), (8, "retention".into())]);
+        super::check(pool, true).await.unwrap();
+
+        // The row just before the first range.
+        behind_the_trigger(pool, "DELETE FROM audit_log WHERE chain_seq = 1").await;
+        assert_eq!(
+            problems(pool).await,
+            vec![
+                (5, "deleted".into(), "rows 1 to 4 missing; no prune-audit run (audit.purge) accounts for them".into()),
+                (
+                    8,
+                    "retention".into(),
+                    "rows 6 to 7 missing; pruned by the prune-audit run recorded at chainSeq 10".into()
+                ),
+            ]
+        );
+        let err = super::check(pool, true).await.unwrap_err().to_string();
+        assert!(err.contains("chain is broken"), "{err}");
+
+        // The row between the two ranges: one gap, 2 to 7, not all of it recorded.
+        two_pruned_ranges(pool).await;
+        behind_the_trigger(pool, "DELETE FROM audit_log WHERE chain_seq = 5").await;
+        assert_eq!(kinds(pool).await, vec![(8, "deleted".into())]);
+
+        // The row just after the last range.
+        two_pruned_ranges(pool).await;
+        behind_the_trigger(pool, "DELETE FROM audit_log WHERE chain_seq = 8").await;
+        assert_eq!(kinds(pool).await, vec![(5, "retention".into()), (9, "deleted".into())]);
+        db.drop().await;
+    }
 }
