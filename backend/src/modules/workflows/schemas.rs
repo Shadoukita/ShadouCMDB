@@ -788,7 +788,8 @@ pub struct WorkflowProblem {
     pub path: String,
     /// Machine-readable: no_states, no_initial_state, initial_state_terminal, unreachable_state, dead_end,
     /// no_terminal_reachable, terminal_has_transitions, unknown_attribute, inactive_attribute, attribute_type,
-    /// unknown_value, op_type, no_state_attribute, state_value_list, state_value_inactive, ungranted_transition, ...
+    /// unknown_value, op_type, no_state_attribute, state_value_list, state_value_inactive, state_field,
+    /// ungranted_transition, ...
     pub code: String,
     pub message: String,
     #[schema(inline)]

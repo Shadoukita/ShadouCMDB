@@ -930,6 +930,21 @@ async fn apply(
     if !foreign.is_empty() {
         return Err(stale(t, foreign));
     }
+    let driven = super::state_field_keys(&mut *conn, &model, row).await?;
+    let state_fields: Vec<FieldError> = staged
+        .keys()
+        .filter(|k| driven.contains(k))
+        .map(|k| {
+            problem(
+                format!("fields.{k}"),
+                format!("{k} is a workflow state field: a transition cannot set it"),
+                "state_field",
+            )
+        })
+        .collect();
+    if !state_fields.is_empty() {
+        return Err(stale(t, state_fields));
+    }
     let current = current_values(&mut *conn, &model, row.ci_id).await?;
     let norm = |v: Option<&Value>| v.cloned().unwrap_or(Value::Null);
     let mut failed: Vec<FieldError> = staged

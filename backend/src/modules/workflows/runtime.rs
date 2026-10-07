@@ -1186,6 +1186,16 @@ pub async fn transition(
     Ok((after.dto(), request.is_some()))
 }
 
+/// Keys of the state fields on the instance's CI: its workflow's and those of
+/// the active workflows covering the CI's type. A transition never sets one
+/// from its fields, even in a version published before the lint refused it
+/// or before the other workflow drove the field: the states set it (GH#668).
+async fn state_field_keys(conn: &mut PgConnection, model: &Model, row: &InstanceRow) -> Result<Vec<String>, AppError> {
+    let mut keys = StateFields::load(conn).await?.driven_keys(model, row.class_id);
+    keys.extend(row.state_attribute_id.and_then(|id| model.field(id)).map(|a| a.key.clone()));
+    Ok(keys)
+}
+
 /// One transition in the caller's transaction (a single run, or one item of a
 /// bulk run), with the approval request it created instead, if it is gated.
 async fn transition_in(
@@ -1248,6 +1258,21 @@ async fn transition_in(
         .collect();
     if !unknown.is_empty() {
         return Err(AppError::validation(unknown));
+    }
+    let driven = state_field_keys(&mut *tx, &model, &row).await?;
+    let state_fields: Vec<FieldError> = b
+        .fields
+        .keys()
+        .filter(|k| driven.contains(k))
+        .map(|k| FieldError {
+            location: FieldLocation::Body,
+            field: format!("fields.{k}"),
+            message: format!("{k} is a workflow state field: transition {} cannot set it", t.key),
+            code: "state_field".into(),
+        })
+        .collect();
+    if !state_fields.is_empty() {
+        return Err(AppError::validation(state_fields));
     }
     items::update_for_workflow(&mut *tx, ctx, row.ci_id, row.class_id, b.fields.clone(), false, None)
         .await

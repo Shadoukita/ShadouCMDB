@@ -23,6 +23,7 @@ use super::schemas::{
     WorkflowProblemSeverity, WorkflowState, WorkflowStateCategory, WorkflowTransition, WorkflowTransitionField,
     WorkflowVersion, WorkflowVersionStatus,
 };
+use super::state_field::Driver;
 use crate::http::error::{AppError, FieldError, FieldLocation};
 use crate::modules::classes::AttributeDataType;
 use crate::schema::model::{Field, Model};
@@ -655,6 +656,9 @@ pub struct LintContext<'a> {
     pub granted: &'a HashSet<String>,
     /// The approver assignments the approval steps are linted against.
     pub approvers: &'a approvers::Facts,
+    /// The other active workflows driving a state field on CIs this one may
+    /// cover ([`StateFields::overlapping`](super::state_field::StateFields::overlapping)).
+    pub other_drivers: &'a [Driver],
 }
 
 fn error(path: impl Into<String>, code: &str, message: impl Into<String>) -> WorkflowProblem {
@@ -799,7 +803,25 @@ pub fn lint(g: &Stored, cx: &LintContext<'_>) -> Vec<WorkflowProblem> {
                 Some(a) if !a.is_active => {
                     out.push(error(path, "inactive_attribute", format!("Field {} is archived", a.key)))
                 }
-                Some(_) => {}
+                // A workflow's state field moves only with its states: taking it
+                // as a transition field would let the actor set any value (GH#668).
+                Some(a) if cx.state_attribute == Some(a.id) => out.push(error(
+                    path,
+                    "state_field",
+                    format!("{} is this workflow's state field: its states set it, not transition fields", a.key),
+                )),
+                Some(a) => {
+                    if let Some(d) = cx.other_drivers.iter().find(|d| d.attribute_id == a.id) {
+                        out.push(error(
+                            path,
+                            "state_field",
+                            format!(
+                                "{} is the state field of the active workflow {}: a transition cannot set it",
+                                a.key, d.definition_key
+                            ),
+                        ));
+                    }
+                }
                 None => out.push(error(path, "unknown_attribute", "The field no longer exists")),
             }
         }

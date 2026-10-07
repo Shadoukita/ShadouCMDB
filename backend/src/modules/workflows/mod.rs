@@ -583,8 +583,9 @@ pub fn runtime_routes() -> Vec<Route> {
             .summary("Move a workflow instance along a transition, or request approval for one that needs it")
             .description(
                 "One transaction: the fields sent are validated as PATCH /configuration-items/{id} validates them \
-                 (400 VALIDATION_ERROR on `fields.<key>`, and `not_a_transition_field` for a field the transition \
-                 does not list); required fields, the comment and the conditions are then checked on the CI's \
+                 (400 VALIDATION_ERROR on `fields.<key>`, `not_a_transition_field` for a field the transition \
+                 does not list, `state_field` for a workflow state field of the CI); required fields, the comment \
+                 and the conditions are then checked on the CI's \
                  values with the ones sent (422 WORKFLOW_CONDITION_FAILED, one detail each: `required`, \
                  `comment_required`, `condition`). The fields and the state field are written to the CI (a CI \
                  `update` audit row), the instance moves on (and completes on a terminal state), and the step is \
