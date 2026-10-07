@@ -1786,3 +1786,77 @@ async fn service_owners_and_memberships_set_by_someone_else_still_name_the_appro
     audit_ok(w).await;
     db.drop().await;
 }
+
+/// GH#708 edges (SHAA-2282): a requester who is a service owner (named by the
+/// administrator) is refused on their own request while another owner still
+/// decides, and an owner group set through a token the requester minted
+/// (GH#709) is not used either.
+#[tokio::test]
+async fn a_requester_who_owns_the_service_is_refused_and_a_lent_token_group_owner_is_dropped() {
+    let Some(db) = scratch::database("workflow_approvals_owner_self_group").await else { return };
+    let o = owners(&db).await;
+    let w = &o.w;
+    let bs = service_owner_step(&o).await;
+    let service = o.service(bs).await;
+    let name = w.ci_values(service).await["label"].as_str().unwrap().to_owned();
+    o.set_owners(&w.admin, service, &[o.req.1, o.pal.1]).await;
+
+    // req owns the service: four-eyes refuses them, pal still approves.
+    let (ci, instance) = o.ready().await;
+    o.add_member(&w.admin, service, ci).await;
+    assert_eq!(request(w, &o.req.0, instance, "approve", json!({})).await.0, 202);
+    let (status, v) = decide(w, &o.req.0, instance, "approve", None).await;
+    assert_eq!((status, reason(&v)), (403, refused("WORKFLOW_APPROVAL_SELF", "requester")), "{v}");
+    let v = o.view(instance).await;
+    assert_eq!(v["steps"][0]["droppedSources"], json!([]), "nothing set by req: {v}");
+    let (status, v) = decide(w, &o.pal.0, instance, "approve", None).await;
+    assert_eq!((status, v["instance"]["state"]["key"].as_str()), (200, Some("approved")), "{v}");
+
+    // req mints a token for ed and makes a group with pal in it the owner.
+    let (status, g) = w.call(&w.admin, "POST", "/api/v1/admin/groups", Some(json!({ "name": "Shop team" }))).await;
+    assert_eq!(status, 201, "{g}");
+    let group = id(&g);
+    let body = json!({ "version": g["version"], "userIds": [o.pal.1] });
+    let (status, v) = w.call(&w.admin, "PUT", &format!("/api/v1/admin/groups/{group}/members"), Some(body)).await;
+    assert_eq!(status, 200, "{v}");
+    let both = w.profile("Servers and services", &[(w.server, true), (bs, true)]).await;
+    sqlx::query("INSERT INTO user_permission_profiles (user_id, profile_id) VALUES ($1, $2)")
+        .bind(o.ed.1)
+        .bind(both)
+        .execute(&w.pool)
+        .await
+        .unwrap();
+    let (lent, _) = token(w, o.ed.1, both, Some(o.req.1)).await;
+    let path = format!("/api/v1/business-services/{service}");
+    let version = w.ok("GET", &path, json!(null)).await["version"].clone();
+    let body = json!({ "version": version, "technical": [{ "kind": "group", "id": group }], "business": [] });
+    let (status, v) = w.call(&lent, "PUT", &format!("{path}/owners"), Some(body)).await;
+    assert_eq!(status, 200, "{v}");
+
+    let (ci, instance) = o.ready().await;
+    o.add_member(&w.admin, service, ci).await;
+    assert_eq!(request(w, &o.req.0, instance, "approve", json!({})).await.0, 202);
+    let (status, v) = decide(w, &o.pal.0, instance, "approve", None).await;
+    assert_eq!((status, reason(&v)), (403, refused("FORBIDDEN", "not_eligible")), "{v}");
+    let v = o.view(instance).await;
+    let step = &v["steps"][0];
+    assert_eq!(
+        dropped_labels(step),
+        vec![(
+            "field_set_by_requester".to_owned(),
+            format!("technical owner group Shop team of business service {name}")
+        )],
+        "{v}"
+    );
+    assert_eq!(step["droppedSources"][0]["fieldLastChanged"]["tokenCreatedBy"], json!([o.req.1]), "{v}");
+    assert_eq!(step["eligibleCount"].as_i64(), Some(0), "{v}");
+
+    // req2 did not mint the token: the group names pal for their request.
+    let (ci, instance) = o.ready().await;
+    o.add_member(&w.admin, service, ci).await;
+    assert_eq!(request(w, &o.req2.0, instance, "approve", json!({})).await.0, 202);
+    let (status, v) = decide(w, &o.pal.0, instance, "approve", None).await;
+    assert_eq!((status, v["instance"]["state"]["key"].as_str()), (200, Some("approved")), "{v}");
+    audit_ok(w).await;
+    db.drop().await;
+}
