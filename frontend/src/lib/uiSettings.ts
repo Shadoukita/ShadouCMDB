@@ -231,7 +231,7 @@ export const PAGES: { page: UiPage; to: string; hiddenByDefault?: boolean }[] = 
   { page: "administration", to: "/admin" },
 ];
 const PAGE = new Map(PAGES.map((p) => [p.page, p]));
-/** Pages that sit under the "System" heading. */
+/** Pages that sit under the "Administration" heading; the others sit under "Workspace". */
 const SYSTEM_PAGES = new Set<UiPage>(["audit_log", "administration"]);
 
 export interface NavClass {
@@ -348,7 +348,7 @@ export function buildNav(
     if (e.type === "page" && e.page) {
       const p = PAGE.get(e.page);
       if (!p || !showPage(e.page)) continue;
-      push(SYSTEM_PAGES.has(e.page) ? t("nav.heading.system") : null, { id: `page:${e.page}`, label: e.label || pageLabel(e.page), to: p.to, page: e.page });
+      push(SYSTEM_PAGES.has(e.page) ? t("nav.heading.administration") : t("nav.heading.workspace"), { id: `page:${e.page}`, label: e.label || pageLabel(e.page), to: p.to, page: e.page });
     } else if (e.type === "class" && e.classKey) {
       const item = classItem(e.classKey, e.label);
       const area = item?.cls?.areaId ? areaById.get(item.cls.areaId) : undefined;

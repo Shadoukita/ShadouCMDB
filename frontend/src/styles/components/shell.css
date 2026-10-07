@@ -1,7 +1,8 @@
 /*
- * The application shell (design document §2.7 "Shell"): the dark nav that collapses to a 56 px icon
- * rail, the 48 px header with the global search, "New CI" and the user menu, and the breadcrumbs.
- * Below 820 px the nav is a drawer behind #nav-toggle (breakpoint also in App.vue).
+ * The application shell (design document §2.7 "Shell", restyled in §0 step 12b): the dark nav with its
+ * Workspace / Administration / Saved views sections and the user block at the bottom, collapsing to a
+ * 56 px icon rail; the header with the global search and "New CI"; the breadcrumbs. Below 820 px the nav
+ * is a drawer behind #nav-toggle and the user menu moves into the header (breakpoint also in App.vue).
  */
 .shell {
   display: grid;
@@ -80,13 +81,13 @@
   flex: none;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   border-radius: var(--radius-md);
   background: var(--c-accent);
   color: var(--c-sidebar);
-  font-size: var(--fs-h2);
-  font-weight: var(--fw-semibold);
+  font-size: 16px;
+  font-weight: var(--fw-bold);
   line-height: 1;
 }
 .bare-brand .brand-logo {
@@ -127,8 +128,8 @@
 }
 .nav-footer {
   flex: none;
-  padding: var(--space-2) 0;
-  border-top: 1px solid var(--c-sidebar-active);
+  padding: var(--space-1) 0 var(--space-2);
+  border-top: 1px solid var(--c-sidebar-border);
 }
 /* Group titles: the overline style (base.css), on the same left edge as the link text. */
 .shell-nav h2 {
@@ -291,7 +292,7 @@
   position: relative;
   flex: 1 1 auto;
   min-width: 150px;
-  max-width: 480px;
+  max-width: 560px;
 }
 .global-search input {
   width: 100%;
@@ -393,6 +394,85 @@ button.who[aria-expanded="true"] {
 .who-chevron {
   flex: none;
   color: var(--c-text-tertiary);
+}
+/* The user block at the bottom of the rail: initials, name over role; the panel opens upwards. */
+.user-menu-rail {
+  margin: var(--space-1) var(--space-2) 0;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--c-sidebar-border);
+}
+.user-menu-rail button.who {
+  flex: 1 1 auto;
+  gap: var(--space-3);
+  height: auto;
+  min-height: 44px;
+  padding: var(--space-1) var(--space-2);
+  color: var(--c-sidebar-text-strong);
+  text-align: start;
+}
+.user-menu-rail button.who:hover,
+.user-menu-rail button.who[aria-expanded="true"] {
+  background: var(--c-sidebar-hover);
+  border-color: transparent;
+}
+.user-menu-rail button.who:focus-visible {
+  outline: 2px solid var(--c-accent);
+  outline-offset: -2px;
+}
+.user-menu-rail .who-initials {
+  min-width: 32px;
+  height: 32px;
+  background: var(--c-sidebar-active);
+  font-size: var(--fs-sm);
+}
+.who-text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.3;
+}
+.user-menu-rail .who-name {
+  max-width: none;
+  font-size: var(--fs-md);
+}
+.who-role {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--c-sidebar-text-muted);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-regular);
+}
+.user-menu-rail .who-chevron {
+  color: var(--c-sidebar-text-muted);
+  transform: rotate(180deg);
+}
+.user-menu-rail .user-menu-panel,
+.user-menu-rail .user-menu-error {
+  top: auto;
+  right: auto;
+  bottom: calc(100% + var(--space-1));
+  left: 0;
+}
+/* Collapsed rail: the initials alone; the name stays the button's accessible name. */
+.nav-collapsed .user-menu-rail {
+  margin: var(--space-1) auto 0;
+}
+.nav-collapsed .user-menu-rail button.who {
+  justify-content: center;
+  width: 40px;
+  padding: var(--space-1) 0;
+}
+.nav-collapsed .user-menu-rail .who-chevron {
+  display: none;
+}
+.nav-collapsed .who-text {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 .user-menu-panel {
   position: absolute;
@@ -505,7 +585,7 @@ button.who[aria-expanded="true"] {
     padding: 0 var(--space-3);
   }
   .new-ci .btn-label,
-  .who-name {
+  .user-menu-header .who-name {
     position: absolute;
     width: 1px;
     height: 1px;

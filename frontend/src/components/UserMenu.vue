@@ -9,10 +9,13 @@ import ErrorAlert from "./ErrorAlert.vue";
 import Icon from "./Icon.vue";
 
 /**
- * The acting user in the header: initials and name on a button that opens a panel with My account, the
- * theme and density choices and "Sign out" (design document §2.7, audit S5). Below 960 px the name folds
- * away and only the initials show; the name stays the button's accessible name.
+ * The acting user: initials and name on a button that opens a panel with My account, the theme and density
+ * choices and "Sign out" (design document §2.7, audit S5). On desktop it is the user block at the bottom of
+ * the rail (§0, step 12b: name over role, the panel opens upwards; the collapsed rail shows the initials).
+ * Below 820 px it sits in the header, where below 960 px only the initials show; the name stays the
+ * button's accessible name in every placement.
  */
+const props = withDefaults(defineProps<{ placement?: "header" | "rail" }>(), { placement: "header" });
 const session = useSessionStore();
 const router = useRouter();
 const route = useRoute();
@@ -61,7 +64,7 @@ async function signOut() {
 </script>
 
 <template>
-  <div v-if="session.user" ref="root" class="user-menu" @keydown="onKeydown">
+  <div v-if="session.user" ref="root" class="user-menu" :class="`user-menu-${props.placement}`" @keydown="onKeydown">
     <button
       ref="toggle"
       type="button"
@@ -74,7 +77,11 @@ async function signOut() {
     >
       <span class="sr-only">{{ t("userMenu.signedInAs") }}</span>
       <span class="who-initials" aria-hidden="true">{{ initials }}</span>
-      <span class="who-name">{{ session.user.displayName }}</span>
+      <span v-if="props.placement === 'rail'" class="who-text">
+        <span class="who-name">{{ session.user.displayName }}</span>
+        <span class="who-role" aria-hidden="true">{{ session.user.isAdministrator ? t("userMenu.administrator") : t("userMenu.user") }}</span>
+      </span>
+      <span v-else class="who-name">{{ session.user.displayName }}</span>
       <Icon name="chevron-down" class="who-chevron" />
     </button>
     <div v-show="open" id="user-menu-panel" class="user-menu-panel">

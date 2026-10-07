@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { useQueries } from "@tanstack/vue-query";
+import { useQueries, useQuery } from "@tanstack/vue-query";
 import { computed, onBeforeUnmount, ref, watch, watchEffect } from "vue";
 import { RouterLink, useRoute, type RouteLocationNormalizedLoaded } from "vue-router";
 import { useAreas } from "../api/datamodel";
 import { ciCountQuery, useCiClasses } from "../api/queries";
+import { useSavedViews } from "../api/savedViews";
 import { useServiceSettings } from "../api/services";
-import { t } from "../i18n";
+import { currentLocale, formatNumber, t } from "../i18n";
 import { dataModelEmpty } from "../lib/dataModel";
+import { viewUrlQuery } from "../lib/savedViews";
 import type { UiPage } from "../api/uiSettings";
 import { useAppSettings, useNavPreviewStore } from "../lib/appSettings";
 import { viewableClasses } from "../lib/permissions";
@@ -101,14 +103,35 @@ const countFor = (item: NavLinkItem) => {
   const i = classItems.value.indexOf(item);
   return i >= 0 ? counts.value[i]?.data : undefined;
 };
+/** All CIs the user may view, compact ("12K") in the rail; the exact figure is its tooltip. Hidden from assistive
+ * technology, so the link keeps its name; the inventory page states the total. */
+const total = useQuery(ciCountQuery({}));
+const totalShort = computed(() =>
+  total.data.value === undefined ? "" : new Intl.NumberFormat(currentLocale(), { notation: "compact", maximumFractionDigits: 1 }).format(total.data.value),
+);
+
+/**
+ * The user's inventory views (their own, then the shared ones), each a link that applies the view the way the
+ * inventory's view menu does. Views that can no longer be applied stay out. Per-view counts wait for gap G4.
+ */
+const views = useSavedViews("inventory");
+const viewLinks = computed(() =>
+  (views.data.value?.data ?? []).flatMap((v) => {
+    const q = viewUrlQuery(v, "inventory");
+    if (!q) return [];
+    const params = new URLSearchParams(Object.entries(q).map(([k, val]) => [k, String(val)]));
+    return [{ id: v.id, name: v.name, shared: v.visibility === "shared", to: `/cis?${params}` }];
+  }),
+);
 
 function active(item: NavLinkItem): (r: RouteLocationNormalizedLoaded) => boolean {
-  if (item.cls) return (r) => r.path === "/cis" && r.query.classId === item.cls!.id;
+  // A saved view lights its own row in the rail, not its class's or the inventory's.
+  if (item.cls) return (r) => r.path === "/cis" && !r.query.view && r.query.classId === item.cls!.id;
   switch (item.page) {
     case "dashboard":
       return (r) => r.path === "/";
     case "inventory":
-      return (r) => r.path === "/cis" && !r.query.classId;
+      return (r) => r.path === "/cis" && !r.query.classId && !r.query.view;
     case "search":
       return (r) => r.path === "/search";
     case "audit_log":
@@ -147,6 +170,13 @@ function active(item: NavLinkItem): (r: RouteLocationNormalizedLoaded) => boolea
         <NavLink :to="item.to" :active="active(item)" :title="collapsed ? item.label : undefined">
           <Icon :name="PAGE_ICONS[item.page]" :size="collapsed ? 20 : 16" />
           <span class="nav-label">{{ item.label }}</span>
+          <span
+            v-if="item.page === 'inventory' && !collapsed && total.data.value !== undefined"
+            class="nav-count"
+            aria-hidden="true"
+            :title="t('nav.inventoryCount', { n: formatNumber(total.data.value) })"
+            >{{ totalShort }}</span
+          >
         </NavLink>
         <AdminNav v-if="item.page === 'administration' && adminSub" placement="rail" :rail-items="items.length" />
         <!-- Bulk import sits under Inventory, only while it is switched on and the user holds cis.import. -->
@@ -183,6 +213,19 @@ function active(item: NavLinkItem): (r: RouteLocationNormalizedLoaded) => boolea
         <span class="nav-count">{{ countFor(item) ?? "" }}</span>
       </NavLink>
     </template>
+  </template>
+  <template v-if="!collapsed && viewLinks.length > 0">
+    <h2>{{ t("nav.heading.savedViews") }}</h2>
+    <NavLink
+      v-for="v in viewLinks"
+      :key="v.id"
+      :to="v.to"
+      :active="(r) => r.path === '/cis' && r.query.view === v.id"
+      :title="v.name"
+    >
+      <Icon :name="v.shared ? 'users' : 'user'" :size="16" />
+      <span class="nav-label" dir="auto">{{ v.name }}</span>
+    </NavLink>
   </template>
   <template v-if="!collapsed">
     <p v-if="classes.isError.value" class="nav-note">{{ t("nav.classesUnavailable") }}</p>

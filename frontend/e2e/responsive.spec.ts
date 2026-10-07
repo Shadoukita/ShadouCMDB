@@ -75,16 +75,19 @@ test("900 px: sidebar stays, header still fits", async ({ page }) => {
   await expectHeaderFits(page);
 });
 
-test("desktop: the user menu holds the badge, theme, density and sign-out; the nav collapses to a rail", async ({ page }) => {
+test("desktop: the user block at the bottom of the rail holds the badge, theme, density and sign-out; the nav collapses to a rail", async ({ page }) => {
   await page.goto("/cis");
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
   await expectHeaderFits(page);
-  const header = page.locator(".shell-header");
-  const who = page.getByRole("button", { name: /^Signed in as \S/ });
+  // Step 12b: the user block sits at the bottom of the rail, not in the header.
+  const rail = page.getByRole("navigation", { name: "Main" });
+  const who = rail.getByRole("button", { name: /^Signed in as \S/ });
+  await expect(page.locator(".shell-header .user-menu")).toHaveCount(0);
   await expect(who.locator(".who-name")).toBeVisible();
+  await expect(who.locator(".who-role")).toHaveText("Administrator");
   await expect(page.getByLabel("Theme")).toBeHidden();
   await who.click();
-  await expect(header.getByText("Administrator", { exact: true })).toBeVisible();
+  await expect(page.locator(".user-menu-panel").getByText("Administrator", { exact: true })).toBeVisible();
   await expect(page.getByLabel("Theme")).toBeVisible();
   await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
   await snap(page, "responsive-desktop-user-menu");
@@ -109,6 +112,8 @@ test("desktop: the user menu holds the badge, theme, density and sign-out; the n
   await expect(inventory).toBeVisible();
   await expect(inventory).toHaveAttribute("title", "All configuration items");
   expect((await nav.boundingBox())!.width).toBeLessThanOrEqual(56);
+  // The collapsed user block shows the initials and keeps the user's name as its accessible name.
+  await expect(nav.getByRole("button", { name: /^Signed in as \S/ })).toBeVisible();
   await snap(page, "responsive-desktop-rail");
   await page.reload();
   await expect(nav.getByRole("button", { name: "Expand sidebar" })).toHaveAttribute("aria-expanded", "false");
