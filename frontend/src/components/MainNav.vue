@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useQueries } from "@tanstack/vue-query";
-import { computed, ref, watch } from "vue";
-import { RouterLink, type RouteLocationNormalizedLoaded } from "vue-router";
+import { computed, onBeforeUnmount, ref, watch, watchEffect } from "vue";
+import { RouterLink, useRoute, type RouteLocationNormalizedLoaded } from "vue-router";
 import { useAreas } from "../api/datamodel";
 import { ciCountQuery, useCiClasses } from "../api/queries";
 import { useServiceSettings } from "../api/services";
@@ -12,6 +12,8 @@ import { useAppSettings, useNavPreviewStore } from "../lib/appSettings";
 import { viewableClasses } from "../lib/permissions";
 import { useImportAccess } from "../lib/useImportAccess";
 import { buildNav, type NavLinkItem } from "../lib/uiSettings";
+import AdminNav from "../pages/admin/AdminNav.vue";
+import { adminNavInRail } from "../pages/admin/adminNavHost";
 import { visibleSections } from "../pages/admin/sections";
 import { useSessionStore } from "../stores/session";
 import ClassBadge from "./ClassBadge.vue";
@@ -20,7 +22,7 @@ import NavLink from "./NavLink.vue";
 import type { IconName } from "../icons/lucide";
 
 /** Collapsed to the 56 px icon rail (desktop only): pages show as icons with a tooltip, classes are hidden. */
-defineProps<{ collapsed?: boolean }>();
+const props = defineProps<{ collapsed?: boolean }>();
 
 /**
  * The main menu. Its order, names, sections and hidden entries come from
@@ -81,6 +83,16 @@ const PAGE_ICONS: Record<UiPage, IconName> = {
 };
 
 const items = computed(() => groups.value.flatMap((g) => g.items));
+/**
+ * In Administration the expanded rail lists its sections under the Administration entry (design §3, PR 8),
+ * so the page needs no second navigation column and the sections follow the rail into the drawer.
+ */
+const route = useRoute();
+const adminSub = computed(
+  () => !props.collapsed && route.path.startsWith("/admin") && hasAdmin.value && items.value.some((i) => i.page === "administration"),
+);
+watchEffect(() => (adminNavInRail.value = adminSub.value));
+onBeforeUnmount(() => (adminNavInRail.value = false));
 const auditShown = computed(() => items.value.some((i) => i.page === "audit_log"));
 
 const classItems = computed(() => items.value.filter((i) => i.cls && !i.cls.isAbstract));
@@ -136,6 +148,7 @@ function active(item: NavLinkItem): (r: RouteLocationNormalizedLoaded) => boolea
           <Icon :name="PAGE_ICONS[item.page]" :size="collapsed ? 20 : 16" />
           <span class="nav-label">{{ item.label }}</span>
         </NavLink>
+        <AdminNav v-if="item.page === 'administration' && adminSub" placement="rail" :rail-items="items.length" />
         <!-- Bulk import sits under Inventory, only while it is switched on and the user holds cis.import. -->
         <NavLink
           v-if="item.page === 'inventory' && importAccess.available.value"

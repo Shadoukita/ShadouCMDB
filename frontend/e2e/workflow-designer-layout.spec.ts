@@ -40,8 +40,6 @@ test("at 1280 px the diagram takes the full width and its labels stay clear of t
 
   const canvas = (await page.locator(".wf-canvas").boundingBox())!;
   expect(canvas.width).toBeGreaterThan(700);
-  // Some states lie beyond the panel: the canvas says it scrolls.
-  await expect(page.getByTestId("wf-canvas-hint")).toBeVisible();
 
   const boxes = await page.locator(".wf-node-box").evaluateAll((els) => els.map((e) => e.getBoundingClientRect().toJSON() as DOMRect));
   const labels = await page.locator(".wf-edge-label").evaluateAll((els) => els.map((e) => ({ text: e.textContent!.trim(), r: e.getBoundingClientRect().toJSON() as DOMRect })));
@@ -57,4 +55,13 @@ test("at 1280 px the diagram takes the full width and its labels stay clear of t
     expect(await table.evaluate((t) => t.scrollWidth <= t.parentElement!.clientWidth)).toBe(true);
   }
   await expect(page.locator("td.wf-name-cell").filter({ hasText: "Commission" }).first()).toHaveText(/^\s*Commission\s+commission/);
+
+  // The hint follows the panel, not the window: with the sections in the rail the arranged diagram fits at
+  // 1280 px, and once a narrower window puts states beyond the panel, the canvas says it scrolls.
+  const scroller = page.locator(".wf-canvas");
+  const overflows = () => scroller.evaluate((c) => c.scrollWidth > c.clientWidth + 1 || c.scrollHeight > c.clientHeight + 1);
+  await expect(page.getByTestId("wf-canvas-hint")).toHaveCount((await overflows()) ? 1 : 0);
+  await page.setViewportSize({ width: 1024, height: 800 });
+  await expect.poll(overflows).toBe(true);
+  await expect(page.getByTestId("wf-canvas-hint")).toBeVisible();
 });

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { adminCrumbs } from "./sections";
 import { computed, ref, watch } from "vue";
 import { RouterLink } from "vue-router";
 import { useImportSettings, useUpdateImportSettings } from "../../api/imports";
@@ -40,7 +41,7 @@ async function save() {
 </script>
 
 <template>
-  <Breadcrumbs :items="[{ label: 'Administration', to: '/admin' }, { label: 'System' }, { label: 'Import' }]" />
+  <Breadcrumbs :items="adminCrumbs('import')" />
   <div class="page-header">
     <div class="title"><h1>Import</h1></div>
   </div>

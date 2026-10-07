@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { adminCrumbs } from "./sections";
 import { computed, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import { useCreateUser, useUpdateUser, useUser, type User, type UserUpdateBody } from "../../api/admin";
@@ -138,11 +139,7 @@ async function submit() {
   }
 }
 
-const crumbs = computed(() => [
-  { label: "Administration", to: "/admin" },
-  { label: "Users", to: "/admin/users" },
-  { label: isNew.value ? "New" : (user.data.value?.username ?? "…") },
-]);
+const crumbs = computed(() => adminCrumbs("users", { label: isNew.value ? t("admin.crumb.new") : (user.data.value?.username ?? "…") }));
 const notFound = computed(() => {
   const e = user.error.value;
   return e instanceof ApiError && (e.code === "NOT_FOUND" || (e.code === "VALIDATION_ERROR" && e.details.some((d) => d.in === "params")));

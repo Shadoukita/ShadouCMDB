@@ -1,34 +1,44 @@
 <script setup lang="ts">
+import { adminCrumbs } from "./sections";
 import { computed, ref, watch } from "vue";
 import { RouterLink } from "vue-router";
-import { useAllProfiles, useUserList, type UserListQuery } from "../../api/admin";
+import { useAllProfiles, useUserList, type UserListQuery, type User } from "../../api/admin";
 import Breadcrumbs from "../../components/Breadcrumbs.vue";
 import EmptyState from "../../components/EmptyState.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
-import LoadingState from "../../components/LoadingState.vue";
+import Icon from "../../components/Icon.vue";
+import KeyboardHints from "../../components/KeyboardHints.vue";
 import PaginationBar from "../../components/PaginationBar.vue";
+import RowMenu from "../../components/RowMenu.vue";
+import SkeletonRows from "../../components/SkeletonRows.vue";
 import { useDebounced, useDocumentTitle } from "../../lib/composables";
-import { formatRelative } from "../../lib/format";
+import { formatDateTime, formatRelative } from "../../lib/format";
+import { onRowKeydown } from "../../lib/rowKeyboard";
 import { useListQuery } from "../../lib/listQuery";
 import { parseSignInStatus, SIGN_IN_STATUSES, signInStatusLabel } from "../../lib/people";
-import { t } from "../../i18n";
+import { formatNumber, t } from "../../i18n";
 import SortIcon from "../../components/SortIcon.vue";
+import { useSessionStore } from "../../stores/session";
 
-/** Administration › Users. Search, filters, sort and page live in the URL; the API filters and pages. */
-useDocumentTitle("Users");
+/**
+ * Administration › Users, an explorer list (design §2.7; audit A4–A6): search, filters, sort and page live in
+ * the URL and the API filters and pages; a row menu and keyboard rows (↑/↓, Enter) as on the inventory.
+ */
+useDocumentTitle(() => t("admin.section.users"));
 type SortField = NonNullable<UserListQuery["sort"]>;
+const session = useSessionStore();
 
 const COLUMNS: { key: string; label: string; sort?: string }[] = [
-  { key: "username", label: "Username", sort: "username" },
-  { key: "displayName", label: "Display name", sort: "displayName" },
-  { key: "email", label: "Email" },
+  { key: "username", label: t("admin.users.col.username"), sort: "username" },
+  { key: "displayName", label: t("admin.users.col.displayName"), sort: "displayName" },
+  { key: "email", label: t("admin.users.col.email") },
   { key: "person", label: t("people.users.col.person") },
-  { key: "profiles", label: "Permission profiles" },
-  { key: "status", label: "Status" },
-  { key: "signIn", label: "Signs in with" },
-  { key: "mfa", label: "Two-factor" },
-  { key: "lastLogin", label: "Last sign-in", sort: "lastLoginAt" },
-  { key: "created", label: "Created", sort: "createdAt" },
+  { key: "profiles", label: t("admin.section.profiles") },
+  { key: "status", label: t("admin.col.status") },
+  { key: "signIn", label: t("admin.users.col.signIn") },
+  { key: "mfa", label: t("admin.users.col.mfa") },
+  { key: "lastLogin", label: t("admin.users.col.lastLogin"), sort: "lastLoginAt" },
+  { key: "created", label: t("common.created"), sort: "createdAt" },
 ];
 
 const lq = useListQuery({ sort: "username" });
@@ -43,7 +53,6 @@ const query = computed<UserListQuery>(() => ({
   offset: offset.value,
 }));
 const list = useUserList(query);
-// Set by the user page after a delete.
 const profiles = useAllProfiles();
 
 const qText = ref(get("q"));
@@ -58,6 +67,13 @@ const filtered = computed(() => !!(get("q") || get("isActive") || get("profileId
 const total = computed(() => list.data.value?.page.total ?? 0);
 const rows = computed(() => list.data.value?.data ?? []);
 
+const pastEnd = computed(() => !!list.data.value && total.value > 0 && rows.value.length === 0);
+const rowMenu = (u: User) => [
+  { label: t("inventory.row.open"), to: `/admin/users/${u.id}` },
+  { label: t("admin.users.row.tokens"), to: { path: "/admin/api-tokens", query: { userId: u.id } } },
+  ...(session.can("audit.view") ? [{ label: t("admin.users.row.audit"), to: { path: "/admin/audit", query: { actorId: u.id } } }] : []),
+];
+
 function clearFilters() {
   qText.value = "";
   update({ q: undefined, isActive: undefined, profileId: undefined, signInStatus: undefined });
@@ -65,37 +81,40 @@ function clearFilters() {
 </script>
 
 <template>
-  <Breadcrumbs :items="[{ label: 'Administration', to: '/admin' }, { label: 'Users' }]" />
+  <Breadcrumbs :items="adminCrumbs('users')" />
   <div class="page-header">
     <div class="title">
-      <h1>Users</h1>
-      <span v-if="list.data.value" class="muted">{{ total.toLocaleString() }} total</span>
-      <span v-if="list.isFetching.value && !list.isLoading.value" class="spinner" aria-label="Refreshing" />
+      <h1>{{ t("admin.section.users") }}</h1>
+      <span v-if="list.data.value" class="muted count">{{ t("common.total", { n: formatNumber(total) }) }}</span>
+      <span v-if="list.isFetching.value && !list.isPending.value" class="spinner" :aria-label="t('common.refreshing')" />
     </div>
     <div class="actions">
-      <RouterLink class="btn btn-primary" to="/admin/users/new">+ New user</RouterLink>
+      <RouterLink class="btn btn-primary" to="/admin/users/new"><Icon name="plus" />{{ t("admin.users.new") }}</RouterLink>
     </div>
   </div>
+  <p class="page-intro">{{ t("admin.users.intro") }}</p>
 
-
-  <section class="panel" aria-label="Users">
+  <section class="panel explorer" :aria-label="t('admin.section.users')">
     <form class="toolbar" role="search" @submit.prevent>
       <div class="field search">
-        <label for="u-q">Search</label>
-        <input id="u-q" v-model="qText" type="search" placeholder="Username, name, email…" />
+        <label for="u-q">{{ t("admin.search") }}</label>
+        <div class="input-icon">
+          <Icon name="search" />
+          <input id="u-q" v-model="qText" type="search" :placeholder="t('admin.users.searchPlaceholder')" />
+        </div>
       </div>
       <div class="field">
-        <label for="u-status">Status</label>
+        <label for="u-status">{{ t("admin.col.status") }}</label>
         <select id="u-status" :value="get('isActive')" @change="update({ isActive: ($event.target as HTMLSelectElement).value || undefined })">
-          <option value="">Any status</option>
-          <option value="true">Active</option>
-          <option value="false">Disabled</option>
+          <option value="">{{ t("admin.filter.anyStatus") }}</option>
+          <option value="true">{{ t("common.active") }}</option>
+          <option value="false">{{ t("common.disabled") }}</option>
         </select>
       </div>
       <div class="field">
-        <label for="u-profile">Profile</label>
+        <label for="u-profile">{{ t("admin.users.filter.profile") }}</label>
         <select id="u-profile" :value="get('profileId')" @change="update({ profileId: ($event.target as HTMLSelectElement).value || undefined })">
-          <option value="">Any profile</option>
+          <option value="">{{ t("admin.users.filter.anyProfile") }}</option>
           <option v-for="p in profiles.data.value?.data ?? []" :key="p.id" :value="p.id">{{ p.name }}</option>
         </select>
       </div>
@@ -110,23 +129,28 @@ function clearFilters() {
           <option v-for="s in SIGN_IN_STATUSES" :key="s" :value="s">{{ signInStatusLabel(s) }}</option>
         </select>
       </div>
-      <button v-if="filtered" type="button" class="btn" @click="clearFilters">Clear filters</button>
+      <button v-if="filtered" type="button" class="btn btn-ghost" @click="clearFilters"><Icon name="x" />{{ t("admin.filter.clear") }}</button>
     </form>
 
     <div v-if="list.isError.value" class="panel-body">
       <ErrorAlert :error="list.error.value" :on-retry="() => list.refetch()" />
     </div>
-    <LoadingState v-if="list.isLoading.value" label="Loading users…" />
-    <EmptyState v-if="list.data.value && total === 0" :title="filtered ? 'No users match these filters' : 'No users yet'">
-      {{ filtered ? "Adjust or clear the filters above." : "Create a user and give them a permission profile." }}
+    <SkeletonRows v-else-if="list.isPending.value" :label="t('admin.users.loading')" />
+    <EmptyState v-else-if="total === 0 && filtered" icon="search" :title="t('admin.users.noMatch')">
+      {{ t("admin.filter.noMatchBody") }}
+      <template #actions><button type="button" class="btn" @click="clearFilters">{{ t("admin.filter.clear") }}</button></template>
     </EmptyState>
-    <EmptyState v-if="list.data.value && total > 0 && rows.length === 0" title="This page is past the end of the results">
-      <template #actions><button class="btn" @click="update({})">Go to first page</button></template>
+    <EmptyState v-else-if="total === 0" icon="user" :title="t('admin.users.empty.title')">
+      {{ t("admin.users.empty.body") }}
+      <template #actions><RouterLink class="btn btn-primary" to="/admin/users/new"><Icon name="plus" />{{ t("admin.users.new") }}</RouterLink></template>
+    </EmptyState>
+    <EmptyState v-else-if="pastEnd" :title="t('common.pastEnd')">
+      <template #actions><button type="button" class="btn" @click="update({})">{{ t("common.firstPage") }}</button></template>
     </EmptyState>
 
-    <template v-if="rows.length > 0">
-      <div class="table-wrap">
-        <table :class="['data', { loading: list.isPlaceholderData.value }]">
+    <template v-if="rows.length > 0 && !list.isError.value">
+      <div class="table-wrap table-scroll">
+        <table :class="['data', { loading: list.isPlaceholderData.value }]" aria-describedby="users-keys">
           <thead>
             <tr>
               <th v-for="c in COLUMNS" :key="c.key" scope="col" :aria-sort="c.sort ? lq.ariaSort(c.sort) : undefined">
@@ -135,12 +159,13 @@ function clearFilters() {
                 </button>
                 <template v-else>{{ c.label }}</template>
               </th>
+              <th scope="col" class="row-actions"><span class="sr-only">{{ t("inventory.actions") }}</span></th>
             </tr>
           </thead>
-          <tbody>
-            <tr v-for="u in rows" :key="u.id" :class="{ disabled: !u.isActive }">
-              <td><RouterLink :to="`/admin/users/${u.id}`">{{ u.username }}</RouterLink></td>
-              <td>{{ u.displayName }}</td>
+          <tbody @keydown="onRowKeydown($event)">
+            <tr v-for="u in rows" :key="u.id" :data-id="u.id" :class="{ disabled: !u.isActive }">
+              <td class="mono"><RouterLink :to="`/admin/users/${u.id}`">{{ u.username }}</RouterLink></td>
+              <td dir="auto">{{ u.displayName }}</td>
               <td>
                 <template v-if="u.email">{{ u.email }}</template>
                 <span v-else class="badge warn" :title="t('people.users.emailRequiredTitle')" data-testid="email-required">
@@ -155,32 +180,37 @@ function clearFilters() {
                 <span v-else class="muted">{{ t("people.users.noPerson") }}</span>
               </td>
               <td :title="u.profiles.map((p) => p.name).join(', ')">
-                <span v-if="u.profiles.length === 0" class="muted">None — cannot see any CI</span>
+                <span v-if="u.profiles.length === 0" class="muted">{{ t("admin.users.noProfiles") }}</span>
                 <template v-for="(p, i) in u.profiles" :key="p.id"><template v-if="i > 0">, </template>{{ p.name }}</template>
               </td>
               <td>
-                <span v-if="u.isActive" class="badge ok">Active</span>
-                <span v-else class="badge off">Disabled</span>
+                <span v-if="u.isActive" class="badge ok">{{ t("common.active") }}</span>
+                <span v-else class="badge off">{{ t("common.disabled") }}</span>
               </td>
               <td>
-                <span v-if="u.identityProvider" class="badge" :title="`Account of ${u.identityProvider.name}: name, e-mail and profiles come from it`">
+                <span v-if="u.identityProvider" class="badge" :title="t('admin.users.idpTitle', { name: u.identityProvider.name })">
                   {{ u.identityProvider.name }}
                 </span>
-                <span v-else class="muted">Local password</span>
+                <span v-else class="muted">{{ t("admin.users.localPassword") }}</span>
               </td>
               <td>
-                <span v-if="u.mfaEnabled" class="badge ok">On</span>
-                <span v-else class="muted">Off</span>
+                <span v-if="u.mfaEnabled" class="badge ok">{{ t("admin.users.mfaOn") }}</span>
+                <span v-else class="muted">{{ t("admin.users.mfaOff") }}</span>
               </td>
-              <td :title="u.lastLoginAt ?? undefined">
-                <template v-if="u.lastLoginAt">{{ formatRelative(u.lastLoginAt) }}</template><span v-else class="muted">Never</span>
+              <td>
+                <time v-if="u.lastLoginAt" :datetime="u.lastLoginAt" :title="formatDateTime(u.lastLoginAt)">{{ formatRelative(u.lastLoginAt) }}</time>
+                <span v-else class="muted">{{ t("admin.never") }}</span>
               </td>
-              <td :title="u.createdAt">{{ formatRelative(u.createdAt) }}</td>
+              <td><time :datetime="u.createdAt" :title="formatDateTime(u.createdAt)">{{ formatRelative(u.createdAt) }}</time></td>
+              <td class="row-actions">
+                <RowMenu :label="t('inventory.rowMenu', { name: u.username })" :items="rowMenu(u)" />
+              </td>
             </tr>
           </tbody>
         </table>
       </div>
       <PaginationBar :total="total" :limit="limit" :offset="offset" @change="lq.onPage" />
+      <KeyboardHints id="users-keys" />
     </template>
   </section>
 </template>

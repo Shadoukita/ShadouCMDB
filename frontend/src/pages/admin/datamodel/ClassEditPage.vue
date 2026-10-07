@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from "../../../i18n";
+import { adminCrumbs } from "../sections";
 import { computed, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import { ApiError } from "../../../api/client";
@@ -228,11 +230,7 @@ async function purgeClass() {
   } else if (outcome.status === "refused") error.value = outcome.error;
 }
 
-const crumbs = computed(() => [
-  { label: "Administration", to: "/admin" },
-  { label: "CI classes", to: "/admin/classes" },
-  { label: isNew.value ? "New" : (cls.data.value?.name ?? "…") },
-]);
+const crumbs = computed(() => adminCrumbs("classes", { label: isNew.value ? t("admin.crumb.new") : (cls.data.value?.name ?? "…") }));
 const notFound = computed(() => {
   const e = cls.error.value;
   return e instanceof ApiError && (e.code === "NOT_FOUND" || (e.code === "VALIDATION_ERROR" && e.details.some((d) => d.in === "params")));

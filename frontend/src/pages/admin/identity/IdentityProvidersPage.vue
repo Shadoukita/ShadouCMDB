@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { adminCrumbs } from "../sections";
 import { computed } from "vue";
 import { RouterLink } from "vue-router";
 import { KIND_LABELS, useIdentityProviders, type IdentityProvider } from "../../../api/identityProviders";
@@ -28,7 +29,7 @@ function warning(p: IdentityProvider): string | null {
 </script>
 
 <template>
-  <Breadcrumbs :items="[{ label: 'Administration', to: '/admin' }, { label: 'Identity providers' }]" />
+  <Breadcrumbs :items="adminCrumbs('identity-providers')" />
   <div class="page-header">
     <div class="title">
       <h1>Identity providers</h1>

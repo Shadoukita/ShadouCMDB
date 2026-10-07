@@ -1,0 +1,108 @@
+/*
+ * Administration (SHAA-1670 design document, rollout 8; audit A1, A2, A4–A7, S7). The section navigation
+ * sits in the expanded rail under "Administration"; beside the page only while the rail is collapsed to
+ * icons. List pages use the explorer pattern (explorer.css); only what that does not cover is here.
+ */
+
+/* ---------- Layout ---------- */
+.admin-body {
+  min-width: 0;
+}
+/* The in-page navigation column, only while the rail does not show the sections. */
+.admin.admin-with-nav {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+
+/* ---------- Section navigation ---------- */
+.admin-nav-group {
+  display: flex;
+  flex-direction: column;
+}
+.admin-nav-label {
+  display: block;
+}
+.admin-nav a {
+  text-decoration: none;
+}
+
+/* In the rail: indented under "Administration", a guide line on the left, the rail's own link style. */
+.admin-nav-rail {
+  margin: 0 var(--space-2) var(--space-2) calc(var(--space-2) + 18px);
+  border-left: 1px solid var(--c-sidebar-active);
+}
+.admin-nav-rail .admin-nav-label {
+  padding: var(--space-3) var(--space-3) var(--space-1);
+  color: var(--c-sidebar-text-muted);
+}
+.shell-nav .admin-nav-rail a {
+  min-height: 28px;
+  margin: 1px 0 1px var(--space-1);
+  font-size: var(--fs-md);
+}
+
+/* Beside the page: the same list on the surface, the record table's selected style for the current section. */
+.admin-nav-page {
+  position: sticky;
+  top: 0;
+  padding: var(--space-2) 0;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+}
+.admin-nav-page .admin-nav-label {
+  padding: var(--space-3) var(--space-4) var(--space-1);
+  color: var(--c-text-tertiary);
+}
+.admin-nav-page a {
+  display: block;
+  padding: var(--space-1) var(--space-4);
+  color: var(--c-text);
+}
+.admin-nav-page a:hover {
+  background: var(--c-row-hover);
+}
+.admin-nav-page a.active {
+  background: var(--c-row-selected);
+  box-shadow: inset 2px 0 0 var(--c-primary);
+  font-weight: var(--fw-semibold);
+}
+.admin-nav-page a:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: -2px;
+}
+
+/* ---------- Denied state ---------- */
+.denied-permissions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+/* ---------- Lists ---------- */
+.admin-body .page-intro {
+  color: var(--c-text-secondary);
+}
+/* A name with its badges (Built-in, Owner disabled): one line, the badges after the name without a text space. */
+.name-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+}
+/* The source chips sit in the toolbar at the control height, like the inputs beside them. */
+.audit-stream .toolbar .event-sources {
+  min-height: var(--control-h);
+}
+/* Changed fields: the keys as mono chips that wrap inside the cell. */
+.audit-stream td.audit-fields {
+  white-space: normal;
+  min-width: 160px;
+}
+.audit-stream td.audit-fields code + code {
+  margin-left: var(--space-1);
+}

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { adminCrumbs } from "../sections";
 import { computed, ref } from "vue";
 import { RouterLink } from "vue-router";
 import { useCreateLookupList, useLookupListValues, useLookupLists, usePatch, type LookupList } from "../../../api/datamodel";
@@ -145,7 +146,7 @@ const valuesEmptyHint = computed(() => {
 </script>
 
 <template>
-  <Breadcrumbs :items="[{ label: 'Administration', to: '/admin' }, { label: 'Data model' }, { label: 'Dropdowns' }]" />
+  <Breadcrumbs :items="adminCrumbs('dropdowns')" />
   <div class="page-header">
     <div class="title">
       <h1>Dropdowns</h1>

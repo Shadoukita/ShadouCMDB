@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { adminCrumbs } from "../sections";
 import { computed, nextTick } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import { ApiError } from "../../../api/client";
@@ -53,11 +54,7 @@ async function onTabKey(e: KeyboardEvent) {
   document.getElementById(`wf-tab-${current.value}`)?.focus();
 }
 
-const crumbs = computed(() => [
-  { label: "Administration", to: "/admin" },
-  { label: "Workflows", to: "/admin/workflows" },
-  { label: isNew.value ? "New workflow" : (wf.data.value?.name ?? "…") },
-]);
+const crumbs = computed(() => adminCrumbs("workflows", { label: isNew.value ? "New workflow" : (wf.data.value?.name ?? "…") }));
 const notFound = computed(() => {
   const e = wf.error.value;
   return e instanceof ApiError && (e.code === "NOT_FOUND" || (e.code === "VALIDATION_ERROR" && e.details.some((d) => d.in === "params")));

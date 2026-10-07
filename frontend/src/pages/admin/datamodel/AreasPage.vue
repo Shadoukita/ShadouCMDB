@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { adminCrumbs } from "../sections";
 import { computed, ref } from "vue";
 import { RouterLink } from "vue-router";
 import { useAreas, usePatch, useRemove, useReorder, type Area } from "../../../api/datamodel";
@@ -141,7 +142,7 @@ function openEdit(a: Area) {
 </script>
 
 <template>
-  <Breadcrumbs :items="[{ label: 'Administration', to: '/admin' }, { label: 'Data model' }, { label: 'Areas' }]" />
+  <Breadcrumbs :items="adminCrumbs('areas')" />
   <div class="page-header">
     <div class="title">
       <h1>Areas</h1>

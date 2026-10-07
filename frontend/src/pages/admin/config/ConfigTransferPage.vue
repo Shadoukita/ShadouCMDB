@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { adminCrumbs } from "../sections";
 import { computed, ref } from "vue";
 import { ApiError } from "../../../api/client";
 import { configApi, useImportConfig, type ImportResult } from "../../../api/uiSettings";
@@ -132,7 +133,7 @@ const sectionName = (s: string) => SECTION_NAMES[s] ?? s;
 </script>
 
 <template>
-  <Breadcrumbs :items="[{ label: 'Administration', to: '/admin' }, { label: 'System' }, { label: 'Export / import' }]" />
+  <Breadcrumbs :items="adminCrumbs('config')" />
   <div class="page-header">
     <div class="title"><h1>Export / import</h1></div>
   </div>

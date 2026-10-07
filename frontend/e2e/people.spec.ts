@@ -148,7 +148,7 @@ test("the Users page links each account's Person and filters by sign-in state in
 
   await page.getByLabel("Sign-in state").selectOption("ready");
   await expect(row).toBeVisible();
-  await page.getByRole("button", { name: "Clear filters" }).click();
+  await page.getByRole("button", { name: "Clear filters" }).first().click();
   await expect(page).not.toHaveURL(/signInStatus=/);
   await snap(page, "people-04-users-page");
 });

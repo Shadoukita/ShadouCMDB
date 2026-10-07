@@ -1,4 +1,5 @@
 import type { EffectivePermissions, GlobalPermission } from "../api/admin";
+import { t } from "../i18n/index";
 
 /**
  * Client-side reading of GET /auth/me → permissions, used to hide or disable
@@ -7,25 +8,19 @@ import type { EffectivePermissions, GlobalPermission } from "../api/admin";
 export type ClassRight = "view" | "create" | "edit" | "delete";
 
 /** Global permissions with operator-facing wording. Order is the order of the profile editor. */
-export const GLOBAL_PERMISSIONS: { key: GlobalPermission; label: string; hint: string }[] = [
-  { key: "users.manage", label: "Manage users", hint: "Create, edit, disable and delete users; reset passwords; assign profiles" },
-  { key: "profiles.manage", label: "Manage permission profiles", hint: "Create, edit, clone and delete permission profiles" },
-  { key: "datamodel.manage", label: "Manage the data model", hint: "CI classes, attributes, relationship types and rules, lookup lists" },
-  { key: "customization.manage", label: "Manage customization", hint: "Branding, navigation, dashboards and layouts" },
-  { key: "config.export_import", label: "Export and import configuration", hint: "Export or import the whole configuration" },
-  { key: "audit.view", label: "View the audit log", hint: "Read the change history of every record" },
-  {
-    key: "cis.import",
-    label: "Bulk import",
-    hint: "Import configuration items from CSV and Excel files (still limited by the class rights)",
-  },
-  { key: "views.share", label: "Share views", hint: "Create, edit and delete views shared with all users" },
-  {
-    key: "workflows.manage",
-    label: "Manage workflows",
-    hint: "Design, publish and retire workflows, decide who may run their transitions, and migrate or force instances",
-  },
-];
+export const GLOBAL_PERMISSIONS: { key: GlobalPermission; label: string; hint: string }[] = (
+  [
+    "users.manage",
+    "profiles.manage",
+    "datamodel.manage",
+    "customization.manage",
+    "config.export_import",
+    "audit.view",
+    "cis.import",
+    "views.share",
+    "workflows.manage",
+  ] as const
+).map((key) => ({ key, label: t(`permission.${key}`), hint: t(`permission.${key}.hint`) }));
 
 export const CLASS_RIGHTS: ClassRight[] = ["view", "create", "edit", "delete"];
 

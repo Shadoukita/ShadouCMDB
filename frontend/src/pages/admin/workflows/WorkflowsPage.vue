@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { adminCrumbs } from "../sections";
 import { computed, ref, watch } from "vue";
 import { RouterLink } from "vue-router";
 import { useCiClasses } from "../../../api/queries";
@@ -68,7 +69,7 @@ function clearFilters() {
 </script>
 
 <template>
-  <Breadcrumbs :items="[{ label: 'Administration', to: '/admin' }, { label: 'Workflows' }]" />
+  <Breadcrumbs :items="adminCrumbs('workflows')" />
   <div class="page-header">
     <div class="title">
       <h1>Workflows</h1>
