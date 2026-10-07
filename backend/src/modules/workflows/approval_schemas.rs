@@ -10,7 +10,9 @@ use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use super::runtime_schemas::{MAX_COMMENT, WorkflowInstance};
-use super::schemas::{WorkflowApproverRole, WorkflowApproverSource};
+use super::schemas::{
+    WorkflowApprovalDroppedSource, WorkflowApproverRole, WorkflowApproverSource, WorkflowFieldChange,
+};
 use crate::api::route::Check;
 use crate::api::schemas::{self, QueryBool, Sort, key_schema, ts};
 use crate::http::error::{FieldError, FieldLocation};
@@ -219,12 +221,15 @@ pub struct WorkflowApprovalRequestStep {
     #[serde(serialize_with = "schemas::ts_opt::serialize")]
     pub completed_at: Option<DateTime<Utc>>,
     pub approvals: i64,
-    /// Distinct active users who could decide it when it was last resolved (the requester never counts); null
-    /// before the step is active
+    /// Distinct active users who could decide it when it was last resolved (the requester never counts). Every
+    /// step is resolved when the request is made; null only for a waiting step of a request made before that
     #[schema(required = true)]
     pub eligible_count: Option<i32>,
     /// Active, and fewer users could decide it than approvals are still needed
     pub understaffed: bool,
+    /// Approver sources not used at the last resolution, with why: a CI field naming the approvers that the
+    /// requester set (GH#664)
+    pub dropped_sources: Vec<WorkflowApprovalDroppedSource>,
     pub decisions: Vec<WorkflowApprovalDecision>,
 }
 
@@ -241,6 +246,10 @@ pub struct WorkflowApprovalPrincipal {
     pub source: WorkflowApproverSource,
     /// The assignment that made it eligible, e.g. "group CAB"
     pub label: String,
+    /// For a CI field source: the audited change that set the field when the step was resolved; null otherwise or
+    /// when the field has no audit history
+    #[schema(required = true)]
+    pub field_last_changed: Option<WorkflowFieldChange>,
 }
 
 /// Whether the caller may decide the active step now, and why not

@@ -39,7 +39,7 @@ use super::super::approval_schemas::*;
 use super::super::approvers::{self, Source};
 use super::super::eval::{self, Subject};
 use super::super::runtime_schemas::WorkflowBlockedReason;
-use super::super::schemas::{WorkflowApproverRole, WorkflowApproverSource};
+use super::super::schemas::{WorkflowApprovalDroppedSource, WorkflowApproverRole, WorkflowApproverSource};
 use super::{
     CANCEL_KEY, InstanceRow, NewEvent, Pinned, PinnedStep, PinnedTransition, as_transition_fields, check_active,
     condition_values, current_values, granted, insert_event, instance, is_set, may_edit, may_manage, move_to, pinned,
@@ -95,6 +95,7 @@ struct StepState {
     overdue_at: Option<DateTime<Utc>>,
     completed_at: Option<DateTime<Utc>>,
     eligible_count: Option<i32>,
+    dropped_sources: SqlJson<Vec<WorkflowApprovalDroppedSource>>,
 }
 
 async fn load(conn: &mut PgConnection, id: Uuid, lock: bool) -> Result<Option<RequestRow>, AppError> {
@@ -217,6 +218,11 @@ fn kind_str(k: WorkflowApprovalPrincipalKind) -> &'static str {
 /// eligibility rows: profiles and groups stay principals (membership is read
 /// at decision time), a CI field and service owners resolve to users now.
 /// Records how many active users who may view the CI could decide it.
+///
+/// A CI field source is dropped when the field's current value was set by an
+/// `excluded` user, or by an API token or import that recorded no user, so a
+/// requester cannot pick their approver by editing the field (GH#664). The
+/// dropped sources are kept on the step with the change that set the field.
 async fn resolve(
     conn: &mut PgConnection,
     request: Uuid,
@@ -229,6 +235,7 @@ async fn resolve(
     use WorkflowApprovalPrincipalKind as K;
     let assignments = approvers::load(&mut *conn, row.definition_id).await?;
     let mut rows: Vec<(K, Uuid, Value)> = Vec::new();
+    let mut dropped: Vec<WorkflowApprovalDroppedSource> = Vec::new();
     for a in assignments
         .iter()
         .filter(|a| a.transition_key == transition && a.step_key == s.key && a.role == WorkflowApproverRole::Approver)
@@ -242,6 +249,22 @@ async fn resolve(
                 let Some(person) = values.get(key).and_then(Value::as_str).and_then(|v| v.parse::<Uuid>().ok()) else {
                     continue;
                 };
+                let change = approvers::last_change(&mut *conn, row.ci_id, key).await?;
+                let label = a.source.label();
+                if let Some(c) = change.clone()
+                    && let Some((reason, message)) = approvers::drop_reason(&c, excluded, &label)
+                {
+                    dropped.push(WorkflowApprovalDroppedSource {
+                        source: a.source.kind(),
+                        label,
+                        reason,
+                        message,
+                        field_last_changed: c,
+                    });
+                    continue;
+                }
+                let mut via = via;
+                via["fieldLastChanged"] = json!(change);
                 let users: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM cmdb.users WHERE person_ci_id = $1")
                     .bind(person)
                     .fetch_all(&mut *conn)
@@ -311,12 +334,13 @@ async fn resolve(
     let permissions = auth_data::load_permissions_of(&mut *conn, &users).await?;
     let count = users.iter().filter(|u| permissions.get(u).is_some_and(|p| p.can(row.class_id, ClassOp::View))).count();
     sqlx::query(
-        "UPDATE cmdb.workflow_approval_request_steps SET eligible_count = $3, resolved_at = now()
+        "UPDATE cmdb.workflow_approval_request_steps SET eligible_count = $3, dropped_sources = $4, resolved_at = now()
          WHERE request_id = $1 AND step_no = $2",
     )
     .bind(request)
     .bind(s.step_no)
     .bind(count as i32)
+    .bind(SqlJson(&dropped))
     .execute(&mut *conn)
     .await?;
     Ok(())
@@ -395,8 +419,14 @@ pub(super) async fn create(
         .execute(&mut *conn)
         .await?;
     }
-    let first = steps.first().ok_or_else(AppError::internal)?;
-    resolve(&mut *conn, id, row, staged.current, &t.key, first, &excluded).await?;
+    if steps.is_empty() {
+        return Err(AppError::internal());
+    }
+    // Every step's approvers are fixed now: an edit of a field that names
+    // them, while the request is pending, changes nothing (GH#664).
+    for s in &steps {
+        resolve(&mut *conn, id, row, staged.current, &t.key, s, &excluded).await?;
+    }
     sqlx::query("UPDATE cmdb.workflow_instances SET version = version + 1 WHERE id = $1")
         .bind(row.id)
         .execute(&mut *conn)
@@ -417,9 +447,11 @@ pub(super) async fn create(
         },
     )
     .await?;
-    let due: Vec<(String, i16, Option<DateTime<Utc>>)> = sqlx::query_as(
-        "SELECT step_key, required_approvals, due_at FROM cmdb.workflow_approval_request_steps
-         WHERE request_id = $1 ORDER BY step_no",
+    // Key, required approvals, due, eligible count and dropped sources of each step.
+    type Due = (String, i16, Option<DateTime<Utc>>, Option<i32>, SqlJson<Value>);
+    let due: Vec<Due> = sqlx::query_as(
+        "SELECT step_key, required_approvals, due_at, eligible_count, dropped_sources
+         FROM cmdb.workflow_approval_request_steps WHERE request_id = $1 ORDER BY step_no",
     )
     .bind(id)
     .fetch_all(&mut *conn)
@@ -435,7 +467,8 @@ pub(super) async fn create(
             "transitionKey": t.key, "fromStateKey": row.state_key, "toStateKey": to, "stagedFields": staged.fields,
             "comment": staged.comment, "tokenId": token_id, "tokenCreatorId": token_id.and(minted_by),
             "excludedUserIds": excluded,
-            "steps": due.iter().map(|(k, n, d)| json!({ "key": k, "required": n, "dueAt": d })).collect::<Vec<_>>(),
+            "steps": due.iter().map(|(k, n, d, e, x)| json!({ "key": k, "required": n, "dueAt": d,
+                "eligibleCount": e, "droppedSources": x.0 })).collect::<Vec<_>>(),
         })),
     };
     crud::write_audit(&mut *conn, ctx, vec![entry]).await?;
@@ -775,21 +808,25 @@ pub async fn decide(
             .execute(&mut *tx)
             .await?;
             if let Some(n) = next {
-                // The next step's approvers are resolved before the audit row, so
-                // the audit chain head is held briefly (§9).
-                sqlx::query(
+                // Its approvers were resolved with the request (GH#664). Only a
+                // request made before that has a step still unresolved; it is
+                // resolved now, before the audit row, so the audit chain head is
+                // held briefly (§9).
+                let unresolved: bool = sqlx::query_scalar(
                     "UPDATE cmdb.workflow_approval_request_steps
                      SET status = 'active', activated_at = now(), due_at = now() + make_interval(mins => $3)
-                     WHERE request_id = $1 AND step_no = $2",
+                     WHERE request_id = $1 AND step_no = $2 RETURNING resolved_at IS NULL",
                 )
                 .bind(req.id)
                 .bind(n.step_no)
                 .bind(n.due_minutes)
-                .execute(&mut *tx)
+                .fetch_one(&mut *tx)
                 .await?;
-                let model = Model::load(&mut tx).await?;
-                let values = current_values(&mut tx, &model, row.ci_id).await?;
-                resolve(&mut tx, req.id, &row, &values, &t.key, n, &req.excluded_user_ids).await?;
+                if unresolved {
+                    let model = Model::load(&mut tx).await?;
+                    let values = current_values(&mut tx, &model, row.ci_id).await?;
+                    resolve(&mut tx, req.id, &row, &values, &t.key, n, &req.excluded_user_ids).await?;
+                }
                 sqlx::query(
                     "UPDATE cmdb.workflow_approval_requests SET current_step_no = $2, version = version + 1
                      WHERE id = $1",
@@ -1269,7 +1306,8 @@ pub async fn refresh(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<Wo
         entity_id: row.ci_id,
         new_value: Some(json!({ "instanceId": row.id, "requestId": req.id, "requestNo": req.request_no,
             "transitionKey": req.transition_key, "stepNo": s.step_no, "stepKey": s.key, "changed": before != after,
-            "approvers": after["approvers"], "eligibleCount": after["eligibleCount"] })),
+            "approvers": after["approvers"], "eligibleCount": after["eligibleCount"],
+            "droppedSources": after["droppedSources"] })),
         old_value: Some(before),
     };
     crud::write_audit(&mut tx, ctx, vec![entry]).await?;
@@ -1279,7 +1317,8 @@ pub async fn refresh(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<Wo
 }
 
 /// Who may decide step `step_no` of a request, as the refresh audit row
-/// records it: the eligibility principals and the count of eligible users.
+/// records it: the eligibility principals, the count of eligible users and
+/// the sources dropped (GH#664).
 async fn approvers_of(conn: &mut PgConnection, request: Uuid, step_no: i16) -> Result<Value, AppError> {
     let principals: Vec<(String, Uuid, SqlJson<Value>)> = sqlx::query_as(
         "SELECT principal_kind, principal_id, via FROM cmdb.workflow_approval_eligibility
@@ -1289,17 +1328,18 @@ async fn approvers_of(conn: &mut PgConnection, request: Uuid, step_no: i16) -> R
     .bind(step_no)
     .fetch_all(&mut *conn)
     .await?;
-    let count: Option<i32> = sqlx::query_scalar(
-        "SELECT eligible_count FROM cmdb.workflow_approval_request_steps WHERE request_id = $1 AND step_no = $2",
+    let step: Option<(Option<i32>, SqlJson<Value>)> = sqlx::query_as(
+        "SELECT eligible_count, dropped_sources FROM cmdb.workflow_approval_request_steps
+         WHERE request_id = $1 AND step_no = $2",
     )
     .bind(request)
     .bind(step_no)
     .fetch_optional(&mut *conn)
-    .await?
-    .flatten();
+    .await?;
+    let (count, dropped) = step.map_or((None, Value::Null), |(c, d)| (c, d.0));
     let approvers: Vec<Value> =
         principals.into_iter().map(|(kind, id, via)| json!({ "kind": kind, "id": id, "via": via.0 })).collect();
-    Ok(json!({ "approvers": approvers, "eligibleCount": count }))
+    Ok(json!({ "approvers": approvers, "eligibleCount": count, "droppedSources": dropped }))
 }
 
 // ---------------------------------------------------------------------------
@@ -1378,7 +1418,7 @@ async fn view(
     let t = p.transition(&req.transition_key).ok_or_else(AppError::internal)?;
     let state_key = |id: Uuid| p.state(id).map(|s| s.key.clone()).unwrap_or_default();
     let states: Vec<StepState> = sqlx::query_as(
-        "SELECT step_no, status, activated_at, due_at, overdue_at, completed_at, eligible_count
+        "SELECT step_no, status, activated_at, due_at, overdue_at, completed_at, eligible_count, dropped_sources
          FROM cmdb.workflow_approval_request_steps WHERE request_id = $1 ORDER BY step_no",
     )
     .bind(req.id)
@@ -1413,6 +1453,7 @@ async fn view(
                 eligible_count: st.eligible_count,
                 understaffed: st.status == WorkflowApprovalStepStatus::Active
                     && st.eligible_count.is_some_and(|n| i64::from(n) < i64::from(required) - approvals),
+                dropped_sources: st.dropped_sources.0.clone(),
                 decisions: decided,
             }
         })
@@ -1453,6 +1494,7 @@ async fn view(
                     id,
                     source: serde_json::from_value(via.0["source"].clone()).unwrap_or(WorkflowApproverSource::User),
                     label: via.0["label"].as_str().unwrap_or_default().to_owned(),
+                    field_last_changed: serde_json::from_value(via.0["fieldLastChanged"].clone()).ok(),
                 })
                 .collect(),
         )

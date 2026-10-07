@@ -6986,6 +6986,30 @@ export interface components {
             /** Format: date-time */
             decidedAt: string;
         };
+        /**
+         * @description An approver source of a step that was not used: its field was set by someone who may not decide the request
+         *     (GH#664). The step falls back on its other sources.
+         */
+        WorkflowApprovalDroppedSource: {
+            /**
+             * @description Where the approvers of an assignment come from: the holders of a permission `profile`, the members of a user
+             *     `group`, one named `user`, the user linked to the Person a reference field of the CI points at (`ci_attribute`,
+             *     for example the CI's owner), or the owners in one role of the business services the CI is a direct member of
+             *     (`service_owner`)
+             * @enum {string}
+             */
+            source: "profile" | "group" | "user" | "ci_attribute" | "service_owner";
+            /** @description e.g. `field server.owner` */
+            label: string;
+            /**
+             * @description Why an approver source that names its approvers through a CI field may not decide a request
+             * @enum {string}
+             */
+            reason: "field_set_by_requester" | "field_set_by_unattributed";
+            /** @description The reason, in words */
+            message: string;
+            fieldLastChanged: components["schemas"]["WorkflowFieldChange"];
+        };
         /** @description Whether the caller may decide the active step now, and why not */
         WorkflowApprovalEligibility: {
             canDecide: boolean;
@@ -7024,6 +7048,7 @@ export interface components {
             source: "profile" | "group" | "user" | "ci_attribute" | "service_owner";
             /** @description The assignment that made it eligible, e.g. "group CAB" */
             label: string;
+            fieldLastChanged: components["schemas"]["WorkflowFieldChange"] | null;
         };
         /** @description An approval request with its steps and decisions */
         WorkflowApprovalRequest: {
@@ -7146,12 +7171,17 @@ export interface components {
             approvals: number;
             /**
              * Format: int32
-             * @description Distinct active users who could decide it when it was last resolved (the requester never counts); null
-             *     before the step is active
+             * @description Distinct active users who could decide it when it was last resolved (the requester never counts). Every
+             *     step is resolved when the request is made; null only for a waiting step of a request made before that
              */
             eligibleCount: number | null;
             /** @description Active, and fewer users could decide it than approvals are still needed */
             understaffed: boolean;
+            /**
+             * @description Approver sources not used at the last resolution, with why: a CI field naming the approvers that the
+             *     requester set (GH#664)
+             */
+            droppedSources: components["schemas"]["WorkflowApprovalDroppedSource"][];
             decisions: components["schemas"]["WorkflowApprovalDecision"][];
         };
         /** @description Who made a request, as recorded then */
@@ -7284,6 +7314,12 @@ export interface components {
             userCount: number;
             /** @description Why it resolved to nobody, or that it is resolved per CI; null otherwise */
             note: string | null;
+            fieldLastChanged: components["schemas"]["WorkflowFieldChange"] | null;
+            /**
+             * @description Set when the source would be dropped for a request by `requestedBy` (see `WorkflowApprovalDroppedSource`);
+             *     it then resolves to nobody and `note` says why
+             */
+            dropped: ("field_set_by_requester" | "field_set_by_unattributed") | null;
         };
         /** @description One user an assignment resolves to */
         WorkflowApproverPreviewUser: {
@@ -7616,6 +7652,19 @@ export interface components {
         WorkflowEventList: {
             data: components["schemas"]["WorkflowEvent"][];
             page: components["schemas"]["PageMeta"];
+        };
+        /** @description The audited change that set a CI field's current value (GH#664) */
+        WorkflowFieldChange: {
+            /** @description `user`, `api_client` (an API token), `import` or `system` */
+            actorType: string;
+            /**
+             * Format: uuid
+             * @description The user who made it; null for the system, or an API token or import that recorded no user
+             */
+            actorId: string | null;
+            actorName: string | null;
+            /** Format: date-time */
+            changedAt: string;
         };
         /** @description The profiles that may run one transition */
         WorkflowGrant: {
