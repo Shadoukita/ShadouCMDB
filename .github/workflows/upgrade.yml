@@ -176,12 +176,31 @@ jobs:
               psql "$ADMIN_DB_URL" -X -v ON_ERROR_STOP=1 -c '\password shadoucmdb_owner' -c '\password shadoucmdb_maintenance'
             echo "MIGRATION_DATABASE_URL=postgres://shadoucmdb_owner:$OWNER_PASSWORD@$PGHOST:$PGPORT/shadoucmdb" >> "$GITHUB_ENV"
             export MIGRATION_DATABASE_URL=postgres://shadoucmdb_owner:$OWNER_PASSWORD@$PGHOST:$PGPORT/shadoucmdb
+            SPLIT=1
           fi
           "$NEW" migrate | tee migrate.txt
           "$NEW" seed
           "$NEW" verify
           # The audit rows of the old release were hash-chained by migration 0018.
           "$NEW" audit-verify
+          if [ -n "${SPLIT:-}" ]; then
+            echo "The split install grants the API role what a fresh three-role install does (GH#713)"
+            psql "$ADMIN_URL" -X -v ON_ERROR_STOP=1 \
+              -c 'CREATE DATABASE shadoucmdb_fresh OWNER shadoucmdb_owner' \
+              -c 'REVOKE ALL ON DATABASE shadoucmdb_fresh FROM PUBLIC' \
+              -c 'GRANT CONNECT ON DATABASE shadoucmdb_fresh TO shadoucmdb_app, shadoucmdb_maintenance' \
+              -c 'GRANT CREATE ON DATABASE shadoucmdb_fresh TO shadoucmdb_app'
+            psql "${ADMIN_URL%/postgres}/shadoucmdb_fresh" -X -v ON_ERROR_STOP=1 \
+              -c 'GRANT CREATE ON SCHEMA public TO shadoucmdb_owner' -c 'REVOKE CREATE ON SCHEMA public FROM PUBLIC' \
+              -c 'CREATE EXTENSION IF NOT EXISTS pg_trgm'
+            DATABASE_URL=postgres://shadoucmdb_app:$APP_PASSWORD@$PGHOST:$PGPORT/shadoucmdb_fresh \
+              MIGRATION_DATABASE_URL=postgres://shadoucmdb_owner:$OWNER_PASSWORD@$PGHOST:$PGPORT/shadoucmdb_fresh \
+              "$NEW" migrate > /dev/null
+            psql "${ADMIN_URL%/postgres}/shadoucmdb_fresh" -XAt -v ON_ERROR_STOP=1 -f sql/checks/api_role_privileges.sql > fresh-privileges.txt
+            psql "$ADMIN_DB_URL" -XAt -v ON_ERROR_STOP=1 -f sql/checks/api_role_privileges.sql > split-privileges.txt
+            test -s fresh-privileges.txt
+            diff -u fresh-privileges.txt split-privileges.txt
+          fi
 
       - name: Every object, audit row and permission is unchanged, also in the UI; smoke suite
         env:

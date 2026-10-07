@@ -49,8 +49,11 @@ pub const EXCLUDED_TABLES: &[&str] = &[
 /// schemas too, created at run time; [`area_schemas`] lists them.
 pub const SYSTEM_SCHEMAS: &[&str] = &["cmdb", "public"];
 
-/// Where sqlx records applied migrations; part of the schema, not of the data.
-const MIGRATIONS_TABLE: (&str, &str) = ("public", "_sqlx_migrations");
+/// Part of the schema, not of the data: where sqlx records applied migrations,
+/// and the API role's rights, which only migrations write (0065, GH#713). A
+/// restore rebuilds them with the migrations; rows from a backup file must
+/// not decide what the API role may do.
+const SCHEMA_TABLES: &[&str] = &["public._sqlx_migrations", "cmdb.api_role_privileges"];
 
 /// First migration with per-type tables in area schemas (SHAA-56).
 pub const TYPE_TABLES_SINCE: i64 = 9;
@@ -208,14 +211,13 @@ pub async fn app_tables(conn: &mut PgConnection) -> sqlx::Result<Vec<Table>> {
         "SELECT n.nspname::text AS schema, c.relname::text AS name
          FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
          WHERE (n.nspname = ANY ($1) OR n.nspname = ANY ($2)) AND c.relkind = 'r' AND NOT c.relispartition
-           AND (n.nspname, c.relname) <> ($3, $4)
+           AND format('%s.%s', n.nspname, c.relname) <> ALL ($3)
            AND NOT EXISTS (SELECT 1 FROM pg_depend d
                            WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e')",
     )
     .bind(SYSTEM_SCHEMAS)
     .bind(&areas)
-    .bind(MIGRATIONS_TABLE.0)
-    .bind(MIGRATIONS_TABLE.1)
+    .bind(SCHEMA_TABLES)
     .fetch_all(conn)
     .await?;
     tables.sort_by(|a, b| (!a.is_system(), a).cmp(&(!b.is_system(), b)));

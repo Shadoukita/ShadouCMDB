@@ -764,6 +764,10 @@ pub mod scratch {
     }
 
     impl Scratch {
+        pub fn name(&self) -> &str {
+            &self.name
+        }
+
         pub async fn drop(self) {
             self.pool.close().await;
             let mut c = self.admin.connect().await.unwrap();
@@ -999,3 +1003,5 @@ mod upgrade_0061;
 mod upgrade_0063;
 #[cfg(test)]
 mod upgrade_0064;
+#[cfg(test)]
+mod upgrade_0065;

@@ -8,9 +8,17 @@
 -- shadoucmdb_app (so migrations can build type tables); shadoucmdb_maintenance
 -- may only prune. Safe to re-run.
 --
+-- The script runs no code the API role could have written, so it cannot
+-- raise the API role's rights beyond what it had. It does not undo changes
+-- the API role made before: if the API role's credentials may have been
+-- compromised before the split, check the cmdb schema (functions, triggers,
+-- views) or restore a known-good backup first.
+--
 -- Order:
 --   1. Install the new binary and run `shadoucmdb migrate` as before (as
---      shadoucmdb_app), so migrations 0007 to 0021 are applied.
+--      shadoucmdb_app), so migrations 0007 to 0065 are applied. The script
+--      takes the API role's rights from migration 0065 on (GH#713); use the
+--      script of the release you migrated with.
 --   2. Stop the server. Run this script as an administrator, connected to the
 --      ShadouCMDB database:
 --        psql "postgres://admin@db.example.internal:5432/shadoucmdb" \
@@ -55,6 +63,12 @@ DO $$ BEGIN RAISE EXCEPTION 'the owner_password and maintenance_password variabl
   \set maintenance_role shadoucmdb_maintenance
 \endif
 BEGIN;
+-- Until now the API role owned the system schema and could change anything in
+-- it, so this script runs nothing it wrote (GH#725): no function, view or
+-- operator it could have created or replaced. Hence the fixed search_path,
+-- the ownership loops on the system catalogs only, and the script's own copy
+-- of cmdb.apply_api_role_grants() below.
+SET LOCAL search_path = pg_catalog, pg_temp;
 -- For the DO block below, which cannot see psql variables.
 SELECT set_config('shadoucmdb.owner_role', :'owner_role', true),
        set_config('shadoucmdb.app_role', :'app_role', true) \gset ignored_
@@ -63,9 +77,8 @@ DO $$
 BEGIN
   IF to_regprocedure('cmdb.prune_audit_log(interval, text, boolean, text)') IS NULL
      OR to_regclass('cmdb.areas') IS NULL
-     OR to_regclass('cmdb.audit_log_chain_head') IS NULL
-     OR to_regclass('cmdb.server_keys') IS NULL THEN
-    RAISE EXCEPTION 'migrations 0007 to 0021 are not applied: run `shadoucmdb migrate` first';
+     OR to_regprocedure('cmdb.apply_api_role_grants(name)') IS NULL THEN
+    RAISE EXCEPTION 'migrations 0007 to 0065 are not applied: run `shadoucmdb migrate` of this release first';
   END IF;
 END;
 $$;
@@ -85,44 +98,44 @@ GRANT :"app_role" TO :"owner_role";
 ALTER ROLE :"owner_role" SET search_path = cmdb, public;
 ALTER ROLE :"maintenance_role" SET search_path = cmdb, public;
 
--- Hand over the database and everything the API role created in it outside
--- the area schemas: schemas, tables (their identity sequences follow), other
+-- Hand over the database and everything the API role created in the system
+-- schemas: the schemas, tables (their identity sequences follow), other
 -- sequences and functions, including _sqlx_migrations. Not REASSIGN OWNED,
 -- which would also take the area schemas and other databases the API role
--- might own on the same server.
+-- might own on the same server. Not cmdb.areas either to tell the area
+-- schemas apart: the API role could have turned it into a view.
 SELECT format('ALTER DATABASE %I OWNER TO %I', current_database(), :'owner_role') \gexec
 DO $$
 DECLARE
   obj record;
   owner_role name := current_setting('shadoucmdb.owner_role');
   app_role regrole := current_setting('shadoucmdb.app_role')::regrole;
-  -- Read up front: the loops below change the owner of cmdb.areas itself.
-  area_keys text[] := ARRAY(SELECT key FROM cmdb.areas);
+  -- cmdb, public, and drizzle of installs adopted from the Node.js version.
+  system_schemas name[] := ARRAY['cmdb', 'public', 'drizzle'];
 BEGIN
   FOR obj IN
-    SELECT n.nspname FROM pg_namespace n WHERE n.nspowner = app_role
-      AND n.nspname <> ALL (area_keys)
+    SELECT n.nspname FROM pg_namespace n WHERE n.nspowner = app_role AND n.nspname = ANY (system_schemas)
   LOOP
     EXECUTE format('ALTER SCHEMA %I OWNER TO %I', obj.nspname, owner_role);
   END LOOP;
   FOR obj IN
     SELECT c.oid::regclass AS name FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE c.relowner = app_role AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
-      AND n.nspname <> ALL (area_keys)
+      AND n.nspname = ANY (system_schemas)
   LOOP
     EXECUTE format('ALTER TABLE %s OWNER TO %I', obj.name, owner_role);
   END LOOP;
   FOR obj IN
     SELECT c.oid::regclass AS name FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE c.relowner = app_role AND c.relkind = 'S'
-      AND n.nspname <> ALL (area_keys)
+      AND n.nspname = ANY (system_schemas)
   LOOP
     EXECUTE format('ALTER SEQUENCE %s OWNER TO %I', obj.name, owner_role);
   END LOOP;
   FOR obj IN
     SELECT p.oid::regprocedure AS name FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
     WHERE p.proowner = app_role
-      AND n.nspname <> ALL (area_keys)
+      AND n.nspname = ANY (system_schemas)
       AND NOT EXISTS (SELECT FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e')
   LOOP
     EXECUTE format('ALTER ROUTINE %s OWNER TO %I', obj.name, owner_role);
@@ -139,29 +152,92 @@ SELECT format('GRANT CONNECT ON DATABASE %I TO %I, %I', current_database(), :'ap
 -- New areas are new schemas, created by the API.
 SELECT format('GRANT CREATE ON DATABASE %I TO %I', current_database(), :'app_role') \gexec
 
--- Same grants as migrations 0007, 0008, 0018, 0021 and 0038 make on a fresh three-role install.
-GRANT USAGE ON SCHEMA cmdb TO :"app_role", :"maintenance_role";
+-- The maintenance role prunes the audit log (migrations 0007 and 0008).
+GRANT USAGE ON SCHEMA cmdb TO :"maintenance_role";
 GRANT EXECUTE ON FUNCTION cmdb.prune_audit_log(interval, text, boolean, text) TO :"maintenance_role";
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA cmdb TO :"app_role";
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA cmdb TO :"app_role";
-REVOKE UPDATE, DELETE, TRUNCATE ON cmdb.audit_log, cmdb.schema_changes FROM :"app_role";
-GRANT REFERENCES ON cmdb.configuration_items, cmdb.lookup_list_values TO :"app_role";
-GRANT SELECT ON public._sqlx_migrations TO :"app_role";
-REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public._sqlx_migrations FROM :"app_role";
--- Only the audit_log trigger moves the hash-chain head (migration 0018); the
--- API role reads it, for `shadoucmdb backup` (migration 0038).
-REVOKE ALL ON cmdb.audit_log_chain_head FROM :"app_role";
-GRANT SELECT ON cmdb.audit_log_chain_head TO :"app_role";
--- Server keys are read and added, never changed (migration 0021).
-REVOKE UPDATE, DELETE, TRUNCATE ON cmdb.server_keys FROM :"app_role";
--- The API role lists a backup.restore entry as exported only through the
--- function, which now runs as the owner role (migration 0064, GH#706). Both
--- exist from 0063 and 0064 on; an older install has nothing to narrow.
-SELECT format('REVOKE ALL ON cmdb.audit_export_restores FROM %I', :'app_role'),
-       format('GRANT SELECT ON cmdb.audit_export_restores TO %I', :'app_role')
-WHERE to_regclass('cmdb.audit_export_restores') IS NOT NULL \gexec
-SELECT format('GRANT EXECUTE ON FUNCTION cmdb.audit_export_mark_restore_sent(bigint) TO %I', :'app_role')
-WHERE to_regprocedure('cmdb.audit_export_mark_restore_sent(bigint)') IS NOT NULL \gexec
+-- The API role gets the same rights on the system tables and routines as on a
+-- fresh three-role install, from the list the migrations keep
+-- (cmdb.api_role_privileges, migration 0065, GH#713). The function is first
+-- replaced with this copy of migration 0065's, which the API role cannot have
+-- changed. It refuses a list that is not a plain table any more, and it reads
+-- the rows as data: it grants only the rights it names itself, and only on
+-- objects in cmdb.
+DROP FUNCTION IF EXISTS cmdb.apply_api_role_grants(name);
+CREATE FUNCTION cmdb.apply_api_role_grants(app_role name)
+RETURNS void
+LANGUAGE plpgsql
+SET search_path = pg_catalog, pg_temp
+SET row_security = off
+AS $$
+DECLARE
+  p record;
+BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = app_role) THEN
+    RAISE EXCEPTION 'role % does not exist', app_role USING ERRCODE = 'undefined_object';
+  END IF;
+  -- Reading a view, a child table or a column of another type would run its code.
+  IF NOT EXISTS (SELECT FROM pg_class c
+                 WHERE c.oid = to_regclass('cmdb.api_role_privileges') AND c.relkind = 'r' AND NOT c.relhassubclass)
+     OR ARRAY(SELECT a.atttypid FROM pg_attribute a
+              WHERE a.attrelid = to_regclass('cmdb.api_role_privileges') AND a.attnum > 0 AND NOT a.attisdropped
+              ORDER BY a.attnum) IS DISTINCT FROM ARRAY['text'::regtype, 'text'::regtype, 'text[]'::regtype]::oid[] THEN
+    RAISE EXCEPTION 'cmdb.api_role_privileges is not the table migration 0065 created'
+      USING ERRCODE = 'object_not_in_prerequisite_state';
+  END IF;
+  EXECUTE format('GRANT USAGE ON SCHEMA cmdb TO %I', app_role);
+  EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA cmdb TO %I', app_role);
+  EXECUTE format('GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA cmdb TO %I', app_role);
+  -- The rows are data, not SQL: the statements name the object by its oid
+  -- and the rights from the constants below, and only objects in cmdb (and
+  -- _sqlx_migrations) are touched. Anything else stops the call. An object a
+  -- later migration dropped is skipped.
+  FOR p IN
+    SELECT l.object, l.object_type, l.privileges, c.oid::regclass AS relation, n.nspname, c.relname, c.relkind,
+           NULL::regprocedure AS routine
+      FROM ONLY cmdb.api_role_privileges l
+      JOIN pg_class c ON c.oid = to_regclass(l.object) JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE l.object_type = 'table'
+    UNION ALL
+    SELECT l.object, l.object_type, l.privileges, NULL, n.nspname, NULL, NULL, f.oid::regprocedure
+      FROM ONLY cmdb.api_role_privileges l
+      JOIN pg_proc f ON f.oid = to_regprocedure(l.object) JOIN pg_namespace n ON n.oid = f.pronamespace
+     WHERE l.object_type = 'routine'
+    UNION ALL
+    SELECT l.object, l.object_type, l.privileges, NULL, NULL, NULL, NULL, NULL
+      FROM ONLY cmdb.api_role_privileges l
+     WHERE l.object_type IS DISTINCT FROM 'table' AND l.object_type IS DISTINCT FROM 'routine'
+  LOOP
+    IF p.object_type = 'table' THEN
+      IF NOT (p.relkind IN ('r', 'p', 'v', 'm', 'f')
+              AND (p.nspname = 'cmdb' OR (p.nspname = 'public' AND p.relname = '_sqlx_migrations')))
+         OR (p.privileges <@ ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'REFERENCES']) IS NOT TRUE THEN
+        RAISE EXCEPTION 'cmdb.api_role_privileges: % rights % are not allowed', quote_literal(p.object), quote_literal(p.privileges::text)
+          USING ERRCODE = 'object_not_in_prerequisite_state';
+      END IF;
+      EXECUTE format('REVOKE ALL ON %s FROM %I', p.relation, app_role);
+      IF 'SELECT' = ANY (p.privileges) THEN EXECUTE format('GRANT SELECT ON %s TO %I', p.relation, app_role); END IF;
+      IF 'INSERT' = ANY (p.privileges) THEN EXECUTE format('GRANT INSERT ON %s TO %I', p.relation, app_role); END IF;
+      IF 'UPDATE' = ANY (p.privileges) THEN EXECUTE format('GRANT UPDATE ON %s TO %I', p.relation, app_role); END IF;
+      IF 'DELETE' = ANY (p.privileges) THEN EXECUTE format('GRANT DELETE ON %s TO %I', p.relation, app_role); END IF;
+      IF 'REFERENCES' = ANY (p.privileges) THEN EXECUTE format('GRANT REFERENCES ON %s TO %I', p.relation, app_role); END IF;
+    ELSIF p.object_type = 'routine' THEN
+      IF p.nspname <> 'cmdb' OR (p.privileges <@ ARRAY['EXECUTE']) IS NOT TRUE THEN
+        RAISE EXCEPTION 'cmdb.api_role_privileges: % rights % are not allowed', quote_literal(p.object), quote_literal(p.privileges::text)
+          USING ERRCODE = 'object_not_in_prerequisite_state';
+      END IF;
+      EXECUTE format('REVOKE ALL ON FUNCTION %s FROM %I', p.routine, app_role);
+      IF 'EXECUTE' = ANY (p.privileges) THEN EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO %I', p.routine, app_role); END IF;
+    ELSE
+      RAISE EXCEPTION 'cmdb.api_role_privileges: % has object type %', quote_literal(p.object), quote_literal(p.object_type)
+        USING ERRCODE = 'object_not_in_prerequisite_state';
+    END IF;
+  END LOOP;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION cmdb.apply_api_role_grants(name) FROM PUBLIC;
+SELECT cmdb.apply_api_role_grants(:'app_role'::name) \gset ignored_
+ALTER FUNCTION cmdb.apply_api_role_grants(name) OWNER TO :"owner_role";
 ALTER DEFAULT PRIVILEGES FOR ROLE :"owner_role" IN SCHEMA cmdb
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO :"app_role";
 ALTER DEFAULT PRIVILEGES FOR ROLE :"owner_role" IN SCHEMA cmdb
