@@ -16,8 +16,8 @@ const b = computed(() => props.doc.branding);
 const branding = useBrandingStore();
 
 const COLORS = [
-  { key: "primaryColor", label: "Primary colour", hint: "Buttons, links and focus rings", fallback: "#0a6c7d" },
-  { key: "accentColor", label: "Accent colour", hint: "The marker of the current menu entry", fallback: "#4cc3d9" },
+  { key: "primaryColor", label: "Primary colour", hint: "Buttons, links and focus rings", fallback: "#0b6e7f" },
+  { key: "accentColor", label: "Accent colour", hint: "The marker of the current menu entry", fallback: "#1e95a8" },
 ] as const;
 const colorText = ref<Record<string, string>>({ primaryColor: b.value.primaryColor ?? "", accentColor: b.value.accentColor ?? "" });
 const colorError = ref<Record<string, string>>({});
