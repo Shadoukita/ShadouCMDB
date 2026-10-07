@@ -1,3 +1,4 @@
+import { t, type MessageKey } from "../i18n/index";
 import type { IconName } from "../icons/lucide";
 
 /**
@@ -8,25 +9,36 @@ import type { IconName } from "../icons/lucide";
  */
 export interface ClassIcon {
   key: string;
-  label: string;
+  readonly label: string;
   icon: IconName;
 }
 
+/** The label is read on access, so it follows the active locale. */
+function icon(key: string, labelKey: MessageKey, glyph: IconName): ClassIcon {
+  return {
+    key,
+    get label() {
+      return t(labelKey);
+    },
+    icon: glyph,
+  };
+}
+
 export const CLASS_ICONS: ClassIcon[] = [
-  { key: "server", label: "Server", icon: "server" },
-  { key: "vm", label: "Virtual machine", icon: "monitor" },
-  { key: "network", label: "Network device", icon: "network" },
-  { key: "storage", label: "Storage", icon: "hard-drive" },
-  { key: "database", label: "Database", icon: "database" },
-  { key: "application", label: "Application", icon: "app-window" },
-  { key: "service", label: "Service", icon: "box" },
-  { key: "container", label: "Container", icon: "container" },
-  { key: "cloud", label: "Cloud", icon: "cloud" },
-  { key: "location", label: "Location", icon: "map-pin" },
-  { key: "device", label: "Device", icon: "smartphone" },
-  { key: "document", label: "Document", icon: "file-text" },
-  { key: "person", label: "Person", icon: "user" },
-  { key: "generic", label: "Generic item", icon: "square" },
+  icon("server", "dm.icon.server", "server"),
+  icon("vm", "dm.icon.vm", "monitor"),
+  icon("network", "dm.icon.network", "network"),
+  icon("storage", "dm.icon.storage", "hard-drive"),
+  icon("database", "dm.icon.database", "database"),
+  icon("application", "dm.icon.application", "app-window"),
+  icon("service", "dm.icon.service", "box"),
+  icon("container", "dm.icon.container", "container"),
+  icon("cloud", "dm.icon.cloud", "cloud"),
+  icon("location", "dm.icon.location", "map-pin"),
+  icon("device", "dm.icon.device", "smartphone"),
+  icon("document", "dm.icon.document", "file-text"),
+  icon("person", "dm.icon.person", "user"),
+  icon("generic", "dm.icon.generic", "square"),
 ];
 
 const BY_KEY = new Map(CLASS_ICONS.map((i) => [i.key, i]));
