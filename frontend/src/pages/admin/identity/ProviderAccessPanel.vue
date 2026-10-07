@@ -5,37 +5,38 @@ import { ApiError } from "../../../api/client";
 import { useDeleteIdentityProvider, useUpdateIdentityProvider, type IdentityProvider } from "../../../api/identityProviders";
 import ConfirmDialog from "../../../components/ConfirmDialog.vue";
 import ErrorAlert from "../../../components/ErrorAlert.vue";
-import { plural } from "../../../lib/format";
+import { t } from "../../../i18n";
+import { useFlashStore } from "../../../stores/flash";
+import { providerKindLabel } from "./providerText";
 
 /**
  * Disable / enable and delete. Both end the sessions of the provider's accounts. A provider that
  * still has accounts cannot be deleted (409 IN_USE): the dialog offers to disable it instead.
+ * Delete is opened from the title row's `⋯` menu (`openDelete`), as on the other admin edit pages.
  */
 const props = defineProps<{ provider: IdentityProvider }>();
 const router = useRouter();
+const flash = useFlashStore();
 const update = useUpdateIdentityProvider();
 const del = useDeleteIdentityProvider();
 const confirming = ref<"toggle" | "delete" | null>(null);
-const done = ref<string | null>(null);
 
-const accounts = computed(() => plural(props.provider.userCount, "account"));
 const inUse = computed(() => del.error.value instanceof ApiError && del.error.value.code === "IN_USE");
 
 function openToggle() {
   update.reset();
-  done.value = null;
   confirming.value = "toggle";
 }
 
 function confirmToggle() {
   const enable = !props.provider.isEnabled;
+  const name = props.provider.name;
   update.mutate(
     { id: props.provider.id, body: { isEnabled: enable } },
     {
       onSuccess: () => {
         confirming.value = null;
-        const name = props.provider.name;
-        done.value = enable ? `${name} is enabled.` : `${name} is disabled. Its accounts were signed out.`;
+        flash.show(enable ? t("idp.access.enabledDone", { name }) : t("idp.access.disabledDone", { name }));
       },
     },
   );
@@ -44,22 +45,29 @@ function confirmToggle() {
 function openDelete() {
   del.reset();
   update.reset();
-  done.value = null;
   confirming.value = "delete";
 }
+defineExpose({ openDelete });
 
 function confirmDelete() {
-  del.mutate(props.provider.id, { onSuccess: () => router.replace("/admin/identity-providers") });
+  const name = props.provider.name;
+  del.mutate(props.provider.id, {
+    onSuccess: () => {
+      flash.show(t("idp.access.deletedDone", { name }));
+      void router.replace("/admin/identity-providers");
+    },
+  });
 }
 
 /** From the IN_USE answer: disable instead of deleting. */
 function disableInstead() {
+  const name = props.provider.name;
   update.mutate(
     { id: props.provider.id, body: { isEnabled: false } },
     {
       onSuccess: () => {
         confirming.value = null;
-        done.value = `${props.provider.name} is disabled. Its accounts were signed out.`;
+        flash.show(t("idp.access.disabledDone", { name }));
       },
     },
   );
@@ -68,71 +76,52 @@ function disableInstead() {
 
 <template>
   <section class="panel" aria-labelledby="provider-access-title">
-    <div class="panel-header"><h2 id="provider-access-title">Availability</h2></div>
+    <div class="panel-header"><h2 id="provider-access-title">{{ t("idp.access.title") }}</h2></div>
     <div class="panel-body stack">
-      <div v-if="done" class="alert alert-success" role="status">{{ done }}</div>
       <p class="muted no-margin">
-        {{ accounts }} {{ provider.userCount === 1 ? "signs" : "sign" }} in through this provider.
-        <template v-if="provider.isEnabled">Disabling it stops those sign-ins and ends their sessions; local accounts keep working.</template>
-        <template v-else>It is disabled: nobody signs in through it.</template>
+        {{ t("idp.access.accounts", { n: provider.userCount }) }}
+        {{ provider.isEnabled ? t("idp.access.enabledNote") : t("idp.access.disabledNote") }}
       </p>
-      <div class="actions">
-        <button v-if="provider.isEnabled" type="button" class="btn" @click="openToggle">Disable provider</button>
-        <button v-else type="button" class="btn" @click="openToggle">Enable provider</button>
-        <button type="button" class="btn btn-danger" @click="openDelete">Delete provider</button>
+      <div>
+        <button type="button" class="btn" @click="openToggle">{{ provider.isEnabled ? t("idp.access.disable") : t("idp.access.enable") }}</button>
       </div>
     </div>
   </section>
 
   <ConfirmDialog
     :open="confirming === 'toggle'"
-    :title="provider.isEnabled ? `Disable ${provider.name}?` : `Enable ${provider.name}?`"
-    :confirm-label="provider.isEnabled ? 'Disable provider' : 'Enable provider'"
+    :title="provider.isEnabled ? t('idp.access.disableTitle', { name: provider.name }) : t('idp.access.enableTitle', { name: provider.name })"
+    :confirm-label="provider.isEnabled ? t('idp.access.disable') : t('idp.access.enable')"
     :busy="update.isPending.value"
     @cancel="confirming = null"
     @confirm="confirmToggle"
   >
-    <ErrorAlert v-if="update.isError.value" :error="update.error.value" :title="provider.isEnabled ? 'Not disabled' : 'Not enabled'" />
-    <p v-if="provider.isEnabled">
-      Nobody can sign in through <strong>{{ provider.name }}</strong> until it is enabled again, and the sessions of its
-      {{ accounts }} end now. The accounts, their history and the settings are kept.
-    </p>
-    <p v-else>
-      Users can sign in through <strong>{{ provider.name }}</strong> again, with the profiles their groups map to.
-    </p>
+    <ErrorAlert v-if="update.isError.value" :error="update.error.value" :title="provider.isEnabled ? t('idp.access.notDisabled') : t('idp.access.notEnabled')" />
+    <p v-if="provider.isEnabled">{{ t("idp.access.disableBody", { name: provider.name, n: provider.userCount }) }}</p>
+    <p v-else>{{ t("idp.access.enableBody", { name: provider.name }) }}</p>
   </ConfirmDialog>
 
   <ConfirmDialog
     :open="confirming === 'delete'"
-    :title="`Delete identity provider ${provider.name}?`"
-    confirm-label="Delete provider"
+    :title="t('idp.access.deleteTitle', { name: provider.name })"
+    :confirm-label="t('idp.access.delete')"
     :busy="del.isPending.value || update.isPending.value"
     @cancel="confirming = null"
     @confirm="confirmDelete"
   >
     <div v-if="inUse" class="alert alert-warn" role="alert">
-      <strong>{{ provider.name }} still has accounts.</strong>
-      <div>
-        {{ del.error.value instanceof Error ? del.error.value.message : "" }} Disable it instead: nobody can sign in
-        through it, and its accounts keep their names on past changes.
-      </div>
+      <strong>{{ t("idp.access.inUseTitle", { name: provider.name }) }}</strong>
+      <div>{{ del.error.value instanceof Error ? del.error.value.message : "" }} {{ t("idp.access.inUseBody") }}</div>
       <div class="meta">
         <button v-if="provider.isEnabled" type="button" class="btn btn-sm" :disabled="update.isPending.value" @click="disableInstead">
-          Disable instead
+          {{ t("idp.access.disableInstead") }}
         </button>
-        <span v-else>It is already disabled.</span>
+        <span v-else>{{ t("idp.access.alreadyDisabled") }}</span>
       </div>
     </div>
-    <ErrorAlert v-else-if="del.isError.value" :error="del.error.value" title="Delete failed" />
-    <ErrorAlert v-if="update.isError.value" :error="update.error.value" title="Not disabled" />
-    <p>
-      Removes <strong>{{ provider.name }}</strong> ({{ provider.kind === "oidc" ? "OpenID Connect" : "LDAP / Active Directory" }})
-      with its settings, stored secrets and {{ plural(provider.groupMappings.length, "group mapping") }}. This cannot be
-      undone.
-    </p>
-    <p v-if="provider.userCount > 0">
-      {{ accounts }} {{ provider.userCount === 1 ? "signs" : "sign" }} in through it, so the server will refuse to delete
-      it. Disable it instead.
-    </p>
+    <ErrorAlert v-else-if="del.isError.value" :error="del.error.value" :title="t('idp.access.deleteFailed')" />
+    <ErrorAlert v-if="update.isError.value" :error="update.error.value" :title="t('idp.access.notDisabled')" />
+    <p>{{ t("idp.access.deleteBody", { name: provider.name, kind: providerKindLabel(provider.kind), n: provider.groupMappings.length }) }}</p>
+    <p v-if="provider.userCount > 0">{{ t("idp.access.deleteRefused", { n: provider.userCount }) }}</p>
   </ConfirmDialog>
 </template>

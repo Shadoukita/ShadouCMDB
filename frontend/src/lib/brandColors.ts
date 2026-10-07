@@ -11,6 +11,9 @@ export type Theme = "light" | "dark";
 /** --c-surface and --c-sidebar of styles/tokens.css (unit/brandColors.test.ts keeps them in step). */
 export const SURFACE: Record<Theme, string> = { light: "#ffffff", dark: "#161b22" };
 export const SIDEBAR: Record<Theme, string> = { light: "#10141a", dark: "#0a0d11" };
+/** --c-primary and --c-accent of styles/tokens.css: what an unset brand colour looks like (the colour pickers start there). */
+export const DEFAULT_PRIMARY: Record<Theme, string> = { light: "#0b6e7f", dark: "#45b5c6" };
+export const DEFAULT_ACCENT: Record<Theme, string> = { light: "#1e95a8", dark: "#1e95a8" };
 
 /** Every variable brandVariables can set, so a cleared colour falls back to tokens.css. */
 export const BRAND_VARS = [

@@ -2,106 +2,116 @@
 import { adminCrumbs } from "../sections";
 import { computed } from "vue";
 import { RouterLink } from "vue-router";
-import { KIND_LABELS, useIdentityProviders, type IdentityProvider } from "../../../api/identityProviders";
+import { useIdentityProviders, type IdentityProvider } from "../../../api/identityProviders";
 import Breadcrumbs from "../../../components/Breadcrumbs.vue";
 import EmptyState from "../../../components/EmptyState.vue";
 import ErrorAlert from "../../../components/ErrorAlert.vue";
-import LoadingState from "../../../components/LoadingState.vue";
+import Icon from "../../../components/Icon.vue";
+import RowMenu from "../../../components/RowMenu.vue";
+import SkeletonRows from "../../../components/SkeletonRows.vue";
+import { formatNumber, t } from "../../../i18n";
 import { useDocumentTitle } from "../../../lib/composables";
-import { formatRelative } from "../../../lib/format";
+import { formatDateTime, formatRelative } from "../../../lib/format";
+import { onRowKeydown } from "../../../lib/rowKeyboard";
+import KeyboardHints from "../../../components/KeyboardHints.vue";
+import { providerKindLabel } from "./providerText";
 
 /**
- * Administration › Identity providers: OpenID Connect providers and LDAP / AD directories, in the
- * order the sign-in page and the directory look-up use them. A handful per installation, so the API
- * lists them all at once.
+ * Administration › Identity providers, an explorer list (design §2.7, audit A4): OpenID Connect
+ * providers and LDAP / AD directories, in the order the sign-in page and the directory look-up use
+ * them. A handful per installation, so the API lists them all at once and there is nothing to page.
  */
-useDocumentTitle("Identity providers");
+useDocumentTitle(t("admin.section.identityProviders"));
 const list = useIdentityProviders();
 const rows = computed(() => list.data.value ?? []);
 
 const endpoint = (p: IdentityProvider) => p.oidc?.issuerUrl ?? p.ldap?.url ?? "";
 /** What still keeps it from working, as far as the saved settings tell. */
 function warning(p: IdentityProvider): string | null {
-  if (p.groupMappings.length === 0) return "No group mappings: nobody can sign in";
-  if (p.oidc && !p.oidc.redirectUri) return "PUBLIC_URL is not set: no sign-in button";
+  if (p.groupMappings.length === 0) return t("idp.list.noMappings");
+  if (p.oidc && !p.oidc.redirectUri) return t("idp.list.noPublicUrl");
   return null;
 }
+const rowMenu = (p: IdentityProvider) => [{ label: t("inventory.row.open"), to: `/admin/identity-providers/${p.id}` }];
+const NEW_OIDC = { path: "/admin/identity-providers/new", query: { kind: "oidc" } };
+const NEW_LDAP = { path: "/admin/identity-providers/new", query: { kind: "ldap" } };
 </script>
 
 <template>
   <Breadcrumbs :items="adminCrumbs('identity-providers')" />
   <div class="page-header">
     <div class="title">
-      <h1>Identity providers</h1>
-      <span v-if="list.data.value" class="muted">{{ rows.length.toLocaleString() }} total</span>
-      <span v-if="list.isFetching.value && !list.isLoading.value" class="spinner" aria-label="Refreshing" />
+      <h1>{{ t("admin.section.identityProviders") }}</h1>
+      <span v-if="list.data.value" class="muted count">{{ t("common.total", { n: formatNumber(rows.length) }) }}</span>
+      <span v-if="list.isFetching.value && !list.isLoading.value" class="spinner" :aria-label="t('common.refreshing')" />
     </div>
     <div class="actions">
-      <RouterLink class="btn" :to="{ path: '/admin/identity-providers/new', query: { kind: 'ldap' } }">+ New LDAP directory</RouterLink>
-      <RouterLink class="btn btn-primary" :to="{ path: '/admin/identity-providers/new', query: { kind: 'oidc' } }">+ New OpenID Connect provider</RouterLink>
+      <RouterLink class="btn" :to="NEW_LDAP"><Icon name="plus" />{{ t("idp.newLdap") }}</RouterLink>
+      <RouterLink class="btn btn-primary" :to="NEW_OIDC"><Icon name="plus" />{{ t("idp.newOidc") }}</RouterLink>
     </div>
   </div>
-  <p class="muted no-margin-top">
-    Let people sign in with their company account. OpenID Connect providers appear as “Sign in with …” buttons;
-    directory users sign in with the username and password form. Group mappings decide their permission profiles.
-    Local accounts keep working next to them.
-  </p>
+  <p class="page-intro">{{ t("idp.list.intro") }}</p>
 
-  <section class="panel" aria-label="Identity providers">
+  <section class="panel explorer" :aria-label="t('admin.section.identityProviders')">
+    <div v-if="rows.length > 0" class="toolbar">
+      <p class="toolbar-hint">{{ t("idp.list.orderHint") }}</p>
+    </div>
     <div v-if="list.isError.value" class="panel-body">
       <ErrorAlert :error="list.error.value" :on-retry="() => list.refetch()" />
     </div>
-    <LoadingState v-if="list.isLoading.value" label="Loading identity providers…" />
-    <EmptyState v-if="list.data.value && rows.length === 0" title="No identity providers yet">
-      Everyone signs in with a local ShadouCMDB account. Add an OpenID Connect provider (Microsoft Entra ID, Okta,
-      Keycloak, ADFS, Google Workspace…) or an LDAP / Active Directory directory to use company accounts.
+    <SkeletonRows v-else-if="list.isLoading.value" :label="t('idp.list.loading')" />
+    <EmptyState v-else-if="list.data.value && rows.length === 0" icon="key-round" :title="t('idp.list.empty.title')">
+      {{ t("idp.list.empty.body") }}
       <template #actions>
-        <RouterLink class="btn btn-primary" :to="{ path: '/admin/identity-providers/new', query: { kind: 'oidc' } }">+ New OpenID Connect provider</RouterLink>
-        <RouterLink class="btn" :to="{ path: '/admin/identity-providers/new', query: { kind: 'ldap' } }">+ New LDAP directory</RouterLink>
+        <RouterLink class="btn btn-primary" :to="NEW_OIDC"><Icon name="plus" />{{ t("idp.newOidc") }}</RouterLink>
+        <RouterLink class="btn" :to="NEW_LDAP"><Icon name="plus" />{{ t("idp.newLdap") }}</RouterLink>
       </template>
     </EmptyState>
 
-    <div v-if="rows.length > 0" class="table-wrap">
-      <table class="data">
-        <thead>
-          <tr>
-            <th scope="col" class="num">Order</th>
-            <th scope="col">Name</th>
-            <th scope="col">Type</th>
-            <th scope="col">Status</th>
-            <th scope="col">Server</th>
-            <th scope="col" class="num">Group mappings</th>
-            <th scope="col" class="num">Accounts</th>
-            <th scope="col">Updated</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="p in rows" :key="p.id" :class="{ disabled: !p.isEnabled }">
-            <td class="num">{{ p.sortOrder }}</td>
-            <td class="wrap">
-              <RouterLink :to="`/admin/identity-providers/${p.id}`">{{ p.name }}</RouterLink>
-              <span v-if="warning(p)" class="badge warn spaced">{{ warning(p) }}</span>
-              <span
-                v-if="p.oidc?.mfaAssurance === 'trustProvider'"
-                class="badge warn spaced"
-                title="Trusts the provider to enforce MFA; the sign-in token is not checked"
-                data-testid="mfa-not-verified"
-              >
-                MFA not verified
-              </span>
-            </td>
-            <td>{{ KIND_LABELS[p.kind] }}</td>
-            <td>
-              <span v-if="p.isEnabled" class="badge ok">Enabled</span>
-              <span v-else class="badge off">Disabled</span>
-            </td>
-            <td class="mono" :title="endpoint(p)">{{ endpoint(p) }}</td>
-            <td class="num" :title="p.groupMappings.map((m) => `${m.group} → ${m.profileName}`).join('\n')">{{ p.groupMappings.length }}</td>
-            <td class="num">{{ p.userCount.toLocaleString() }}</td>
-            <td :title="p.updatedAt">{{ formatRelative(p.updatedAt) }}</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+    <template v-if="rows.length > 0 && !list.isError.value">
+      <div class="table-wrap table-scroll">
+        <table class="data" aria-describedby="idp-keys">
+          <thead>
+            <tr>
+              <th scope="col" class="num">{{ t("idp.col.order") }}</th>
+              <th scope="col">{{ t("idp.col.name") }}</th>
+              <th scope="col">{{ t("idp.col.type") }}</th>
+              <th scope="col">{{ t("admin.col.status") }}</th>
+              <th scope="col">{{ t("idp.col.server") }}</th>
+              <th scope="col" class="num">{{ t("idp.col.mappings") }}</th>
+              <th scope="col" class="num">{{ t("idp.col.accounts") }}</th>
+              <th scope="col">{{ t("common.updated") }}</th>
+              <th scope="col" class="row-actions"><span class="sr-only">{{ t("inventory.actions") }}</span></th>
+            </tr>
+          </thead>
+          <tbody @keydown="onRowKeydown($event)">
+            <tr v-for="p in rows" :key="p.id" :data-id="p.id" :class="{ disabled: !p.isEnabled }">
+              <td class="num">{{ p.sortOrder }}</td>
+              <td class="wrap">
+                <RouterLink :to="`/admin/identity-providers/${p.id}`" dir="auto">{{ p.name }}</RouterLink>
+                <span v-if="warning(p)" class="badge warn spaced">{{ warning(p) }}</span>
+                <span v-if="p.oidc?.mfaAssurance === 'trustProvider'" class="badge warn spaced" :title="t('idp.mfaNotVerifiedTitle')" data-testid="mfa-not-verified">
+                  {{ t("idp.mfaNotVerified") }}
+                </span>
+              </td>
+              <td>{{ providerKindLabel(p.kind) }}</td>
+              <td>
+                <span class="status">
+                  <span :class="['status-dot', p.isEnabled ? 'ok' : 'off']" aria-hidden="true" />{{ p.isEnabled ? t("idp.enabled") : t("common.disabled") }}
+                </span>
+              </td>
+              <td class="mono" :title="endpoint(p)">{{ endpoint(p) }}</td>
+              <td class="num" :title="p.groupMappings.map((m) => `${m.group} → ${m.profileName}`).join('\n')">{{ formatNumber(p.groupMappings.length) }}</td>
+              <td class="num">{{ formatNumber(p.userCount) }}</td>
+              <td><time :datetime="p.updatedAt" :title="formatDateTime(p.updatedAt)">{{ formatRelative(p.updatedAt) }}</time></td>
+              <td class="row-actions">
+                <RowMenu :label="t('inventory.rowMenu', { name: p.name })" :items="rowMenu(p)" />
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <KeyboardHints id="idp-keys" />
+    </template>
   </section>
 </template>

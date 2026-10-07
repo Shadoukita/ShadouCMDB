@@ -240,7 +240,7 @@ const rowMenu = (tok: ApiToken): RowMenuItem[] => [
                 >{{ formatRelative(tok.createdAt) }}</time>
               </td>
               <td class="row-actions">
-                <RowMenu :label="t('inventory.rowMenu', { name: tok.name })" :items="rowMenu(tok)" />
+                <RowMenu :label="t('inventory.rowMenu', { name: tok.name })" :items="rowMenu(tok)" row-focus />
               </td>
             </tr>
           </tbody>

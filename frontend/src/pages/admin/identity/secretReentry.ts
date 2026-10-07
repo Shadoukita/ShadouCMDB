@@ -87,7 +87,3 @@ export function secretRequiredFields(error: unknown): SecretField[] {
     .filter((d): d is { field: SecretField } => d?.code === SECRET_REQUIRED && (d.field === "oidc.clientSecret" || d.field === "ldap.bindPassword"))
     .map((d) => d.field);
 }
-
-/** The hint under a secret that must be entered again. */
-export const reentryHint = (field: SecretField) =>
-  `The server address changed. Enter the ${field === "oidc.clientSecret" ? "client secret" : "bind password"} again.`;

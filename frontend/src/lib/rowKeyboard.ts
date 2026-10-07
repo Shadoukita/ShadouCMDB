@@ -19,12 +19,15 @@ export function isTextEntry(el: Element | null): boolean {
 }
 
 /**
- * The element a row's keyboard focus lands on: the link to the row's own CI (`data-id`), else its
- * first link, else its first button. Other links in the row (a related CI in an attribute column)
- * are only fallbacks, so Enter opens the CI the row is about.
+ * The element a row's keyboard focus lands on: an element marked `data-row-focus` (a row with no page
+ * of its own, such as an API token, marks its actions menu button), else the link to the row's own CI
+ * (`data-id`), else its first link, else its first button. Other links in the row (a related CI in an
+ * attribute column, a token's owner) are only fallbacks, so Enter acts on what the row is about.
  */
 export function rowFocusTarget(row: Element | null): HTMLElement | null {
   if (!row) return null;
+  const marked = row.querySelector<HTMLElement>("[data-row-focus]:not(:disabled)");
+  if (marked) return marked;
   const links = [...row.querySelectorAll<HTMLAnchorElement>("a[href]")];
   const id = (row as HTMLElement).dataset.id;
   const own = id ? links.find((a) => new URL(a.href, "http://host.invalid").pathname.endsWith(`/cis/${id}`)) : undefined;

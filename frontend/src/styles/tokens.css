@@ -9,7 +9,13 @@
  * Branding (stores/branding.ts) overrides --c-primary, --c-primary-hover, --c-primary-text,
  * --c-link, --c-focus and --c-accent on <html> at runtime. Its SURFACE and SIDEBAR constants
  * mirror --c-surface and --c-sidebar here; unit/brandColors.test.ts keeps them in step.
+ *
+ * `[data-theme-scope="light"|"dark"]` draws one element in a theme whatever the page's: the
+ * Customization › Branding preview shows the rail and sign-in card in both. Every token is
+ * declared again on the scoped element so derived tokens resolve in its theme; the branding
+ * colours are set inline on it (brandVariables for that theme).
  */
+[data-theme-scope],
 :root {
   /* ---------- Raw scales (the user's reference mockups, design document §0) ---------- */
   --gray-0: #ffffff;
@@ -219,6 +225,7 @@
 }
 
 /* Dark theme: set on <html data-theme="dark"> from the user's choice or the administrator's default. */
+[data-theme-scope="dark"],
 :root[data-theme="dark"] {
   --c-bg: #0e1116;
   --c-surface: #161b22;
@@ -303,6 +310,7 @@
 }
 
 /* Comfortable density: the operator's choice (stores/density.ts). Text sizes do not change. */
+:root[data-density="comfortable"] [data-theme-scope],
 :root[data-density="comfortable"] {
   --row-h: 34px;
   --control-h: 34px;

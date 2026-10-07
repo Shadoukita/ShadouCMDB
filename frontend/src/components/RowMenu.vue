@@ -16,7 +16,17 @@ export interface RowMenuItem {
  * A row's action menu (ARIA menu button): Enter, Space or Down opens it on the first item, Up on the last;
  * the arrow keys, Home and End move, Esc and Tab close it, and Esc returns focus to the button.
  */
-defineProps<{ label: string; items: RowMenuItem[]; /** At the control height, for a page header (default: small, for a table row). */ large?: boolean }>();
+const props = defineProps<{
+  label: string;
+  items: RowMenuItem[];
+  /** At the control height, for a page header (default: small, for a table row). */
+  large?: boolean;
+  /**
+   * The row's keyboard focus target (lib/rowKeyboard), for a row with no page of its own: ↑/↓ move between rows
+   * instead of opening the menu, and Enter or Space opens it.
+   */
+  rowFocus?: boolean;
+}>();
 const open = ref(false);
 const button = ref<HTMLButtonElement>();
 const menu = ref<HTMLElement>();
@@ -70,7 +80,7 @@ const onScroll = (e: Event) => {
 onBeforeUnmount(() => hide(false));
 
 function onButtonKey(e: KeyboardEvent) {
-  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+  if ((e.key === "ArrowDown" || e.key === "ArrowUp") && !props.rowFocus) {
     e.preventDefault();
     void show(e.key === "ArrowDown" ? "first" : "last");
   }
@@ -106,6 +116,7 @@ function run(item: RowMenuItem) {
       :aria-expanded="open"
       :aria-controls="open ? menuId : undefined"
       :aria-label="label"
+      :data-row-focus="rowFocus || undefined"
       @click="open ? hide(false) : show()"
       @keydown="onButtonKey"
     >

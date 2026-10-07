@@ -136,7 +136,7 @@ function onResizeStart(e: PointerEvent) {
 <style scoped>
 .le-field {
   position: relative;
-  border: 1px dashed var(--c-border-strong);
+  border: 1px solid var(--c-border);
   border-radius: var(--radius);
   padding: var(--sp-1) var(--sp-3) var(--sp-2) var(--sp-2);
   background: var(--c-surface);
@@ -144,7 +144,7 @@ function onResizeStart(e: PointerEvent) {
   min-width: 0;
 }
 .le-field.auto {
-  border-style: dotted;
+  border-style: dashed;
 }
 .le-field:hover,
 .le-field:focus-within {

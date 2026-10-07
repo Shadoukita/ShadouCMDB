@@ -109,9 +109,13 @@ jobs:
       - if: steps.pw-cache.outputs.cache-hit != 'true'
         run: npx playwright install --with-deps --only-shell chromium
         working-directory: frontend
+        # apt-get can stall on a slow mirror (SHAA-2361).
+        timeout-minutes: 15
       - if: steps.pw-cache.outputs.cache-hit == 'true'
         run: npx playwright install-deps chromium
         working-directory: frontend
+        # apt-get can stall on a slow mirror (SHAA-2361).
+        timeout-minutes: 15
 
       - name: Encryption key (ENCRYPTION_KEY_FILE, required by serve)
         run: |

@@ -141,7 +141,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
 </script>
 
 <template>
-  <div class="le-bar" role="region" aria-label="Layout editing">
+  <div class="le-bar" role="region" :aria-label="t('layoutEditor.region')">
     <div class="le-bar-row">
       <span class="le-bar-title">
         <span>
@@ -153,11 +153,11 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         </span>
         <span v-if="elsewhere" class="muted" data-testid="le-elsewhere">{{ elsewhere }}</span>
       </span>
-      <span class="le-bar-group" role="group" aria-label="History">
-        <button type="button" class="btn btn-sm" :disabled="!editor.canUndo" title="Undo (Ctrl+Z)" @click="editor.undo()">Undo</button>
-        <button type="button" class="btn btn-sm" :disabled="!editor.canRedo" title="Redo (Ctrl+Shift+Z)" @click="editor.redo()">Redo</button>
+      <span class="le-bar-group" role="group" :aria-label="t('layoutEditor.history')">
+        <button type="button" class="btn btn-sm" :disabled="!editor.canUndo" :title="t('layoutEditor.undoTitle')" @click="editor.undo()"><Icon name="arrow-left" />{{ t("layoutEditor.undo") }}</button>
+        <button type="button" class="btn btn-sm" :disabled="!editor.canRedo" :title="t('layoutEditor.redoTitle')" @click="editor.redo()"><Icon name="arrow-right" />{{ t("layoutEditor.redo") }}</button>
       </span>
-      <button type="button" class="btn btn-sm" :disabled="editor.builtIn" @click="confirmReset = true">Reset to built-in layout</button>
+      <button type="button" class="btn btn-sm" :disabled="editor.builtIn" @click="confirmReset = true">{{ t("layoutEditor.resetBuiltIn") }}</button>
       <span v-if="editor.onCi && editor.ci" class="le-bar-group" role="group" :aria-label="t('layoutEditor.ciGroup')">
         <button type="button" class="btn btn-sm" :disabled="editor.saving" @click="openChoose">{{ t("layoutEditor.useTemplate") }}</button>
         <button v-if="editor.ciHasOwn" type="button" class="btn btn-sm" :disabled="editor.saving" @click="confirmResetCi = true">{{ t("layoutEditor.resetCi") }}</button>
@@ -165,18 +165,18 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
     </div>
     <div class="le-bar-row">
       <template v-if="editor.tab">
-        <button type="button" class="btn btn-sm" :aria-pressed="editor.snap" title="Snap windows to each other's edges and an 8 px grid (hold Alt while dragging to place freely)" @click="editor.snap = !editor.snap">
-          Snap {{ editor.snap ? "on" : "off" }}
+        <button type="button" class="btn btn-sm le-snap-toggle" :aria-pressed="editor.snap" :title="t('layoutEditor.snapTitle')" @click="editor.snap = !editor.snap">
+          <Icon :name="editor.snap ? 'check' : 'square'" />{{ t("layoutEditor.snap") }}
         </button>
-        <span class="le-bar-group" role="group" aria-label="Layers of the selected window">
-          <span class="muted" data-testid="le-layer" :title="picked ? picked.section.label : undefined">{{ picked ? `Layer ${picked.index} of ${picked.count}` : "No window selected" }}</span>
+        <span class="le-bar-group" role="group" :aria-label="t('layoutEditor.layers')">
+          <span class="muted le-layer" data-testid="le-layer" :title="picked ? picked.section.label : undefined">{{ picked ? t("layoutEditor.layerOf", { index: picked.index, count: picked.count }) : t("layoutEditor.noWindow") }}</span>
           <button
             v-for="m in LAYER_MOVES"
             :key="m.move"
             type="button"
             class="btn btn-sm"
-            :aria-label="m.label"
-            :title="`${m.label} (${m.keys})`"
+            :aria-label="t(`layoutEditor.layer.${m.move}`)"
+            :title="`${t(`layoutEditor.layer.${m.move}`)} (${m.keys})`"
             :disabled="!picked || (m.move === 'front' || m.move === 'forward' ? picked.index >= picked.count : picked.index <= 1)"
             @click="editor.layer(m.move)"
           >
@@ -185,19 +185,16 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         </span>
       </template>
       <span class="le-bar-save">
-        <span v-if="editor.dirty" class="badge warn">Unsaved changes</span>
-        <span v-else class="muted">No unsaved changes</span>
+        <span v-if="editor.dirty" class="save-bar-status"><Icon name="circle-alert" /><strong>{{ t("record.save.unsaved") }}</strong></span>
         <button type="button" class="btn btn-primary" :disabled="!editor.dirty || editor.saving" data-testid="le-save" @click="onPrimary">
           {{ editor.saving ? t("layoutEditor.saving") : onTemplate ? t("layoutEditor.saveToTemplate", { name: templateName }) : t("layoutEditor.saveForCi") }}
         </button>
         <RowMenu :label="t('layoutEditor.moreSave')" :items="moreSave" />
-        <button type="button" class="btn" :disabled="!editor.dirty || editor.saving" @click="editor.discard()">Discard</button>
-        <button type="button" class="btn" @click="editor.exit()">Done</button>
+        <button type="button" class="btn" :disabled="!editor.dirty || editor.saving" @click="editor.discard()">{{ t("record.save.discard") }}</button>
+        <button type="button" class="btn" @click="editor.exit()">{{ t("layoutEditor.done") }}</button>
       </span>
     </div>
-    <div v-if="editor.openedHere" class="alert" role="note">
-      Your browser blocked the new window, so the layout editor opened in this tab. Done takes you back to the page.
-    </div>
+    <div v-if="editor.openedHere" class="alert" role="note">{{ t("layoutEditor.openedHere") }}</div>
     <div v-if="editor.saved && !editor.dirty" class="alert alert-success" role="status">{{ editor.saved }}</div>
     <div v-if="editor.conflict || (editor.stale && editor.dirty)" class="alert alert-warn" role="alert">
       <strong>{{ t("layoutEditor.conflictTitle") }}</strong>
@@ -210,7 +207,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
     <ErrorAlert v-else-if="editor.saveError" :error="editor.saveError" :title="t('layoutEditor.notSaved')" />
   </div>
 
-  <ConfirmDialog :open="confirmReset" :title="t('layoutEditor.resetBuiltInTitle')" confirm-label="Reset to built-in layout" @confirm="onReset" @cancel="confirmReset = false">
+  <ConfirmDialog :open="confirmReset" :title="t('layoutEditor.resetBuiltInTitle')" :confirm-label="t('layoutEditor.resetBuiltIn')" @confirm="onReset" @cancel="confirmReset = false">
     {{ onTemplate ? t("layoutEditor.resetBuiltInTemplate", { name: templateName }) : t("layoutEditor.resetBuiltInCi") }}
   </ConfirmDialog>
 
@@ -294,9 +291,10 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
   gap: var(--sp-2);
   padding: var(--sp-2) var(--sp-4);
   margin-bottom: var(--sp-4);
-  border: 2px solid var(--c-primary);
-  border-radius: var(--radius);
-  background: var(--c-surface-alt);
+  border: 1px solid var(--c-border);
+  border-top: 3px solid var(--c-primary);
+  border-radius: var(--radius-lg);
+  background: var(--c-surface);
   box-shadow: var(--shadow-md);
 }
 .le-bar-row {
@@ -323,9 +321,15 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
   gap: var(--sp-2);
   margin-left: auto;
 }
-.le-bar-group [aria-pressed="true"] {
+/* Snap is a toggle: pressed reads as selected (A10: the old rule never matched it). */
+.le-snap-toggle[aria-pressed="true"] {
   border-color: var(--c-primary);
+  background: var(--c-row-selected);
   color: var(--c-primary);
+}
+.le-layer {
+  padding: 0 var(--space-2);
+  font-variant-numeric: tabular-nums;
 }
 .le-bar .alert {
   margin: 0;
