@@ -16,8 +16,9 @@
 //! export starts before the oldest such entry not yet sent, so it leaves with
 //! every row after it, also the ones CLI commands (`mfa reset-undecryptable`,
 //! `create-admin`) wrote before the server started (GH#677). A sent entry is
-//! listed in `audit_export_restores` (migration 0061); one whose send fails is
-//! sent again after a restart.
+//! listed in `audit_export_restores` (migration 0061; only existing entries
+//! may be listed, 0063, GH#696); one whose send fails is sent again after a
+//! restart.
 //!
 //! A row that can never be sent (larger than one UDP datagram) must not hold
 //! the export up: it leaves as a stub without `oldValue` and `newValue`, with
@@ -830,6 +831,146 @@ mod tests {
         assert!(health.failing.is_none());
         assert_eq!(start(&db.pool).await.unwrap(), (after, 0), "a restart resumes at the newest row");
         db.drop().await;
+    }
+
+    fn file_sink() -> (Sink, PathBuf) {
+        let path = std::env::temp_dir().join(format!("shadoucmdb-audit-{}.jsonl", Uuid::new_v4()));
+        let sink = Sink {
+            target: AuditSink::File(path.clone()),
+            format: AuditFormat::Json,
+            facility: 13,
+            hostname: "h".into(),
+            tls: None,
+            conn: None,
+        };
+        (sink, path)
+    }
+
+    fn sql_state(err: &sqlx::Error) -> String {
+        err.as_database_error().and_then(|d| d.code()).unwrap_or_default().into_owned()
+    }
+
+    /// GH#696: the API role lists only a `backup.restore` entry that exists,
+    /// never a chainSeq past the head or another row, and `sent_at` is when it
+    /// listed it.
+    #[tokio::test]
+    async fn the_api_role_lists_only_existing_restore_entries() {
+        let Some(roles) = crate::db::scratch::Roles::create("the_api_role_lists_only_existing_restore_entries").await
+        else {
+            return;
+        };
+        let db = roles.database().await;
+        let api = roles.api_pool(&db).await;
+        let insert = |action: &'static str| {
+            sqlx::query_scalar::<_, i64>(
+                "INSERT INTO cmdb.audit_log (actor_type, actor_name, action, entity_type, entity_id, new_value)
+                 VALUES ('system', session_user, $1, 'audit_log', gen_random_uuid(), '{}') RETURNING chain_seq",
+            )
+            .bind(action)
+            .fetch_one(&db.pool)
+        };
+        let other = insert("mfa.disable").await.unwrap();
+        let head = head(&db.pool).await.unwrap();
+        for seq in [head + 1, head + 250, other] {
+            let err = mark_restore_sent(&api, seq).await.unwrap_err();
+            assert_eq!(sql_state(&err), "23503", "chainSeq {seq}: {err}");
+        }
+        let planted = "INSERT INTO cmdb.audit_export_restores (chain_seq) SELECT generate_series($1, $1 + 249)";
+        let err = sqlx::query(planted).bind(head + 1).execute(&api).await.unwrap_err();
+        assert_eq!(sql_state(&err), "23503", "{err}");
+
+        let restore = insert("backup.restore").await.unwrap();
+        assert_eq!(start(&api).await.unwrap(), (restore - 1, 1));
+        sqlx::query("INSERT INTO cmdb.audit_export_restores (chain_seq, sent_at) VALUES ($1, '2000-01-01')")
+            .bind(restore)
+            .execute(&api)
+            .await
+            .unwrap();
+        let backdated: bool = sqlx::query_scalar(
+            "SELECT sent_at < now() - interval '1 minute' FROM cmdb.audit_export_restores WHERE chain_seq = $1",
+        )
+        .bind(restore)
+        .fetch_one(&api)
+        .await
+        .unwrap();
+        assert!(!backdated, "sent_at is the time of the insert");
+        assert_eq!(start(&api).await.unwrap(), (restore, 0));
+        api.close().await;
+        db.drop().await;
+        roles.drop().await;
+    }
+
+    /// GH#696: rows listed past the head before the upgrade (no guard then) go
+    /// with the backup, but `restore` drops them, so the entry it writes is
+    /// sent at the next start.
+    #[tokio::test]
+    async fn a_planted_chain_seq_does_not_hide_a_later_restore() {
+        use crate::maintenance::{archive, backup, restore};
+        let Some(roles) = crate::db::scratch::Roles::create("a_planted_chain_seq_does_not_hide_a_later_restore").await
+        else {
+            return;
+        };
+        let a = roles.database().await;
+        let b = roles.database().await;
+        sqlx::query(
+            "INSERT INTO cmdb.audit_log (actor_type, actor_name, action, entity_type, entity_id, new_value)
+             VALUES ('system', session_user, 'mfa.disable', 'users', gen_random_uuid(), '{}')",
+        )
+        .execute(&a.pool)
+        .await
+        .unwrap();
+        let head_a = head(&a.pool).await.unwrap();
+        // As the API role could on 0061: the guard is off for the plant.
+        let mut owner = a.pool.acquire().await.unwrap();
+        for sql in [
+            "ALTER TABLE cmdb.audit_export_restores DISABLE TRIGGER audit_export_restores_guard",
+            "INSERT INTO cmdb.audit_export_restores (chain_seq) SELECT generate_series(1, 300)",
+            "ALTER TABLE cmdb.audit_export_restores ENABLE TRIGGER audit_export_restores_guard",
+        ] {
+            sqlx::query(sql).execute(&mut *owner).await.unwrap();
+        }
+        drop(owner);
+
+        let api_a = roles.api_pool(&a).await;
+        let mut buf = Vec::new();
+        backup::write(&mut api_a.acquire().await.unwrap(), &mut buf, None).await.unwrap();
+        let checked = archive::verify(buf.as_slice(), None).unwrap();
+        let listed = checked.header.tables.iter().find(|t| t.name == "audit_export_restores").map(|t| t.rows);
+        assert_eq!(listed, Some(300), "the backup holds the planted rows");
+
+        let report = {
+            let _one = crate::db::scratch::whole_schema_transaction().await;
+            let mut cb = b.pool.acquire().await.unwrap();
+            restore::restore(&mut cb, buf.as_slice(), &checked, true, true).await.unwrap()
+        };
+        assert_eq!(report.restored_head.chain_seq, head_a);
+        assert_eq!(report.entry.chain_seq, head_a + 1);
+        let left: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM cmdb.audit_export_restores").fetch_one(&b.pool).await.unwrap();
+        assert_eq!(left, 0, "nothing listed matches a restore entry");
+
+        let api_b = roles.api_pool(&b).await;
+        let (cursor, unsent) = start(&api_b).await.unwrap();
+        assert_eq!((cursor, unsent), (head_a, 1), "starts before the new entry");
+        let (mut sink, path) = file_sink();
+        let mut health = Health::default();
+        assert_eq!(drain(&api_b, &mut sink, cursor, &mut health).await, report.entry.chain_seq);
+        let out = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let sent: Vec<Value> = out.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert_eq!(sent.len(), 1, "{out}");
+        assert_eq!(
+            (sent[0]["chainSeq"].as_i64(), sent[0]["action"].as_str()),
+            (Some(head_a + 1), Some("backup.restore"))
+        );
+        assert!(health.failing.is_none());
+        assert_eq!(start(&api_b).await.unwrap(), (head_a + 1, 0), "listed once sent");
+
+        api_a.close().await;
+        api_b.close().await;
+        a.drop().await;
+        b.drop().await;
+        roles.drop().await;
     }
 
     /// GH#509: a refused sign-in under a name that matches no account (often a
