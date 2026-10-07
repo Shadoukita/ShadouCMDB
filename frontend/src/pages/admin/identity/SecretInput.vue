@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from "vue";
+import { t } from "../../../i18n";
 
 /**
  * A write-only secret (OIDC client secret, LDAP bind password). The API never returns it, only
@@ -41,21 +42,21 @@ async function replace() {
         :aria-describedby="describedBy"
         @input="model = ($event.target as HTMLInputElement).value"
       />
-      <button v-if="isSet && !required" type="button" class="btn" @click="model = undefined">Keep stored</button>
+      <button v-if="isSet && !required" type="button" class="btn" @click="model = undefined">{{ t("idp.secret.keep") }}</button>
     </div>
     <div v-else class="secret-row">
       <span :id="`${id}-state`" class="secret-state" :class="{ removed: model === null }">
-        {{ model === null ? "Will be removed when you save" : "Stored — never shown" }}
+        {{ model === null ? t("idp.secret.willRemove") : t("idp.secret.stored") }}
       </span>
       <template v-if="model === null">
-        <button type="button" class="btn" :aria-describedby="`${id}-label`" @click="model = undefined">Undo</button>
+        <button type="button" class="btn" :aria-describedby="`${id}-label`" @click="model = undefined">{{ t("idp.secret.undo") }}</button>
       </template>
       <template v-else>
-        <button type="button" class="btn" :aria-describedby="`${id}-label`" @click="replace">Replace…</button>
-        <button v-if="removable" type="button" class="btn btn-quiet-danger" :aria-describedby="`${id}-label`" @click="model = null">Remove</button>
+        <button type="button" class="btn" :aria-describedby="`${id}-label`" @click="replace">{{ t("idp.secret.replace") }}</button>
+        <button v-if="removable" type="button" class="btn btn-quiet-danger" :aria-describedby="`${id}-label`" @click="model = null">{{ t("idp.secret.remove") }}</button>
       </template>
     </div>
-    <span v-if="editing" :id="`${id}-state`" class="sr-only">{{ isSet ? "Replaces the stored secret when you save." : "No secret stored." }}</span>
+    <span v-if="editing" :id="`${id}-state`" class="sr-only">{{ isSet ? t("idp.secret.replaces") : t("idp.secret.none") }}</span>
     <span v-if="error" :id="`${id}-err`" class="error">{{ error }}</span>
     <span v-if="hint" :id="`${id}-hint`" class="hint">{{ hint }}</span>
   </div>
