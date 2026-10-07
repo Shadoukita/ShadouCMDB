@@ -995,8 +995,9 @@ async fn a_transition_never_takes_a_workflow_state_field() {
     assert_eq!((status, details(&v)), (400, refused), "{v}");
     assert!(v["error"]["details"][0]["message"].as_str().unwrap().contains("server_lifecycle"), "{v}");
 
-    // While server_lifecycle is inactive the review may take the field and publishes; once it is
-    // active again, the published review version is refused at run time.
+    // While server_lifecycle is inactive the review may take the field and publishes; activating
+    // server_lifecycle again is then refused (GH#698). Data from before that check (forced here)
+    // still has the published review version refused at run time.
     let set_active = |def: Uuid, active: bool| {
         let w = &w;
         async move {
@@ -1008,7 +1009,15 @@ async fn a_transition_never_takes_a_workflow_state_field() {
     let (status, v) = publish(other, w.ok("GET", &format!("{DEFS}/{other}/draft"), json!(null)).await).await;
     assert_eq!(status, 201, "{v}");
     set_active(other, true).await;
-    set_active(w.definition, true).await;
+    let d = w.ok("GET", &format!("{DEFS}/{}", w.definition), json!(null)).await;
+    let body = json!({ "version": d["version"], "isActive": true });
+    let (status, v) = w.call(&w.admin, "PATCH", &format!("{DEFS}/{}", w.definition), Some(body)).await;
+    assert_eq!((status, details(&v)), (409, pairs(&[("stateAttributeId", "state_field_in_transition")])), "{v}");
+    sqlx::query("UPDATE workflow_definitions SET is_active = true WHERE id = $1")
+        .bind(w.definition)
+        .execute(&w.pool)
+        .await
+        .unwrap();
     let ci = w.ci(w.server).await;
     let (status, v) = w.start(&w.admin, ci).await;
     assert_eq!(status, 201, "{v}");
