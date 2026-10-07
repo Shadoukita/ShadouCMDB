@@ -1288,3 +1288,80 @@ async fn activating_a_driver_is_refused_while_another_workflow_takes_its_field()
     );
     db.drop().await;
 }
+
+/// GH#698 edges (SHAA-2254): a driver on another branch of the type tree is
+/// not held up, widening an active driver to include the taker's subtype is
+/// refused, and the configuration import refuses that widening as the API
+/// does and changes nothing.
+#[tokio::test]
+async fn widening_a_driver_over_a_takers_subtype_is_refused_also_by_import() {
+    let Some(db) = scratch::database("workflow_widen_over_taker").await else { return };
+    let w = world(&db).await;
+    post(&w.app, &w.admin, "/api/v1/ci-classes", json!({ "key": "blade", "name": "Blade", "parentId": w.server }))
+        .await;
+    let blade: Uuid =
+        sqlx::query_scalar("SELECT id FROM ci_classes WHERE key = 'blade'").fetch_one(&w.pool).await.unwrap();
+    let publish = |flow: Uuid, graph: Value| {
+        let w = &w;
+        async move {
+            let (status, v) = w.call("PUT", &format!("{BASE}/{flow}/draft"), Some(graph)).await;
+            assert_eq!(status, 200, "{v}");
+            let sum = v["checksum"].as_str().unwrap().to_owned();
+            let path = format!("{BASE}/{flow}/draft/publish");
+            let (status, v) = w.call("POST", &path, Some(json!({ "expectedDraftChecksum": sum }))).await;
+            assert_eq!(status, 201, "{v}");
+        }
+    };
+    // An active taker on Blade only: its transition takes `lifecycle`.
+    let body = json!({ "key": "blade_taker", "name": "Blade taker", "classId": blade, "isActive": true });
+    let taker = id(&post(&w.app, &w.admin, BASE, body).await);
+    publish(
+        taker,
+        json!({
+            "initialState": "a",
+            "states": [
+                { "key": "a", "name": "A", "category": "open", "terminal": false },
+                { "key": "b", "name": "B", "category": "done", "terminal": true }
+            ],
+            "transitions": [ { "key": "set_env", "name": "Set", "from": "a", "to": "b", "requiresComment": false,
+                "fields": [ { "attribute": "lifecycle", "required": true } ] } ]
+        }),
+    )
+    .await;
+
+    // A driver on Server alone shares no CI with it: it activates.
+    let body = json!({ "key": "server_driver", "name": "Driver", "classId": w.server, "includeSubclasses": false,
+        "stateAttributeId": w.lifecycle });
+    let driver = id(&post(&w.app, &w.admin, BASE, body).await);
+    publish(driver, lifecycle_graph()).await;
+    let driver_path = format!("{BASE}/{driver}");
+    let (status, v) = w.call("PATCH", &driver_path, Some(json!({ "version": 2, "isActive": true }))).await;
+    assert_eq!(status, 200, "{v}");
+
+    // Including the subtypes would cover Blade's CIs: refused, nothing changes.
+    let (status, v) = w.call("PATCH", &driver_path, Some(json!({ "version": 3, "includeSubclasses": true }))).await;
+    assert_eq!(
+        (status, details(&v)),
+        (409, vec![("stateAttributeId".to_owned(), "state_field_in_transition".to_owned())]),
+        "{v}"
+    );
+    let (_, v) = w.call("GET", &driver_path, None).await;
+    assert_eq!((v["includeSubclasses"].as_bool(), v["version"].as_i64()), (Some(false), Some(3)), "{v}");
+
+    // The same widening through the configuration import.
+    let full = export_config(&w.app, &w.admin).await;
+    let mut file = json!({ "format": full["format"], "formatVersion": full["formatVersion"],
+        "workflows": full["workflows"] });
+    let flows = file["workflows"].as_array_mut().unwrap();
+    let mine = flows.iter_mut().find(|f| f["key"] == "server_driver").expect("the driver is exported");
+    mine["includeSubclasses"] = json!(true);
+    for mode in ["dry_run", "apply"] {
+        let path = format!("/api/v1/admin/config/import?mode={mode}");
+        let (status, v, _) = call(&w.app, "POST", &path, &w.admin, Some(file.clone())).await;
+        assert!(status >= 400, "{mode}: {status} {v}");
+        assert!(details(&v).iter().any(|(_, c)| c == "state_field_in_transition"), "{mode}: {v}");
+    }
+    let (_, v) = w.call("GET", &driver_path, None).await;
+    assert_eq!((v["includeSubclasses"].as_bool(), v["version"].as_i64()), (Some(false), Some(3)), "{v}");
+    db.drop().await;
+}
