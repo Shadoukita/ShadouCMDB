@@ -81,7 +81,7 @@ const tiles = computed<Tile[]>(() => {
 </script>
 
 <template>
-  <section v-if="tiles.length > 0" class="record-stats" :aria-label="t('record.stats')" data-testid="record-stats">
+  <section v-if="tiles.length > 0" class="stat-grid" :aria-label="t('record.stats')" data-testid="record-stats">
     <div v-for="tile in tiles" :key="tile.key" class="stat" :data-stat="tile.key" :aria-busy="tile.pending">
       <span class="value">
         <span v-if="tile.pending" class="skeleton-line" aria-hidden="true" />

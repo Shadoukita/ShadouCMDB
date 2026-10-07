@@ -13,6 +13,7 @@
 @import "./components/shell.css";
 @import "./components/explorer.css";
 @import "./components/record.css";
+@import "./components/dashboard.css";
 
 /*
  * Page and shell rules. The primitives (SHAA-1670 design document, §2.7) live in base.css and
@@ -192,20 +193,6 @@ dl.props .group-title:first-child {
 .diff ins {
   color: var(--c-success-text);
   text-decoration: none;
-}
-
-/* ---------- Dashboard ---------- */
-.kpis {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-4);
-  margin-bottom: var(--sp-4);
-}
-.bar {
-  height: 8px;
-  background: var(--c-primary);
-  border-radius: 2px;
-  min-width: 1px;
 }
 
 /* ---------- Combobox / dialog ---------- */
@@ -527,29 +514,6 @@ table.attributes tr.section-row td {
 }
 fieldset.ro-wrap {
   display: contents;
-}
-
-/* ---------- Dashboard widgets ---------- */
-.widgets {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: var(--sp-4);
-  align-items: start;
-}
-.widget-small {
-  grid-column: span 2;
-}
-.widget-medium {
-  grid-column: span 3;
-}
-.widget-large {
-  grid-column: span 6;
-}
-@media (max-width: 1100px) {
-  .widget-small,
-  .widget-medium {
-    grid-column: span 6;
-  }
 }
 
 /* ---------- Customization editor ---------- */

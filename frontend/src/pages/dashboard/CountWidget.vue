@@ -55,18 +55,23 @@ const loading = computed(() =>
 const sourceError = computed(() => (props.widget.type === "count_by_class" ? classes.error.value : (lookupLists.error.value ?? values.error.value)));
 const counts = useQueries({ queries: computed(() => rows.value.map((r) => ciCountQuery(r.query))) });
 const listMissing = computed(() => tAround("dashboard.listMissing", "key"));
+/** The widget names a lookup list that is not there (any more): said inside the widget's panel. */
+const listIsMissing = computed(() => props.widget.type === "count_by_lookup" && !!lookupLists.data.value && !list.value);
+const labelHeader = computed(() => (props.widget.type === "count_by_class" ? t("dashboard.col.class") : (list.value?.name ?? t("dashboard.col.value"))));
 const countRows = computed<CountRow[]>(() => rows.value.map((r, i) => ({ ...r, count: counts.value[i]?.data })));
 </script>
 
 <template>
   <CountTable
     :title="heading"
+    :label-header="labelHeader"
     :rows="countRows"
     :total="total.data.value ?? 0"
     :loading="loading"
     :error="sourceError ?? counts.find((c) => c.error)?.error"
-  />
-  <p v-if="widget.type === 'count_by_lookup' && lookupLists.data.value && !list" class="muted">
-    {{ listMissing[0] }}<code>{{ widget.lookupListKey }}</code>{{ listMissing[1] }}
-  </p>
+  >
+    <template v-if="listIsMissing" #note>
+      <p class="muted no-margin">{{ listMissing[0] }}<code>{{ widget.lookupListKey }}</code>{{ listMissing[1] }}</p>
+    </template>
+  </CountTable>
 </template>

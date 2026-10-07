@@ -80,26 +80,6 @@ a.fact-chip:focus-visible {
   outline-offset: 1px;
 }
 
-/* ---------- Stat tiles: 6 across at most, wrapping ---------- */
-.record-stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  gap: var(--space-3);
-  max-width: calc(6 * 240px);
-  margin: 0 0 var(--space-4);
-}
-.record-stats .value {
-  min-height: 28px;
-}
-.record-stats .skeleton-line {
-  display: block;
-  width: 48px;
-  height: 20px;
-  margin-top: var(--space-1);
-  border-radius: var(--radius-sm);
-  background: var(--c-surface-alt);
-}
-
 /* ---------- Sections (audit R4): only a section the layout collapses has a toggle ---------- */
 .layout-panel.is-collapsed > .panel-header {
   border-bottom: 0;

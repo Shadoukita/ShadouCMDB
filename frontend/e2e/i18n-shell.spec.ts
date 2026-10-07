@@ -32,16 +32,21 @@ test("the shell and the dashboard are German with the German catalog", async ({ 
   await page.goto("/");
   await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
   await expect(page).toHaveTitle(/^Dashboard · /);
-  await expect(page.getByRole("heading", { name: "Nach Klasse", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "CIs nach Klasse", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Zuletzt geändert", exact: true })).toBeVisible();
-  await expect(page.locator(".kpi .label")).toHaveText("Configuration Items");
+  const stats = page.getByRole("region", { name: "Kennzahlen" });
+  await expect(stats.locator('[data-stat="total"] .label')).toHaveText("Configuration Items");
+  await expect(stats.locator('[data-stat="total"] .note')).toHaveText(/^in \d+ Klassen?$/);
+  await expect(stats.locator('[data-stat="changes"] .label')).toHaveText("Änderungen (7 Tage)");
   await expect(page.getByRole("columnheader", { name: "Bezeichnung" })).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "Anteil" }).first()).toBeVisible();
   await expect(page.locator("table.data td.num .spinner")).toHaveCount(0); // every count has loaded
+  await expect(page.locator(".share-pct").first()).toHaveText(/^(<1|\d+) %$/);
 
   const nav = page.getByRole("navigation", { name: "Hauptmenü" });
   await expect(nav.getByRole("link", { name: "Alle Configuration Items" })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Navigationspfad" })).toBeVisible();
-  // Exact: the dashboard's own "+ Neues CI" button would otherwise match too.
+  // In the banner: the dashboard's own "Neues CI" button would otherwise match too.
   await expect(page.getByRole("banner").getByRole("link", { name: "Neues CI", exact: true })).toBeVisible();
   await openUserMenu(page);
   await expect(page.getByRole("button", { name: "Abmelden", exact: true })).toBeVisible();

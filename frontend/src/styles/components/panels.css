@@ -51,8 +51,26 @@
 }
 
 /* ---------- Stat tile: an overline label, a mono value, a note ---------- */
-.stat,
-.kpi {
+/* A row of tiles: 6 across at most, wrapping to 3 or 2 (record header, dashboard). */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: var(--space-3);
+  max-width: calc(6 * 240px);
+  margin: 0 0 var(--space-4);
+}
+.stat-grid .value {
+  min-height: 28px;
+}
+.stat-grid .skeleton-line {
+  display: block;
+  width: 48px;
+  height: 20px;
+  margin-top: var(--space-1);
+  border-radius: var(--radius-sm);
+  background: var(--c-surface-alt);
+}
+.stat {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
@@ -62,8 +80,7 @@
   border: 1px solid var(--c-border);
   border-radius: var(--radius-lg);
 }
-.stat .label,
-.kpi .label {
+.stat .label {
   order: -1;
   font-size: var(--fs-overline);
   font-weight: var(--fw-semibold);
@@ -72,8 +89,7 @@
   letter-spacing: var(--ls-overline);
   color: var(--c-text-secondary);
 }
-.stat .value,
-.kpi .value {
+.stat .value {
   font-family: var(--font-mono);
   font-size: var(--fs-kpi);
   line-height: 28px;

@@ -1,0 +1,83 @@
+/*
+ * Dashboard (design document §2.7, audit D1–D4): the stat tiles (panels.css), then one widget grid for the
+ * built-in and the customized widgets alike. A widget is a panel; its size sets the width (a third, half, full).
+ */
+.widgets {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: var(--space-4);
+  align-items: start;
+}
+.widgets > .widget > .panel {
+  margin-bottom: 0;
+}
+.widget-small {
+  grid-column: span 2;
+}
+.widget-medium {
+  grid-column: span 3;
+}
+.widget-large {
+  grid-column: span 6;
+}
+@media (max-width: 1100px) {
+  .widget-small,
+  .widget-medium {
+    grid-column: span 6;
+  }
+}
+
+/* A widget's title with its count badge (a saved search's matches). */
+.panel-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.panel-title .count {
+  padding: 0 var(--space-1_5);
+  border-radius: var(--radius-full);
+  background: var(--badge-neutral-bg);
+  color: var(--badge-neutral-fg);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 18px;
+}
+
+/* ---------- Count table: label, count, share of all CIs, and the row's New action ---------- */
+table.count-table td.num,
+table.count-table th.num {
+  width: 1%;
+  white-space: nowrap;
+}
+table.count-table .share {
+  width: 40%;
+}
+table.count-table td.share {
+  white-space: nowrap;
+}
+/* The bar is the first data-viz series on a sunken track; the percentage beside it is the reading. */
+.share-track {
+  display: inline-block;
+  vertical-align: middle;
+  width: calc(100% - 5ch - var(--space-2));
+  height: 6px;
+  border-radius: var(--radius-sm);
+  background: var(--c-surface-sunken);
+  overflow: hidden;
+}
+.share-bar {
+  display: block;
+  height: 100%;
+  background: var(--c-viz-1);
+}
+.share-pct {
+  display: inline-block;
+  width: 5ch;
+  margin-left: var(--space-2);
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--c-text-tertiary);
+}

@@ -4,7 +4,7 @@ import { useLookupLists } from "../../../api/datamodel";
 import { useAttributesOfClasses, useCiClasses } from "../../../api/queries";
 import type { UiListFilters, UiSettingsDocument, UiWidget, UiWidgetType } from "../../../api/uiSettings";
 import { moveItem } from "../../../lib/reorder";
-import { attributeSortFields, sharedSortAttributes, SORT_FIELDS, unavailableSortLabel, WIDGET_TYPES, widgetLabel } from "../../../lib/uiSettings";
+import { attributeSortFields, builtInWidgets, sharedSortAttributes, SORT_FIELDS, unavailableSortLabel, WIDGET_TYPES, widgetLabel } from "../../../lib/uiSettings";
 import DashboardWidgets from "../../dashboard/DashboardWidgets.vue";
 import KeyChecklist from "./KeyChecklist.vue";
 import LookupFilterEditor from "./LookupFilterEditor.vue";
@@ -24,11 +24,7 @@ const statusListKey = computed(() => lookupLists.data.value?.find((l) => l.key =
 
 /** Starts from the built-in dashboard's panels, so switching to custom widgets changes nothing until edited. */
 function useCustom() {
-  props.doc.dashboard.widgets = [
-    { id: "by_class", type: "count_by_class", title: null, size: "medium" },
-    ...(statusListKey.value ? [{ id: "by_status", type: "count_by_lookup", title: "By status", size: "medium", lookupListKey: statusListKey.value } as UiWidget] : []),
-    { id: "recent", type: "recent_changes", title: null, size: "large", limit: 12 },
-  ];
+  props.doc.dashboard.widgets = builtInWidgets(statusListKey.value);
 }
 function useBuiltIn() {
   props.doc.dashboard.widgets = null;
