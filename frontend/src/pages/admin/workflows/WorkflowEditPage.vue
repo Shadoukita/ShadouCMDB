@@ -36,19 +36,21 @@ const current = computed<Tab>(() => {
   return TABS.some(([k]) => k === t) ? (t as Tab) : "settings";
 });
 
-function selectTab(key: Tab) {
+/** A tab with unsaved changes (Designer, Grants) may ask first and keep the current tab. */
+async function selectTab(key: Tab) {
   if (key === current.value) return;
-  void router.push({ path: route.path, query: key === "settings" ? {} : { tab: key } });
+  await router.push({ path: route.path, query: key === "settings" ? {} : { tab: key } });
 }
-function onTabKey(e: KeyboardEvent) {
+async function onTabKey(e: KeyboardEvent) {
   const keys = TABS.map(([k]) => k);
   const at = keys.indexOf(current.value);
   const to = { ArrowRight: at + 1, ArrowLeft: at - 1 + keys.length, Home: 0, End: keys.length - 1 }[e.key];
   if (to === undefined) return;
   e.preventDefault();
-  const next = keys[to % keys.length];
-  selectTab(next);
-  void nextTick(() => document.getElementById(`wf-tab-${next}`)?.focus());
+  await selectTab(keys[to % keys.length]);
+  // The tab now shown: the one asked for, or the same one when leaving it was cancelled.
+  await nextTick();
+  document.getElementById(`wf-tab-${current.value}`)?.focus();
 }
 
 const crumbs = computed(() => [

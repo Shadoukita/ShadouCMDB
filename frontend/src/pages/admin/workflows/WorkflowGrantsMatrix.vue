@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { onBeforeRouteLeave, onBeforeRouteUpdate } from "vue-router";
 import { useAllProfiles } from "../../../api/admin";
 import { ApiError } from "../../../api/client";
 import { useSaveGrants, useWorkflowDraft, useWorkflowGrants, useWorkflowVersion, type WorkflowDefinitionDetail, type WorkflowGrants } from "../../../api/workflows";
@@ -113,6 +114,20 @@ function reset() {
   added.value = [];
   error.value = null;
 }
+
+// Unsaved grants: ask before another tab of this page (a ?tab= update) or another page drops them, and let the
+// browser ask before a reload or closing the window.
+const keepChanges = () => !dirty.value || window.confirm("Your grant changes are not saved. Leave and lose them?");
+onBeforeRouteLeave(keepChanges);
+onBeforeRouteUpdate(keepChanges);
+function onBeforeUnload(e: BeforeUnloadEvent) {
+  if (!dirty.value) return;
+  e.preventDefault();
+  e.returnValue = "";
+}
+onMounted(() => window.addEventListener("beforeunload", onBeforeUnload));
+onBeforeUnmount(() => window.removeEventListener("beforeunload", onBeforeUnload));
+
 const ungranted = computed(() => rows.value.filter((r) => !PSEUDO_GRANTS.includes(r.key) && !r.orphan && !(sets.value.get(r.key)?.size ?? 0)).length);
 </script>
 

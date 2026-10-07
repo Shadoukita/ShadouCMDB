@@ -221,6 +221,44 @@ test("grant transitions to a permission profile", async ({ page, request }) => {
   expect(byKey.retire).toEqual([PROFILE]);
 });
 
+test("unsaved grants are not dropped without asking: another tab, another page, a reload (GH#670)", async ({ page }) => {
+  await page.goto(`/admin/workflows/${wfId}?tab=grants`);
+  const matrix = page.getByTestId("wf-grants");
+  const box = matrix.getByRole("checkbox", { name: `${PROFILE} may run Retire` });
+  await expect(box).toBeChecked();
+  await box.uncheck();
+  await expect(page.getByText("Unsaved changes")).toBeVisible();
+
+  // Another tab: cancelling keeps the tab and the edit.
+  const questions: string[] = [];
+  page.once("dialog", (d) => (questions.push(d.message()), void d.dismiss()));
+  await page.getByRole("tab", { name: "Settings" }).click();
+  await expect.poll(() => questions).toEqual(["Your grant changes are not saved. Leave and lose them?"]);
+  await expect(page).toHaveURL(/tab=grants/);
+  await expect(page.getByRole("tab", { name: "Grants" })).toHaveAttribute("aria-selected", "true");
+  await expect(box).not.toBeChecked();
+  await expect(page.getByText("Unsaved changes")).toBeVisible();
+
+  // Another page: asked as well, and kept when cancelled.
+  page.once("dialog", (d) => void d.dismiss());
+  await page.getByRole("link", { name: "Workflows", exact: true }).first().click();
+  await expect(page).toHaveURL(/tab=grants/);
+  await expect(box).not.toBeChecked();
+
+  // A reload: the browser asks (beforeunload).
+  page.once("dialog", (d) => (questions.push(d.type()), void d.dismiss()));
+  await page.reload({ waitUntil: "commit", timeout: 2_000 }).catch(() => undefined);
+  await expect.poll(() => questions).toEqual(["Your grant changes are not saved. Leave and lose them?", "beforeunload"]);
+
+  // Confirming leaves: the edit is dropped, and the saved grants show again.
+  page.once("dialog", (d) => void d.accept());
+  await page.getByRole("tab", { name: "Settings" }).click();
+  await expect(page).not.toHaveURL(/tab=grants/);
+  await page.getByRole("tab", { name: "Grants" }).click();
+  await expect(box).toBeChecked();
+  await expect(page.getByText("Unsaved changes")).toHaveCount(0);
+});
+
 test("activating with a state field is confirmed and reports the CIs without an instance", async ({ page, request }) => {
   await page.goto(`/admin/workflows/${wfId}`);
   await page.getByLabel("Active: new instances can start").check();
