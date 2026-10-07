@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
-import { brandVariables, SIDEBAR, SURFACE, type Theme } from "../src/lib/brandColors";
+import { brandVariables, DEFAULT_ACCENT, DEFAULT_PRIMARY, SIDEBAR, SURFACE, type Theme } from "../src/lib/brandColors";
 import { contrast } from "../src/lib/color";
 
 const css = readFileSync(new URL("../src/styles/tokens.css", import.meta.url), "utf8");
@@ -38,6 +38,10 @@ describe("brand colour constants", () => {
     test(`${theme}: SURFACE and SIDEBAR are the tokens' --c-surface and --c-sidebar`, () => {
       assert.equal(SURFACE[theme], resolve(theme, "--c-surface"));
       assert.equal(SIDEBAR[theme], resolve(theme, "--c-sidebar"));
+    });
+    test(`${theme}: DEFAULT_PRIMARY and DEFAULT_ACCENT are the tokens' --c-primary and --c-accent`, () => {
+      assert.equal(DEFAULT_PRIMARY[theme], resolve(theme, "--c-primary"));
+      assert.equal(DEFAULT_ACCENT[theme], resolve(theme, "--c-accent"));
     });
   }
 });
