@@ -174,8 +174,8 @@ pub async fn run(cfg: &DatabaseConfig, encryption: &EncryptionConfig, args: Rest
         report.restored_head.chain_seq, report.restored_head.row_hash
     );
     println!(
-        "Recorded as a backup.restore entry in audit_log: chainSeq {}, rowHash {}. The server's AUDIT_EXPORT sends it \
-         at start-up; compare the restored head with the SIEM copy, which still holds every row written after the \
+        "Recorded as a backup.restore entry in audit_log: chainSeq {}, rowHash {}. The server's AUDIT_EXPORT sends it, \
+         with every row written after it, when it starts; compare the restored head with the SIEM copy, which still holds every row written after the \
          backup was taken.",
         report.entry.chain_seq, report.entry.row_hash
     );
