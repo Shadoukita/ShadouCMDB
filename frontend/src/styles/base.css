@@ -98,8 +98,7 @@ kbd {
 .admin-nav-label,
 fieldset.group legend,
 dl.props .group-title,
-.view-menu-heading,
-table.attributes tr.section-row th {
+.view-menu-heading {
   font-size: var(--fs-overline);
   font-weight: var(--fw-semibold);
   line-height: 16px;

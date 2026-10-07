@@ -111,14 +111,14 @@ test.describe("a bare install", () => {
   test("a class with a lookup-list attribute is built and used in the inventory", async ({ page, request }) => {
     // The lookup list the class refers to.
     await page.goto("/admin/dropdowns");
-    await page.getByRole("button", { name: "+ New list" }).first().click();
+    await page.getByRole("button", { name: "New list", exact: true }).first().click();
     await page.locator("#ll-name").fill(LIST);
     await page.getByRole("button", { name: "Create list" }).click();
     await expect(page.getByRole("status").filter({ hasText: `Created list ${LIST}.` })).toBeVisible();
     for (const v of ["Gold", "Silver"]) {
-      await page.getByRole("button", { name: "+ Add value" }).first().click();
+      await page.getByRole("button", { name: "Add value", exact: true }).first().click();
       await page.locator("#lookup-list-values-name").fill(v);
-      await page.getByRole("button", { name: "Add value", exact: true }).click();
+      await page.getByRole("dialog").getByRole("button", { name: "Add value", exact: true }).click();
       await expect(page.getByRole("status").filter({ hasText: `Added value ${v}.` })).toBeVisible();
     }
 
@@ -131,7 +131,7 @@ test.describe("a bare install", () => {
     await expect(page.getByRole("status").filter({ hasText: `Created class ${CLASS} (table` })).toBeVisible();
     const classId = page.url().split("/").pop()!;
     const add = async (label: string, fill: () => Promise<void>) => {
-      await page.getByRole("button", { name: "+ Add attribute" }).click();
+      await page.getByRole("button", { name: "Add attribute", exact: true }).click();
       await page.locator("#ad-label").fill(label);
       await fill();
       await page.getByRole("button", { name: "Preview and add…" }).click();

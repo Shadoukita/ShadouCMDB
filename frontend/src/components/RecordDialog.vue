@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { ApiError } from "../api/client";
+import { t } from "../i18n";
 import { changedFields } from "../lib/changes";
 import { keyError, suggestKey } from "../lib/keys";
 import FormErrorBanner from "../pages/form/FormErrorBanner.vue";
@@ -135,7 +136,7 @@ async function submit() {
     if (f.type === "key") {
       const e = keyError(String(v));
       if (e) errs[f.name] = e;
-    } else if (f.required && f.type !== "checkbox" && String(v ?? "").trim() === "") errs[f.name] = "Required";
+    } else if (f.required && f.type !== "checkbox" && String(v ?? "").trim() === "") errs[f.name] = t("common.required");
   }
   local.value = errs;
   const first = Object.keys(errs)[0];
@@ -182,7 +183,7 @@ async function submit() {
           :label="f.label"
           :required="f.required || (f.type === 'key' && !readOnly(f))"
           :error="fieldErrors[f.name]"
-          :hint="readOnly(f) ? 'Fixed after creation' : f.hint"
+          :hint="readOnly(f) ? t('dm.recordDialog.fixed') : f.hint"
           :wide="f.wide || f.type === 'textarea'"
         >
           <textarea
@@ -211,8 +212,8 @@ async function submit() {
               :aria-describedby="p.describedBy"
               @input="values[f.name] = ($event.target as HTMLInputElement).value"
             />
-            <span class="mono">{{ values[f.name] || "none" }}</span>
-            <button v-if="values[f.name]" type="button" class="btn btn-sm" @click="values[f.name] = ''">No colour</button>
+            <span class="mono">{{ values[f.name] || t("dm.recordDialog.noColourValue") }}</span>
+            <button v-if="values[f.name]" type="button" class="btn btn-sm" @click="values[f.name] = ''">{{ t("dm.recordDialog.noColour") }}</button>
           </div>
           <input
             v-else

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { adminCrumbs } from "../sections";
-import { computed, ref } from "vue";
+import { computed, nextTick, ref } from "vue";
 import { RouterLink } from "vue-router";
 import { useCreateLookupList, useLookupListValues, useLookupLists, usePatch, type LookupList } from "../../../api/datamodel";
 import Breadcrumbs from "../../../components/Breadcrumbs.vue";
@@ -9,9 +9,13 @@ import DeleteRowButton from "../../../components/DeleteRowButton.vue";
 import EmptyState from "../../../components/EmptyState.vue";
 import ErrorAlert from "../../../components/ErrorAlert.vue";
 import LoadingState from "../../../components/LoadingState.vue";
+import Icon from "../../../components/Icon.vue";
 import RecordDialog, { type FieldSpec } from "../../../components/RecordDialog.vue";
+import RowMenu, { type RowMenuItem } from "../../../components/RowMenu.vue";
+import { formatNumber, t } from "../../../i18n";
 import { useDocumentTitle } from "../../../lib/composables";
 import { useListQuery } from "../../../lib/listQuery";
+import { useFlashStore } from "../../../stores/flash";
 import OrderedLookupTable, { type Row } from "./OrderedLookupTable.vue";
 
 /**
@@ -22,12 +26,12 @@ import OrderedLookupTable, { type Row } from "./OrderedLookupTable.vue";
  * the chosen parent. The selected list (?list=…) and the parent value its values
  * are filtered by (?parent=<id>|none) are in the URL.
  */
-useDocumentTitle(() => "Dropdowns");
+useDocumentTitle(() => t("dm.dropdowns.title"));
+const flash = useFlashStore();
 const lq = useListQuery({ sort: "sortOrder" });
 const lists = useLookupLists();
 const create = useCreateLookupList();
 const patch = usePatch<LookupList>("lookup-lists");
-const notice = ref<string | null>(null);
 
 const selectedId = computed(() => lq.get("list") || lists.data.value?.[0]?.id || "");
 const selected = computed(() => lists.data.value?.find((l) => l.id === selectedId.value));
@@ -64,23 +68,21 @@ const listFields = computed<FieldSpec[]>(() => {
   const own = editing.value?.id;
   const excluded = own ? dependents(own).add(own) : new Set<string>();
   return [
-    { name: "name", label: "Name", type: "text", required: true, hint: "e.g. Support contract" },
-    { name: "key", label: "Key", type: "key", from: "name" },
+    { name: "name", label: t("dm.lookup.col.name"), type: "text", required: true, hint: t("dm.dropdowns.field.nameHint") },
+    { name: "key", label: t("dm.lookup.col.key"), type: "key", from: "name" },
     {
       name: "parentListId",
-      label: "Parent list",
+      label: t("dm.dropdowns.col.parent"),
       type: "select",
       options: [
-        { value: "", label: "— none —" },
+        { value: "", label: t("dm.dropdowns.field.noParent") },
         ...(lists.data.value ?? [])
           .filter((l) => !excluded.has(l.id))
-          .map((l) => ({ value: l.id, label: `${l.name}${l.isActive ? "" : " (archived)"}` })),
+          .map((l) => ({ value: l.id, label: l.isActive ? l.name : t("dm.dropdowns.archivedName", { name: l.name }) })),
       ],
-      hint: own
-        ? "Changing it unassigns the parent value of every value, and the parent field of every attribute, that uses this list"
-        : "e.g. Manufacturer for a Model list: each value then belongs to a value of the parent list",
+      hint: own ? t("dm.dropdowns.field.parentHintEdit") : t("dm.dropdowns.field.parentHintNew"),
     },
-    { name: "description", label: "Description", type: "textarea", wide: true },
+    { name: "description", label: t("dm.lookup.col.description"), type: "textarea", wide: true },
   ];
 });
 function open(l: LookupList | null) {
@@ -92,56 +94,71 @@ async function save(body: Record<string, unknown>, isNew: boolean): Promise<stri
     const last = Math.max(0, ...(lists.data.value ?? []).map((l) => l.sortOrder));
     const created = await create.mutateAsync({ ...(body as { key: string; name: string }), sortOrder: last + 10 });
     lq.update({ list: created.id, parent: undefined });
-    return `Created list ${created.name}. Add its values below, then use it in a “Lookup list” attribute.`;
+    return t("dm.dropdowns.created", { name: created.name });
   }
   const before = editing.value!;
   const saved = await patch.mutateAsync({ id: before.id, body });
   if (saved.parentListId !== before.parentListId) {
     lq.update({ list: saved.id, parent: undefined });
     return saved.parentListId
-      ? `Saved list ${saved.name}: it now depends on ${listName(saved.parentListId)}. Assign each value its parent value below, and each “${saved.name}” attribute its parent field.`
-      : `Saved list ${saved.name}: it no longer depends on another list.`;
+      ? t("dm.dropdowns.savedParent", { name: saved.name, parent: listName(saved.parentListId) })
+      : t("dm.dropdowns.savedNoParent", { name: saved.name });
   }
-  return `Saved list ${saved.name}.`;
+  return t("dm.dropdowns.saved", { name: saved.name });
 }
 function setActive(l: LookupList, isActive: boolean) {
-  notice.value = null;
   patch.mutate(
     { id: l.id, body: { isActive } },
-    { onSuccess: () => (notice.value = isActive ? `Restored list ${l.name}.` : `Archived list ${l.name}: it can no longer be chosen for new attributes.`) },
+    { onSuccess: () => flash.show(t(isActive ? "dm.dropdowns.restored" : "dm.dropdowns.archived", { name: l.name })) },
   );
 }
 
+// One delete dialog for the lists, opened from a row's menu.
+const deleting = ref<LookupList | null>(null);
+const deleteDialog = ref<InstanceType<typeof DeleteRowButton>>();
+async function askDelete(l: LookupList) {
+  deleting.value = l;
+  await nextTick();
+  deleteDialog.value?.open();
+}
+function onDeleted() {
+  flash.show(t("dm.dropdowns.deleted", { name: deleting.value?.name ?? "" }));
+  lq.update({ list: undefined, parent: undefined });
+}
+const rowMenu = (l: LookupList): RowMenuItem[] => [
+  { label: t("common.edit"), action: () => open(l) },
+  l.isActive ? { label: t("dm.lookup.archive"), action: () => setActive(l, false) } : { label: t("dm.lookup.restore"), action: () => setActive(l, true) },
+  { label: t("common.delete"), action: () => void askDelete(l), danger: true },
+];
+
 const valueFields = computed<FieldSpec[]>(() => [
-  { name: "name", label: "Name", type: "text", required: true },
-  { name: "key", label: "Key", type: "key", from: "name" },
+  { name: "name", label: t("dm.lookup.col.name"), type: "text", required: true },
+  { name: "key", label: t("dm.lookup.col.key"), type: "key", from: "name" },
   ...(parentList.value
     ? [
         {
           name: "parentValueId",
-          label: `Belongs to (${parentList.value.name})`,
+          label: t("dm.dropdowns.belongsTo", { list: parentList.value.name }),
           type: "select",
           options: [
-            { value: "", label: "— not assigned —" },
-            ...(parentValues.data.value ?? []).map((v) => ({ value: v.id, label: `${v.name}${v.isActive ? "" : " (retired)"}` })),
+            { value: "", label: t("dm.dropdowns.field.notAssigned") },
+            ...(parentValues.data.value ?? []).map((v) => ({ value: v.id, label: v.isActive ? v.name : t("dm.dropdowns.retiredName", { name: v.name }) })),
           ],
-          hint: `Shown on CI forms only when this ${parentList.value.name} is chosen. Required for new values.`,
+          hint: t("dm.dropdowns.field.belongsToHint", { list: parentList.value.name }),
         } satisfies FieldSpec,
       ]
     : []),
-  { name: "color", label: "Colour", type: "color", hint: "Shown next to the value on CI pages" },
-  { name: "description", label: "Description", type: "textarea" },
+  { name: "color", label: t("dm.dropdowns.col.colour"), type: "color", hint: t("dm.dropdowns.field.colourHint") },
+  { name: "description", label: t("dm.lookup.col.description"), type: "textarea" },
 ]);
 const valueColumns = computed(() => [
-  ...(parentList.value ? [{ key: "parentValueId", label: `Belongs to (${parentList.value.name})` }] : []),
-  { key: "color", label: "Colour" },
+  ...(parentList.value ? [{ key: "parentValueId", label: t("dm.dropdowns.belongsTo", { list: parentList.value.name }) }] : []),
+  { key: "color", label: t("dm.dropdowns.col.colour") },
 ]);
 const valuesEmptyHint = computed(() => {
-  if (parentFilter.value === "none") return "Every value belongs to a parent value.";
-  if (parentFilterName.value) return `No value belongs to ${parentFilterName.value} yet.`;
-  return parentList.value
-    ? `Add the values operators can choose from, each with the ${parentList.value.name} it belongs to.`
-    : "Add the values operators can choose from.";
+  if (parentFilter.value === "none") return t("dm.dropdowns.valuesEmpty.noneUnassigned");
+  if (parentFilterName.value) return t("dm.dropdowns.valuesEmpty.noneOf", { name: parentFilterName.value });
+  return parentList.value ? t("dm.dropdowns.valuesEmpty.withParent", { list: parentList.value.name }) : t("dm.dropdowns.valuesEmpty.plain");
 });
 </script>
 
@@ -149,39 +166,36 @@ const valuesEmptyHint = computed(() => {
   <Breadcrumbs :items="adminCrumbs('dropdowns')" />
   <div class="page-header">
     <div class="title">
-      <h1>Dropdowns</h1>
-      <span class="muted">Value lists for “Lookup list” attributes; a list can depend on a parent list.</span>
+      <h1>{{ t("dm.dropdowns.title") }}</h1>
+      <span v-if="lists.data.value" class="muted count">{{ t("common.total", { n: formatNumber(lists.data.value.length) }) }}</span>
+      <span v-if="patch.isPending.value" class="spinner" :aria-label="t('common.saving')" />
+    </div>
+    <div class="actions">
+      <button type="button" class="btn btn-primary" @click="open(null)"><Icon name="plus" />{{ t("dm.dropdowns.create") }}</button>
     </div>
   </div>
+  <p class="page-intro">{{ t("dm.dropdowns.intro") }}</p>
+  <ErrorAlert v-if="patch.isError.value" :error="patch.error.value" :title="t('formError.notSaved')" />
 
-  <section class="panel" aria-label="Lookup lists">
-    <div class="panel-header">
-      <h2>Lists</h2>
-      <span v-if="lists.data.value" class="muted">{{ lists.data.value.length }}</span>
-      <span v-if="patch.isPending.value" class="spinner" aria-label="Saving" />
-      <button type="button" class="btn btn-primary btn-sm" style="margin-left: auto" @click="open(null)">+ New list</button>
-    </div>
-    <div v-if="notice || patch.isError.value" class="panel-body">
-      <div v-if="notice" class="alert alert-success" role="status">{{ notice }}</div>
-      <ErrorAlert v-if="patch.isError.value" :error="patch.error.value" title="Not saved" />
-    </div>
+  <section class="panel explorer" :aria-label="t('dm.dropdowns.lists')">
     <div v-if="lists.isError.value" class="panel-body"><ErrorAlert :error="lists.error.value" :on-retry="() => lists.refetch()" /></div>
-    <LoadingState v-else-if="lists.isLoading.value" />
-    <EmptyState v-else-if="lists.data.value?.length === 0" title="No lookup lists yet">
-      Create a list (e.g. “Support contract” with Gold, Silver and Bronze), then add an attribute of type “Lookup list” to a
-      class to let operators pick from it.
-      <template #actions><button type="button" class="btn btn-primary" @click="open(null)">+ New list</button></template>
+    <LoadingState v-else-if="lists.isLoading.value" :label="t('dm.dropdowns.loading')" />
+    <EmptyState v-else-if="lists.data.value?.length === 0" icon="list" :title="t('dm.dropdowns.empty.title')">
+      {{ t("dm.dropdowns.empty.body") }}
+      <template #actions>
+        <button type="button" class="btn btn-primary" @click="open(null)"><Icon name="plus" />{{ t("dm.dropdowns.create") }}</button>
+      </template>
     </EmptyState>
     <div v-else class="table-wrap">
       <table class="data">
         <thead>
           <tr>
-            <th scope="col">Name</th>
-            <th scope="col">Key</th>
-            <th scope="col">Parent list</th>
-            <th scope="col">Description</th>
-            <th scope="col">Status</th>
-            <th scope="col"><span class="sr-only">Actions</span></th>
+            <th scope="col">{{ t("dm.lookup.col.name") }}</th>
+            <th scope="col">{{ t("dm.lookup.col.key") }}</th>
+            <th scope="col">{{ t("dm.dropdowns.col.parent") }}</th>
+            <th scope="col">{{ t("dm.lookup.col.description") }}</th>
+            <th scope="col">{{ t("admin.col.status") }}</th>
+            <th scope="col" class="row-actions"><span class="sr-only">{{ t("inventory.actions") }}</span></th>
           </tr>
         </thead>
         <tbody>
@@ -193,23 +207,11 @@ const valuesEmptyHint = computed(() => {
             </td>
             <td class="muted fill" :title="l.description ?? undefined">{{ l.description ?? "" }}</td>
             <td>
-              <span v-if="l.isActive" class="badge ok">Active</span>
-              <span v-else class="badge off">Archived</span>
+              <span v-if="l.isActive" class="badge ok">{{ t("common.active") }}</span>
+              <span v-else class="badge off">{{ t("dm.lookup.archivedBadge") }}</span>
             </td>
             <td class="row-actions">
-              <button type="button" class="btn btn-sm" :aria-label="`Edit list ${l.name}`" @click="open(l)">Edit</button>
-              <button v-if="l.isActive" type="button" class="btn btn-sm" :disabled="patch.isPending.value" :aria-label="`Archive ${l.name}`" @click="setActive(l, false)">Archive</button>
-              <button v-else type="button" class="btn btn-sm" :disabled="patch.isPending.value" :aria-label="`Restore ${l.name}`" @click="setActive(l, true)">Restore</button>
-              <DeleteRowButton
-                resource="lookup-lists"
-                :id="l.id"
-                :label="`list “${l.name}”`"
-                archivable
-                :archived="!l.isActive"
-                small
-                @archive="setActive(l, false)"
-                @deleted="(notice = `Deleted list ${l.name}.`), lq.update({ list: undefined, parent: undefined })"
-              />
+              <RowMenu :label="t('inventory.rowMenu', { name: l.name })" :items="rowMenu(l)" />
             </td>
           </tr>
         </tbody>
@@ -221,8 +223,7 @@ const valuesEmptyHint = computed(() => {
     v-if="selected"
     :key="`${selected.id}:${selected.parentListId ?? ''}`"
     resource="lookup-list-values"
-    noun="value"
-    :title="`Values of “${selected.name}”`"
+    :title="t('dm.dropdowns.valuesTitle', { name: selected.name })"
     :rows="values.data.value as Row[] | undefined"
     :loading="values.isLoading.value"
     :error="values.error.value"
@@ -236,33 +237,45 @@ const valuesEmptyHint = computed(() => {
   >
     <template v-if="parentList" #toolbar>
       <div class="field">
-        <label for="llv-parent">Belongs to ({{ parentList.name }})</label>
+        <label for="llv-parent">{{ t("dm.dropdowns.belongsTo", { list: parentList.name }) }}</label>
         <select id="llv-parent" :value="parentFilter" @change="lq.update({ parent: ($event.target as HTMLSelectElement).value || undefined })">
-          <option value="">All values</option>
-          <option value="none">Not assigned</option>
-          <option v-for="v in parentValues.data.value ?? []" :key="v.id" :value="v.id">{{ v.name }}{{ v.isActive ? "" : " (retired)" }}</option>
+          <option value="">{{ t("dm.dropdowns.filter.all") }}</option>
+          <option value="none">{{ t("dm.dropdowns.notAssigned") }}</option>
+          <option v-for="v in parentValues.data.value ?? []" :key="v.id" :value="v.id">{{ v.isActive ? v.name : t("dm.dropdowns.retiredName", { name: v.name }) }}</option>
         </select>
       </div>
-      <span v-if="parentValues.isError.value" class="error">Could not load the values of {{ parentList.name }}.</span>
+      <span v-if="parentValues.isError.value" class="error">{{ t("dm.dropdowns.filter.loadFailed", { name: parentList.name }) }}</span>
     </template>
     <template #cell="{ row, column }">
       <template v-if="column === 'parentValueId'">
         <template v-if="row.parentValueId">{{ parentValueName(row.parentValueId) ?? "…" }}</template>
-        <span v-else class="badge warn" title="Cannot be chosen on attributes that have a parent field until assigned">Not assigned</span>
+        <span v-else class="badge warn" :title="t('dm.dropdowns.notAssignedTitle')">{{ t("dm.dropdowns.notAssigned") }}</span>
       </template>
       <ClassBadge v-else-if="row.color" :color="String(row.color)" :name="String(row.color)" />
     </template>
   </OrderedLookupTable>
 
+  <DeleteRowButton
+    ref="deleteDialog"
+    headless
+    resource="lookup-lists"
+    :id="deleting?.id ?? ''"
+    :label="t('dm.dropdowns.deleteLabel', { name: deleting?.name ?? '' })"
+    archivable
+    :archived="!deleting?.isActive"
+    @archive="deleting && setActive(deleting, false)"
+    @deleted="onDeleted"
+  />
+
   <RecordDialog
     :open="dialogOpen"
-    :title="editing ? `Edit list “${editing.name}”` : 'New lookup list'"
-    :submit-label="editing ? 'Save' : 'Create list'"
+    :title="editing ? t('dm.dropdowns.dialog.editTitle', { name: editing.name }) : t('dm.dropdowns.dialog.newTitle')"
+    :submit-label="editing ? t('record.save.save') : t('dm.dropdowns.dialog.create')"
     :fields="listFields"
     :record="editing"
     :save="save"
     id-prefix="ll"
     @close="dialogOpen = false"
-    @saved="(m) => (notice = m)"
+    @saved="(m) => flash.show(m)"
   />
 </template>

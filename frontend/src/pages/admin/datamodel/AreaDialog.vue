@@ -6,6 +6,7 @@ import ClassBadge from "../../../components/ClassBadge.vue";
 import FormDialog from "../../../components/FormDialog.vue";
 import SchemaChangeDialog from "../../../components/SchemaChangeDialog.vue";
 import TechnicalNameField from "../../../components/TechnicalNameField.vue";
+import { t } from "../../../i18n";
 import { changedFields } from "../../../lib/changes";
 import { CLASS_ICONS, classIcon } from "../../../lib/classIcons";
 import { keyError } from "../../../lib/keys";
@@ -71,7 +72,7 @@ const unplaced = computed(() => (error.value instanceof ApiError ? error.value.d
 async function submit() {
   error.value = null;
   const errs: Record<string, string> = {};
-  if (!name.value.trim()) errs.name = "Required";
+  if (!name.value.trim()) errs.name = t("common.required");
   if (isNew.value) {
     const k = keyError(key.value);
     if (k) errs.key = k;
@@ -82,15 +83,15 @@ async function submit() {
   if (isNew.value) {
     const body: AreaCreateBody = { ...common, name: common.name!, key: key.value, sortOrder: props.nextSortOrder };
     const outcome = await flow.run({
-      title: `Create area “${body.name}”`,
-      intro: `The area becomes a menu tab and the PostgreSQL schema “${body.key}”; the tables of its types are created in it.`,
+      title: t("dm.areas.dialog.createTitle", { name: body.name }),
+      intro: t("dm.areas.dialog.createIntro", { key: body.key }),
       preview: { operation: "createArea", body },
       apply: () => create.mutateAsync(body),
-      applyLabel: "Create area",
+      applyLabel: t("dm.areas.dialog.createApply"),
       alwaysShow: true,
     });
     if (outcome.status === "applied") {
-      emit("saved", `Created area ${body.name} (schema ${body.key}).`);
+      emit("saved", t("dm.areas.dialog.created", { name: body.name, key: body.key }));
       emit("close");
     } else if (outcome.status === "refused") error.value = outcome.error;
     return;
@@ -102,13 +103,13 @@ async function submit() {
     return;
   }
   const outcome = await flow.run({
-    title: `Save area “${common.name}”`,
+    title: t("dm.areas.dialog.saveTitle", { name: common.name ?? "" }),
     preview: { operation: "updateArea", id: a.id, body: changed },
     apply: () => update.mutateAsync({ id: a.id, body: changed }),
-    applyLabel: "Save area",
+    applyLabel: t("dm.areas.dialog.saveApply"),
   });
   if (outcome.status === "applied") {
-    emit("saved", `Saved area ${common.name}.`);
+    emit("saved", t("dm.areas.dialog.saved", { name: common.name ?? "" }));
     emit("close");
   } else if (outcome.status === "refused") error.value = outcome.error;
 }
@@ -117,36 +118,36 @@ async function submit() {
 <template>
   <FormDialog
     :open="open"
-    :title="isNew ? 'New area' : `Edit area “${area?.name}”`"
-    :submit-label="isNew ? 'Preview and create…' : 'Save area'"
+    :title="isNew ? t('dm.areas.dialog.newTitle') : t('dm.areas.dialog.editTitle', { name: area?.name ?? '' })"
+    :submit-label="isNew ? t('dm.areas.dialog.submitCreate') : t('dm.areas.dialog.saveApply')"
     :busy="busy"
     @submit="submit"
     @cancel="emit('close')"
   >
     <FormErrorBanner v-if="error" :error="error" :unplaced="unplaced" />
     <div class="form-grid">
-      <FormField id="area-name" v-slot="p" label="Name" required :error="fieldErrors.name" hint="The menu tab's label, e.g. Bestand">
+      <FormField id="area-name" v-slot="p" :label="t('dm.areas.dialog.name')" required :error="fieldErrors.name" :hint="t('dm.areas.dialog.nameHint')">
         <input :id="p.id" v-model="name" type="text" maxlength="200" autofocus :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy" />
       </FormField>
       <TechnicalNameField id="area-key" v-model="key" kind="area" :name="name" :editable="isNew" :location="area?.key" :error="fieldErrors.key" />
-      <FormField id="area-icon" v-slot="p" label="Icon" :error="fieldErrors.icon">
+      <FormField id="area-icon" v-slot="p" :label="t('dm.areas.dialog.icon')" :error="fieldErrors.icon">
         <div class="inline-control">
           <select :id="p.id" v-model="icon" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy">
-            <option value="">— none —</option>
+            <option value="">{{ t("dm.areas.dialog.iconNone") }}</option>
             <option v-for="i in CLASS_ICONS" :key="i.key" :value="i.key">{{ i.label }}</option>
-            <option v-if="unknownIcon" :value="icon">{{ icon }} (custom)</option>
+            <option v-if="unknownIcon" :value="icon">{{ t("dm.areas.dialog.iconCustom", { icon }) }}</option>
           </select>
           <ClassBadge :icon="icon" :color="color || '#56606d'" />
         </div>
       </FormField>
-      <FormField id="area-color" v-slot="p" label="Colour" :error="fieldErrors.color" hint="Shown with the icon on the menu tab">
+      <FormField id="area-color" v-slot="p" :label="t('dm.areas.dialog.colour')" :error="fieldErrors.color" :hint="t('dm.areas.dialog.colourHint')">
         <div class="inline-control">
           <input :id="p.id" type="color" :value="color || '#1f5fbf'" :aria-describedby="p.describedBy" @input="color = ($event.target as HTMLInputElement).value" />
-          <span class="mono">{{ color || "none" }}</span>
-          <button v-if="color" type="button" class="btn btn-sm" @click="color = ''">No colour</button>
+          <span class="mono">{{ color || t("dm.areas.dialog.colourNone") }}</span>
+          <button v-if="color" type="button" class="btn btn-sm" @click="color = ''">{{ t("dm.areas.dialog.noColour") }}</button>
         </div>
       </FormField>
-      <FormField id="area-description" v-slot="p" label="Description" wide :error="fieldErrors.description">
+      <FormField id="area-description" v-slot="p" :label="t('dm.areas.dialog.description')" wide :error="fieldErrors.description">
         <textarea :id="p.id" v-model="description" rows="2" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy" />
       </FormField>
     </div>

@@ -30,19 +30,19 @@ test("a list depends on a parent list, and each value names its parent value", a
   await expect(page.getByRole("heading", { level: 1, name: "Dropdowns" })).toBeVisible();
 
   // The parent list and its values.
-  await page.getByRole("button", { name: "+ New list" }).first().click();
+  await page.getByRole("button", { name: "New list", exact: true }).first().click();
   await page.locator("#ll-name").fill(MAKER);
   await page.getByRole("button", { name: "Create list" }).click();
   await expect(status(page, `Created list ${MAKER}.`)).toBeVisible();
   for (const v of ["Cisco", "HPE"]) {
-    await page.getByRole("button", { name: "+ Add value" }).first().click();
+    await page.getByRole("button", { name: "Add value", exact: true }).first().click();
     await page.locator("#lookup-list-values-name").fill(v);
-    await page.getByRole("button", { name: "Add value", exact: true }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Add value", exact: true }).click();
     await expect(status(page, `Added value ${v}.`)).toBeVisible();
   }
 
   // The child list names its parent list.
-  await page.getByRole("button", { name: "+ New list" }).first().click();
+  await page.getByRole("button", { name: "New list", exact: true }).first().click();
   await page.locator("#ll-name").fill(MODEL);
   await page.locator("#ll-parentListId").selectOption({ label: MAKER });
   await page.getByRole("button", { name: "Create list" }).click();
@@ -52,17 +52,17 @@ test("a list depends on a parent list, and each value names its parent value", a
   const values = page.getByRole("region", { name: `Values of “${MODEL}”` });
   await expect(values.getByLabel(`Belongs to (${MAKER})`)).toBeVisible();
   // A new value of a child list needs its parent value: the API's field error shows next to the field.
-  await page.getByRole("button", { name: "+ Add value" }).first().click();
+  await page.getByRole("button", { name: "Add value", exact: true }).first().click();
   await page.locator("#lookup-list-values-name").fill("Orphan");
-  await page.getByRole("button", { name: "Add value", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Add value", exact: true }).click();
   await expect(page.locator("#lookup-list-values-parentValueId-err")).toBeVisible();
   await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
 
   for (const [v, maker] of [["Catalyst 9300", "Cisco"], ["ProLiant DL380", "HPE"], ["Nexus 9000", "Cisco"]]) {
-    await page.getByRole("button", { name: "+ Add value" }).first().click();
+    await page.getByRole("button", { name: "Add value", exact: true }).first().click();
     await page.locator("#lookup-list-values-name").fill(v);
     await page.locator("#lookup-list-values-parentValueId").selectOption({ label: maker });
-    await page.getByRole("button", { name: "Add value", exact: true }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Add value", exact: true }).click();
     await expect(status(page, `Added value ${v}.`)).toBeVisible();
   }
   await expect(values.locator("tbody tr td:nth-child(2)")).toHaveText(["Catalyst 9300", "ProLiant DL380", "Nexus 9000"]);
@@ -80,7 +80,7 @@ test("a list depends on a parent list, and each value names its parent value", a
   await expect(status(page, "Moved Nexus 9000.")).toBeVisible();
   await expect(values.locator("tbody tr td:nth-child(2)")).toHaveText(["Nexus 9000", "Catalyst 9300"]);
   // A value added while filtered starts with that parent value.
-  await page.getByRole("button", { name: "+ Add value" }).first().click();
+  await page.getByRole("button", { name: "Add value", exact: true }).first().click();
   await expect(page.locator("#lookup-list-values-parentValueId").locator("option:checked")).toHaveText("Cisco");
   await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
   await snap(page, "35-dropdowns-dependent-list");
@@ -107,7 +107,7 @@ test("a lookup attribute on a child list names its parent field", async ({ page,
   await page.goto(`/admin/classes/${classId}`);
 
   const add = async (label: string, list: string, parentField?: string) => {
-    await page.getByRole("button", { name: "+ Add attribute" }).click();
+    await page.getByRole("button", { name: "Add attribute", exact: true }).click();
     await page.locator("#ad-label").fill(label);
     await page.locator("#ad-type").selectOption({ label: "Lookup list" });
     await page.locator("#ad-list").selectOption({ label: list });
@@ -195,7 +195,7 @@ test("the row actions fit at a 1280 px viewport, however long the description (G
   await expect(rows.filter({ hasText: name })).toHaveCount(1);
   for (const row of await rows.all()) {
     const cell = (await row.locator("td.row-actions").boundingBox())!;
-    for (const button of await row.locator("td.row-actions > button").all()) {
+    for (const button of await row.locator("td.row-actions button").all()) {
       await expect(button).toBeVisible();
       const b = (await button.boundingBox())!;
       // Inside its cell (which hides overflow) and inside the viewport, without scrolling sideways.

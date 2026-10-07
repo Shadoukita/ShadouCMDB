@@ -169,7 +169,8 @@ test("data model: the delete dialog lists counts over hidden CIs without a numbe
   const page = await signInUi(browser, OPERATOR);
   // A relationship type used between Public and Secrets CIs.
   await page.goto("/admin/relationships");
-  await page.getByRole("button", { name: `Delete relationship type “${REL_TYPE}”` }).click();
+  await page.getByRole("button", { name: `Actions for ${REL_TYPE}` }).click();
+  await page.getByRole("menuitem", { name: "Delete" }).click();
   let dialog = page.getByRole("dialog", { name: `Delete relationship type “${REL_TYPE}”?` });
   await expect(dialog.getByText("It cannot be deleted while it is in use:")).toBeVisible();
   await expect(dialog.getByRole("listitem").filter({ hasText: /relationships/i }).first()).toHaveText(withheld);
@@ -181,7 +182,8 @@ test("data model: the delete dialog lists counts over hidden CIs without a numbe
   // A lookup value stored only on a Secrets CI.
   await page.goto(`/admin/dropdowns?list=${modelId}`);
   const values = page.getByRole("region", { name: `Values of “${MODEL}”` });
-  await values.getByRole("button", { name: "Delete value “Rocket”" }).click();
+  await values.getByRole("button", { name: "Actions for Rocket" }).click();
+  await page.getByRole("menuitem", { name: "Delete" }).click();
   dialog = page.getByRole("dialog", { name: "Delete value “Rocket”?" });
   await expect(dialog.getByText("It cannot be deleted while it is in use:")).toBeVisible();
   await expect(dialog.getByRole("listitem")).toHaveText([withheld]);
@@ -192,7 +194,8 @@ test("data model: the delete dialog lists counts over hidden CIs without a numbe
   // The administrator gets the number.
   const admin = await browser.newPage();
   await admin.goto(`/admin/dropdowns?list=${modelId}`);
-  await admin.getByRole("region", { name: `Values of “${MODEL}”` }).getByRole("button", { name: "Delete value “Rocket”" }).click();
+  await admin.getByRole("region", { name: `Values of “${MODEL}”` }).getByRole("button", { name: "Actions for Rocket" }).click();
+  await admin.getByRole("menuitem", { name: "Delete" }).click();
   await expect(admin.getByRole("dialog", { name: "Delete value “Rocket”?" }).getByRole("listitem")).toHaveText([/^1 /]);
   await admin.close();
 });
@@ -201,7 +204,8 @@ test("lookups: refusing to retire a value names the dependent value without a co
   const page = await signInUi(browser, OPERATOR);
   await page.goto(`/admin/dropdowns?list=${makerId}`);
   const values = page.getByRole("region", { name: `Values of “${MAKER}”` });
-  await values.getByRole("button", { name: "Archive Acme" }).click();
+  await values.getByRole("button", { name: "Actions for Acme" }).click();
+  await page.getByRole("menuitem", { name: "Archive" }).click();
   const alert = values.getByRole("alert");
   await expect(alert).toContainText("Not saved");
   await expect(alert).toContainText(`vis_model_${stamp}.rocket`);
@@ -214,7 +218,8 @@ test("lookups: refusing to retire a value names the dependent value without a co
   const admin = await browser.newPage();
   await admin.goto(`/admin/dropdowns?list=${makerId}`);
   const adminValues = admin.getByRole("region", { name: `Values of “${MAKER}”` });
-  await adminValues.getByRole("button", { name: "Archive Acme" }).click();
+  await adminValues.getByRole("button", { name: "Actions for Acme" }).click();
+  await admin.getByRole("menuitem", { name: "Archive" }).click();
   await expect(adminValues.getByRole("alert")).toContainText(`vis_model_${stamp}.rocket (1 configuration items)`);
   await admin.close();
   const acme = (await apiGet<{ data: { name: string; isActive: boolean }[] }>(request, `/lookup-list-values?listId=${makerId}`)).data;

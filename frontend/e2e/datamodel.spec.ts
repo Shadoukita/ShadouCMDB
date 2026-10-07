@@ -55,16 +55,16 @@ test("a lookup list with ordered values", async ({ page, request }) => {
   await expect(page).toHaveURL(/\/admin\/dropdowns$/);
   await expect(page.getByRole("heading", { level: 1, name: "Dropdowns" })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Administration" }).getByRole("link", { name: "Dropdowns" })).toHaveAttribute("aria-current", "page");
-  await page.getByRole("button", { name: "+ New list" }).first().click();
+  await page.getByRole("button", { name: "New list", exact: true }).first().click();
   await page.locator("#ll-name").fill(LIST);
   await expect(page.locator("#ll-key")).toHaveValue(`e2e_tier_${stamp}`);
   await page.getByRole("button", { name: "Create list" }).click();
   await expect(page.getByRole("status").filter({ hasText: `Created list ${LIST}.` })).toBeVisible();
   await expect(page.getByRole("heading", { name: `Values of “${LIST}”` })).toBeVisible();
   for (const v of ["Gold", "Silver", "Bronze"]) {
-    await page.getByRole("button", { name: "+ Add value" }).first().click();
+    await page.getByRole("button", { name: "Add value", exact: true }).first().click();
     await page.locator("#lookup-list-values-name").fill(v);
-    await page.getByRole("button", { name: "Add value", exact: true }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Add value", exact: true }).click();
     await expect(page.getByRole("status").filter({ hasText: `Added value ${v}.` })).toBeVisible();
   }
   // The arrow buttons are the keyboard way to reorder.
@@ -82,7 +82,7 @@ test("a lookup list with ordered values", async ({ page, request }) => {
 test("a class and its attributes are built in the editor", async ({ page, request }) => {
   await page.goto("/admin/classes");
   await expect(page.getByRole("region", { name: "CI classes" }).getByRole("link", { name: "Hardware", exact: true })).toBeVisible();
-  await page.getByRole("link", { name: "+ New class" }).click();
+  await page.getByRole("link", { name: "New class", exact: true }).click();
   await page.locator("#class-name").fill(CLASS);
   await expect(page.locator("#class-key")).toHaveValue(CLASS_KEY);
   await page.locator("#class-parent").selectOption({ label: "Hardware" });
@@ -102,7 +102,7 @@ test("a class and its attributes are built in the editor", async ({ page, reques
   await expect(inherited.getByRole("row", { name: /Manufacturer/ }).getByRole("link", { name: "Hardware" })).toBeVisible();
 
   const add = async (fill: () => Promise<void>, label: string) => {
-    await page.getByRole("button", { name: "+ Add attribute" }).click();
+    await page.getByRole("button", { name: "Add attribute", exact: true }).click();
     await page.locator("#ad-label").fill(label);
     await fill();
     await page.getByRole("button", { name: "Preview and add…" }).click();
@@ -129,7 +129,7 @@ test("a class and its attributes are built in the editor", async ({ page, reques
     await page.locator("#ad-section").fill("Physical");
   }, "Mode");
   // An API validation error lands next to its field, and nothing is saved.
-  await page.getByRole("button", { name: "+ Add attribute" }).click();
+  await page.getByRole("button", { name: "Add attribute", exact: true }).click();
   await page.locator("#ad-label").fill("Rack units");
   // The technical name is checked live: rack_units is taken in this class.
   await expect(page.locator("#ad-key-err")).toBeVisible();
@@ -186,12 +186,15 @@ test("the CI form and detail page follow the new definitions", async ({ page }) 
 
 test("an archived class keeps its CIs but takes no new ones", async ({ page }) => {
   await page.goto(`/admin/classes/${classId}`);
-  await page.getByRole("button", { name: "Archive", exact: true }).click();
+  // Archive, Restore and Purge… are in the title row's `⋯` menu.
+  await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "Archive", exact: true }).click();
   await applySchemaChange(page, "Archive class");
   await expect(page.getByRole("status").filter({ hasText: `Archived ${CLASS}` })).toBeVisible();
   await expect(page.getByText("This class is archived")).toBeVisible();
   // Purging drops the table with its CIs: the dialog shows the DDL and wants the technical name typed.
-  await page.getByRole("button", { name: "Purge…" }).click();
+  await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "Purge…" }).click();
   const dialog = page.locator("dialog.schema-change[open]");
   await expect(dialog.locator(".sc-ddl")).toContainText(`DROP TABLE "infrastruktur"."${CLASS_KEY}"`);
   const purge = dialog.getByRole("button", { name: "Purge class and its CIs" });
@@ -211,7 +214,8 @@ test("an archived class keeps its CIs but takes no new ones", async ({ page }) =
   await expect(list.getByRole("link", { name: CLASS })).toHaveCount(0);
   await page.getByLabel(/Show archived classes/).check();
   await expect(page).toHaveURL(/archived=show/);
-  await list.getByRole("row", { name: new RegExp(CLASS) }).getByRole("button", { name: "Restore" }).click();
+  await list.getByRole("row", { name: new RegExp(CLASS) }).getByRole("button", { name: `Actions for ${CLASS}` }).click();
+  await page.getByRole("menuitem", { name: "Restore", exact: true }).click();
   // Restoring runs no DDL, so it applies without a preview.
   await expect(page.getByRole("status").filter({ hasText: `Restored ${CLASS}` })).toBeVisible();
 });
@@ -219,7 +223,7 @@ test("an archived class keeps its CIs but takes no new ones", async ({ page }) =
 test("a relationship type with a rule", async ({ page, request }) => {
   await page.goto("/admin/relationships");
   await expect(page.getByRole("link", { name: "Runs on", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "+ New relationship type" }).click();
+  await page.getByRole("button", { name: "New relationship type", exact: true }).click();
   await page.locator("#rt-name").fill(REL);
   await page.locator("#rt-forwardLabel").fill("powers");
   await page.locator("#rt-reverseLabel").fill("is powered by");
@@ -255,7 +259,8 @@ test("the former Lookups tabs lead to Dropdowns; values in use cannot be deleted
   expect(status, "lookup list status").toBeTruthy();
   await page.goto(`/admin/dropdowns?list=${status!.id}`);
   await expect(page.getByRole("heading", { name: "Values of “Status”" })).toBeVisible();
-  await page.getByRole("button", { name: "Delete value “In service”" }).click();
+  await page.getByRole("button", { name: "Actions for In service" }).click();
+  await page.getByRole("menuitem", { name: "Delete" }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toContainText("cannot be deleted while it is in use");
   await expect(dialog.getByRole("button", { name: "Archive instead" })).toBeVisible();
@@ -273,7 +278,7 @@ test("a fresh install guides the administrator to the data model", async ({ page
     await page.goto(path);
     await expect(page.getByRole("heading", { name: "No CI classes are defined yet" })).toBeVisible();
     await expect(page.getByRole("link", { name: "Install a starter template" })).toHaveAttribute("href", "/admin/templates");
-    await expect(page.getByRole("link", { name: "+ Create a class" })).toHaveAttribute("href", "/admin/classes/new");
+    await expect(page.getByRole("link", { name: "Create a class", exact: true })).toHaveAttribute("href", "/admin/classes/new");
   }
   await expect(page.getByRole("navigation", { name: "Main" }).getByText("No classes yet.")).toBeVisible();
   await snap(page, "36-fresh-install");

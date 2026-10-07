@@ -16,6 +16,10 @@ import { moveItem, useDragReorder } from "../../../lib/reorder";
 import { useSchemaChangeFlow } from "../../../lib/schemaChange";
 import { bySortOrder, flattenTree } from "../../../lib/tree";
 import Icon from "../../../components/Icon.vue";
+import RowMenu, { type RowMenuItem } from "../../../components/RowMenu.vue";
+import { formatNumber, t } from "../../../i18n";
+import { onRowKeydown } from "../../../lib/rowKeyboard";
+import { useFlashStore } from "../../../stores/flash";
 
 /**
  * Administration › Data model › CI classes. The class tree in the order menus and
@@ -24,7 +28,7 @@ import Icon from "../../../components/Icon.vue";
  * "Show archived" is on; the area filter narrows the list to one area's classes
  * (both kept in the URL).
  */
-useDocumentTitle("CI classes");
+useDocumentTitle(t("dm.classes.title"));
 const lq = useListQuery({ sort: "sortOrder" });
 const showArchived = computed(() => lq.get("archived") === "show");
 const classes = useCiClasses();
@@ -33,7 +37,7 @@ const patch = usePatch<CiClass>("ci-classes");
 const remove = useRemove("ci-classes");
 const areas = useAreas();
 const flow = useSchemaChangeFlow();
-const notice = ref<string | null>(null);
+const flash = useFlashStore();
 const failure = ref<unknown>(null);
 const areaFilter = computed(() => lq.get("areaId") ?? "");
 const areaById = computed(() => new Map((areas.data.value ?? []).map((a) => [a.id, a])));
@@ -63,7 +67,7 @@ function commit(dragId: string, targetId: string) {
   const target = byId.value.get(targetId);
   if (!drag || !target) return;
   if ((drag.parentId ?? null) !== (target.parentId ?? null)) {
-    notice.value = `${drag.name} can only move among classes with the same parent. To move it under another parent, edit the class.`;
+    flash.show(t("dm.classes.sameParent", { name: drag.name }));
     return;
   }
   const sibs = siblings(drag);
@@ -72,11 +76,12 @@ function commit(dragId: string, targetId: string) {
   // Depth-first order with the new sibling order; sortOrder is renumbered along it, so flat menus match the tree.
   const order = flattenTree(all.value, (a, b) => (rank.has(a.id) && rank.has(b.id) ? rank.get(a.id)! - rank.get(b.id)! : bySortOrder(a, b)));
   pendingOrder.value = order.map((n) => n.item.id);
-  notice.value = null;
   reorder.mutate(
     order.map((n) => ({ id: n.item.id, sortOrder: n.item.sortOrder })),
     {
-      onSuccess: (n) => (notice.value = n > 0 ? `Moved ${drag.name}. Menus and pickers use the new order.` : null),
+      onSuccess: (n) => {
+        if (n > 0) flash.show(t("dm.classes.moved", { name: drag.name }));
+      },
       onSettled: () => (pendingOrder.value = null),
     },
   );
@@ -98,84 +103,93 @@ const dnd = useDragReorder(commit, () => !reorder.isPending.value);
 const parentName = (c: CiClass) => (c.parentId ? byId.value.get(c.parentId)?.name : undefined);
 
 async function setActive(c: CiClass, isActive: boolean) {
-  notice.value = null;
   failure.value = null;
   const outcome = isActive
     ? await flow.run({
-        title: `Restore class “${c.name}”`,
+        title: t("dm.class.restore.title", { name: c.name }),
         preview: { operation: "updateType", id: c.id, body: { isActive: true } },
         apply: () => patch.mutateAsync({ id: c.id, body: { isActive: true } }),
-        applyLabel: "Restore class",
+        applyLabel: t("dm.class.restore.apply"),
       })
     : await flow.run({
-        title: `Archive class “${c.name}”?`,
-        intro: `Its table ${c.tableName}, its CIs and every stored value are kept and stay readable, but no new CIs can be created and the menu hides it. Restore it at any time; only a purge (on the class's page) deletes the data.`,
+        title: t("dm.class.archive.title", { name: c.name }),
+        intro: t("dm.classes.archive.intro", { table: c.tableName }),
         preview: { operation: "deleteType", id: c.id },
         apply: () => remove.mutateAsync(c.id),
-        applyLabel: "Archive class",
+        applyLabel: t("dm.class.archive.apply"),
         alwaysShow: true,
       });
-  if (outcome.status === "applied")
-    notice.value = isActive
-      ? `Restored ${c.name}: new CIs of this class can be created again.`
-      : `Archived ${c.name}: its CIs are kept, but no new ones can be created.`;
+  if (outcome.status === "applied") flash.show(t(isActive ? "dm.class.restored" : "dm.class.archived", { name: c.name }));
   else if (outcome.status === "refused") failure.value = outcome.error;
 }
+
+const rowMenu = (c: CiClass): RowMenuItem[] => [
+  { label: t("common.edit"), to: `/admin/classes/${c.id}` },
+  c.isActive ? { label: t("dm.class.archive"), action: () => void setActive(c, false) } : { label: t("dm.class.restore"), action: () => void setActive(c, true) },
+];
+const newClassTo = computed(() => ({ path: "/admin/classes/new", query: areaFilter.value ? { areaId: areaFilter.value } : {} }));
 </script>
 
 <template>
   <Breadcrumbs :items="adminCrumbs('classes')" />
   <div class="page-header">
     <div class="title">
-      <h1>CI classes</h1>
-      <span v-if="classes.data.value" class="muted">{{ classes.data.value.length }} total</span>
-      <span v-if="reorder.isPending.value || patch.isPending.value || (classes.isFetching.value && !classes.isLoading.value)" class="spinner" aria-label="Saving" />
+      <h1>{{ t("dm.classes.title") }}</h1>
+      <span v-if="classes.data.value" class="muted count">{{ t("common.total", { n: formatNumber(classes.data.value.length) }) }}</span>
+      <span
+        v-if="reorder.isPending.value || patch.isPending.value || (classes.isFetching.value && !classes.isLoading.value)"
+        class="spinner"
+        :aria-label="t('common.saving')"
+      />
     </div>
     <div class="actions">
-      <RouterLink class="btn btn-primary" :to="{ path: '/admin/classes/new', query: areaFilter ? { areaId: areaFilter } : {} }">+ New class</RouterLink>
+      <RouterLink class="btn btn-primary" :to="newClassTo"><Icon name="plus" />{{ t("dm.classes.create") }}</RouterLink>
     </div>
   </div>
+  <p class="page-intro">{{ t("dm.classes.intro") }}</p>
 
-  <div v-if="notice" class="alert alert-success" role="status">{{ notice }}</div>
-  <ErrorAlert v-if="reorder.isError.value" :error="reorder.error.value" title="The new order was not saved completely" />
-  <ErrorAlert v-if="failure" :error="failure" title="Not saved" />
+  <ErrorAlert v-if="reorder.isError.value" :error="reorder.error.value" :title="t('dm.classes.reorderFailed')" />
+  <ErrorAlert v-if="failure" :error="failure" :title="t('dm.classes.notSaved')" />
 
-  <section class="panel" aria-label="CI classes">
+  <section class="panel explorer" :aria-label="t('dm.classes.title')">
     <div class="toolbar">
       <label class="checkbox-row">
         <input type="checkbox" :checked="showArchived" @change="lq.update({ archived: ($event.target as HTMLInputElement).checked ? 'show' : undefined })" />
-        Show archived classes<span v-if="archivedCount" class="muted">&nbsp;({{ archivedCount }})</span>
+        {{ t("dm.classes.showArchived") }}<span v-if="archivedCount" class="muted">&nbsp;({{ formatNumber(archivedCount) }})</span>
       </label>
       <label class="inline-control">
-        Area
+        {{ t("dm.classes.area") }}
         <select :value="areaFilter" @change="lq.update({ areaId: ($event.target as HTMLSelectElement).value || undefined })">
-          <option value="">All areas</option>
-          <option v-for="a in areas.data.value ?? []" :key="a.id" :value="a.id">{{ a.name }}{{ a.isActive ? "" : " (archived)" }}</option>
+          <option value="">{{ t("dm.classes.allAreas") }}</option>
+          <option v-for="a in areas.data.value ?? []" :key="a.id" :value="a.id">{{ a.isActive ? a.name : t("dm.classes.archivedArea", { name: a.name }) }}</option>
         </select>
       </label>
-      <span class="muted" style="margin-left: auto">Drag a row, or use the arrows, to change the order of menus and pickers.</span>
+      <p class="toolbar-hint">{{ t("dm.classes.reorderHint") }}</p>
     </div>
     <div v-if="classes.isError.value" class="panel-body">
       <ErrorAlert :error="classes.error.value" :on-retry="() => classes.refetch()" />
     </div>
-    <LoadingState v-if="classes.isLoading.value" label="Loading classes…" />
-    <EmptyState v-if="classes.data.value && classes.data.value.length === 0" title="No CI classes yet">
-      A class is a kind of configuration item (server, application, database…) and decides which attributes its CIs
-      carry. Start from the IT infrastructure starter, or build your own model class by class.
+    <LoadingState v-if="classes.isLoading.value" :label="t('dm.classes.loading')" />
+    <EmptyState v-if="classes.data.value && classes.data.value.length === 0" icon="layers" :title="t('dm.classes.empty.title')">
+      {{ t("dm.classes.empty.body") }}
       <template #actions>
-        <RouterLink class="btn btn-primary" to="/admin/templates">Install a starter template</RouterLink>
-        <RouterLink class="btn" to="/admin/classes/new">+ New class</RouterLink>
+        <RouterLink class="btn btn-primary" to="/admin/templates">{{ t("dataModel.empty.installTemplate") }}</RouterLink>
+        <RouterLink class="btn" to="/admin/classes/new"><Icon name="plus" />{{ t("dm.classes.create") }}</RouterLink>
       </template>
     </EmptyState>
-    <EmptyState v-else-if="classes.data.value && rows.length === 0 && areaFilter" title="No classes in this area">
+    <EmptyState v-else-if="classes.data.value && rows.length === 0 && areaFilter" icon="layers" :title="t('dm.classes.emptyArea.title')">
+      {{ t("dm.classes.emptyArea.body") }}
       <template #actions>
-        <RouterLink class="btn btn-primary" :to="{ path: '/admin/classes/new', query: { areaId: areaFilter } }">+ New class in {{ areaById.get(areaFilter)?.name }}</RouterLink>
-        <button type="button" class="btn" @click="lq.update({ areaId: undefined })">All areas</button>
+        <RouterLink class="btn btn-primary" :to="newClassTo">
+          <Icon name="plus" />{{ t("dm.classes.emptyArea.create", { area: areaById.get(areaFilter)?.name ?? "" }) }}
+        </RouterLink>
+        <button type="button" class="btn" @click="lq.update({ areaId: undefined })">{{ t("dm.classes.allAreas") }}</button>
       </template>
     </EmptyState>
-    <EmptyState v-else-if="classes.data.value && rows.length === 0" title="Every class is archived">
+    <EmptyState v-else-if="classes.data.value && rows.length === 0" icon="layers" :title="t('dm.classes.allArchived.title')">
+      {{ t("dm.classes.allArchived.body") }}
       <template #actions>
-        <button type="button" class="btn" @click="lq.update({ archived: 'show' })">Show archived classes</button>
+        <button type="button" class="btn" @click="lq.update({ archived: 'show' })">{{ t("dm.classes.showArchived") }}</button>
       </template>
     </EmptyState>
 
@@ -183,48 +197,66 @@ async function setActive(c: CiClass, isActive: boolean) {
       <table class="data reorderable">
         <thead>
           <tr>
-            <th scope="col" class="drag-col"><span class="sr-only">Drag to reorder</span></th>
-            <th scope="col">Class</th>
-            <th scope="col">Area</th>
-            <th scope="col">Table</th>
-            <th scope="col">Parent</th>
-            <th scope="col">Kind</th>
-            <th scope="col">Status</th>
-            <th scope="col">Order</th>
-            <th scope="col"><span class="sr-only">Actions</span></th>
+            <th scope="col" class="drag-col"><span class="sr-only">{{ t("dm.classes.drag") }}</span></th>
+            <th scope="col">{{ t("dm.classes.col.class") }}</th>
+            <th scope="col">{{ t("dm.classes.col.area") }}</th>
+            <th scope="col">{{ t("dm.classes.col.table") }}</th>
+            <th scope="col">{{ t("dm.classes.col.parent") }}</th>
+            <th scope="col">{{ t("dm.classes.col.kind") }}</th>
+            <th scope="col">{{ t("dm.classes.col.status") }}</th>
+            <th scope="col">{{ t("dm.classes.col.order") }}</th>
+            <th scope="col" class="row-actions"><span class="sr-only">{{ t("inventory.actions") }}</span></th>
           </tr>
         </thead>
-        <tbody>
-          <tr v-for="{ item: c, depth } in rows" :key="c.id" v-bind="dnd.row(c.id)" :class="{ disabled: !c.isActive }">
-            <td class="drag-handle" aria-hidden="true" title="Drag to reorder"><Icon name="grip-vertical" /></td>
+        <tbody @keydown="onRowKeydown($event)">
+          <tr v-for="{ item: c, depth } in rows" :key="c.id" v-bind="dnd.row(c.id)" :data-id="c.id" :class="{ disabled: !c.isActive }">
+            <td class="drag-handle" aria-hidden="true" :title="t('dm.classes.drag')"><Icon name="grip-vertical" /></td>
             <td>
               <span :style="{ paddingLeft: `${depth * 18}px` }">
                 <RouterLink :to="`/admin/classes/${c.id}`"><ClassBadge :icon="c.icon" :color="c.color" :name="c.name" /></RouterLink>
               </span>
             </td>
             <td>
-              <RouterLink v-if="areaById.get(c.areaId)" :to="{ query: { ...$route.query, areaId: c.areaId } }" :title="`Only classes in ${areaById.get(c.areaId)!.name}`">
+              <RouterLink
+                v-if="areaById.get(c.areaId)"
+                :to="{ query: { ...$route.query, areaId: c.areaId } }"
+                :title="t('dm.classes.onlyArea', { area: areaById.get(c.areaId)!.name })"
+              >
                 {{ areaById.get(c.areaId)!.name }}
               </RouterLink>
             </td>
             <td class="mono">{{ c.tableName }}</td>
             <td>{{ parentName(c) ?? "" }}</td>
             <td>
-              <span v-if="c.isAbstract" class="badge warn" title="Groups other classes; holds no CIs itself">Abstract</span>
-              <span v-else class="muted">Concrete</span>
+              <span v-if="c.isAbstract" class="badge warn" :title="t('dm.class.abstractTitle')">{{ t("dm.class.abstract") }}</span>
+              <span v-else class="muted">{{ t("dm.classes.concrete") }}</span>
             </td>
             <td>
-              <span v-if="c.isActive" class="badge ok">Active</span>
-              <span v-else class="badge off">Archived</span>
+              <span v-if="c.isActive" class="badge ok">{{ t("common.active") }}</span>
+              <span v-else class="badge off">{{ t("dm.class.archivedBadge") }}</span>
             </td>
             <td class="order-buttons">
-              <button type="button" class="btn btn-sm btn-icon" :disabled="reorder.isPending.value || !canStep(c, -1)" :aria-label="`Move ${c.name} up`" @click="step(c, -1)"><Icon name="arrow-up" /></button>
-              <button type="button" class="btn btn-sm btn-icon" :disabled="reorder.isPending.value || !canStep(c, 1)" :aria-label="`Move ${c.name} down`" @click="step(c, 1)"><Icon name="arrow-down" /></button>
+              <button
+                type="button"
+                class="btn btn-sm btn-icon"
+                :disabled="reorder.isPending.value || !canStep(c, -1)"
+                :aria-label="t('dm.classes.moveUp', { name: c.name })"
+                @click="step(c, -1)"
+              >
+                <Icon name="arrow-up" />
+              </button>
+              <button
+                type="button"
+                class="btn btn-sm btn-icon"
+                :disabled="reorder.isPending.value || !canStep(c, 1)"
+                :aria-label="t('dm.classes.moveDown', { name: c.name })"
+                @click="step(c, 1)"
+              >
+                <Icon name="arrow-down" />
+              </button>
             </td>
             <td class="row-actions">
-              <RouterLink class="btn btn-sm" :to="`/admin/classes/${c.id}`">Edit</RouterLink>
-              <button v-if="c.isActive" type="button" class="btn btn-sm" :aria-label="`Archive ${c.name}`" @click="setActive(c, false)">Archive</button>
-              <button v-else type="button" class="btn btn-sm" :aria-label="`Restore ${c.name}`" @click="setActive(c, true)">Restore</button>
+              <RowMenu :label="t('inventory.rowMenu', { name: c.name })" :items="rowMenu(c)" />
             </td>
           </tr>
         </tbody>

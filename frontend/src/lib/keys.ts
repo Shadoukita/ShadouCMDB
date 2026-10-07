@@ -1,3 +1,5 @@
+import { t } from "../i18n/index";
+
 /** Keys of data model rows: lower case, digits and underscores, starting with a letter, at most 63 characters (the API's rule). */
 export const KEY_PATTERN = /^[a-z][a-z0-9_]{0,62}$/;
 
@@ -24,7 +26,7 @@ export function suggestKey(name: string): string {
 
 /** Client-side check before the round trip; the API validates again. */
 export function keyError(key: string): string | undefined {
-  if (!key) return "Required";
-  if (!KEY_PATTERN.test(key)) return "Lower-case letters, digits and _, starting with a letter (max 63)";
+  if (!key) return t("common.required");
+  if (!KEY_PATTERN.test(key)) return t("dm.key.format");
   return undefined;
 }

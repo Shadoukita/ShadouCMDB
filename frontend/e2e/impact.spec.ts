@@ -96,7 +96,8 @@ test.afterAll(async ({ request }) => {
 test("1. an administrator sets a relationship type to propagate impact (§6.3.1)", async ({ page }, testInfo) => {
   await page.goto(`/admin/relationships?type=${typeId}`);
   const row = page.getByRole("row").filter({ hasText: TYPE });
-  await row.getByRole("button", { name: `Edit ${TYPE}` }).click();
+  await row.getByRole("button", { name: `Actions for ${TYPE}` }).click();
+  await page.getByRole("menuitem", { name: "Edit" }).click();
   const dialog = page.getByRole("dialog");
   const field = dialog.getByLabel("Impact propagation");
   await expect(field).toHaveValue("none");
