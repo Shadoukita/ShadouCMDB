@@ -8,9 +8,12 @@
 -- not learn of the rollback. The export now starts before the oldest
 -- backup.restore entry not listed here, and lists each one once it is sent.
 --
--- Existing entries count as sent when a user or API client wrote a row after
--- them: a server served requests since, and the export (if any) was past
--- them. The others are sent, with every row after them, at the next start.
+-- Existing entries count as sent when the first row after them that is not
+-- another backup.restore entry came from a user or API client: the server
+-- started with the entry at the end of the log, and the export (if any) sent
+-- it. When a CLI command wrote a system row first, the export started past
+-- the entry and never sent it (GH#677), even if users signed in later. Those
+-- entries, and any with nothing after them, are sent at the next start.
 --
 -- The table is in backups, so a restored database keeps what was sent from
 -- it. The API role may read and add rows, never change or remove them. The
@@ -25,9 +28,11 @@ CREATE TABLE cmdb.audit_export_restores (
 INSERT INTO cmdb.audit_export_restores (chain_seq)
 SELECT r.chain_seq FROM cmdb.audit_log r
 WHERE r.action = 'backup.restore'
-  AND EXISTS (
-    SELECT 1 FROM cmdb.audit_log a WHERE a.chain_seq > r.chain_seq AND a.actor_type IN ('user', 'api_client')
-  );
+  AND (
+    SELECT a.actor_type FROM cmdb.audit_log a
+    WHERE a.chain_seq > r.chain_seq AND a.action <> 'backup.restore'
+    ORDER BY a.chain_seq LIMIT 1
+  ) IN ('user', 'api_client');
 --> statement-breakpoint
 DO $$
 DECLARE
