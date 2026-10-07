@@ -467,6 +467,7 @@ function confirmPublish() {
             :transition="selectedTransition"
             :problems="problemsFor(problems, 'transition', selectedTransition.key)"
             :fields="fields"
+            :state-field-key="stateField?.key"
             :granted-keys="grantedKeys"
             @renamed="(k) => (selected = { kind: 'transition', key: k })"
             @remove="removeTransition(selectedTransition.key)"

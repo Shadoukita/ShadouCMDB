@@ -16,6 +16,8 @@ const props = defineProps<{
   problems: PlacedProblem[];
   /** The fields of the workflow's type, own and inherited. */
   fields: AttributeDefinition[];
+  /** The key of the workflow's state field: its states set it, so it cannot be a transition field. */
+  stateFieldKey?: string;
   /** Transition keys granted to a profile: renaming one of them loses its grants. */
   grantedKeys: Set<string>;
 }>();
@@ -128,7 +130,9 @@ const fid = (f: string) => `wf-tr-${f}`;
         <div class="inline-control">
           <select v-model="toAdd" aria-label="Field to add">
             <option value="">Add a field…</option>
-            <option v-for="f in unusedFields" :key="f.key" :value="f.key">{{ f.label }}</option>
+            <option v-for="f in unusedFields" :key="f.key" :value="f.key" :disabled="f.key === stateFieldKey">
+              {{ f.key === stateFieldKey ? `${f.label} (state field: set by the states)` : f.label }}
+            </option>
           </select>
           <button type="button" class="btn btn-sm" :disabled="!toAdd" @click="addField">Add</button>
         </div>
