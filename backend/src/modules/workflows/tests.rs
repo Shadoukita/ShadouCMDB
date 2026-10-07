@@ -1058,10 +1058,21 @@ async fn workflow_definitions_follow_the_managers_class_scope() {
         ("GET", format!("{by_id}/approvers"), None),
         ("PUT", format!("{by_id}/approvers"), Some(json!({ "version": 2, "approvers": [] }))),
         ("GET", format!("{by_id}/approvers/preview?transition=approve&step=cab"), None),
+        // GH#695: not 409 `inactive` / `unpublished` naming the workflow.
+        ("POST", format!("{by_id}/bootstrap"), Some(json!({ "stateFromAttribute": true }))),
+        ("POST", format!("{by_id}/bootstrap"), Some(json!({ "stateFromAttribute": true, "dryRun": true }))),
+        (
+            "POST",
+            format!("{by_id}/instance-migrations"),
+            Some(json!({ "fromVersionNo": 1, "toVersionNo": 2, "dryRun": false })),
+        ),
     ];
+    let (_, hidden, _) = call(&w.app, "GET", &by_id, &net_manager, None).await;
     for (method, path, body) in &routes {
         let (status, v, _) = call(&w.app, method, path, &net_manager, body.clone()).await;
         assert_eq!((status, code(&v)), (404, "NOT_FOUND"), "{method} {path}: {v}");
+        assert!(!v.to_string().contains("server_lifecycle"), "{method} {path} names the workflow: {v}");
+        assert_eq!(v["error"]["message"], hidden["error"]["message"], "{method} {path}: as the read route");
     }
     let (_, v) = w.call("GET", &by_id, None).await;
     assert_eq!((v["isActive"].as_bool(), v["version"].as_i64()), (Some(false), Some(2)), "unchanged: {v}");

@@ -314,6 +314,60 @@ async fn bootstrap_starts_the_covered_cis_in_the_state_of_their_value() {
     db.drop().await;
 }
 
+/// GH#694 (SHAA-2229): a real bootstrap starts instances on every covered CI,
+/// so it needs the edit right on the covered types, as a single start does. A
+/// manager who may only view them gets 403 and starts nothing (and no audit
+/// row is written, as for a refused single start); their dry run still counts.
+/// An editor runs it.
+#[tokio::test]
+async fn bootstrap_needs_the_edit_right_on_the_covered_types() {
+    let Some(db) = scratch::database("workflow_bootstrap_edit_right").await else { return };
+    let w = world(&db).await;
+    w.set_active(false, false).await;
+    for _ in 0..3 {
+        let (status, v) = w.create(Some("planned")).await;
+        assert_eq!(status, 201, "{v}");
+    }
+    w.set_active(true, false).await;
+    let manager = |name: &'static str, edit: bool| {
+        let w = &w;
+        async move {
+            let profile = w.profile(&format!("{name} profile"), &[(w.server, edit)]).await;
+            sqlx::query(
+                "INSERT INTO permission_profile_global_permissions (profile_id, permission)
+                 VALUES ($1, 'workflows.manage')",
+            )
+            .bind(profile)
+            .execute(&w.pool)
+            .await
+            .unwrap();
+            w.user(name, &[profile]).await.0
+        }
+    };
+    let viewer = manager("server_viewer", false).await;
+    let editor = manager("server_editor", true).await;
+    let path = format!("{DEFS}/{}/bootstrap", w.definition);
+    let real = json!({ "stateFromAttribute": true });
+    let audit =
+        || async { sqlx::query_scalar::<_, i64>("SELECT count(*) FROM audit_log").fetch_one(&w.pool).await.unwrap() };
+
+    let audit_before = audit().await;
+    let (status, v) = w.call(&viewer, "POST", &path, Some(real.clone())).await;
+    assert_eq!((status, code(&v)), (403, "FORBIDDEN"), "{v}");
+    assert_eq!(w.running().await, 0, "a refused bootstrap starts nothing");
+    assert_eq!(audit().await, audit_before, "a refused bootstrap writes no audit row");
+
+    // The dry run tells only what the view right already shows.
+    let (status, v) = w.call(&viewer, "POST", &path, Some(json!({ "stateFromAttribute": true, "dryRun": true }))).await;
+    assert_eq!((status, v["started"].as_i64()), (200, Some(3)), "{v}");
+    assert_eq!(w.running().await, 0);
+
+    let (status, v) = w.call(&editor, "POST", &path, Some(real)).await;
+    assert_eq!((status, v["started"].as_i64()), (200, Some(3)), "{v}");
+    assert_eq!(w.running().await, 3);
+    db.drop().await;
+}
+
 /// Auto-start on a CI created through the API: instance, state field and audit in the create's transaction.
 #[tokio::test]
 async fn an_auto_start_workflow_starts_on_a_new_ci() {

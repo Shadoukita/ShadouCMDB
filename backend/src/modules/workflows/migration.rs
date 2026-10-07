@@ -136,10 +136,11 @@ pub async fn migrate(
     // It writes the state field of CIs of every type the workflow runs on.
     let model = Model::load(&mut conn).await?;
     let covered = if d.include_subclasses { model.subtree(d.class_id) } else { vec![d.class_id] };
-    if covered
-        .iter()
-        .any(|c| ctx.require_class(*c, ClassOp::View).is_err() || ctx.require_class(*c, ClassOp::Edit).is_err())
-    {
+    // GH#695: one the caller may not read answers like a missing one, before anything names it.
+    if !ctx.may_view_all(&covered) {
+        return Err(AppError::missing("Workflow definition", definition));
+    }
+    if covered.iter().any(|c| ctx.require_class(*c, ClassOp::Edit).is_err()) {
         return Err(AppError::new(
             ErrorCode::Forbidden,
             format!(
