@@ -2158,25 +2158,35 @@ mod tests {
 
     /// GH#682 review: an HTTP/1 client that reads its response slowly but
     /// steadily is not dropped, though the socket's send buffer drains much
-    /// more slowly than the send limit.
+    /// more slowly than the send limit. Without `TCP_NOTSENT_LOWAT` the
+    /// server sees no progress until a third of that buffer has drained, and
+    /// drops this client.
     #[tokio::test]
     async fn steady_slow_http1_readers_are_not_dropped() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
         let (addr, server) = one_connection_server(rx, Duration::from_secs(1)).await;
-        let socket = tokio::net::TcpSocket::new_v4().unwrap();
-        socket.set_recv_buffer_size(64 * 1024).unwrap();
-        let mut stream = socket.connect(addr).await.unwrap();
-        stream.write_all(b"GET /big HTTP/1.1\r\nHost: x\r\n\r\n").await.unwrap();
-        // About 400 KiB/s for 4 s, four times the send limit.
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream.write_all(b"GET /big HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").await.unwrap();
+        // 16 KiB every 100 ms (about 160 KiB/s) for 4 s, four times the send limit.
         let mut chunk = vec![0u8; 16 * 1024];
         let mut taken = 0;
-        for _ in 0..100 {
-            let n = tokio::time::timeout(Duration::from_secs(3), stream.read(&mut chunk)).await.unwrap().unwrap();
-            assert!(n > 0, "dropped after the client took {taken} bytes");
-            taken += n;
-            tokio::time::sleep(Duration::from_millis(40)).await;
+        for _ in 0..40 {
+            tokio::time::timeout(Duration::from_secs(3), stream.read_exact(&mut chunk))
+                .await
+                .unwrap()
+                .unwrap_or_else(|e| panic!("dropped after the client took {taken} bytes: {e}"));
+            taken += chunk.len();
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
+        // The rest at full speed: the whole chunked response arrives, last chunk included.
+        let mut rest = Vec::new();
+        tokio::time::timeout(Duration::from_secs(30), stream.read_to_end(&mut rest)).await.unwrap().unwrap();
+        let response = taken + rest.len();
+        assert!(
+            response > 256 << 20 && rest.ends_with(b"\r\n0\r\n\r\n"),
+            "dropped after the client took {response} bytes"
+        );
         drop(stream);
         let _ = tx.send(());
         server.await.unwrap();
