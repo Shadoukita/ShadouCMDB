@@ -1139,10 +1139,10 @@ async fn including_subtypes_needs_the_rights_on_every_subtype() {
     assert_eq!((status, v["page"]["total"].as_i64()), (200, Some(1)), "{v}");
 
     // Turning the subtypes on would cover Blade: refused, and nothing changes.
-    // GH#686: the answer should be 403, since the editor may read this workflow.
+    // GH#686: 403, not 404, since the editor may read this workflow.
     let (status, v, _) =
         call(&w.app, "PATCH", &by_id, &editor, Some(json!({ "version": 1, "includeSubclasses": true }))).await;
-    assert!(matches!(status, 403 | 404), "{status} {v}");
+    assert_eq!((status, code(&v)), (403, "FORBIDDEN"), "{v}");
     let (_, v) = w.call("GET", &by_id, None).await;
     assert_eq!((v["includeSubclasses"].as_bool(), v["version"].as_i64()), (Some(false), Some(1)), "{v}");
 
