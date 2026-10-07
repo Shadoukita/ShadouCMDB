@@ -220,9 +220,12 @@ fn kind_str(k: WorkflowApprovalPrincipalKind) -> &'static str {
 /// Records how many active users who may view the CI could decide it.
 ///
 /// A CI field source is dropped when the field's current value was set by an
-/// `excluded` user, or by an API token or import that recorded no user, so a
+/// `excluded` user (directly or through an API token one of them minted:
+/// GH#709), or by an API token or import that recorded no user, so a
 /// requester cannot pick their approver by editing the field (GH#664). The
-/// dropped sources are kept on the step with the change that set the field.
+/// same holds for a service owner an excluded user made an owner, and for the
+/// owners of a service an excluded user added the CI to (GH#708). The dropped
+/// sources are kept on the step with the change that named the approvers.
 async fn resolve(
     conn: &mut PgConnection,
     request: Uuid,
@@ -252,7 +255,7 @@ async fn resolve(
                 let change = approvers::last_change(&mut *conn, row.ci_id, key).await?;
                 let label = a.source.label();
                 if let Some(c) = change.clone()
-                    && let Some((reason, message)) = approvers::drop_reason(&c, excluded, &label)
+                    && let Some((reason, message)) = approvers::field_drop_reason(&c, excluded, &label)
                 {
                     dropped.push(WorkflowApprovalDroppedSource {
                         source: a.source.kind(),
@@ -272,28 +275,11 @@ async fn resolve(
                 rows.extend(users.into_iter().map(|u| (K::User, u, via.clone())));
             }
             Source::ServiceOwner(role) => {
-                // Direct membership only (A-Q3).
-                let owners: Vec<(Option<Uuid>, Option<Uuid>)> = sqlx::query_as(
-                    "SELECT DISTINCT o.user_id, o.group_id
-                     FROM cmdb.ci_relationships r
-                     JOIN cmdb.relationship_types rt ON rt.id = r.relationship_type_id
-                       AND rt.system_role = 'business_service_member'
-                     JOIN cmdb.configuration_items sv ON sv.id = r.source_ci_id AND sv.deleted_at IS NULL
-                     JOIN cmdb.business_service_owners o ON o.service_ci_id = sv.id AND o.role = $2
-                     WHERE r.target_ci_id = $1 AND r.deleted_at IS NULL",
-                )
-                .bind(row.ci_id)
-                .bind(role.as_str())
-                .fetch_all(&mut *conn)
-                .await?;
-                for (user, group) in owners {
-                    if let Some(u) = user {
-                        rows.push((K::User, u, via.clone()));
-                    }
-                    if let Some(g) = group {
-                        rows.push((K::Group, g, via.clone()));
-                    }
-                }
+                // Direct membership only (A-Q3), less the owners and memberships an excluded user set (GH#708).
+                let owners = approvers::service_owners(&mut *conn, row.ci_id, *role, excluded).await?;
+                rows.extend(owners.users.into_iter().map(|u| (K::User, u, via.clone())));
+                rows.extend(owners.groups.into_iter().map(|g| (K::Group, g, via.clone())));
+                dropped.extend(owners.dropped);
             }
         }
     }

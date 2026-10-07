@@ -382,7 +382,12 @@ pub fn routes() -> Vec<Route> {
                  policy itself (steps, quorum, due interval) is part of each version's graph. Sources: a permission \
                  profile, a user group, a named user, a reference field of the CI that points at the Person type \
                  (the user linked to that Person), or the technical or business owners of the business services the \
-                 CI is a direct member of. Role `escalation` applies only once the step is overdue. `problems` holds \
+                 CI is a direct member of. Separation of duties: when a request is made, a field source is not used \
+                 if the requester (or the creator of the requesting token) set the field's current value, nor a \
+                 service owner they made an owner, nor the owners of a service they added the CI to; an edit through \
+                 an API token counts as both its owner's and its creator's, and one through a token or import that \
+                 recorded no user is not trusted (the request's `droppedSources`). Role `escalation` applies only \
+                 once the step is overdue. `problems` holds \
                  the lint's warnings against the current version and the draft: `no_approvers`, \
                  `approvers_cannot_view`, `understaffed`, `inactive_attribute`, `unknown_step`. Administrators are \
                  not approvers unless assigned.",
@@ -424,6 +429,9 @@ pub fn routes() -> Vec<Route> {
                  `inactive` (the account is disabled), `no_view_right` (no profile of theirs lets them view the CI's \
                  type, so they would never see the request), `excluded` (the `requestedBy` user: four-eyes), or \
                  `escalation_only`. Each source tells how many users it resolved to, and why none when it is empty. \
+                 With `ciId` and `requestedBy`, the sources and parts a request by that user would not use are \
+                 marked: `dropped` on a field source (or on a service owner source none of whose owners is left), \
+                 and `droppedParts` listing each service owner or membership left out, with who made the change. \
                  Membership is read now; a running request reads it when each decision is made. 400 `unknown_step` \
                  for a step no version or draft has; 400 `not_covered` when the workflow does not run on the CI's \
                  type; 404 for a CI that does not exist or that the caller may not view.",

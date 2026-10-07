@@ -826,13 +826,58 @@ pub async fn audit_value(conn: &mut PgConnection, id: Uuid) -> Result<Value, App
 }
 
 // ---------------------------------------------------------------------------
-// Who set the field that names the approvers (GH#664)
+// Who named the approvers (GH#664, GH#708, GH#709)
 // ---------------------------------------------------------------------------
 
-/// An audit row's actor type, actor id, actor name and time.
-type ChangeRow = (String, Option<String>, Option<String>, chrono::DateTime<chrono::Utc>);
+/// The columns of an audit row `a` that made a change: actor type, id, name
+/// and time, and for a change made with an API token the users who minted
+/// that token for its owner (GH#709): an `api_client` row records only the
+/// owner. The token is the one whose `token.use` row (written just before, in
+/// the same request) shares the change's request id. When that row was pruned
+/// (it is an access event), every user who minted one of the owner's tokens
+/// before the change counts, so pruning never clears an edit made through a
+/// lent token.
+const CHANGE_COLUMNS: &str = "a.actor_type, a.actor_id, a.actor_name, a.occurred_at,
+    CASE WHEN a.actor_type = 'api_client'
+          AND a.actor_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    THEN ARRAY(
+      SELECT DISTINCT t.created_by_user_id FROM cmdb.api_tokens t
+      WHERE t.user_id = a.actor_id::uuid AND t.created_at <= a.occurred_at
+        AND t.created_by_user_id IS NOT NULL AND t.created_by_user_id <> t.user_id
+        AND (EXISTS (SELECT 1 FROM audit_log u
+                     WHERE u.entity_type = 'api_tokens' AND u.entity_id = t.id AND u.action = 'token.use'
+                       AND u.occurred_at BETWEEN a.occurred_at - interval '1 day' AND a.occurred_at
+                       AND u.request_id = a.request_id)
+             OR NOT EXISTS (SELECT 1 FROM cmdb.api_tokens t2
+                            JOIN audit_log u ON u.entity_type = 'api_tokens' AND u.entity_id = t2.id
+                             AND u.action = 'token.use'
+                             AND u.occurred_at BETWEEN a.occurred_at - interval '1 day' AND a.occurred_at
+                             AND u.request_id = a.request_id
+                            WHERE t2.user_id = a.actor_id::uuid))
+      ORDER BY 1)
+    ELSE '{}'::uuid[] END";
 
-/// Why a field source is dropped, and the reason in words.
+/// An audit row's actor type, actor id, actor name, time and token creators.
+type ChangeRow = (String, Option<String>, Option<String>, chrono::DateTime<chrono::Utc>, Vec<Uuid>);
+
+fn change_of((actor_type, actor_id, actor_name, changed_at, token_created_by): ChangeRow) -> WorkflowFieldChange {
+    WorkflowFieldChange {
+        actor_type,
+        actor_id: actor_id.and_then(|a| a.parse().ok()),
+        actor_name,
+        changed_at,
+        token_created_by,
+    }
+}
+
+/// The latest change among the audit rows `filter` (on alias `a`) selects.
+fn latest_sql(filter: &str) -> sqlx::AssertSqlSafe<String> {
+    sqlx::AssertSqlSafe(format!(
+        "SELECT {CHANGE_COLUMNS} FROM audit_log a WHERE {filter} ORDER BY a.occurred_at DESC, a.id DESC LIMIT 1"
+    ))
+}
+
+/// Why a source is dropped, and the reason in words.
 type Dropped = Option<(WorkflowApprovalDropReason, String)>;
 
 /// The audited change that set the current value of field `key` of CI `ci`:
@@ -844,48 +889,204 @@ pub async fn last_change(
     ci: Uuid,
     key: &str,
 ) -> Result<Option<WorkflowFieldChange>, AppError> {
-    let row: Option<ChangeRow> = sqlx::query_as(
-        "SELECT actor_type, actor_id, actor_name, occurred_at FROM audit_log
-         WHERE entity_type = 'configuration_items' AND entity_id = $1 AND action IN ('create', 'update', 'restore')
-           AND coalesce(new_value->'attributes'->$2, 'null') IS DISTINCT FROM coalesce(old_value->'attributes'->$2, 'null')
-           AND new_value ? 'attributes'
-         ORDER BY occurred_at DESC, id DESC LIMIT 1",
-    )
+    let row: Option<ChangeRow> = sqlx::query_as(latest_sql(
+        "a.entity_type = 'configuration_items' AND a.entity_id = $1 AND a.action IN ('create', 'update', 'restore')
+           AND coalesce(a.new_value->'attributes'->$2, 'null')
+               IS DISTINCT FROM coalesce(a.old_value->'attributes'->$2, 'null')
+           AND a.new_value ? 'attributes'",
+    ))
     .bind(ci)
     .bind(key)
     .fetch_optional(&mut *conn)
     .await?;
-    Ok(row.map(|(actor_type, actor_id, actor_name, changed_at)| WorkflowFieldChange {
-        actor_type,
-        actor_id: actor_id.and_then(|a| a.parse().ok()),
-        actor_name,
-        changed_at,
-    }))
+    Ok(row.map(change_of))
 }
 
-/// Why the approvers field `label` names may not decide a request that the
-/// users `excluded` may not decide, given the change that set the field: the
-/// change was theirs, or an API token or import made it with no user recorded.
-/// A system change (a first-run setup, an upgrade) counts as nobody's.
-pub fn drop_reason(change: &WorkflowFieldChange, excluded: &[Uuid], label: &str) -> Dropped {
+/// The audited change that made `principal` (`{"kind", "id"}`) a `role`
+/// owner of business service `service`: the latest owner update whose new
+/// list has it and whose old list did not. None when no audit row did.
+async fn owner_change(
+    conn: &mut PgConnection,
+    service: Uuid,
+    role: &str,
+    principal: Value,
+) -> Result<Option<WorkflowFieldChange>, AppError> {
+    let row: Option<ChangeRow> = sqlx::query_as(latest_sql(
+        "a.entity_type = 'configuration_items' AND a.entity_id = $1 AND a.action = 'update'
+           AND a.new_value->'owners'->$2 @> $3
+           AND NOT coalesce(a.old_value->'owners'->$2, '[]') @> $3",
+    ))
+    .bind(service)
+    .bind(role)
+    .bind(json!([principal]))
+    .fetch_optional(&mut *conn)
+    .await?;
+    Ok(row.map(change_of))
+}
+
+/// The audited change that created (or restored) membership edge `edge`.
+async fn membership_change(conn: &mut PgConnection, edge: Uuid) -> Result<Option<WorkflowFieldChange>, AppError> {
+    let row: Option<ChangeRow> = sqlx::query_as(latest_sql(
+        "a.entity_type = 'ci_relationships' AND a.entity_id = $1 AND a.action IN ('create', 'restore')",
+    ))
+    .bind(edge)
+    .fetch_optional(&mut *conn)
+    .await?;
+    Ok(row.map(change_of))
+}
+
+/// What a change named, for the reason in words: `did` after its author
+/// ("set field server.owner"), `done` in the passive ("field server.owner was
+/// set") and what is `unused` because of it.
+pub struct Named<'a> {
+    pub did: &'a str,
+    pub done: &'a str,
+    pub unused: &'a str,
+}
+
+/// Why the approvers a change named may not decide a request that the users
+/// `excluded` may not decide: one of them made the change, directly or with an
+/// API token one of them minted for its owner (GH#709), or an API token or
+/// import made it with no user recorded. A system change (a first-run setup,
+/// an upgrade) counts as nobody's.
+pub fn drop_reason(change: &WorkflowFieldChange, excluded: &[Uuid], what: &Named) -> Dropped {
     let by = change.actor_name.as_deref().unwrap_or("an unnamed user");
+    let Named { did, done, unused } = what;
     match change.actor_id {
         Some(user) if excluded.contains(&user) => Some((
             WorkflowApprovalDropReason::FieldSetByRequester,
+            format!("Separation of duties: {by} {did} and may not decide this request, so {unused}"),
+        )),
+        Some(_) if change.token_created_by.iter().any(|c| excluded.contains(c)) => Some((
+            WorkflowApprovalDropReason::FieldSetByRequester,
             format!(
-                "Separation of duties: {by} set {label} and may not decide this request, so the approvers it names \
-                 are not used"
+                "Separation of duties: {by} {did} with an API token minted for them by someone who may not decide \
+                 this request, so {unused}"
             ),
         )),
         None if matches!(change.actor_type.as_str(), "api_client" | "import") => Some((
             WorkflowApprovalDropReason::FieldSetByUnattributed,
             format!(
-                "Separation of duties: {label} was set through an API token or an import that recorded no user, so \
-                 the approvers it names are not used"
+                "Separation of duties: {done} through an API token or an import that recorded no user, so {unused}"
             ),
         )),
         _ => None,
     }
+}
+
+/// [`drop_reason`] for field source `label` (`field server.owner`).
+pub fn field_drop_reason(change: &WorkflowFieldChange, excluded: &[Uuid], label: &str) -> Dropped {
+    let (did, done) = (format!("set {label}"), format!("{label} was set"));
+    drop_reason(change, excluded, &Named { did: &did, done: &done, unused: "the approvers it names are not used" })
+}
+
+/// What a `service_owner` source resolves to on one CI.
+#[derive(Default)]
+pub struct ServiceOwners {
+    /// The owner users and groups used.
+    pub users: Vec<Uuid>,
+    pub groups: Vec<Uuid>,
+    /// The owners and memberships not used, and why.
+    pub dropped: Vec<WorkflowApprovalDroppedSource>,
+    /// Whether the CI's services name any owner of the role at all.
+    pub any: bool,
+}
+
+/// The `role` owners of the business services CI `ci` is a direct member of
+/// (approvals design A-Q3), less those a request that the users `excluded`
+/// may not decide drops (GH#708): all owners of a service one of them added
+/// the CI to, and each owner one of them made an owner (by
+/// [`drop_reason`]). An owner or membership with no audit history is kept,
+/// as a field is. With `excluded` empty nothing is dropped.
+pub async fn service_owners(
+    conn: &mut PgConnection,
+    ci: Uuid,
+    role: WorkflowServiceOwnerRole,
+    excluded: &[Uuid],
+) -> Result<ServiceOwners, AppError> {
+    type OwnerRow = (Uuid, Uuid, String, Option<Uuid>, Option<Uuid>, Option<String>);
+    let rows: Vec<OwnerRow> = sqlx::query_as(
+        "SELECT r.id, sv.id, sv.label, o.user_id, o.group_id, coalesce(u.username, 'group ' || g.name)
+         FROM cmdb.ci_relationships r
+         JOIN cmdb.relationship_types rt ON rt.id = r.relationship_type_id
+           AND rt.system_role = 'business_service_member'
+         JOIN cmdb.configuration_items sv ON sv.id = r.source_ci_id AND sv.deleted_at IS NULL
+         JOIN cmdb.business_service_owners o ON o.service_ci_id = sv.id AND o.role = $2
+         LEFT JOIN cmdb.users u ON u.id = o.user_id
+         LEFT JOIN cmdb.user_groups g ON g.id = o.group_id
+         WHERE r.target_ci_id = $1 AND r.deleted_at IS NULL
+         ORDER BY lower(sv.label), sv.id, o.position",
+    )
+    .bind(ci)
+    .bind(role.as_str())
+    .fetch_all(&mut *conn)
+    .await?;
+    let role = role.as_str();
+    let mut out = ServiceOwners { any: !rows.is_empty(), ..Default::default() };
+    let source = WorkflowApproverSource::ServiceOwner;
+    let mut edge: Option<(Uuid, bool)> = None;
+    for (edge_id, service, name, user, group, principal) in rows {
+        if !excluded.is_empty() && edge.is_none_or(|(e, _)| e != edge_id) {
+            let mut skip = false;
+            if let Some(c) = membership_change(&mut *conn, edge_id).await? {
+                let (did, done, unused) = (
+                    format!("added the CI to business service {name}"),
+                    format!("the CI was added to business service {name}"),
+                    format!("its {role} owners are not used"),
+                );
+                if let Some((reason, message)) =
+                    drop_reason(&c, excluded, &Named { did: &did, done: &done, unused: &unused })
+                {
+                    out.dropped.push(WorkflowApprovalDroppedSource {
+                        source,
+                        label: format!("{role} owners of business service {name}"),
+                        reason,
+                        message,
+                        field_last_changed: c,
+                    });
+                    skip = true;
+                }
+            }
+            edge = Some((edge_id, skip));
+        }
+        if edge.is_some_and(|(_, skip)| skip) {
+            continue;
+        }
+        if !excluded.is_empty() {
+            let (kind, id) = match (user, group) {
+                (Some(u), _) => ("user", u),
+                (_, Some(g)) => ("group", g),
+                _ => continue,
+            };
+            let principal = principal.unwrap_or_default();
+            if let Some(c) = owner_change(&mut *conn, service, role, json!({ "kind": kind, "id": id })).await? {
+                let (did, done, unused) = (
+                    format!("made {principal} a {role} owner of business service {name}"),
+                    format!("{principal} was made a {role} owner of business service {name}"),
+                    format!("{principal} is not used as an approver"),
+                );
+                if let Some((reason, message)) =
+                    drop_reason(&c, excluded, &Named { did: &did, done: &done, unused: &unused })
+                {
+                    out.dropped.push(WorkflowApprovalDroppedSource {
+                        source,
+                        label: format!("{role} owner {principal} of business service {name}"),
+                        reason,
+                        message,
+                        field_last_changed: c,
+                    });
+                    continue;
+                }
+            }
+        }
+        out.users.extend(user);
+        out.groups.extend(group);
+    }
+    out.users.sort();
+    out.users.dedup();
+    out.groups.sort();
+    out.groups.dedup();
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -975,11 +1176,15 @@ pub async fn preview(
             (Source::Attribute { key, .. }, Some(ci)) => last_change(&mut conn, ci, key).await?,
             _ => None,
         };
-        let dropped = change.as_ref().zip(q.requested_by).and_then(|(c, r)| drop_reason(c, &[r], &a.source.label()));
+        let dropped =
+            change.as_ref().zip(q.requested_by).and_then(|(c, r)| field_drop_reason(c, &[r], &a.source.label()));
         fields.push((change, dropped));
     }
+    let excluded: Vec<Uuid> = q.requested_by.into_iter().collect();
+    // A service owner source on a CI: the owners and memberships a request by `requestedBy` drops (GH#708).
+    let mut parts: Vec<Vec<WorkflowApprovalDroppedSource>> = vec![Vec::new(); assignments.len()];
     let mut resolved: Vec<(Vec<Uuid>, Option<String>)> = Vec::with_capacity(assignments.len());
-    for (a, (_, dropped)) in assignments.iter().zip(&fields) {
+    for (n, (a, (_, dropped))) in assignments.iter().zip(fields.iter_mut()).enumerate() {
         let users: Vec<Uuid> = match &a.source {
             Source::Profile { id, .. } => {
                 sqlx::query_scalar("SELECT user_id FROM cmdb.user_permission_profiles WHERE profile_id = $1")
@@ -1004,7 +1209,7 @@ pub async fn preview(
                     resolved.push((Vec::new(), Some(format!("The CI's field {key} is empty"))));
                     continue;
                 };
-                if let Some((_, message)) = dropped {
+                if let Some((_, message)) = dropped.as_ref() {
                     resolved.push((Vec::new(), Some(message.clone())));
                     continue;
                 }
@@ -1020,33 +1225,27 @@ pub async fn preview(
                 user
             }
             Source::ServiceOwner(role) => {
-                // Direct membership only (approvals design A-Q3).
-                let users: Vec<Uuid> = sqlx::query_scalar(
-                    "SELECT DISTINCT coalesce(o.user_id, m.user_id)
-                     FROM cmdb.ci_relationships r
-                     JOIN cmdb.relationship_types rt ON rt.id = r.relationship_type_id
-                       AND rt.system_role = 'business_service_member'
-                     JOIN cmdb.configuration_items s ON s.id = r.source_ci_id AND s.deleted_at IS NULL
-                     JOIN cmdb.business_service_owners o ON o.service_ci_id = s.id AND o.role = $2
-                     LEFT JOIN cmdb.user_group_members m ON m.group_id = o.group_id
-                     WHERE r.target_ci_id = $1 AND r.deleted_at IS NULL
-                       AND coalesce(o.user_id, m.user_id) IS NOT NULL",
-                )
-                .bind(q.ci_id)
-                .bind(role.as_str())
-                .fetch_all(&mut *conn)
-                .await?;
-                if users.is_empty() {
-                    resolved.push((
-                        Vec::new(),
-                        Some(format!(
-                            "The CI is not a direct member of a business service with {} owners",
-                            role.as_str()
-                        )),
-                    ));
-                    continue;
-                }
-                users
+                let Some(ci) = q.ci_id else { return Err(AppError::internal()) };
+                let owners = service_owners(&mut conn, ci, *role, &excluded).await?;
+                let members: Vec<Uuid> =
+                    sqlx::query_scalar("SELECT user_id FROM cmdb.user_group_members WHERE group_id = ANY($1)")
+                        .bind(&owners.groups)
+                        .fetch_all(&mut *conn)
+                        .await?;
+                let users: Vec<Uuid> =
+                    owners.users.iter().copied().chain(members).collect::<BTreeSet<_>>().into_iter().collect();
+                let used = !owners.users.is_empty() || !owners.groups.is_empty();
+                let note = if !owners.any {
+                    Some(format!("The CI is not a direct member of a business service with {} owners", role.as_str()))
+                } else if !used && !owners.dropped.is_empty() {
+                    *dropped = owners.dropped.first().map(|d| (d.reason, d.message.clone()));
+                    Some(owners.dropped.iter().map(|d| d.message.as_str()).collect::<Vec<_>>().join(" "))
+                } else {
+                    users.is_empty().then(|| "Has no members".to_owned())
+                };
+                parts[n] = owners.dropped;
+                resolved.push((users, note));
+                continue;
             }
         };
         let note = users.is_empty().then(|| "Has no members".to_owned());
@@ -1111,7 +1310,8 @@ pub async fn preview(
         .iter()
         .zip(resolved)
         .zip(fields)
-        .map(|((a, (users, note)), (change, dropped))| WorkflowApproverPreviewSource {
+        .zip(parts)
+        .map(|(((a, (users, note)), (change, dropped)), dropped_parts)| WorkflowApproverPreviewSource {
             role: a.role,
             source: a.source.kind(),
             label: a.source.label(),
@@ -1119,6 +1319,7 @@ pub async fn preview(
             note,
             field_last_changed: change,
             dropped: dropped.map(|(reason, _)| reason),
+            dropped_parts,
         })
         .collect();
     Ok(WorkflowApproverPreview {

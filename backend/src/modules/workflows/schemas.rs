@@ -1217,9 +1217,13 @@ pub struct WorkflowApproverPreviewSource {
     #[schema(required = true)]
     pub field_last_changed: Option<WorkflowFieldChange>,
     /// Set when the source would be dropped for a request by `requestedBy` (see `WorkflowApprovalDroppedSource`);
-    /// it then resolves to nobody and `note` says why
+    /// it then resolves to nobody and `note` says why. For business service owners: set when every owner the CI's
+    /// services name is dropped
     #[schema(required = true, inline)]
     pub dropped: Option<WorkflowApprovalDropReason>,
+    /// Business service owners with `ciId` and `requestedBy`: the owners and memberships a request by
+    /// `requestedBy` would not use, and why (GH#708). Empty otherwise
+    pub dropped_parts: Vec<WorkflowApprovalDroppedSource>,
 }
 
 /// The audited change that set a CI field's current value (GH#664)
@@ -1235,31 +1239,41 @@ pub struct WorkflowFieldChange {
     pub actor_name: Option<String>,
     #[serde(serialize_with = "ts::serialize")]
     pub changed_at: DateTime<Utc>,
+    /// A change made with an API token (`api_client`): the user who minted that token for its owner, when it
+    /// was not the owner (GH#709). Several when the token's `token.use` row was pruned: then every user who
+    /// minted one of the owner's tokens before the change counts. Left out when there is none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub token_created_by: Vec<Uuid>,
 }
 
-/// Why an approver source that names its approvers through a CI field may not decide a request
+/// Why an approver source (a CI field, or a business service's owner or membership) may not decide a request
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowApprovalDropReason {
-    /// The field's current value was set by the requester (or the creator of the token the request was made with)
+    /// The change that named the approvers (the field's current value, the service owner, or the CI's membership
+    /// of the service) was made by the requester or the creator of the token the request was made with, directly
+    /// or through an API token one of them minted
     FieldSetByRequester,
-    /// The field's current value was set through an API token or an import that recorded no user
+    /// That change was made through an API token or an import that recorded no user
     FieldSetByUnattributed,
 }
 
-/// An approver source of a step that was not used: its field was set by someone who may not decide the request
-/// (GH#664). The step falls back on its other sources.
+/// An approver source of a step, or part of one, that was not used: someone who may not decide the request set
+/// the field that names the approvers (GH#664), made a service owner an owner, or added the CI to the service
+/// (GH#708). The step falls back on its other sources.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkflowApprovalDroppedSource {
     #[schema(inline)]
     pub source: WorkflowApproverSource,
-    /// e.g. `field server.owner`
+    /// e.g. `field server.owner`, `technical owner pal of business service Shop`, `technical owners of business
+    /// service Shop`
     pub label: String,
     #[schema(inline)]
     pub reason: WorkflowApprovalDropReason,
     /// The reason, in words
     pub message: String,
+    /// The audited change that named the approvers: the field's, the owner's or the membership's
     pub field_last_changed: WorkflowFieldChange,
 }
 
