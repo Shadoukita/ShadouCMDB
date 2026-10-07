@@ -70,6 +70,8 @@ serde_json = { version = "1", features = ["preserve_order"] }
 serde_path_to_error = "0.1"
 sha1 = "0.11"
 sha2 = "0.11"
+# TCP_NOTSENT_LOWAT on accepted sockets (GH#682); already used by tokio.
+socket2 = { version = "0.6", features = ["all"] }
 # rustls with ring and the Mozilla root set: no OpenSSL and no system TLS library,
 # so the same code builds unchanged for Linux (x64/arm64) and Windows.
 sqlx = { version = "0.9", default-features = false, features = [
@@ -125,4 +127,6 @@ strip = "symbols"
 [dev-dependencies]
 # Test certificates for the AUDIT_EXPORT=tls:// sink, made at test time (no fixture to expire).
 rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
+# An HTTP/2 client that paces its flow-control window (GH#682 tests).
+h2 = "0.4"
 tokio = { version = "1", features = ["test-util"] }
