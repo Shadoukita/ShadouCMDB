@@ -5,7 +5,6 @@ import { computed, nextTick, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import { ApiError } from "../../../api/client";
 import {
-  KIND_LABELS,
   useCreateIdentityProvider,
   useIdentityProvider,
   useUpdateIdentityProvider,
@@ -18,23 +17,28 @@ import {
 import Breadcrumbs from "../../../components/Breadcrumbs.vue";
 import EmptyState from "../../../components/EmptyState.vue";
 import ErrorAlert from "../../../components/ErrorAlert.vue";
+import Icon from "../../../components/Icon.vue";
 import LoadingState from "../../../components/LoadingState.vue";
-import { useDocumentTitle } from "../../../lib/composables";
+import RowMenu, { type RowMenuItem } from "../../../components/RowMenu.vue";
+import SaveBar from "../../../components/SaveBar.vue";
+import { useDocumentTitle, useUnsavedGuard } from "../../../lib/composables";
 import { vAutofocus } from "../../../lib/directives";
-import { formatDateTime, plural } from "../../../lib/format";
+import { formatDateTime, formatRelative } from "../../../lib/format";
 import { useFlashStore } from "../../../stores/flash";
 import FormErrorBanner from "../../form/FormErrorBanner.vue";
 import FormField from "../../form/FormField.vue";
 import GroupMappingsEditor, { type MappingRow } from "./GroupMappingsEditor.vue";
 import ProviderAccessPanel from "./ProviderAccessPanel.vue";
 import ProviderTestPanel from "./ProviderTestPanel.vue";
+import { providerKindLabel, reentryHint } from "./providerText";
 import SecretInput from "./SecretInput.vue";
-import { reentryHint, secretMissing, secretReentryField, secretRequiredFields, syncSecret, type SecretField } from "./secretReentry";
+import { secretMissing, secretReentryField, secretRequiredFields, syncSecret, type SecretField } from "./secretReentry";
 
 /**
  * Create or edit an identity provider: an OpenID Connect provider (a "Sign in with …" button) or an
  * LDAP / Active Directory directory (its users sign in with the password form). Secrets are
- * write-only; group mappings decide which permission profiles its users get.
+ * write-only; group mappings decide which permission profiles its users get. Title row, `⋯` menu and
+ * save bar as on the other admin edit pages (design §2.7, audit A3).
  */
 const route = useRoute();
 const router = useRouter();
@@ -45,7 +49,7 @@ const provider = useIdentityProvider(id);
 const create = useCreateIdentityProvider();
 const update = useUpdateIdentityProvider();
 const pending = computed(() => create.isPending.value || update.isPending.value);
-useDocumentTitle(() => (isNew.value ? "New identity provider" : provider.data.value?.name));
+useDocumentTitle(() => (isNew.value ? t("idp.edit.new") : provider.data.value?.name));
 
 interface Form {
   kind: ProviderKind;
@@ -135,7 +139,6 @@ const form = ref<Form>(blank(initialKind()));
 const baseline = ref(JSON.stringify(form.value));
 const error = ref<unknown>(null);
 const local = ref<Record<string, string>>({});
-const saved = ref<string | null>(null);
 const copyState = ref<"" | "copied" | "failed">("");
 /** Secrets the API asked for again (422 secret_required), whatever the form thinks; until the next load or save. */
 const apiRequired = ref<SecretField[]>([]);
@@ -154,9 +157,15 @@ watch(id, () => {
   if (!id.value) seed(blank(initialKind()));
   error.value = null;
   local.value = {};
-  saved.value = null;
 });
-const dirty = computed(() => JSON.stringify(form.value) !== baseline.value);
+/** The fields that differ from the form as loaded or saved (group mappings count as one). */
+const changes = computed(() => {
+  const now = form.value as unknown as Record<string, unknown>;
+  const before = JSON.parse(baseline.value) as Record<string, unknown>;
+  return Object.keys(now).filter((k) => JSON.stringify(now[k]) !== JSON.stringify(before[k])).length;
+});
+const dirty = computed(() => changes.value > 0);
+const guard = useUnsavedGuard(() => dirty.value, () => t("admin.unsaved.leave"));
 
 /** A changed server address sends the stored secret nowhere: it has to be entered again (GH#238). */
 const reentry = computed(() => secretReentryField(provider.data.value, form.value));
@@ -176,9 +185,9 @@ const isOidc = computed(() => form.value.kind === "oidc");
 /** StartTLS follows the URL's scheme (the API refuses the other combinations): shown, never asked. */
 const transport = computed(() => {
   const u = form.value.url.trim().toLowerCase();
-  if (u.startsWith("ldaps://")) return "LDAPS: TLS from the first byte.";
-  if (u.startsWith("ldap://")) return "StartTLS: the connection is upgraded to TLS before anything is sent. Plain LDAP is never used.";
-  return "Use ldaps://host[:port] (TLS), or ldap://host[:port] (upgraded with StartTLS).";
+  if (u.startsWith("ldaps://")) return t("idp.ldap.transportLdaps");
+  if (u.startsWith("ldap://")) return t("idp.ldap.transportStartTls");
+  return t("idp.ldap.transportHint");
 });
 
 const FIELDS = [
@@ -212,7 +221,7 @@ const fieldErrors = computed<Record<string, string>>(() => {
   // One input holds the whole list: a complaint about one value ("oidc.requiredAcr.2") belongs next to it.
   for (const [k, v] of Object.entries(api)) {
     const m = /^oidc\.requiredAcr[.[](\d+)/.exec(k);
-    if (m) api["oidc.requiredAcr"] = [api["oidc.requiredAcr"], `Value ${Number(m[1]) + 1}: ${v}`].filter(Boolean).join("; ");
+    if (m) api["oidc.requiredAcr"] = [api["oidc.requiredAcr"], t("idp.oidc.acrValueError", { n: Number(m[1]) + 1, message: v })].filter(Boolean).join("; ");
   }
   return { ...api, ...local.value };
 });
@@ -224,38 +233,38 @@ const unplaced = computed(() =>
 
 function validate(f: Form): Record<string, string> {
   const errs: Record<string, string> = {};
-  const need = (key: string, v: string) => !v.trim() && (errs[key] = "Required");
+  const need = (key: string, v: string) => !v.trim() && (errs[key] = t("common.required"));
   need("name", f.name);
-  if (!/^-?\d+$/.test(f.sortOrder.trim())) errs.sortOrder = "A whole number";
+  if (!/^-?\d+$/.test(f.sortOrder.trim())) errs.sortOrder = t("idp.error.wholeNumber");
   if (f.kind === "oidc") {
     need("oidc.issuerUrl", f.issuerUrl);
     need("oidc.clientId", f.clientId);
     need("oidc.usernameClaim", f.usernameClaim);
     need("oidc.groupsClaim", f.groupsClaim);
-    if (secretRequired("oidc.clientSecret") && secretMissing(f.clientSecret)) errs["oidc.clientSecret"] = "Required";
+    if (secretRequired("oidc.clientSecret") && secretMissing(f.clientSecret)) errs["oidc.clientSecret"] = t("common.required");
     if (f.mfaAssurance === "verify") {
       const acr = acrValues(f.requiredAcr);
       const bad = acr.find((v) => !ACR_VALUE.test(v));
-      if (acr.length > MAX_REQUIRED_ACR) errs["oidc.requiredAcr"] = `At most ${MAX_REQUIRED_ACR} values`;
-      else if (bad !== undefined) errs["oidc.requiredAcr"] = `“${bad.length > 40 ? `${bad.slice(0, 40)}…` : bad}”: printable ASCII only, up to 200 characters`;
+      if (acr.length > MAX_REQUIRED_ACR) errs["oidc.requiredAcr"] = t("idp.error.acrTooMany", { n: MAX_REQUIRED_ACR });
+      else if (bad !== undefined) errs["oidc.requiredAcr"] = t("idp.error.acrValue", { value: bad.length > 40 ? `${bad.slice(0, 40)}…` : bad });
     }
   } else {
     need("ldap.url", f.url);
     need("ldap.userBaseDn", f.userBaseDn);
     need("ldap.userFilter", f.userFilter);
-    if (f.userFilter.trim() && !f.userFilter.includes("{username}")) errs["ldap.userFilter"] = "Must contain {username}";
+    if (f.userFilter.trim() && !f.userFilter.includes("{username}")) errs["ldap.userFilter"] = t("idp.error.userFilter");
     need("ldap.usernameAttribute", f.usernameAttribute);
     need("ldap.displayNameAttribute", f.displayNameAttribute);
     need("ldap.emailAttribute", f.emailAttribute);
     need("ldap.groupAttribute", f.groupAttribute);
     const hasPassword = typeof f.bindPassword === "string" ? f.bindPassword !== "" : f.bindPassword === undefined && !!p.value?.ldap?.bindPasswordSet;
-    if (secretRequired("ldap.bindPassword") && secretMissing(f.bindPassword)) errs["ldap.bindPassword"] = "Required";
-    else if (f.bindDn.trim() && !hasPassword) errs["ldap.bindPassword"] = "A bind DN needs its password";
-    if (!f.bindDn.trim() && typeof f.bindPassword === "string" && f.bindPassword) errs["ldap.bindPassword"] = "A bind password needs a bind DN";
+    if (secretRequired("ldap.bindPassword") && secretMissing(f.bindPassword)) errs["ldap.bindPassword"] = t("common.required");
+    else if (f.bindDn.trim() && !hasPassword) errs["ldap.bindPassword"] = t("idp.error.bindDnNeedsPassword");
+    if (!f.bindDn.trim() && typeof f.bindPassword === "string" && f.bindPassword) errs["ldap.bindPassword"] = t("idp.error.passwordNeedsBindDn");
   }
   f.mappings.forEach((m, i) => {
-    if (!m.group.trim()) errs[`groupMappings.${i}.group`] = "Required";
-    if (!m.profileId) errs[`groupMappings.${i}.profileId`] = "Choose a profile";
+    if (!m.group.trim()) errs[`groupMappings.${i}.group`] = t("common.required");
+    if (!m.profileId) errs[`groupMappings.${i}.profileId`] = t("idp.mappings.chooseError");
   });
   return errs;
 }
@@ -311,7 +320,6 @@ function body(f: Form): IdentityProviderUpdateBody {
 
 async function submit() {
   error.value = null;
-  saved.value = null;
   const f = form.value;
   local.value = validate(f);
   const first = Object.keys(local.value)[0];
@@ -325,14 +333,15 @@ async function submit() {
       const b = body(f);
       const created = await create.mutateAsync({ ...b, kind: f.kind, name: b.name! } as IdentityProviderCreateBody);
       if (created) {
-        flash.show(`Created ${created.name}. Run the connection test to check the settings.`);
+        guard.allow();
+        flash.show(t("idp.edit.created", { name: created.name }));
         await router.push(`/admin/identity-providers/${created.id}`);
       }
       return;
     }
     const next = await update.mutateAsync({ id: id.value!, body: body(f) });
     if (next) seed(fromProvider(next));
-    saved.value = `Saved ${next?.name ?? "the provider"}. Mapping changes apply at each account's next sign-in.`;
+    flash.show(t("idp.edit.saved", { name: next?.name ?? form.value.name }));
   } catch (e) {
     error.value = e;
     // The API wants the secret again (the stored address may have changed meanwhile): open its input.
@@ -365,6 +374,17 @@ async function copyRedirect() {
   }
 }
 
+/** Back to the stored settings. */
+function discard() {
+  seed(isNew.value || !provider.data.value ? blank(initialKind()) : fromProvider(provider.data.value));
+  error.value = null;
+  local.value = {};
+}
+
+// Delete sits in the `⋯` menu; its dialog is the availability panel's.
+const access = ref<InstanceType<typeof ProviderAccessPanel>>();
+const moreActions = computed<RowMenuItem[]>(() => [{ label: t("idp.access.delete"), danger: true, action: () => access.value?.openDelete() }]);
+
 const crumbs = computed(() => adminCrumbs("identity-providers", { label: isNew.value ? t("admin.crumb.new") : (p.value?.name ?? "…") }));
 const notFound = computed(() => {
   const e = provider.error.value;
@@ -374,113 +394,105 @@ const notFound = computed(() => {
 
 <template>
   <Breadcrumbs :items="crumbs" />
-  <LoadingState v-if="!isNew && provider.isLoading.value" label="Loading identity provider…" />
+  <LoadingState v-if="!isNew && provider.isLoading.value" :label="t('idp.edit.loading')" />
   <template v-else-if="!isNew && provider.isError.value">
-    <EmptyState v-if="notFound" title="Identity provider not found">
-      No identity provider has the id <code>{{ id }}</code>. It may have been deleted.
-      <template #actions><RouterLink class="btn" to="/admin/identity-providers">Back to identity providers</RouterLink></template>
+    <EmptyState v-if="notFound" :title="t('idp.edit.notFound.title')">
+      {{ t("idp.edit.notFound.body", { id: id ?? "" }) }}
+      <template #actions><RouterLink class="btn" to="/admin/identity-providers">{{ t("idp.edit.back") }}</RouterLink></template>
     </EmptyState>
     <ErrorAlert v-else :error="provider.error.value" :on-retry="() => provider.refetch()" />
   </template>
   <template v-else>
-    <div class="page-header">
-      <div class="title">
-        <h1>{{ isNew ? "New identity provider" : p?.name }}</h1>
-        <template v-if="p && !isNew">
-          <span class="badge">{{ KIND_LABELS[p.kind] }}</span>
-          <span v-if="p.isEnabled" class="badge ok">Enabled</span>
-          <span v-else class="badge off">Disabled</span>
-          <span v-if="p.oidc?.mfaAssurance === 'trustProvider'" class="badge warn" title="Trusts the provider to enforce MFA; the sign-in token is not checked">
-            MFA not verified
+    <div class="page-header record-header">
+      <div class="record-heading">
+        <div class="title">
+          <Icon name="key-round" class="class-icon" />
+          <h1 dir="auto">{{ isNew ? t("idp.edit.new") : p?.name }}</h1>
+        </div>
+        <p v-if="p && !isNew" class="record-meta" data-testid="record-meta">
+          <span class="status">
+            <span :class="['status-dot', p.isEnabled ? 'ok' : 'off']" aria-hidden="true" />{{ p.isEnabled ? t("idp.enabled") : t("common.disabled") }}
           </span>
-          <span class="muted">{{ plural(p.userCount, "account") }}</span>
-        </template>
+          <span class="sep" aria-hidden="true">·</span>
+          <span>{{ providerKindLabel(p.kind) }}</span>
+          <span v-if="p.oidc?.mfaAssurance === 'trustProvider'" class="badge warn" :title="t('idp.mfaNotVerifiedTitle')">{{ t("idp.mfaNotVerified") }}</span>
+          <span class="sep" aria-hidden="true">·</span>
+          <span>{{ t("idp.edit.accounts", { n: p.userCount }) }}</span>
+          <span class="sep" aria-hidden="true">·</span>
+          <time :datetime="p.updatedAt" :title="formatDateTime(p.updatedAt)">{{ t("idp.edit.updated", { when: formatRelative(p.updatedAt) }) }}</time>
+        </p>
+      </div>
+      <div v-if="p && !isNew" class="actions">
+        <RowMenu :label="t('record.actions.more')" :items="moreActions" large />
       </div>
     </div>
 
+    <FormErrorBanner v-if="error" :error="error" :unplaced="unplaced" />
     <div class="grid-2">
-      <form class="stack" aria-label="Identity provider settings" novalidate @submit.prevent="submit">
+      <form id="idp-form" class="stack" :aria-label="t('idp.edit.formLabel')" novalidate @submit.prevent="submit">
         <section class="panel" aria-labelledby="idp-general-title">
-          <div class="panel-header"><h2 id="idp-general-title">General</h2></div>
+          <div class="panel-header"><h2 id="idp-general-title">{{ t("idp.edit.general") }}</h2></div>
           <div class="panel-body stack">
-            <FormErrorBanner v-if="error" :error="error" :unplaced="unplaced" />
-            <div v-if="saved" class="alert alert-success" role="status">{{ saved }}</div>
             <fieldset v-if="isNew" class="group">
-              <legend>Type</legend>
+              <legend>{{ t("idp.col.type") }}</legend>
               <div class="radio-choice">
                 <label class="checkbox-row">
                   <input v-model="form.kind" type="radio" name="idp-kind" value="oidc" />
-                  <span><strong>OpenID Connect</strong> — Microsoft Entra ID, Okta, Keycloak, ADFS, Google Workspace…: a “Sign in with …” button</span>
+                  <span><strong>{{ t("idp.kind.oidc") }}</strong> — {{ t("idp.edit.kindOidc") }}</span>
                 </label>
                 <label class="checkbox-row">
                   <input v-model="form.kind" type="radio" name="idp-kind" value="ldap" />
-                  <span><strong>LDAP / Active Directory</strong>: directory users sign in with their username and password</span>
+                  <span><strong>{{ t("idp.kind.ldap") }}</strong> — {{ t("idp.edit.kindLdap") }}</span>
                 </label>
               </div>
             </fieldset>
             <div class="form-grid">
-              <FormField
-                id="idp-name"
-                label="Name"
-                required
-                :error="fieldErrors.name"
-                :hint="isOidc ? 'On the sign-in button: “Sign in with {name}”. Also in the audit trail.' : 'Shown to administrators and in the audit trail.'"
-              >
+              <FormField id="idp-name" :label="t('idp.col.name')" required :error="fieldErrors.name" :hint="isOidc ? t('idp.edit.nameHintOidc', { name: form.name.trim() || t('idp.col.name') }) : t('idp.edit.nameHintLdap')">
                 <template #default="{ id: fid, invalid, describedBy }">
                   <input :id="fid" v-model="form.name" v-autofocus="isNew" type="text" autocomplete="off" :aria-invalid="invalid" :aria-describedby="describedBy" />
                 </template>
               </FormField>
-              <FormField
-                id="idp-sortOrder"
-                label="Order"
-                :error="fieldErrors.sortOrder"
-                :hint="isOidc ? 'Buttons are listed from the lowest number.' : 'Directories are asked from the lowest number; the first that knows the name decides.'"
-              >
+              <FormField id="idp-sortOrder" :label="t('idp.col.order')" :error="fieldErrors.sortOrder" :hint="isOidc ? t('idp.edit.orderHintOidc') : t('idp.edit.orderHintLdap')">
                 <template #default="{ id: fid, invalid, describedBy }">
                   <input :id="fid" v-model="form.sortOrder" type="number" step="1" :aria-invalid="invalid" :aria-describedby="describedBy" />
                 </template>
               </FormField>
               <div v-if="isNew" class="field">
-                <span class="label">Status</span>
-                <label class="checkbox-row"><input v-model="form.isEnabled" type="checkbox" /> Enabled (users can sign in through it)</label>
+                <span class="label">{{ t("admin.col.status") }}</span>
+                <label class="checkbox-row"><input v-model="form.isEnabled" type="checkbox" /> {{ t("idp.edit.enabledCheckbox") }}</label>
               </div>
             </div>
           </div>
         </section>
 
         <section v-if="isOidc" class="panel" aria-labelledby="idp-oidc-title">
-          <div class="panel-header"><h2 id="idp-oidc-title">OpenID Connect</h2></div>
+          <div class="panel-header"><h2 id="idp-oidc-title">{{ t("idp.kind.oidc") }}</h2></div>
           <div class="panel-body stack">
             <div class="field">
-              <label for="idp-redirect">Redirect URI</label>
-              <template v-if="isNew">
-                <span class="hint">Shown here after you create the provider. Register it at the provider as the application's redirect (reply) URI.</span>
-              </template>
+              <label for="idp-redirect">{{ t("idp.oidc.redirect") }}</label>
+              <span v-if="isNew" class="hint">{{ t("idp.oidc.redirectAfterCreate") }}</span>
               <template v-else-if="p?.oidc?.redirectUri">
                 <div class="copy-row">
                   <input id="idp-redirect" class="mono" type="text" readonly :value="p.oidc.redirectUri" aria-describedby="idp-redirect-hint" @focus="($event.target as HTMLInputElement).select()" />
-                  <button type="button" class="btn" @click="copyRedirect">Copy</button>
+                  <button type="button" class="btn" @click="copyRedirect"><Icon name="copy" />{{ t("idp.oidc.copy") }}</button>
                 </div>
-                <span id="idp-redirect-hint" class="hint">Register this at the provider as the application's redirect (reply) URI.</span>
+                <span id="idp-redirect-hint" class="hint">{{ t("idp.oidc.redirectHint") }}</span>
                 <span role="status" :class="copyState === 'failed' ? 'error' : 'hint'">
-                  {{ copyState === "copied" ? "Copied to the clipboard." : copyState === "failed" ? "Could not copy — select it and copy it by hand." : "" }}
+                  {{ copyState === "copied" ? t("idp.oidc.copied") : copyState === "failed" ? t("idp.oidc.copyFailed") : "" }}
                 </span>
               </template>
               <div v-else class="alert alert-warn" role="status" data-testid="public-url-missing">
-                <strong>No redirect URI yet.</strong>
-                <div>
-                  Set <code>PUBLIC_URL</code> on the server to the address users open ShadouCMDB at. Until then the
-                  redirect URI is unknown and the sign-in page shows no OpenID Connect buttons.
-                </div>
+                <strong>{{ t("idp.oidc.noRedirectTitle") }}</strong>
+                <div>{{ t("idp.oidc.noRedirectBody") }}</div>
               </div>
             </div>
             <div class="form-grid">
-              <FormField id="idp-oidc-issuerUrl" label="Issuer URL" required wide :error="fieldErrors['oidc.issuerUrl']" hint="e.g. https://login.microsoftonline.com/{tenant}/v2.0 — must be https">
+              <FormField id="idp-oidc-issuerUrl" :label="t('idp.oidc.issuer')" required wide :error="fieldErrors['oidc.issuerUrl']" :hint="t('idp.oidc.issuerHint')">
                 <template #default="{ id: fid, invalid, describedBy }">
                   <input :id="fid" v-model="form.issuerUrl" class="mono" type="text" spellcheck="false" autocomplete="off" :aria-invalid="invalid" :aria-describedby="describedBy" />
                 </template>
               </FormField>
-              <FormField id="idp-oidc-clientId" label="Client ID" required :error="fieldErrors['oidc.clientId']">
+              <FormField id="idp-oidc-clientId" :label="t('idp.oidc.clientId')" required :error="fieldErrors['oidc.clientId']">
                 <template #default="{ id: fid, invalid, describedBy }">
                   <input :id="fid" v-model="form.clientId" class="mono" type="text" spellcheck="false" autocomplete="off" :aria-invalid="invalid" :aria-describedby="describedBy" />
                 </template>
@@ -488,81 +500,72 @@ const notFound = computed(() => {
               <SecretInput
                 id="idp-oidc-clientSecret"
                 v-model="form.clientSecret"
-                label="Client secret"
+                :label="t('idp.oidc.clientSecret')"
                 :is-set="!!p?.oidc?.clientSecretSet"
                 removable
                 :required="secretRequired('oidc.clientSecret')"
                 :error="fieldErrors['oidc.clientSecret']"
-                :hint="secretRequired('oidc.clientSecret') ? reentryHint('oidc.clientSecret') : 'Leave empty for a public client (PKCE only). Never shown again after saving.'"
+                :hint="secretRequired('oidc.clientSecret') ? reentryHint('oidc.clientSecret') : t('idp.oidc.clientSecretHint')"
               />
-              <FormField id="idp-oidc-scopes" label="Scopes" :error="fieldErrors['oidc.scopes']" hint="Space-separated; openid is always added">
+              <FormField id="idp-oidc-scopes" :label="t('idp.oidc.scopes')" :error="fieldErrors['oidc.scopes']" :hint="t('idp.oidc.scopesHint')">
                 <template #default="{ id: fid, invalid, describedBy }">
                   <input :id="fid" v-model="form.scopes" class="mono" type="text" spellcheck="false" autocomplete="off" :aria-invalid="invalid" :aria-describedby="describedBy" />
                 </template>
               </FormField>
-              <FormField id="idp-oidc-usernameClaim" label="Username claim" required :error="fieldErrors['oidc.usernameClaim']" hint="ID token claim used as the ShadouCMDB username">
+              <FormField id="idp-oidc-usernameClaim" :label="t('idp.oidc.usernameClaim')" required :error="fieldErrors['oidc.usernameClaim']" :hint="t('idp.oidc.usernameClaimHint')">
                 <template #default="{ id: fid, invalid, describedBy }">
                   <input :id="fid" v-model="form.usernameClaim" class="mono" type="text" spellcheck="false" autocomplete="off" :aria-invalid="invalid" :aria-describedby="describedBy" />
                 </template>
               </FormField>
-              <FormField id="idp-oidc-groupsClaim" label="Groups claim" required :error="fieldErrors['oidc.groupsClaim']" hint="Dots descend into objects, e.g. realm_access.roles (Keycloak)">
+              <FormField id="idp-oidc-groupsClaim" :label="t('idp.oidc.groupsClaim')" required :error="fieldErrors['oidc.groupsClaim']" :hint="t('idp.oidc.groupsClaimHint')">
                 <template #default="{ id: fid, invalid, describedBy }">
                   <input :id="fid" v-model="form.groupsClaim" class="mono" type="text" spellcheck="false" autocomplete="off" :aria-invalid="invalid" :aria-describedby="describedBy" />
                 </template>
               </FormField>
             </div>
             <fieldset class="group mfa" aria-describedby="idp-mfa-hint">
-              <legend>Multi-factor authentication</legend>
-              <span id="idp-mfa-hint" class="hint">
-                Applies to users whose permission profiles require multi-factor authentication. Their second factor is run by the provider.
-              </span>
+              <legend>{{ t("idp.mfa.title") }}</legend>
+              <span id="idp-mfa-hint" class="hint">{{ t("idp.mfa.hint") }}</span>
               <div class="radio-choice">
                 <label class="checkbox-row">
                   <input v-model="form.mfaAssurance" type="radio" name="idp-mfa" value="verify" />
-                  <span>
-                    <strong>Verify from the sign-in token (recommended)</strong>: the ID token must prove a second factor
-                    (<code>amr</code>, or <code>acr</code> in the list below); otherwise the sign-in is refused
-                  </span>
+                  <span><strong>{{ t("idp.mfa.verify") }}</strong>: {{ t("idp.mfa.verifyBody") }}</span>
                 </label>
                 <label class="checkbox-row">
                   <input v-model="form.mfaAssurance" type="radio" name="idp-mfa" value="trustProvider" />
-                  <span><strong>Trust the provider without checking</strong>: for providers that send neither, such as Google Workspace</span>
+                  <span><strong>{{ t("idp.mfa.trust") }}</strong>: {{ t("idp.mfa.trustBody") }}</span>
                 </label>
               </div>
               <FormField
                 v-if="form.mfaAssurance === 'verify'"
                 id="idp-oidc-requiredAcr"
-                label="Required ACR values"
+                :label="t('idp.mfa.acr')"
                 wide
                 :error="fieldErrors['oidc.requiredAcr']"
-                hint="Optional, up to 10, separated by spaces (e.g. a Keycloak level of authentication). Case-sensitive; also sent to the provider as acr_values. Empty: the amr claim decides."
+                :hint="t('idp.mfa.acrHint')"
               >
                 <template #default="{ id: fid, invalid, describedBy }">
                   <input :id="fid" v-model="form.requiredAcr" class="mono" type="text" spellcheck="false" autocomplete="off" :aria-invalid="invalid" :aria-describedby="describedBy" />
                 </template>
               </FormField>
               <div v-else class="alert alert-warn" role="status" data-testid="mfa-trust-warning">
-                <strong>MFA is not verified.</strong>
-                <div>
-                  ShadouCMDB will not check that the provider used a second factor. Permission profiles that require
-                  multi-factor authentication then depend entirely on the identity provider's policy for this application:
-                  make sure it enforces MFA there.
-                </div>
+                <strong>{{ t("idp.mfa.notVerifiedTitle") }}</strong>
+                <div>{{ t("idp.mfa.notVerifiedBody") }}</div>
               </div>
             </fieldset>
           </div>
         </section>
 
         <section v-else class="panel" aria-labelledby="idp-ldap-title">
-          <div class="panel-header"><h2 id="idp-ldap-title">LDAP / Active Directory</h2></div>
+          <div class="panel-header"><h2 id="idp-ldap-title">{{ t("idp.kind.ldap") }}</h2></div>
           <div class="panel-body stack">
             <div class="form-grid">
-              <FormField id="idp-ldap-url" label="Server URL" required wide :error="fieldErrors['ldap.url']" :hint="transport">
+              <FormField id="idp-ldap-url" :label="t('idp.ldap.url')" required wide :error="fieldErrors['ldap.url']" :hint="transport">
                 <template #default="{ id: fid, invalid, describedBy }">
                   <input :id="fid" v-model="form.url" class="mono" type="text" spellcheck="false" autocomplete="off" placeholder="ldaps://dc1.example.com" :aria-invalid="invalid" :aria-describedby="describedBy" />
                 </template>
               </FormField>
-              <FormField id="idp-ldap-bindDn" label="Service account (bind DN)" wide :error="fieldErrors['ldap.bindDn']" hint="Read-only is enough. Leave empty to search anonymously.">
+              <FormField id="idp-ldap-bindDn" :label="t('idp.ldap.bindDn')" wide :error="fieldErrors['ldap.bindDn']" :hint="t('idp.ldap.bindDnHint')">
                 <template #default="{ id: fid, invalid, describedBy }">
                   <input :id="fid" v-model="form.bindDn" class="mono" type="text" spellcheck="false" autocomplete="off" placeholder="CN=svc-cmdb,OU=Service Accounts,DC=example,DC=com" :aria-invalid="invalid" :aria-describedby="describedBy" />
                 </template>
@@ -570,38 +573,38 @@ const notFound = computed(() => {
               <SecretInput
                 id="idp-ldap-bindPassword"
                 v-model="form.bindPassword"
-                label="Service account password"
+                :label="t('idp.ldap.bindPassword')"
                 :is-set="!!p?.ldap?.bindPasswordSet"
                 :required="secretRequired('ldap.bindPassword')"
                 :error="fieldErrors['ldap.bindPassword']"
-                :hint="secretRequired('ldap.bindPassword') ? reentryHint('ldap.bindPassword') : 'Never shown again after saving. Clearing the bind DN removes it.'"
+                :hint="secretRequired('ldap.bindPassword') ? reentryHint('ldap.bindPassword') : t('idp.ldap.bindPasswordHint')"
               />
-              <FormField id="idp-ldap-userBaseDn" label="User search base" required wide :error="fieldErrors['ldap.userBaseDn']">
+              <FormField id="idp-ldap-userBaseDn" :label="t('idp.ldap.userBaseDn')" required wide :error="fieldErrors['ldap.userBaseDn']">
                 <template #default="{ id: fid, invalid, describedBy }">
                   <input :id="fid" v-model="form.userBaseDn" class="mono" type="text" spellcheck="false" autocomplete="off" placeholder="OU=Staff,DC=example,DC=com" :aria-invalid="invalid" :aria-describedby="describedBy" />
                 </template>
               </FormField>
-              <FormField id="idp-ldap-userFilter" label="User filter" required wide :error="fieldErrors['ldap.userFilter']" hint="{username} is replaced by the escaped sign-in name; must find exactly one entry.">
+              <FormField id="idp-ldap-userFilter" :label="t('idp.ldap.userFilter')" required wide :error="fieldErrors['ldap.userFilter']" :hint="t('idp.ldap.userFilterHint')">
                 <template #default="{ id: fid, invalid, describedBy }">
                   <input :id="fid" v-model="form.userFilter" class="mono" type="text" spellcheck="false" autocomplete="off" :aria-invalid="invalid" :aria-describedby="describedBy" />
                 </template>
               </FormField>
-              <FormField id="idp-ldap-usernameAttribute" label="Username attribute" required :error="fieldErrors['ldap.usernameAttribute']">
+              <FormField id="idp-ldap-usernameAttribute" :label="t('idp.ldap.usernameAttribute')" required :error="fieldErrors['ldap.usernameAttribute']">
                 <template #default="{ id: fid, invalid, describedBy }">
                   <input :id="fid" v-model="form.usernameAttribute" class="mono" type="text" spellcheck="false" autocomplete="off" :aria-invalid="invalid" :aria-describedby="describedBy" />
                 </template>
               </FormField>
-              <FormField id="idp-ldap-displayNameAttribute" label="Display name attribute" required :error="fieldErrors['ldap.displayNameAttribute']">
+              <FormField id="idp-ldap-displayNameAttribute" :label="t('idp.ldap.displayNameAttribute')" required :error="fieldErrors['ldap.displayNameAttribute']">
                 <template #default="{ id: fid, invalid, describedBy }">
                   <input :id="fid" v-model="form.displayNameAttribute" class="mono" type="text" spellcheck="false" autocomplete="off" :aria-invalid="invalid" :aria-describedby="describedBy" />
                 </template>
               </FormField>
-              <FormField id="idp-ldap-emailAttribute" label="E-mail attribute" required :error="fieldErrors['ldap.emailAttribute']">
+              <FormField id="idp-ldap-emailAttribute" :label="t('idp.ldap.emailAttribute')" required :error="fieldErrors['ldap.emailAttribute']">
                 <template #default="{ id: fid, invalid, describedBy }">
                   <input :id="fid" v-model="form.emailAttribute" class="mono" type="text" spellcheck="false" autocomplete="off" :aria-invalid="invalid" :aria-describedby="describedBy" />
                 </template>
               </FormField>
-              <FormField id="idp-ldap-groupAttribute" label="Group attribute" required :error="fieldErrors['ldap.groupAttribute']" hint="Holds the DNs of the user's groups (direct membership)">
+              <FormField id="idp-ldap-groupAttribute" :label="t('idp.ldap.groupAttribute')" required :error="fieldErrors['ldap.groupAttribute']" :hint="t('idp.ldap.groupAttributeHint')">
                 <template #default="{ id: fid, invalid, describedBy }">
                   <input :id="fid" v-model="form.groupAttribute" class="mono" type="text" spellcheck="false" autocomplete="off" :aria-invalid="invalid" :aria-describedby="describedBy" />
                 </template>
@@ -611,14 +614,9 @@ const notFound = computed(() => {
         </section>
 
         <section class="panel" aria-labelledby="idp-tls-title">
-          <div class="panel-header"><h2 id="idp-tls-title">Trusted certificates</h2></div>
+          <div class="panel-header"><h2 id="idp-tls-title">{{ t("idp.tls.title") }}</h2></div>
           <div class="panel-body stack">
-            <FormField
-              id="idp-caCertificate"
-              label="Extra CA certificates (PEM)"
-              :error="fieldErrors.caCertificate"
-              hint="Only for a private CA. Certificates are always verified against the public roots and the server's trust store."
-            >
+            <FormField id="idp-caCertificate" :label="t('idp.tls.ca')" :error="fieldErrors.caCertificate" :hint="t('idp.tls.caHint')">
               <template #default="{ id: fid, invalid, describedBy }">
                 <textarea :id="fid" v-model="form.caCertificate" class="mono" rows="4" spellcheck="false" placeholder="-----BEGIN CERTIFICATE-----" :aria-invalid="invalid" :aria-describedby="describedBy" />
               </template>
@@ -627,58 +625,43 @@ const notFound = computed(() => {
         </section>
 
         <GroupMappingsEditor v-model="form.mappings" :kind="form.kind" :errors="fieldErrors" />
-
-        <div class="panel">
-          <div class="form-footer">
-            <button type="submit" class="btn btn-primary" :disabled="pending">
-              {{ pending ? "Saving…" : isNew ? "Create provider" : "Save changes" }}
-            </button>
-            <RouterLink class="btn" to="/admin/identity-providers">{{ isNew ? "Cancel" : "Back to identity providers" }}</RouterLink>
-            <span v-if="!isNew && dirty" class="muted unsaved">Unsaved changes</span>
-          </div>
-        </div>
       </form>
 
       <div class="stack">
-        <section class="panel" aria-labelledby="idp-about-title">
-          <div class="panel-header"><h2 id="idp-about-title">How accounts work</h2></div>
-          <div class="panel-body stack">
-            <p class="no-margin">
-              A person's first sign-in creates their account. Every sign-in sets the display name, e-mail and permission
-              profiles from the provider; changes made by hand last until then.
-            </p>
-            <p class="no-margin">
-              An existing local account is never taken over: if the username is taken, the sign-in is refused.
-            </p>
-            <p class="muted no-margin">
-              Local accounts keep working when a provider is down. Keep a local administrator with two-factor
-              authentication for emergencies.
-            </p>
-            <p class="muted no-margin">
-              OpenID Connect accounts get their second factor from the provider; the provider's multi-factor
-              authentication setting decides whether ShadouCMDB checks it in the sign-in token. Directory (LDAP) accounts that hold a
-              permission profile requiring two-factor authentication set up an authenticator app in ShadouCMDB, confirmed
-              with their directory password; sign-in then asks for its code after the directory password.
-            </p>
-          </div>
-        </section>
         <template v-if="p && !isNew">
           <ProviderTestPanel :provider="p" :dirty="dirty" />
-          <ProviderAccessPanel :provider="p" />
-          <section class="panel" aria-labelledby="idp-facts-title">
-            <div class="panel-header"><h2 id="idp-facts-title">Record</h2></div>
-            <div class="panel-body">
-              <dl class="props">
-                <dt>Created</dt>
-                <dd>{{ formatDateTime(p.createdAt) }}</dd>
-                <dt>Updated</dt>
-                <dd>{{ formatDateTime(p.updatedAt) }}</dd>
-              </dl>
-            </div>
-          </section>
+          <ProviderAccessPanel ref="access" :provider="p" />
         </template>
+        <section class="panel" aria-labelledby="idp-about-title">
+          <div class="panel-header"><h2 id="idp-about-title">{{ t("idp.about.title") }}</h2></div>
+          <div class="panel-body stack">
+            <p class="no-margin">{{ t("idp.about.firstSignIn") }}</p>
+            <p class="no-margin">{{ t("idp.about.noTakeover") }}</p>
+            <p class="muted no-margin">{{ t("idp.about.local") }}</p>
+            <p class="muted no-margin">{{ t("idp.about.mfa") }}</p>
+          </div>
+        </section>
+        <section v-if="p && !isNew" class="panel" aria-labelledby="idp-facts-title">
+          <div class="panel-header"><h2 id="idp-facts-title">{{ t("idp.edit.record") }}</h2></div>
+          <div class="panel-body">
+            <dl class="props">
+              <dt>{{ t("common.created") }}</dt>
+              <dd>{{ formatDateTime(p.createdAt) }}</dd>
+              <dt>{{ t("common.updated") }}</dt>
+              <dd>{{ formatDateTime(p.updatedAt) }}</dd>
+            </dl>
+          </div>
+        </section>
       </div>
     </div>
+
+    <SaveBar :label="t('record.save.region')" :dirty="!isNew && dirty" :changes="isNew ? 0 : changes">
+      <RouterLink class="btn" to="/admin/identity-providers">{{ t("common.cancel") }}</RouterLink>
+      <button v-if="!isNew && dirty" type="button" class="btn" :disabled="pending" @click="discard">{{ t("record.save.discard") }}</button>
+      <button type="submit" form="idp-form" class="btn btn-primary" :disabled="pending">
+        {{ pending ? t("common.saving") : isNew ? t("idp.edit.create") : t("common.saveChanges") }}
+      </button>
+    </SaveBar>
   </template>
 </template>
 
@@ -701,9 +684,6 @@ const notFound = computed(() => {
 }
 .copy-row input {
   flex: 1;
-}
-.unsaved {
-  align-self: center;
 }
 .mfa {
   display: flex;

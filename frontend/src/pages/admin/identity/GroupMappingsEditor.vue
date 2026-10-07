@@ -3,7 +3,9 @@ import { computed } from "vue";
 import { RouterLink } from "vue-router";
 import { useAllProfiles } from "../../../api/admin";
 import ErrorAlert from "../../../components/ErrorAlert.vue";
+import Icon from "../../../components/Icon.vue";
 import LoadingState from "../../../components/LoadingState.vue";
+import { t } from "../../../i18n";
 
 /** One row: users in `group` get `profileId`. `key` only keeps Vue's rows stable while editing. */
 export interface MappingRow {
@@ -22,11 +24,7 @@ const profiles = useAllProfiles();
 const options = computed(() => profiles.data.value?.data ?? []);
 let next = Date.now();
 
-const groupHint = computed(() =>
-  props.kind === "ldap"
-    ? "The group's full DN, as the directory lists it in memberOf, e.g. CN=CMDB Operators,OU=Groups,DC=example,DC=com"
-    : "The value the provider sends in the groups claim: a group name, or an object id (Microsoft Entra ID).",
-);
+const groupHint = computed(() => (props.kind === "ldap" ? t("idp.mappings.ldapHint") : t("idp.mappings.oidcHint")));
 
 function add() {
   rows.value = [...rows.value, { key: next++, group: "", profileId: "" }];
@@ -44,29 +42,26 @@ function set(i: number, patch: Partial<MappingRow>) {
 <template>
   <section class="panel" aria-labelledby="mappings-title">
     <div class="panel-header">
-      <h2 id="mappings-title">Group mappings</h2>
-      <button type="button" class="btn btn-sm" @click="add">+ Add mapping</button>
+      <h2 id="mappings-title">{{ t("idp.mappings.title") }}</h2>
+      <button type="button" class="btn btn-sm mappings-add" @click="add"><Icon name="plus" />{{ t("idp.mappings.add") }}</button>
     </div>
     <div class="panel-body stack">
       <p class="muted no-margin">
-        At every sign-in an account gets exactly the permission profiles its groups map to, and loses the others. A
-        user in no mapped group cannot sign in. Groups are compared without regard to case.
-        <RouterLink to="/admin/profiles">Permission profiles</RouterLink>
+        {{ t("idp.mappings.body") }}
+        <RouterLink to="/admin/profiles">{{ t("admin.section.profiles") }}</RouterLink>
       </p>
       <p class="hint no-margin">{{ groupHint }}</p>
-      <LoadingState v-if="profiles.isLoading.value" label="Loading profiles…" />
+      <LoadingState v-if="profiles.isLoading.value" :label="t('idp.mappings.loadingProfiles')" />
       <ErrorAlert v-else-if="profiles.isError.value" :error="profiles.error.value" :on-retry="() => profiles.refetch()" />
       <div v-if="errors.groupMappings" class="field"><span class="error" role="alert">{{ errors.groupMappings }}</span></div>
-      <p v-if="rows.length === 0" class="alert alert-warn no-margin" role="status">
-        No mappings yet: nobody can sign in through this provider until at least one group maps to a profile.
-      </p>
+      <p v-if="rows.length === 0" class="alert alert-warn no-margin" role="status">{{ t("idp.mappings.none") }}</p>
       <div v-else class="table-wrap">
         <table class="data mappings">
           <thead>
             <tr>
-              <th scope="col">Group</th>
-              <th scope="col">Permission profile</th>
-              <th scope="col"><span class="sr-only">Actions</span></th>
+              <th scope="col">{{ t("idp.mappings.group") }}</th>
+              <th scope="col">{{ t("idp.mappings.profile") }}</th>
+              <th scope="col" class="row-actions"><span class="sr-only">{{ t("inventory.actions") }}</span></th>
             </tr>
           </thead>
           <tbody>
@@ -79,7 +74,7 @@ function set(i: number, patch: Partial<MappingRow>) {
                   type="text"
                   spellcheck="false"
                   autocomplete="off"
-                  :aria-label="`Group of mapping ${i + 1}`"
+                  :aria-label="t('idp.mappings.groupOf', { n: i + 1 })"
                   :aria-invalid="!!errors[`groupMappings.${i}.group`]"
                   @input="set(i, { group: ($event.target as HTMLInputElement).value })"
                 />
@@ -89,17 +84,19 @@ function set(i: number, patch: Partial<MappingRow>) {
                 <select
                   :id="`mapping-${i}-profile`"
                   :value="r.profileId"
-                  :aria-label="`Permission profile of mapping ${i + 1}`"
+                  :aria-label="t('idp.mappings.profileOf', { n: i + 1 })"
                   :aria-invalid="!!errors[`groupMappings.${i}.profileId`]"
                   @change="set(i, { profileId: ($event.target as HTMLSelectElement).value })"
                 >
-                  <option value="" disabled>Choose a profile…</option>
+                  <option value="" disabled>{{ t("idp.mappings.choose") }}</option>
                   <option v-for="p in options" :key="p.id" :value="p.id">{{ p.name }}</option>
                 </select>
                 <span v-if="errors[`groupMappings.${i}.profileId`]" class="error">{{ errors[`groupMappings.${i}.profileId`] }}</span>
               </td>
-              <td class="num">
-                <button type="button" class="btn btn-sm btn-quiet-danger" :aria-label="`Remove mapping ${i + 1}`" @click="remove(i)">Remove</button>
+              <td class="row-actions">
+                <button type="button" class="btn btn-sm btn-icon btn-quiet-danger" :aria-label="t('idp.mappings.removeOf', { n: i + 1 })" :title="t('idp.mappings.remove')" @click="remove(i)">
+                  <Icon name="x" />
+                </button>
               </td>
             </tr>
           </tbody>
@@ -121,5 +118,8 @@ function set(i: number, patch: Partial<MappingRow>) {
   display: block;
   font-size: var(--fs-sm);
   color: var(--c-danger-text);
+}
+.panel-header .mappings-add {
+  margin-left: auto;
 }
 </style>

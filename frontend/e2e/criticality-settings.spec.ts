@@ -13,7 +13,7 @@ async function save(page: Page, comment: string) {
   await bar.getByLabel("Comment for this version").fill(`${comment} ${stamp}`);
   await bar.getByRole("button", { name: "Save" }).click();
   await expect(page.getByRole("status").filter({ hasText: /Saved as version \d+/ })).toBeVisible();
-  await expect(bar.getByText("No unsaved changes")).toBeVisible();
+  await expect(bar.getByText("Unsaved changes")).toHaveCount(0);
 }
 
 test.beforeAll(async ({ request }) => resetUiSettings(request));

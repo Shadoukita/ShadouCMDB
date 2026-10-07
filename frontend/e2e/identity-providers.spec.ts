@@ -169,7 +169,7 @@ test("create an OIDC provider: required fields, the API's field errors, then a w
   await page.goto("/admin");
   await page.getByRole("navigation", { name: "Administration" }).getByRole("link", { name: "Identity providers" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Identity providers" })).toBeVisible();
-  await page.getByRole("link", { name: "+ New OpenID Connect provider" }).first().click();
+  await page.getByRole("link", { name: "New OpenID Connect provider" }).first().click();
   await expect(page.getByRole("heading", { level: 1, name: "New identity provider" })).toBeVisible();
   await expect(page.getByRole("radio", { name: /^OpenID Connect/ })).toBeChecked();
   // The server's defaults are filled in.
@@ -191,7 +191,7 @@ test("create an OIDC provider: required fields, the API's field errors, then a w
   await page.getByLabel("Issuer URL").fill("http://idp.example.com/realms/e2e");
   await page.getByLabel("Client ID").fill("shadoucmdb-e2e");
   await page.getByLabel("Client secret").fill(SECRET);
-  await page.getByRole("button", { name: "+ Add mapping" }).click();
+  await page.getByRole("button", { name: "Add mapping" }).click();
   await page.getByLabel("Group of mapping 1").fill("CMDB-Admins");
   await page.getByLabel("Permission profile of mapping 1").selectOption({ label: "Administrator" });
   await page.getByRole("button", { name: "Create provider" }).click();
@@ -360,7 +360,7 @@ test("the sign-in page offers the new provider (when PUBLIC_URL is set)", async 
 
 test("create an LDAP directory: StartTLS follows the URL, a bind DN needs its password, the lookup test runs", async ({ page, request }) => {
   await page.goto("/admin/identity-providers");
-  await page.getByRole("link", { name: "+ New LDAP directory" }).first().click();
+  await page.getByRole("link", { name: "New LDAP directory" }).first().click();
   await expect(page.getByRole("radio", { name: /^LDAP \/ Active Directory/ })).toBeChecked();
   await expect(page.getByLabel("User filter")).toHaveValue("(&(objectClass=user)(sAMAccountName={username}))");
   // Directory accounts set up MFA in ShadouCMDB: no provider MFA setting.
@@ -379,10 +379,10 @@ test("create an LDAP directory: StartTLS follows the URL, a bind DN needs its pa
   await expect(page.getByRole("status").filter({ hasText: "No mappings yet" })).toBeVisible();
 
   await page.getByLabel("Service account password").fill(BIND_PASSWORD);
-  await page.getByRole("button", { name: "+ Add mapping" }).click();
+  await page.getByRole("button", { name: "Add mapping" }).click();
   await page.getByLabel("Group of mapping 1").fill("CN=CMDB Operators,OU=Groups,DC=example,DC=com");
   await page.getByLabel("Permission profile of mapping 1").selectOption({ label: "Administrator" });
-  await page.getByRole("button", { name: "+ Add mapping" }).click();
+  await page.getByRole("button", { name: "Add mapping" }).click();
   await page.getByLabel("Group of mapping 2").fill("CN=CMDB Readers,OU=Groups,DC=example,DC=com");
   // Left without a profile: said next to the row before any request.
   await page.getByRole("button", { name: "Create provider" }).click();
@@ -484,7 +484,9 @@ test("deleting a provider that still has accounts (409 IN_USE) offers to disable
         })
       : route.fallback(),
   );
-  await page.getByRole("button", { name: "Delete provider" }).click();
+  // Delete is in the title row's `⋯` menu.
+  await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "Delete provider" }).click();
   const dialog = page.getByRole("dialog", { name: `Delete identity provider ${OIDC_NAME}?` });
   await expect(dialog).toContainText("group mapping");
   await dialog.getByRole("button", { name: "Delete provider" }).click();
@@ -494,7 +496,7 @@ test("deleting a provider that still has accounts (409 IN_USE) offers to disable
   await dialog.getByRole("button", { name: "Disable instead" }).click();
   await expect(dialog).toBeHidden();
   await expect(page.getByRole("status").filter({ hasText: `${OIDC_NAME} is disabled` })).toBeVisible();
-  await expect(page.locator(".page-header .badge.off")).toHaveText("Disabled");
+  await expect(page.getByTestId("record-meta")).toContainText("Disabled");
   expect((await provider(request, oidcId)).isEnabled).toBe(false);
 
   // Enable again through the confirmation.
@@ -506,7 +508,9 @@ test("deleting a provider that still has accounts (409 IN_USE) offers to disable
 
 test("a provider without accounts is deleted, and is gone from the list", async ({ page, request }) => {
   await page.goto(`/admin/identity-providers/${ldapId}`);
-  await page.getByRole("button", { name: "Delete provider" }).click();
+  // Delete is in the title row's `⋯` menu.
+  await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "Delete provider" }).click();
   const dialog = page.getByRole("dialog", { name: `Delete identity provider ${LDAP_NAME}?` });
   await dialog.getByRole("button", { name: "Delete provider" }).click();
   await expect(page).toHaveURL(/\/admin\/identity-providers$/);

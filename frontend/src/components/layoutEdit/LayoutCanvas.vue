@@ -59,6 +59,7 @@ import NoteText from "../NoteText.vue";
 import EditableField, { type SectionOption } from "./EditableField.vue";
 import FreeWindow from "./FreeWindow.vue";
 import Icon from "../Icon.vue";
+import { t } from "../../i18n";
 
 /**
  * The CI page's fields in layout edit mode: the class layout's tabs, sections
@@ -93,6 +94,8 @@ defineSlots<{
   panel?(p: { kind: PanelKind }): unknown;
 }>();
 
+/** The mouse and keyboard help under the canvas, collapsed; the grips point at its list (aria-describedby). */
+const KEY_HELP = ["layoutEditor.keys.fieldMouse", "layoutEditor.keys.fieldKeys", "layoutEditor.keys.separator", "layoutEditor.keys.windowMouse", "layoutEditor.keys.snap", "layoutEditor.keys.windowKeys"] as const;
 const layout = computed(() => props.editor.layout);
 const defFor = (f: string) => props.attrs.find((d) => d.key === attributeKey(f));
 const labelOf = (f: string) => fieldLabel(f, props.attrs);
@@ -631,9 +634,9 @@ function onHiddenDrop(e: DragEvent) {
     <div class="le-frame" data-testid="le-frame">
       <div class="layout-container">
         <div class="le-tabs" role="group" aria-label="Tabs of the layout">
-          <div v-for="t in tabs" :key="t.key" :class="['le-tab', { current: t === activeTab, 'drop-target': dropTab === t.key }]" @dragover="onTabOver(t, $event)" @dragleave="dropTab = null" @drop="onTabDrop(t, $event)">
+          <div v-for="tb in tabs" :key="tb.key" :class="['le-tab', { current: tb === activeTab, 'drop-target': dropTab === tb.key }]" @dragover="onTabOver(tb, $event)" @dragleave="dropTab = null" @drop="onTabDrop(tb, $event)">
             <input
-              v-if="renaming?.kind === 'tab' && renaming.key === t.key"
+              v-if="renaming?.kind === 'tab' && renaming.key === tb.key"
               id="le-rename"
               v-model="renameValue"
               class="le-rename"
@@ -643,17 +646,17 @@ function onHiddenDrop(e: DragEvent) {
               @keydown="onRenameKey"
               @blur="commitRename"
             />
-            <button v-else :id="`le-tab-${t.key}`" type="button" class="le-tab-label" :aria-pressed="t === activeTab" :title="t === activeTab ? 'Click to rename' : undefined" @click="onTabClick(t)">
-              {{ t.label }}
+            <button v-else :id="`le-tab-${tb.key}`" type="button" class="le-tab-label" :aria-pressed="tb === activeTab" :title="tb === activeTab ? 'Click to rename' : undefined" @click="onTabClick(tb)">
+              {{ tb.label }}
             </button>
-            <span v-if="t === activeTab && !(renaming?.kind === 'tab' && renaming.key === t.key)" class="le-tab-tools" role="toolbar" :aria-label="`Tab ${t.label}: layout`">
-              <button type="button" class="btn btn-sm btn-icon" :aria-label="`Rename tab ${t.label}`" title="Rename" @click="startRename('tab', t.key, t.label)"><Icon name="pencil" /></button>
-              <button type="button" class="btn btn-sm btn-icon" :aria-label="`Move tab ${t.label} left`" title="Move left" :disabled="tabs.indexOf(t) === 0" @click="onMoveTab(t, -1)"><Icon name="arrow-left" /></button>
-              <button type="button" class="btn btn-sm btn-icon" :aria-label="`Move tab ${t.label} right`" title="Move right" :disabled="tabs.indexOf(t) === tabs.length - 1" @click="onMoveTab(t, 1)"><Icon name="arrow-right" /></button>
-              <button type="button" class="btn btn-sm btn-icon" :aria-label="`Remove tab ${t.label}`" title="Remove" :disabled="!layout || !canRemoveTab(layout, t)" @click="confirmRemove = { tab: t }"><Icon name="x" /></button>
+            <span v-if="tb === activeTab && !(renaming?.kind === 'tab' && renaming.key === tb.key)" class="le-tab-tools" role="toolbar" :aria-label="`Tab ${tb.label}: layout`">
+              <button type="button" class="btn btn-sm btn-icon" :aria-label="`Rename tab ${tb.label}`" title="Rename" @click="startRename('tab', tb.key, tb.label)"><Icon name="pencil" /></button>
+              <button type="button" class="btn btn-sm btn-icon" :aria-label="`Move tab ${tb.label} left`" title="Move left" :disabled="tabs.indexOf(tb) === 0" @click="onMoveTab(tb, -1)"><Icon name="arrow-left" /></button>
+              <button type="button" class="btn btn-sm btn-icon" :aria-label="`Move tab ${tb.label} right`" title="Move right" :disabled="tabs.indexOf(tb) === tabs.length - 1" @click="onMoveTab(tb, 1)"><Icon name="arrow-right" /></button>
+              <button type="button" class="btn btn-sm btn-icon" :aria-label="`Remove tab ${tb.label}`" title="Remove" :disabled="!layout || !canRemoveTab(layout, tb)" @click="confirmRemove = { tab: tb }"><Icon name="x" /></button>
             </span>
           </div>
-          <button type="button" class="btn btn-sm le-add" @click="onAddTab">+ Tab</button>
+          <button type="button" class="btn btn-sm le-add" aria-label="Add a tab" @click="onAddTab"><Icon name="plus" />Tab</button>
         </div>
 
         <div
@@ -721,13 +724,13 @@ function onHiddenDrop(e: DragEvent) {
                   </button>
                   <button v-if="kindOf(s) === 'note'" type="button" class="btn btn-sm" :aria-label="`Edit the text of ${s.label}`" @click="startNote(s)">Edit text</button>
                   <button v-if="kindOf(s) === 'fields'" type="button" class="btn btn-sm" :aria-label="`Add a separator to ${s.label}`" title="A line across the section between its fields, with an optional label" @click="insertSeparator(s)">
-                    + Separator
+                    <Icon name="plus" />Separator
                   </button>
                   <select v-if="kindOf(s) === 'fields'" :aria-label="`Columns of ${s.label}`" title="Columns of the section's field grid" :value="s.columns ?? 3" @change="onSection(s.key, (_, own) => setColumns(own, Number(($event.target as HTMLSelectElement).value)))">
                     <option v-for="n in MAX_COLUMNS" :key="n" :value="n">{{ n }} column{{ n === 1 ? "" : "s" }}</option>
                   </select>
                   <select v-if="tabs.length > 1" :aria-label="`Tab of ${s.label}`" :value="activeTab?.key" @change="onSectionTab(s, ($event.target as HTMLSelectElement).value)">
-                    <option v-for="t in tabs" :key="t.key" :value="t.key">{{ t.label }}</option>
+                    <option v-for="tb in tabs" :key="tb.key" :value="tb.key">{{ tb.label }}</option>
                   </select>
                   <button type="button" class="btn btn-sm" :aria-label="`Remove section ${s.label}`" :disabled="!layout || !canRemoveSection(layout, s)" @click="confirmRemove = { section: s }">Remove</button>
                 </span>
@@ -852,16 +855,16 @@ function onHiddenDrop(e: DragEvent) {
           <!-- Below the lowest window. -->
           <div class="layout-panels le-tail">
             <div class="le-insert">
-              <button type="button" class="btn btn-sm le-add" :aria-label="`Add a section to ${activeTab?.label}`" @click="insertSection(activeTab?.sections?.length ?? 0)">+ Section</button>
-              <button type="button" class="btn btn-sm le-add" :aria-label="`Add a note to ${activeTab?.label}`" @click="insertNote(activeTab?.sections?.length ?? 0)">+ Note</button>
+              <button type="button" class="btn btn-sm le-add" :aria-label="`Add a section to ${activeTab?.label}`" @click="insertSection(activeTab?.sections?.length ?? 0)"><Icon name="plus" />{{ t("layoutEditor.addSection") }}</button>
+              <button type="button" class="btn btn-sm le-add" :aria-label="`Add a note to ${activeTab?.label}`" @click="insertNote(activeTab?.sections?.length ?? 0)"><Icon name="plus" />{{ t("layoutEditor.addNote") }}</button>
               <select
-                class="btn btn-sm le-add"
+                class="le-add-panel"
                 :aria-label="`Add a panel to ${activeTab?.label}`"
                 :disabled="freePanels.length === 0"
                 :title="freePanels.length === 0 ? 'Every panel is placed' : undefined"
                 @change="insertPanel(activeTab?.sections?.length ?? 0, $event)"
               >
-                <option value="">+ Panel</option>
+                <option value="">{{ t("layoutEditor.addPanel") }}</option>
                 <option v-for="p in freePanels" :key="p.kind" :value="p.kind">{{ p.label }}</option>
               </select>
             </div>
@@ -906,16 +909,12 @@ function onHiddenDrop(e: DragEvent) {
         </div>
       </div>
     </div>
-    <p id="le-keys" class="hint le-keys">
-      Drag a field by its grip to move it, onto a tab to move it there, or drag its right edge to resize it. Keyboard, on a
-      field's grip: Alt+↑ / Alt+↓ move it, Alt+← / Alt+→ make it narrower or wider, Delete hides it. A separator moves the
-      same way; on its grip Enter edits its label and Delete removes it. Drag a section's window
-      by its title bar anywhere, and its edges or corners to resize it; windows may overlap. Pressing on a window brings it to
-      the front; right-click it for the layers. Edges snap to other windows and an 8 px grid: hold Alt, or turn Snap off in
-      the bar, to place freely. Keyboard, on a window's grip: arrows move it (Shift: further, Alt: 1 px), Ctrl+arrows resize
-      it, Ctrl+PageUp / Ctrl+PageDown move it a layer up or down (with Shift: to the front or the back), Shift+F10 opens the
-      layers menu. The toolbars have the rest.
-    </p>
+    <details class="le-keys">
+      <summary><Icon name="info" />{{ t("layoutEditor.keys.title") }}</summary>
+      <ul id="le-keys">
+        <li v-for="k in KEY_HELP" :key="k">{{ t(k) }}</li>
+      </ul>
+    </details>
     <div class="sr-only" aria-live="assertive">{{ editor.announcement }}</div>
   </div>
 
@@ -933,7 +932,7 @@ function onHiddenDrop(e: DragEvent) {
   align-items: center;
   gap: var(--sp-2);
   padding: var(--sp-1) var(--sp-2);
-  border: 1px dashed var(--c-border-strong);
+  border: 1px solid var(--c-border);
   border-radius: var(--radius);
   background: var(--c-surface);
   cursor: grab;
@@ -1052,10 +1051,13 @@ function onHiddenDrop(e: DragEvent) {
   flex-direction: column;
   gap: var(--sp-3);
 }
+/* One border language (audit A10): solid for what the layout places, dashed only for what it does not
+   (unplaced fields and sections, empty drop areas), a solid primary outline for a drop target. */
 .le-frame {
   padding: var(--sp-3);
-  border: 2px dashed var(--c-primary);
-  border-radius: var(--radius);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  background: var(--c-bg);
 }
 .le-hidden {
   display: flex;
@@ -1068,7 +1070,7 @@ function onHiddenDrop(e: DragEvent) {
   background: var(--c-surface-alt);
 }
 .le-hidden.drop-target {
-  outline: 2px dashed var(--c-primary);
+  outline: 2px solid var(--c-primary);
 }
 .le-hidden ul {
   display: contents;
@@ -1104,7 +1106,7 @@ function onHiddenDrop(e: DragEvent) {
 }
 .le-tab.drop-target {
   background: var(--c-row-hover);
-  outline: 2px dashed var(--c-primary);
+  outline: 2px solid var(--c-primary);
 }
 .le-tab-label,
 .le-section-label {
@@ -1142,8 +1144,12 @@ function onHiddenDrop(e: DragEvent) {
   margin: var(--sp-1) 0;
 }
 .le-add {
-  border-style: dashed;
   color: var(--c-primary);
+}
+.le-add-panel {
+  width: auto;
+  height: var(--control-h-sm);
+  font-size: var(--fs-sm);
 }
 .le-tabs > .le-add {
   margin-left: var(--sp-2);
@@ -1201,7 +1207,7 @@ function onHiddenDrop(e: DragEvent) {
   padding-top: var(--sp-4);
 }
 .le-grid.drop-end {
-  outline: 2px dashed var(--c-primary);
+  outline: 2px solid var(--c-primary);
   outline-offset: 2px;
 }
 .le-empty {
@@ -1213,16 +1219,29 @@ function onHiddenDrop(e: DragEvent) {
   text-align: center;
 }
 .le-keys {
-  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--c-text-secondary);
+}
+.le-keys summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  cursor: pointer;
+}
+.le-keys ul {
+  margin: var(--sp-2) 0 0;
+  padding-left: var(--sp-5);
+  max-width: 90ch;
 }
 .le-insert {
   gap: var(--sp-2);
 }
-.le-insert select.le-add {
-  width: auto;
+.le-insert select.le-add-panel {
+  opacity: 0.55;
 }
-.le-block {
-  border-style: dashed;
+.le-insert select.le-add-panel:hover,
+.le-insert select.le-add-panel:focus-visible {
+  opacity: 1;
 }
 .le-section.invalid {
   border-color: var(--c-danger-text);

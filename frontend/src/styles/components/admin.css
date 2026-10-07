@@ -172,3 +172,114 @@ table.matrix .matrix-note {
 .profile-picker-hint {
   margin: 0 0 var(--space-3);
 }
+
+/* ---------- Customization › Branding preview (audit A9) ---------- */
+/* One figure per theme ([data-theme-scope], tokens.css): the rail with the mark and the current entry,
+   and the sign-in card, where the mark sits on the light surface. Real tokens, no hardcoded colours. */
+.brand-previews {
+  display: grid;
+  gap: var(--space-3);
+}
+.brand-preview {
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  background: var(--c-bg);
+  color: var(--c-text);
+}
+.brand-preview figcaption {
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--c-border);
+  background: var(--c-surface-alt);
+  color: var(--c-text-secondary);
+  font-size: var(--fs-sm);
+}
+.brand-preview-body {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  min-height: 150px;
+}
+.brand-preview-rail {
+  padding-bottom: var(--space-2);
+  background: var(--c-sidebar);
+  color: var(--c-sidebar-text);
+}
+.brand-preview-mark {
+  display: flex;
+  align-items: center;
+  height: 44px;
+  padding: 0 var(--space-3);
+  margin-bottom: var(--space-2);
+  border-bottom: 1px solid var(--c-sidebar-active);
+  color: var(--c-sidebar-text-strong);
+  font-weight: var(--fw-semibold);
+}
+.brand-preview-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 28px;
+  margin: 1px var(--space-2);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-md);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.brand-preview-item.active {
+  background: var(--c-sidebar-active);
+  color: var(--c-sidebar-text-strong);
+  box-shadow: inset 3px 0 0 var(--c-accent);
+}
+.brand-preview-item.active .icon {
+  color: var(--c-accent);
+}
+.brand-preview-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+}
+.brand-preview-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: min(220px, 100%);
+  padding: var(--space-3);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  background: var(--c-surface);
+  box-shadow: var(--shadow-xs);
+}
+.brand-preview-card-mark {
+  font-weight: var(--fw-semibold);
+}
+.brand-preview-input {
+  height: var(--control-h-sm);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--c-surface);
+}
+.brand-preview-card .btn {
+  justify-content: center;
+  pointer-events: none;
+}
+.brand-preview-link {
+  color: var(--c-link);
+  font-size: var(--fs-sm);
+  text-decoration: underline;
+}
+.brand-preview .brand-logo {
+  max-height: 24px;
+  max-width: 110px;
+}
+.brand-assets {
+  margin-top: var(--space-4);
+}
+/* The comment of a Customization version, in the shared save bar before Discard and Save. */
+.save-bar-comment {
+  width: min(360px, 100%);
+}

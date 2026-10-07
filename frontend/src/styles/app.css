@@ -566,6 +566,10 @@ label.check {
   border-radius: var(--radius);
   background: var(--c-sidebar);
 }
+/* "none" sits on the rail colour the logo is shown on, so it takes the rail's muted text. */
+.asset-preview .muted {
+  color: var(--c-sidebar-text-muted);
+}
 .asset-preview img {
   max-width: 110px;
   max-height: 48px;

@@ -1,9 +1,10 @@
 // Unit tests for the identity-provider form's secret re-entry rule (GH#238). Run: npm run test:unit -w frontend
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
+import { setLocaleForTests } from "../src/i18n/index";
+import { reentryHint } from "../src/pages/admin/identity/providerText";
 import {
   ldapEndpoint,
-  reentryHint,
   secretMissing,
   secretReentryField,
   secretRequiredFields,
@@ -111,4 +112,11 @@ test("secretRequiredFields: picks the secret fields a 422 names with code secret
 test("reentryHint names the secret", () => {
   assert.equal(reentryHint("ldap.bindPassword"), "The server address changed. Enter the bind password again.");
   assert.equal(reentryHint("oidc.clientSecret"), "The server address changed. Enter the client secret again.");
+
+  setLocaleForTests("de");
+  try {
+    assert.equal(reentryHint("ldap.bindPassword"), "Die Serveradresse wurde geändert. Geben Sie das Bind-Passwort erneut ein.");
+  } finally {
+    setLocaleForTests(null);
+  }
 });
