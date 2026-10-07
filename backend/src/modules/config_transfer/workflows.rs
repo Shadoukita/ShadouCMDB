@@ -432,8 +432,13 @@ impl Importer<'_> {
             .map_err(|e| at(&gpath, e))?;
         let row = service::draft_row(self.conn, d.id, false).await?.ok_or_else(AppError::internal)?;
         let stored = graph::load(self.conn, row).await?;
-        let others =
-            StateFields::load(self.conn).await?.overlapping(&fields.model, &d.key, d.class_id, d.include_subclasses);
+        let others = StateFields::load(self.conn).await?.overlapping(
+            self.ctx,
+            &fields.model,
+            &d.key,
+            d.class_id,
+            d.include_subclasses,
+        );
         let problems = graph::lint(
             &stored,
             &LintContext {

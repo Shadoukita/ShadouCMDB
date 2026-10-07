@@ -271,28 +271,36 @@ fn check_state_attribute(fields: &Fields, id: Uuid) -> Result<(), AppError> {
 }
 
 /// One active workflow per state field (the partial unique index); answered
-/// first with the name of the other workflow.
-async fn check_state_driver(conn: &mut PgConnection, d_id: Option<Uuid>, attribute: Uuid) -> Result<(), AppError> {
-    let other: Option<String> = sqlx::query_scalar(
-        "SELECT key FROM cmdb.workflow_definitions
+/// first with the name of the other workflow, when the caller may view it
+/// (GH#718: one they may not answers 404, so it is not named here either).
+async fn check_state_driver(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    d_id: Option<Uuid>,
+    attribute: Uuid,
+) -> Result<(), AppError> {
+    let other: Option<(String, Uuid, bool)> = sqlx::query_as(
+        "SELECT key, class_id, include_subclasses FROM cmdb.workflow_definitions
          WHERE state_attribute_id = $1 AND is_active AND id IS DISTINCT FROM $2",
     )
     .bind(attribute)
     .bind(d_id)
     .fetch_optional(&mut *conn)
     .await?;
-    match other {
-        None => Ok(()),
-        Some(key) => {
-            let message = format!("The active workflow {key} already drives this field; deactivate it first");
-            Err(AppError::new(ErrorCode::Conflict, message.clone()).with_details(vec![FieldError {
-                location: FieldLocation::Body,
-                field: "stateAttributeId".into(),
-                message,
-                code: "state_attribute_driven".into(),
-            }]))
-        }
-    }
+    let Some((key, class_id, include_subclasses)) = other else { return Ok(()) };
+    let hidden = ctx.class_scope(ClassOp::View).is_some()
+        && !ctx.may_view_all(&coverage(&Model::load(conn).await?, class_id, include_subclasses));
+    let message = if hidden {
+        "Another active workflow already drives this field; ask an administrator to deactivate it first".to_owned()
+    } else {
+        format!("The active workflow {key} already drives this field; deactivate it first")
+    };
+    Err(AppError::new(ErrorCode::Conflict, message.clone()).with_details(vec![FieldError {
+        location: FieldLocation::Body,
+        field: "stateAttributeId".into(),
+        message,
+        code: "state_attribute_driven".into(),
+    }]))
 }
 
 /// The classes a workflow on `class_id` covers.
@@ -325,6 +333,7 @@ struct Taker {
 /// refuse that transition from then on, stranding its instances.
 async fn check_transition_takers(
     conn: &mut PgConnection,
+    ctx: &RequestContext,
     d_id: Option<Uuid>,
     class_id: Uuid,
     include_subclasses: bool,
@@ -350,20 +359,25 @@ async fn check_transition_takers(
     }
     let model = Model::load(&mut *conn).await?;
     let mine = coverage(&model, class_id, include_subclasses);
-    let Some(t) =
-        takers.iter().find(|t| coverage(&model, t.class_id, t.include_subclasses).iter().any(|c| mine.contains(c)))
-    else {
-        return Ok(());
-    };
-    let field = model.field(attribute).map(|f| f.key.as_str()).unwrap_or_default();
-    Err(state_field_conflict(
-        "stateAttributeId",
+    let conflicts: Vec<&Taker> = takers
+        .iter()
+        .filter(|t| coverage(&model, t.class_id, t.include_subclasses).iter().any(|c| mine.contains(c)))
+        .collect();
+    let Some(t) = conflicts.first() else { return Ok(()) };
+    let field = model.field(attribute).map(|f| f.key.clone()).unwrap_or_default();
+    let message = if conflicts.iter().any(|t| !ctx.may_view_all(&coverage(&model, t.class_id, t.include_subclasses))) {
+        format!(
+            "Another workflow on these CIs takes {field} as a field in a transition: it could no longer run once \
+             this workflow drives {field}. Ask an administrator"
+        )
+    } else {
         format!(
             "Transition {} of the workflow {} takes {field} as a field: it could no longer run once this workflow \
              drives {field}. Publish a version of {} without that field, and let its running instances finish, first",
             t.transition_key, t.definition_key, t.definition_key
-        ),
-    ))
+        )
+    };
+    Err(state_field_conflict("stateAttributeId", message))
 }
 
 /// GH#698, activating a workflow whose current version has a transition
@@ -372,6 +386,7 @@ async fn check_transition_takers(
 /// would refuse the transition.
 async fn check_takes_driven_fields(
     conn: &mut PgConnection,
+    ctx: &RequestContext,
     d: &WorkflowDefinition,
     include_subclasses: bool,
 ) -> Result<(), AppError> {
@@ -389,18 +404,16 @@ async fn check_takes_driven_fields(
         return Ok(());
     }
     let model = Model::load(&mut *conn).await?;
-    let drivers = StateFields::load(&mut *conn).await?.overlapping(&model, &d.key, d.class_id, include_subclasses);
+    let drivers = StateFields::load(&mut *conn).await?.overlapping(ctx, &model, &d.key, d.class_id, include_subclasses);
     for (transition, attribute) in fields {
         if let Some(driver) = drivers.iter().find(|x| x.attribute_id == attribute) {
             let field = model.field(attribute).map(|f| f.key.as_str()).unwrap_or_default();
-            return Err(state_field_conflict(
-                "isActive",
-                format!(
-                    "Transition {transition} of this workflow takes {field}, the state field of the active workflow \
-                     {}: publish a version without that field first",
-                    driver.definition_key
-                ),
-            ));
+            let message = format!(
+                "Transition {transition} of this workflow takes {field}, the state field of {}: publish a version \
+                 without that field first",
+                driver.named()
+            );
+            return Err(state_field_conflict("isActive", message));
         }
     }
     Ok(())
@@ -550,8 +563,8 @@ pub(crate) async fn create_in(
         let fields = Fields::load(&mut *tx, b.class_id).await?;
         check_state_attribute(&fields, attribute)?;
         if is_active {
-            check_state_driver(&mut *tx, None, attribute).await?;
-            check_transition_takers(&mut *tx, None, b.class_id, b.include_subclasses.unwrap_or(true), attribute)
+            check_state_driver(&mut *tx, ctx, None, attribute).await?;
+            check_transition_takers(&mut *tx, ctx, None, b.class_id, b.include_subclasses.unwrap_or(true), attribute)
                 .await?;
         }
     }
@@ -660,7 +673,7 @@ pub(crate) async fn update_in(
         && active
         && (!before.is_active || attribute != before.state_attribute_id)
     {
-        check_state_driver(&mut *tx, Some(id), a).await?;
+        check_state_driver(&mut *tx, ctx, Some(id), a).await?;
     }
     let include_subclasses = b.include_subclasses.unwrap_or(before.include_subclasses);
     if let Some(a) = attribute
@@ -669,10 +682,10 @@ pub(crate) async fn update_in(
             || attribute != before.state_attribute_id
             || include_subclasses != before.include_subclasses)
     {
-        check_transition_takers(&mut *tx, Some(id), before.class_id, include_subclasses, a).await?;
+        check_transition_takers(&mut *tx, ctx, Some(id), before.class_id, include_subclasses, a).await?;
     }
     if active && (!before.is_active || include_subclasses != before.include_subclasses) {
-        check_takes_driven_fields(&mut *tx, &before, include_subclasses).await?;
+        check_takes_driven_fields(&mut *tx, ctx, &before, include_subclasses).await?;
     }
     let (user_id, user_name) = actor(ctx);
     let mut columns = b.columns();
@@ -898,6 +911,7 @@ async fn granted_keys(conn: &mut PgConnection, id: Uuid) -> Result<HashSet<Strin
 /// The draft with its lint and checksum (recomputed from the stored graph).
 async fn lint_draft(
     conn: &mut PgConnection,
+    ctx: &RequestContext,
     d: &WorkflowDefinition,
     for_update: bool,
 ) -> Result<(Stored, Fields, Vec<WorkflowProblem>, String), AppError> {
@@ -907,7 +921,8 @@ async fn lint_draft(
     let granted = granted_keys(conn, d.id).await?;
     let assignments = approvers::load(conn, d.id).await?;
     let facts = Facts::gather(conn, d.class_id, &fields, assignments).await?;
-    let others = StateFields::load(conn).await?.overlapping(&fields.model, &d.key, d.class_id, d.include_subclasses);
+    let others =
+        StateFields::load(conn).await?.overlapping(ctx, &fields.model, &d.key, d.class_id, d.include_subclasses);
     let problems = graph::lint(
         &stored,
         &LintContext {
@@ -925,7 +940,7 @@ async fn lint_draft(
 pub async fn validate_draft(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<WorkflowValidation, AppError> {
     let mut conn = pool.acquire().await?;
     let d = load_for(&mut conn, ctx, id, false, Access::Read).await?;
-    let (_, _, problems, checksum) = lint_draft(&mut conn, &d, false).await?;
+    let (_, _, problems, checksum) = lint_draft(&mut conn, ctx, &d, false).await?;
     let valid = !problems.iter().any(|p| p.severity == WorkflowProblemSeverity::Error);
     Ok(WorkflowValidation { valid, checksum, problems })
 }
@@ -938,7 +953,7 @@ pub async fn publish(
 ) -> Result<WorkflowVersion, AppError> {
     let mut tx = pool.begin().await?;
     let d = load_for(&mut tx, ctx, id, true, Access::Write).await?;
-    let (stored, fields, problems, sum) = lint_draft(&mut tx, &d, true).await?;
+    let (stored, fields, problems, sum) = lint_draft(&mut tx, ctx, &d, true).await?;
     let saved = stored.version.checksum.as_ref().map(hex::encode);
     if saved.as_deref() != Some(b.expected_draft_checksum.as_str()) {
         return Err(stale(

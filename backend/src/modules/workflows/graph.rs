@@ -815,10 +815,7 @@ pub fn lint(g: &Stored, cx: &LintContext<'_>) -> Vec<WorkflowProblem> {
                         out.push(error(
                             path,
                             "state_field",
-                            format!(
-                                "{} is the state field of the active workflow {}: a transition cannot set it",
-                                a.key, d.definition_key
-                            ),
+                            format!("{} is the state field of {}: a transition cannot set it", a.key, d.named()),
                         ));
                     }
                 }
