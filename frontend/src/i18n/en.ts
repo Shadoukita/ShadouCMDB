@@ -305,6 +305,7 @@ export const en = {
   "record.actions.impact": "Impact analysis",
   "record.actions.map": "Relationship map",
   "record.actions.history": "History",
+  "record.meta.created": "Created {when}",
   "record.meta.updated": "Updated {when}",
   "record.meta.version": "Version {n}",
   "record.save.unsaved": "Unsaved changes",
