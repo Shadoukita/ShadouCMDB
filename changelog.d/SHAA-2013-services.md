@@ -1,0 +1,6 @@
+### Changed: Business services list and service page layout
+
+The **Business services** list and a business service's page now use the same layout as the inventory and the CI page.
+
+- **List:** the table header stays in view while the rows scroll. **Active** is a status badge, such as "Active" or "Inactive", instead of Yes or No. **Updated** shows relative time, such as "3 h ago", and the exact time in its tooltip. When a service has more than two owners in a role, the extra owners appear as a **+N** badge, and their names are in its tooltip. Each row has an actions menu with **Open** and **Impact analysis**. The arrow keys move between rows, and Enter opens the selected service. A chosen owner filter appears as a removable chip.
+- **Service page:** the title row shows the class icon and the name. Below it, a single line shows the state, the ident, the class, the criticality and the time of the last update. The separate "Business service" badge is gone. **Impact analysis**, **Relationship map** and **History** are buttons in the title row. **Delete** has moved into the **More actions** (`⋯`) menu. Stat tiles show the number of members, including how many of them are business services, the business services this one belongs to, and its changes in the last 30 days. You only see the changes tile with the **audit.view** permission.

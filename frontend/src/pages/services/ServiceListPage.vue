@@ -7,12 +7,16 @@ import { useServiceList, useServiceSettings, type Principal, type PrincipalRef, 
 import Breadcrumbs from "../../components/Breadcrumbs.vue";
 import CriticalityBadge from "../../components/CriticalityBadge.vue";
 import EmptyState from "../../components/EmptyState.vue";
+import KeyboardHints from "../../components/KeyboardHints.vue";
 import LoadingState from "../../components/LoadingState.vue";
 import PaginationBar from "../../components/PaginationBar.vue";
 import PrincipalCombobox from "../../components/PrincipalCombobox.vue";
-import { t, type MessageKey } from "../../i18n";
+import RowMenu from "../../components/RowMenu.vue";
+import SkeletonRows from "../../components/SkeletonRows.vue";
+import { formatNumber, t, type MessageKey } from "../../i18n";
 import { useDebounced, useDocumentTitle } from "../../lib/composables";
-import { formatDateTime } from "../../lib/format";
+import { formatDateTime, formatRelative } from "../../lib/format";
+import { onRowKeydown } from "../../lib/rowKeyboard";
 import {
   CRITICALITY_NONE,
   DEFAULT_SERVICE_LIST,
@@ -24,13 +28,16 @@ import {
   type ServiceListState,
 } from "../../lib/serviceList";
 import { useSessionStore } from "../../stores/session";
-import ServiceError from "./ServiceError.vue";
+import CiStateBadge from "../../components/CiStateBadge.vue";
 import Icon from "../../components/Icon.vue";
 import SortIcon from "../../components/SortIcon.vue";
+import ServiceError from "./ServiceError.vue";
 
 /**
  * The business service list (spec §5.2): filters, sort and page in the URL (lib/serviceList), so a view
- * survives a reload, can be shared and walks back with Back; paged and filtered on the server.
+ * survives a reload, can be shared and walks back with Back; paged and filtered on the server. It is an
+ * explorer list like the inventory (design §2.7, audit B1): a sticky table header, a row menu, keyboard
+ * rows (↑/↓, Enter), the state as a badge and the last update as relative time.
  */
 const route = useRoute();
 const router = useRouter();
@@ -134,6 +141,10 @@ const numeric = new Set(["members", "nested"]);
 const ownerText = (o: PrincipalRef) => (o.active ? o.displayName : `${o.displayName} ${t("services.owners.disabled")}`);
 const cell = (s: ServiceSummary, role: "technical" | "business") => ownerCell(s.owners[role]);
 const pastEnd = computed(() => !!list.data.value && total.value > 0 && rows.value.length === 0);
+const rowMenu = (s: ServiceSummary) => [
+  { label: t("inventory.row.open"), to: `/services/${s.id}` },
+  { label: t("inventory.row.impact"), to: `/services/${s.id}/impact` },
+];
 </script>
 
 <template>
@@ -141,26 +152,29 @@ const pastEnd = computed(() => !!list.data.value && total.value > 0 && rows.valu
   <div class="page-header">
     <div class="title">
       <h1>{{ t("services.title") }}</h1>
-      <span v-if="list.data.value" class="muted">{{ t("services.count", { n: total }) }}</span>
+      <span v-if="list.data.value" class="muted count">{{ t("common.total", { n: formatNumber(total) }) }}</span>
       <span v-if="list.isFetching.value && !list.isPending.value" class="spinner" :aria-label="t('common.refreshing')" />
     </div>
     <div v-if="canCreate" class="actions">
-      <RouterLink class="btn btn-primary" :to="createTo">{{ t("services.create") }}</RouterLink>
+      <RouterLink class="btn btn-primary" :to="createTo"><Icon name="plus" />{{ t("services.create") }}</RouterLink>
     </div>
   </div>
 
   <ServiceError v-if="settings.isError.value" :error="settings.error.value" :on-retry="() => settings.refetch()" />
   <LoadingState v-else-if="settings.isPending.value" :label="t('services.loading')" />
-  <EmptyState v-else-if="forbidden" :title="t('services.forbiddenTitle')">
+  <EmptyState v-else-if="forbidden" icon="lock" :title="t('services.forbiddenTitle')">
     {{ t("services.forbidden") }}
     <template #actions><RouterLink class="btn" to="/">{{ t("services.backToDashboard") }}</RouterLink></template>
   </EmptyState>
 
-  <section v-else class="panel" :aria-label="t('services.title')">
+  <section v-else class="panel explorer" :aria-label="t('services.title')">
     <form class="toolbar" role="search" @submit.prevent>
       <div class="field search">
         <label for="svc-q">{{ t("services.filter.search") }}</label>
-        <input id="svc-q" v-model="qText" type="search" maxlength="200" :placeholder="t('services.filter.searchPlaceholder')" />
+        <div class="input-icon">
+          <Icon name="search" />
+          <input id="svc-q" v-model="qText" type="search" maxlength="200" :placeholder="t('services.filter.searchPlaceholder')" />
+        </div>
       </div>
       <details class="field multi-select">
         <summary>
@@ -179,9 +193,9 @@ const pastEnd = computed(() => !!list.data.value && total.value > 0 && rows.valu
       <template v-if="canPickOwner">
         <div v-if="state.owner" class="field">
           <span class="label">{{ t("services.filter.owner") }}</span>
-          <span class="filter-token">
+          <span class="chip owner-chip">
             <bdi>{{ ownerName }}</bdi>
-            <button type="button" class="btn btn-sm btn-icon" :aria-label="t('services.filter.owner.clear', { name: ownerName })" @click="update({ owner: '' })"><Icon name="x" /></button>
+            <button type="button" class="chip-clear" :aria-label="t('services.filter.owner.clear', { name: ownerName })" @click="update({ owner: '' })"><Icon name="x" :size="14" /></button>
           </span>
         </div>
         <PrincipalCombobox v-else :label="t('services.filter.owner')" @select="pickOwner" />
@@ -216,23 +230,20 @@ const pastEnd = computed(() => !!list.data.value && total.value > 0 && rows.valu
           {{ t("services.filter.includeInactive") }}
         </label>
       </div>
-      <button v-if="filtered" type="button" class="btn" @click="clearFilters">{{ t("services.filter.clear") }}</button>
+      <button v-if="filtered" type="button" class="btn btn-ghost" @click="clearFilters"><Icon name="x" />{{ t("services.filter.clear") }}</button>
     </form>
 
     <div v-if="list.isError.value" class="panel-body">
       <ServiceError :error="list.error.value" :on-retry="() => list.refetch()" />
     </div>
-    <div v-else-if="list.isPending.value" class="table-wrap" aria-busy="true">
-      <span class="sr-only" role="status">{{ t("services.loading") }}</span>
-      <div class="skeleton-table" aria-hidden="true"><div v-for="n in 8" :key="n" class="skeleton-row" /></div>
-    </div>
+    <SkeletonRows v-else-if="list.isPending.value" :label="t('services.loading')" />
     <EmptyState v-else-if="total === 0 && !filtered" :title="t('services.empty.title')">
       {{ canCreate ? t("services.empty.canCreate") : t("services.empty.cannotCreate") }}
       <template v-if="canCreate" #actions>
-        <RouterLink class="btn btn-primary" :to="createTo">{{ t("services.create") }}</RouterLink>
+        <RouterLink class="btn btn-primary" :to="createTo"><Icon name="plus" />{{ t("services.create") }}</RouterLink>
       </template>
     </EmptyState>
-    <EmptyState v-else-if="total === 0" :title="t('services.empty.noMatch')">
+    <EmptyState v-else-if="total === 0" icon="search" :title="t('services.empty.noMatch')">
       <template #actions><button type="button" class="btn" @click="clearFilters">{{ t("services.filter.clear") }}</button></template>
     </EmptyState>
     <EmptyState v-else-if="pastEnd" :title="t('services.pastEnd')">
@@ -240,8 +251,8 @@ const pastEnd = computed(() => !!list.data.value && total.value > 0 && rows.valu
     </EmptyState>
 
     <template v-if="rows.length > 0 && !list.isError.value">
-      <div class="table-wrap">
-        <table :class="['data', { loading: list.isPlaceholderData.value }]">
+      <div class="table-wrap table-scroll">
+        <table :class="['data', 'service-table', { loading: list.isPlaceholderData.value }]" aria-describedby="services-keys">
           <thead>
             <tr>
               <th
@@ -254,10 +265,11 @@ const pastEnd = computed(() => !!list.data.value && total.value > 0 && rows.valu
                 <button v-if="SORTABLE[key]" type="button" class="sort" @click="toggleSort(SORTABLE[key])">{{ t(label) }} <SortIcon :dir="ariaSort(SORTABLE[key])" /></button>
                 <template v-else>{{ t(label) }}</template>
               </th>
+              <th scope="col" class="row-actions"><span class="sr-only">{{ t("inventory.actions") }}</span></th>
             </tr>
           </thead>
-          <tbody>
-            <tr v-for="s in rows" :key="s.id">
+          <tbody @keydown="onRowKeydown($event)">
+            <tr v-for="s in rows" :key="s.id" :data-id="s.id">
               <td><RouterLink :to="`/services/${s.id}`" dir="auto">{{ s.name }}</RouterLink></td>
               <td class="mono">{{ s.ident }}</td>
               <td><CriticalityBadge :value="s.criticality" show-unset /></td>
@@ -266,16 +278,19 @@ const pastEnd = computed(() => !!list.data.value && total.value > 0 && rows.valu
                   <template v-for="(o, i) in cell(s, role).shown" :key="o.id">
                     <template v-if="i > 0">, </template><bdi>{{ ownerText(o) }}</bdi>
                   </template>
-                  <span v-if="cell(s, role).more" class="more" :title="s.owners[role].slice(2).map(ownerText).join(', ')">
-                    +{{ cell(s, role).more }}<span class="sr-only"> {{ t("services.owners.more", { n: cell(s, role).more }) }}</span>
+                  <span v-if="cell(s, role).more" class="badge more" :title="s.owners[role].slice(2).map(ownerText).join(', ')">
+                    <span aria-hidden="true">+{{ cell(s, role).more }}</span><span class="sr-only">{{ t("services.owners.more", { n: cell(s, role).more }) }}</span>
                   </span>
                 </template>
                 <span v-else class="muted">{{ t("services.owners.noneCell") }}</span>
               </td>
               <td class="num">{{ s.memberCount.toLocaleString() }}</td>
               <td class="num">{{ s.serviceMemberCount.toLocaleString() }}</td>
-              <td>{{ s.active ? t("common.yes") : t("common.no") }}</td>
-              <td>{{ formatDateTime(s.updatedAt) }}</td>
+              <td><CiStateBadge :ci="s" show-active /></td>
+              <td><time :datetime="s.updatedAt" :title="formatDateTime(s.updatedAt)">{{ formatRelative(s.updatedAt) }}</time></td>
+              <td class="row-actions">
+                <RowMenu :label="t('inventory.rowMenu', { name: s.name })" :items="rowMenu(s)" />
+              </td>
             </tr>
           </tbody>
         </table>
@@ -286,6 +301,7 @@ const pastEnd = computed(() => !!list.data.value && total.value > 0 && rows.valu
         :offset="(state.page - 1) * state.limit"
         @change="(p) => update({ page: Math.floor(p.offset / p.limit) + 1, limit: p.limit }, { keepPage: true })"
       />
+      <KeyboardHints id="services-keys" />
     </template>
   </section>
 </template>

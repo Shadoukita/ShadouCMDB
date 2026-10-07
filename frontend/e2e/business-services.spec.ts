@@ -96,6 +96,25 @@ test("owner cells show two names, then +N", async ({ page }) => {
   const row = page.getByRole("row").filter({ has: page.getByRole("link", { name: PAY }) });
   await expect(row.locator("td").nth(3)).toHaveText(new RegExp(`${ANN}, ${BEN}\\s*\\+1`));
   await expect(row.locator("td").nth(4)).toHaveText("None");
+  // The list as an explorer (audit B1): the state as a badge, the last update as relative time, a row menu.
+  await expect(row.locator("td").nth(7).locator(".badge.ok")).toHaveText("Active");
+  await expect(row.locator("td").nth(8).locator("time")).toHaveText(/ago|just now|^now$/i);
+  await row.getByRole("button", { name: `Actions for ${PAY}` }).click();
+  await expect(page.getByRole("menu").getByRole("menuitem")).toHaveText(["Open", "Impact analysis"]);
+  await page.keyboard.press("Escape");
+});
+
+test("the service page has the record header: meta line, stat tiles, Delete in the actions menu (audit B2, R2)", async ({ page }) => {
+  await page.goto(`/services/${ids.pay}`);
+  await expect(page.getByRole("heading", { level: 1, name: PAY })).toBeVisible();
+  const meta = page.getByTestId("record-meta");
+  await expect(meta).toContainText("Active");
+  await expect(meta.getByRole("link", { name: "Business service" })).toHaveAttribute("href", "/services");
+  await expect(page.getByRole("region", { name: "Summary" }).locator("[data-stat=members] .value")).toHaveText(/^\d+$/);
+  await expect(page.getByRole("button", { name: "Delete" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Impact analysis" })).toHaveAttribute("href", `/services/${ids.pay}/impact`);
+  await page.getByRole("button", { name: "Relationship map" }).click();
+  await expect(page.getByRole("tab", { name: "Relationship map" })).toHaveAttribute("aria-selected", "true");
 });
 
 test("create: the operator lands on the detail with the Owners editor open, picks, orders and saves owners", async ({ page }, testInfo) => {
@@ -264,7 +283,8 @@ test("delete: Confirm waits for the included-in check, and a failed check offers
       : route.fallback();
   });
   await page.goto(`/services/${ids.pay}`);
-  await page.getByRole("button", { name: "Delete" }).click();
+  await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "Delete" }).click();
   const dialog = page.getByRole("dialog", { name: `Delete business service ${PAY}?` });
   const confirm = dialog.getByRole("button", { name: "Delete business service" });
   await expect(dialog).toContainText("Checking which services include it");
@@ -284,7 +304,8 @@ test("delete: Confirm waits for the included-in check, and a failed check offers
 
 test("delete: the dialog names the memberships and the services it is nested in", async ({ page }, testInfo) => {
   await page.goto(`/services/${ids.pay}`);
-  await page.getByRole("button", { name: "Delete" }).click();
+  await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "Delete" }).click();
   const dialog = page.getByRole("dialog", { name: `Delete business service ${PAY}?` });
   await expect(dialog).toContainText("Its 0 memberships are removed. The member CIs themselves are not deleted.");
   await expect(dialog).toContainText("It is also part of 1 other business service; it is removed from it.");
@@ -292,7 +313,8 @@ test("delete: the dialog names the memberships and the services it is nested in"
   await dialog.getByRole("button", { name: "Cancel" }).click();
 
   await page.goto(`/services/${ids.shop}`);
-  await page.getByRole("button", { name: "Delete" }).click();
+  await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "Delete" }).click();
   const shop = page.getByRole("dialog", { name: `Delete business service ${SHOP}?` });
   await expect(shop).toContainText("Its 2 memberships are removed.");
   await expect(shop).not.toContainText("It is also part of");

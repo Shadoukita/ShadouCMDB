@@ -5,13 +5,17 @@ import { ApiError } from "../../api/client";
 import { useCi, useCiClasses, useClassAttributes } from "../../api/queries";
 import { useService, useServiceSettings } from "../../api/services";
 import Breadcrumbs, { type Crumb } from "../../components/Breadcrumbs.vue";
+import CiStateBadge from "../../components/CiStateBadge.vue";
+import ClassBadge from "../../components/ClassBadge.vue";
 import CriticalityBadge from "../../components/CriticalityBadge.vue";
 import EmptyState from "../../components/EmptyState.vue";
 import LoadingState from "../../components/LoadingState.vue";
+import RowMenu, { type RowMenuItem } from "../../components/RowMenu.vue";
 import SaveBar from "../../components/SaveBar.vue";
 import { t } from "../../i18n";
 import { useAppSettings } from "../../lib/appSettings";
 import { useDocumentTitle } from "../../lib/composables";
+import { formatDateTime, formatRelative } from "../../lib/format";
 import type { TrailStep } from "../../lib/trail";
 import { builtInLayout, DETAIL_CORE, DETAIL_RECORD, layoutFor, resolveLayout, withoutKinds } from "../../lib/uiSettings";
 import { useFlashStore } from "../../stores/flash";
@@ -19,10 +23,11 @@ import { useSessionStore } from "../../stores/session";
 import HistoryPanel from "../detail/HistoryPanel.vue";
 import ImpactPanel from "../detail/ImpactPanel.vue";
 import LayoutPanels from "../detail/LayoutPanels.vue";
+import RecordStats from "../detail/RecordStats.vue";
 import RelationshipGraphPanel from "../detail/RelationshipGraphPanel.vue";
 import { fieldIdFor, useCiDraft } from "../form/ciDraft";
 import FormErrorBanner from "../form/FormErrorBanner.vue";
-import DeleteServiceButton from "./DeleteServiceButton.vue";
+import DeleteServiceDialog from "./DeleteServiceDialog.vue";
 import OwnersCard from "./OwnersCard.vue";
 import ServiceError from "./ServiceError.vue";
 import ServiceMembersPanel from "./ServiceMembersPanel.vue";
@@ -34,6 +39,10 @@ import ServiceMembersPanel from "./ServiceMembersPanel.vue";
  * the class layout, the map, the impact analysis and the history, exactly as on any CI. Like a CI's page
  * (SHAA-1644, GH#588) the Overview's fields open as inputs, and once something was changed a bar offers
  * Save and Discard; leaving the service with unsaved changes asks first.
+ *
+ * The title row is the record page's (design §2.7, audit B2 and R2): class icon, name and a meta line
+ * (state, ident, class, criticality, last update), the views as secondary buttons, Delete in the `⋯`
+ * menu; then the stat tiles.
  */
 type Tab = "overview" | "members" | "impact" | "graph" | "history";
 
@@ -70,7 +79,8 @@ const canDelete = computed(() => !!s.value && session.canOnClass(s.value.classId
 // class has a layout, else the built-in one. History and audit sections need audit.view.
 const settings = useAppSettings();
 const classes = useCiClasses();
-const classKey = computed(() => classes.data.value?.find((k) => k.id === c.value?.classId)?.key);
+const cls = computed(() => classes.data.value?.find((k) => k.id === c.value?.classId));
+const classKey = computed(() => cls.value?.key);
 const attrs = useClassAttributes(() => c.value?.classId);
 const defs = computed(() => (attrs.data.value ?? []).filter((d) => d.isActive || c.value?.attributes[d.key] != null));
 const layout = computed(() => layoutFor(settings.doc.value, classKey.value));
@@ -167,6 +177,11 @@ function onTabKey(e: KeyboardEvent) {
   void nextTick(() => document.getElementById(`service-tab-${next}`)?.focus());
 }
 
+// The title row's actions (audit R2): the views as secondary buttons, Delete in the overflow menu.
+const deleting = ref(false);
+const moreActions = computed<RowMenuItem[]>(() => (canDelete.value ? [{ label: t("common.delete"), danger: true, action: () => (deleting.value = true) }] : []));
+const hasTab = (key: Tab) => TABS.value.some(([k]) => k === key);
+
 const crumbs = computed<Crumb[]>(() => [{ label: t("services.title"), to: "/services" }, { label: s.value?.name ?? "" }]);
 
 // After "Create business service", the operator lands here with the Owners card open (?edit=owners).
@@ -200,18 +215,36 @@ watch(
   </template>
   <template v-else-if="s && c && self">
     <Breadcrumbs :items="crumbs" />
-    <div class="page-header">
-      <div class="title">
-        <h1 dir="auto">{{ s.name }}</h1>
-        <span class="mono muted" :title="t('services.col.ident')">{{ s.ident }}</span>
-        <span class="badge">{{ t("services.badge") }}</span>
-        <CriticalityBadge :value="s.criticality" />
-        <span :class="['badge', s.active ? 'ok' : 'off']">{{ s.active ? t("services.state.active") : t("services.state.inactive") }}</span>
+    <div class="page-header record-header">
+      <div class="record-heading">
+        <div class="title">
+          <ClassBadge :icon="cls?.icon" :color="cls?.color" />
+          <h1 dir="auto">{{ s.name }}</h1>
+        </div>
+        <p class="record-meta" data-testid="record-meta">
+          <span v-if="c.active" class="status"><span class="status-dot ok" aria-hidden="true" />{{ t("ciState.active") }}</span>
+          <CiStateBadge :ci="c" />
+          <span class="sep" aria-hidden="true">·</span>
+          <span class="ident" :title="t('record.meta.ident')">{{ s.ident }}</span>
+          <span class="sep" aria-hidden="true">·</span>
+          <RouterLink to="/services" dir="auto">{{ c.class.name }}</RouterLink>
+          <template v-if="s.criticality">
+            <span class="sep" aria-hidden="true">·</span>
+            <CriticalityBadge :value="s.criticality" />
+          </template>
+          <span class="sep" aria-hidden="true">·</span>
+          <time :datetime="s.updatedAt" :title="formatDateTime(s.updatedAt)">{{ t("record.meta.updated", { when: formatRelative(s.updatedAt) }) }}</time>
+        </p>
       </div>
       <div class="actions">
-        <DeleteServiceButton v-if="canDelete" :service="s" />
+        <RouterLink v-if="current !== 'impact'" class="btn" :to="`/services/${s.id}/impact`">{{ t("record.actions.impact") }}</RouterLink>
+        <button v-if="current !== 'graph'" type="button" class="btn" @click="selectTab('graph')">{{ t("record.actions.map") }}</button>
+        <button v-if="hasTab('history') && current !== 'history'" type="button" class="btn" @click="selectTab('history')">{{ t("record.actions.history") }}</button>
+        <RowMenu v-if="moreActions.length > 0" :label="t('record.actions.more')" :items="moreActions" large />
+        <DeleteServiceDialog v-if="moreActions.length > 0" v-model:open="deleting" :service="s" />
       </div>
     </div>
+    <RecordStats :ci="c" :service="s" />
     <FormErrorBanner v-if="draft.error != null && draft.dirty" :error="draft.error" :unplaced="draft.unplaced" :on-reload="loadCurrent" />
 
     <div class="tabs" role="tablist" :aria-label="t('services.tabsLabel')">

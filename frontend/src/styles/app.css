@@ -14,6 +14,7 @@
 @import "./components/explorer.css";
 @import "./components/record.css";
 @import "./components/dashboard.css";
+@import "./components/services.css";
 
 /*
  * Page and shell rules. The primitives (SHAA-1670 design document, §2.7) live in base.css and
@@ -1255,18 +1256,6 @@ fieldset.owner-role {
 }
 .owners-actions {
   margin-top: var(--sp-4);
-}
-.owner-cell {
-  white-space: normal;
-}
-.owner-cell .more {
-  color: var(--c-text-muted);
-}
-.filter-token {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-2);
-  min-height: var(--control-h);
 }
 
 /* ---------- Business services: members, member picker, "part of", impact pin (SHAA-934) ---------- */
