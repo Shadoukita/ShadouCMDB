@@ -151,6 +151,16 @@ export interface PlacedEdge extends TopoEdge {
   y1: number;
   x2: number;
   y2: number;
+  /** Where the curve ends: from here a straight run at the child's height leads into the child. */
+  xm: number;
+  /**
+   * The label sits on that run, against the child: `lx` is its end facing the child, `ly` its middle,
+   * `labelRoom` its widest. Each child has a run of its own at its own row, and no other edge enters
+   * the runs' band, so labels neither pile up where edges converge nor have edges drawn through them.
+   */
+  lx: number;
+  ly: number;
+  labelRoom: number;
 }
 export interface TopologyLayout {
   width: number;
@@ -168,6 +178,10 @@ export interface TopologyLayout {
 export const BOX_HEIGHT = 40;
 const ROW_GAP = 12;
 const PAD = 16;
+/** The share of the gap between two columns that the straight run into the child takes. */
+const RUN_SHARE = 0.5;
+/** Room left between a label and the child box, for the arrowhead. */
+const ARROW_ROOM = 12;
 
 /**
  * Positions for a canvas `width` pixels wide: one column per hop on each side, at most `maxRows`
@@ -237,12 +251,23 @@ export function layoutTopology(topo: Topology, width: number, maxRows = 8): Topo
     if (!a || !b) continue;
     // From the parent's side facing the child to the child's side facing the parent.
     const right = b.x > a.x;
+    const x1 = right ? a.x + boxWidth : a.x;
+    const x2 = right ? b.x : b.x + boxWidth;
+    const toward = right ? 1 : -1;
+    const gap = Math.abs(x2 - x1);
+    const xm = Math.round(x2 - toward * gap * RUN_SHARE);
+    const lx = x2 - toward * ARROW_ROOM;
     edges.push({
       ...e,
-      x1: right ? a.x + boxWidth : a.x,
+      x1,
       y1: a.y + BOX_HEIGHT / 2,
-      x2: right ? b.x : b.x + boxWidth,
+      x2,
       y2: b.y + BOX_HEIGHT / 2,
+      xm,
+      lx,
+      ly: b.y + BOX_HEIGHT / 2,
+      // Kept to the run so the label never hides the curves of its neighbours; the full text is in its tooltip.
+      labelRoom: Math.max(48, Math.floor(Math.abs(lx - xm))),
     });
   }
   return { width, height, boxWidth, boxHeight: BOX_HEIGHT, nodes: [...placed.values()], edges, more, hidden };
