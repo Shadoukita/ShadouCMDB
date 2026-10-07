@@ -82,3 +82,27 @@
   gap: var(--space-2);
   margin-top: var(--space-2);
 }
+
+/* ---------- Lists ---------- */
+.admin-body .page-intro {
+  color: var(--c-text-secondary);
+}
+/* A name with its badges (Built-in, Owner disabled): one line, the badges after the name without a text space. */
+.name-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+}
+/* The source chips sit in the toolbar at the control height, like the inputs beside them. */
+.audit-stream .toolbar .event-sources {
+  min-height: var(--control-h);
+}
+/* Changed fields: the keys as mono chips that wrap inside the cell. */
+.audit-stream td.audit-fields {
+  white-space: normal;
+  min-width: 160px;
+}
+.audit-stream td.audit-fields code + code {
+  margin-left: var(--space-1);
+}

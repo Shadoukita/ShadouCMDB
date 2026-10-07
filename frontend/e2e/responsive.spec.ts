@@ -135,3 +135,38 @@ test("320 px: header reflows, the user menu shows initials and names the user wh
   expect(panel!.x + panel!.width).toBeLessThanOrEqual(320);
   await snap(page, "responsive-320-user-menu");
 });
+
+// Audit A1/A2 (SHAA-1670, rollout 8): Administration has no second navigation column beside the page. Its
+// sections sit in the rail under "Administration", beside the page only while the rail is collapsed, and
+// in the drawer under 820 px, so a 320 px window does not scroll sideways.
+test("Administration: sections in the rail, beside the page when collapsed, in the drawer at 320 px", async ({ page }) => {
+  await page.goto("/admin/users");
+  const main = page.getByRole("navigation", { name: "Main" });
+  const sections = page.getByRole("navigation", { name: "Administration" });
+  await expect(sections).toHaveCount(1);
+  await expect(main.getByRole("navigation", { name: "Administration" })).toBeVisible();
+  await expect(sections.getByRole("link", { name: "Users", exact: true })).toHaveAttribute("aria-current", "page");
+  await sections.getByRole("link", { name: "Audit log" }).click();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Audit log");
+  await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("System");
+
+  await main.getByRole("button", { name: "Collapse sidebar" }).click();
+  await expect(sections).toHaveCount(1);
+  await expect(page.getByRole("main").getByRole("navigation", { name: "Administration" })).toBeVisible();
+  await snap(page, "responsive-admin-rail-collapsed");
+  await main.getByRole("button", { name: "Expand sidebar" }).click();
+  await expect(main.getByRole("navigation", { name: "Administration" })).toBeVisible();
+
+  await page.setViewportSize({ width: 320, height: 800 });
+  await page.goto("/admin/users");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Users");
+  await expect(sections).toBeHidden();
+  const { scrollWidth, innerWidth } = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth }));
+  expect(scrollWidth).toBeLessThanOrEqual(innerWidth);
+  await page.getByRole("button", { name: "Open navigation" }).click();
+  await expect(sections).toBeVisible();
+  await sections.getByRole("link", { name: "Permission profiles" }).click();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Permission profiles");
+  await expect(sections).toBeHidden();
+  await snap(page, "responsive-admin-320");
+});

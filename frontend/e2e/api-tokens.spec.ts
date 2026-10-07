@@ -18,7 +18,7 @@ async function bearer(playwright: { request: { newContext: (o: object) => Promis
 test("the create dialog shows the API's per-field errors next to the fields", async ({ page }) => {
   await page.goto("/admin/api-tokens");
   await expect(page.getByRole("heading", { level: 1, name: "API tokens" })).toBeVisible();
-  await page.getByRole("button", { name: "+ New API token" }).first().click();
+  await page.getByRole("button", { name: "New API token" }).first().click();
   const dialog = page.getByRole("dialog", { name: "New API token" });
   await expect(dialog.getByLabel("Name")).toBeFocused();
 
@@ -45,7 +45,7 @@ test("the create dialog shows the API's per-field errors next to the fields", as
 
 test("create a token: the secret is shown once, copied, and never listed", async ({ page }) => {
   await page.goto("/admin/api-tokens");
-  await page.getByRole("button", { name: "+ New API token" }).first().click();
+  await page.getByRole("button", { name: "New API token" }).first().click();
   const dialog = page.getByRole("dialog", { name: "New API token" });
   await dialog.getByLabel("Name").fill(NAME);
   await expect(dialog.getByLabel("Owner")).toHaveValue(""); // yourself
@@ -137,7 +137,8 @@ test("search and filters live in the URL and survive a reload", async ({ page })
 test("revoke asks first, keeps the token listed as revoked, and the secret stops working", async ({ page, playwright, baseURL }) => {
   await page.goto(`/admin/api-tokens?q=${encodeURIComponent(stamp)}`);
   const row = page.getByRole("row").filter({ has: page.getByRole("cell", { name: NAME, exact: true }) });
-  await row.getByRole("button", { name: `Revoke ${NAME}` }).click();
+  await row.getByRole("button", { name: `Actions for ${NAME}` }).click();
+  await page.getByRole("menu", { name: `Actions for ${NAME}` }).getByRole("menuitem", { name: "Revoke…" }).click();
   const confirm = page.getByRole("dialog", { name: `Revoke API token “${NAME}”?` });
   await expect(confirm).toContainText(`owned by ${E2E_USER.username}`);
   await expect(confirm).toContainText("refused from now on");
@@ -147,7 +148,9 @@ test("revoke asks first, keeps the token listed as revoked, and the secret stops
   await expect(page.getByRole("status").filter({ hasText: `Revoked API token ${NAME}` })).toBeVisible();
   await expect(row.getByText("Revoked", { exact: true })).toBeVisible();
   await expect(row).toContainText(`by ${E2E_USER.username}`);
-  await expect(row.getByRole("button", { name: `Revoke ${NAME}` })).toHaveCount(0);
+  await row.getByRole("button", { name: `Actions for ${NAME}` }).click();
+  await expect(page.getByRole("menu", { name: `Actions for ${NAME}` }).getByRole("menuitem", { name: "Revoke…" })).toHaveCount(0);
+  await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Clear filters" }).click();
   await snap(page, "43-api-tokens-list");
 
@@ -182,7 +185,7 @@ test("a token for an owner with more rights than yours is refused, and the dialo
   await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
 
   await page.goto("/admin/api-tokens");
-  await page.getByRole("button", { name: "+ New API token" }).first().click();
+  await page.getByRole("button", { name: "New API token" }).first().click();
   const dialog = page.getByRole("dialog", { name: "New API token" });
   await dialog.getByLabel("Name").fill(`E2E refused ${stamp}`);
   await dialog.getByLabel("Owner").selectOption(ownerId);
@@ -231,7 +234,7 @@ test("a token refused because its owner must use two-factor authentication is ba
   await expect(page).toHaveURL(at("/admin/api-tokens"));
 
   // A new token for the account from this session would be refused too: the dialog shows the server's reason.
-  await page.getByRole("button", { name: "+ New API token" }).first().click();
+  await page.getByRole("button", { name: "New API token" }).first().click();
   const dialog = page.getByRole("dialog", { name: "New API token" });
   await dialog.getByLabel("Name").fill(`E2E not created ${stamp}`);
   await dialog.getByLabel("Owner").selectOption(svc.id);

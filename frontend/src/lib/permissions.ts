@@ -1,5 +1,5 @@
 import type { EffectivePermissions, GlobalPermission } from "../api/admin";
-import { t } from "../i18n";
+import { t } from "../i18n/index";
 
 /**
  * Client-side reading of GET /auth/me → permissions, used to hide or disable

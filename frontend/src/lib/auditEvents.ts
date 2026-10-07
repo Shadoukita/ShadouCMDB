@@ -1,5 +1,5 @@
 import type { AuditEntry } from "../api/queries";
-import { t, type MessageKey } from "../i18n";
+import { t, type MessageKey } from "../i18n/index";
 
 /**
  * How an audit entry reads in an event stream (design §2.7, audit R8): one tone per action wherever it

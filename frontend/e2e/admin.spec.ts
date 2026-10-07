@@ -45,7 +45,7 @@ test("Administration has its own sub-navigation", async ({ page }) => {
 test("create a permission profile from the matrix", async ({ page, request }) => {
   await page.goto("/admin/profiles");
   await expect(page.getByRole("link", { name: "Administrator", exact: true })).toBeVisible();
-  await page.getByRole("link", { name: "+ New profile" }).click();
+  await page.getByRole("link", { name: "New profile" }).click();
   await page.locator("#profile-name").fill(PROFILE);
   await page.locator("#profile-description").fill("Sees everything, edits servers");
   await page.getByLabel("View the audit log").check();
