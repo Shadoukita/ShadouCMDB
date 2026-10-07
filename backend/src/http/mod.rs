@@ -1036,11 +1036,46 @@ impl Drop for PeerHold {
     }
 }
 
+/// The requests a connection is serving, from the request head until the
+/// response body is dropped.
+struct InFlight(Arc<tokio::sync::watch::Sender<usize>>);
+
+impl InFlight {
+    fn new(requests: &Arc<tokio::sync::watch::Sender<usize>>) -> Self {
+        requests.send_modify(|n| *n += 1);
+        InFlight(requests.clone())
+    }
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        self.0.send_modify(|n| *n -= 1);
+    }
+}
+
+/// Resolves once the connection has served no request for `limit`.
+async fn idle_for(requests: &mut tokio::sync::watch::Receiver<usize>, limit: Duration) {
+    loop {
+        // The sender lives as long as the connection task, so neither wait fails.
+        let _ = requests.wait_for(|n| *n == 0).await;
+        tokio::select! {
+            () = tokio::time::sleep(limit) => return,
+            _ = requests.wait_for(|n| *n > 0) => {}
+        }
+    }
+}
+
 /// Accepts connections until `shutdown`, then waits for open ones to finish
 /// their current request. axum::serve sets no timer on hyper, which leaves
 /// HTTP/1 header reads unbounded; this loop sets one. Past `max_connections`
 /// open connections, or past its network's share of them (`PeerConnections`),
 /// new ones are closed at once (GH#557, GH#561).
+///
+/// hyper's header read timeout covers HTTP/1 only, not the protocol preface
+/// read before it nor HTTP/2, so a connection that serves no request for
+/// `header_read_timeout` (from accept, or since its last response) is shut
+/// down here whatever its protocol (GH#665): HTTP/2 gets a GOAWAY. One that
+/// has not closed another `header_read_timeout` later is dropped.
 async fn accept_loop(
     listener: TcpListener,
     app: Router,
@@ -1051,7 +1086,6 @@ async fn accept_loop(
 ) {
     use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
     use hyper_util::server::conn::auto::Builder;
-    use hyper_util::server::graceful::GracefulShutdown;
     use hyper_util::service::TowerToHyperService;
     use tower::ServiceExt;
 
@@ -1067,7 +1101,8 @@ async fn accept_loop(
         .keep_alive_interval(Duration::from_secs(30))
         .keep_alive_timeout(Duration::from_secs(20));
 
-    let graceful = GracefulShutdown::new();
+    let (stopping, stop) = tokio::sync::watch::channel(false);
+    let idle_limit = http.header_read_timeout;
     let connections = Arc::new(tokio::sync::Semaphore::new(max_connections));
     let mut refused: u64 = 0;
     let mut last_warned: Option<tokio::time::Instant> = None;
@@ -1107,22 +1142,67 @@ async fn accept_loop(
         };
         let _ = stream.set_nodelay(true);
         // The peer address is the client IP of last resort for the audit trail (auth::session::client_ip).
-        let service = app.clone().map_request(move |req: axum::http::Request<hyper::body::Incoming>| {
-            let mut req = req.map(axum::body::Body::new);
-            req.extensions_mut().insert(axum::extract::ConnectInfo(peer));
-            req
-        });
-        let conn = builder.serve_connection_with_upgrades(TokioIo::new(stream), TowerToHyperService::new(service));
-        let conn = graceful.watch(conn.into_owned());
+        let requests = Arc::new(tokio::sync::watch::Sender::new(0usize));
+        let service = app
+            .clone()
+            .map_request(move |req: axum::http::Request<hyper::body::Incoming>| {
+                let mut req = req.map(axum::body::Body::new);
+                req.extensions_mut().insert(axum::extract::ConnectInfo(peer));
+                req
+            })
+            .map_future({
+                let requests = requests.clone();
+                move |response| {
+                    let in_flight = InFlight::new(&requests);
+                    async move {
+                        let response: Response = response.await?;
+                        Ok::<_, std::convert::Infallible>(response.map(|body| {
+                            use http_body_util::BodyExt;
+                            axum::body::Body::new(body.map_frame(move |frame| {
+                                let _ = &in_flight;
+                                frame
+                            }))
+                        }))
+                    }
+                }
+            });
+        let conn = builder
+            .serve_connection_with_upgrades(TokioIo::new(stream), TowerToHyperService::new(service))
+            .into_owned();
+        let mut stop = stop.clone();
         tokio::spawn(async move {
-            if let Err(e) = conn.await {
-                tracing::debug!(error = %e, "connection closed with an error");
+            let mut conn = std::pin::pin!(conn);
+            let mut idle = requests.subscribe();
+            let mut shut_down = false;
+            let result = loop {
+                tokio::select! {
+                    result = conn.as_mut() => break Some(result),
+                    _ = stop.wait_for(|stop| *stop), if !shut_down => {
+                        conn.as_mut().graceful_shutdown();
+                        shut_down = true;
+                    }
+                    () = idle_for(&mut idle, idle_limit) => {
+                        if shut_down {
+                            // A client that ignores the shutdown while it is served nothing.
+                            break None;
+                        }
+                        conn.as_mut().graceful_shutdown();
+                        shut_down = true;
+                    }
+                }
+            };
+            match result {
+                Some(Err(e)) => tracing::debug!(error = %e, "connection closed with an error"),
+                None => tracing::debug!("idle connection dropped after its shutdown"),
+                Some(Ok(())) => {}
             }
             drop(held);
         });
     }
     drop(listener);
-    graceful.shutdown().await;
+    // Every connection task holds a permit until it ends.
+    let _ = stopping.send(true);
+    let _ = connections.acquire_many(u32::try_from(max_connections).unwrap_or(u32::MAX)).await;
 }
 
 /// Resolves on Ctrl+C, or SIGTERM on Unix (systemd, Docker, Kubernetes).
@@ -1558,6 +1638,139 @@ mod tests {
         let mut buf = Vec::new();
         let read = tokio::time::timeout(Duration::from_secs(3), stream.read_to_end(&mut buf)).await;
         assert!(read.is_ok(), "connection still open after the header read timeout");
+        let _ = tx.send(());
+        server.await.unwrap();
+    }
+
+    /// GH#665: hyper's header read timeout does not cover the protocol preface
+    /// nor HTTP/2, so a silent client, one that sends part of the HTTP/2
+    /// preface, or an HTTP/2 client that opens no stream held its connection
+    /// (and its place under the connection limit) for ever.
+    #[tokio::test]
+    async fn connections_that_send_no_request_are_closed_whatever_the_protocol() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let http = crate::config::HttpConfig {
+            header_read_timeout: Duration::from_millis(200),
+            request_timeout: Duration::from_secs(5),
+            body_timeout: Duration::from_secs(5),
+            max_concurrent_requests: 512,
+        };
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(async move {
+            accept_loop(listener, app(), &http, 16, PeerConnections::new(16, Default::default()), async {
+                let _ = rx.await;
+            })
+            .await
+        });
+        // An HTTP/2 SETTINGS frame with no settings.
+        const H2_SETTINGS: &[u8] = &[0, 0, 0, 4, 0, 0, 0, 0, 0];
+        let preface = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+        let cases: [(&str, Vec<u8>); 3] = [
+            ("silent", Vec::new()),
+            ("partial HTTP/2 preface", b"PRI * HTTP/2.0\r\n".to_vec()),
+            ("HTTP/2 with no stream", [&preface[..], H2_SETTINGS].concat()),
+        ];
+        for (case, sent) in cases {
+            let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+            stream.write_all(&sent).await.unwrap();
+            let mut buf = Vec::new();
+            let read = tokio::time::timeout(Duration::from_secs(3), stream.read_to_end(&mut buf)).await;
+            assert!(read.is_ok(), "{case}: connection still open after the header read timeout");
+        }
+        let _ = tx.send(());
+        server.await.unwrap();
+    }
+
+    /// GH#665: places held by silent connections are freed once they are
+    /// closed, so a later client is served.
+    #[tokio::test]
+    async fn silent_connections_give_back_their_place() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let http = crate::config::HttpConfig {
+            header_read_timeout: Duration::from_millis(200),
+            request_timeout: Duration::from_secs(5),
+            body_timeout: Duration::from_secs(5),
+            max_concurrent_requests: 512,
+        };
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(async move {
+            let peers = PeerConnections::new(2, crate::auth::session::TrustedProxies::parse("127.0.0.0/8").unwrap());
+            accept_loop(listener, app(), &http, 2, peers, async {
+                let _ = rx.await;
+            })
+            .await
+        });
+        let mut silent = Vec::new();
+        for _ in 0..2 {
+            silent.push(tokio::net::TcpStream::connect(addr).await.unwrap());
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream.write_all(b"GET /healthz HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").await.unwrap();
+        let mut buf = Vec::new();
+        tokio::time::timeout(Duration::from_secs(3), stream.read_to_end(&mut buf)).await.unwrap().unwrap();
+        let answer = String::from_utf8_lossy(&buf);
+        assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+        drop(silent);
+        let _ = tx.send(());
+        server.await.unwrap();
+    }
+
+    /// GH#665: the idle limit applies only while a connection serves nothing;
+    /// a response that takes longer than it is sent in full, and the
+    /// connection stays open for the next request.
+    #[tokio::test]
+    async fn the_idle_limit_does_not_cut_requests_in_flight() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let http = crate::config::HttpConfig {
+            header_read_timeout: Duration::from_millis(200),
+            request_timeout: Duration::from_secs(5),
+            body_timeout: Duration::from_secs(5),
+            max_concurrent_requests: 512,
+        };
+        // Answers after 600 ms, then streams its body over another 600 ms.
+        let slow = Router::new().route(
+            "/slow",
+            axum::routing::get(|| async {
+                tokio::time::sleep(Duration::from_millis(600)).await;
+                let chunks = futures_util::stream::unfold(0, |i| async move {
+                    (i < 3).then_some(())?;
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    Some((Ok::<_, std::convert::Infallible>(axum::body::Bytes::from_static(b"chunk")), i + 1))
+                });
+                Body::from_stream(chunks)
+            }),
+        );
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(async move {
+            accept_loop(listener, slow, &http, 16, PeerConnections::new(16, Default::default()), async {
+                let _ = rx.await;
+            })
+            .await
+        });
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        for last in [false, true] {
+            let close = if last { "Connection: close\r\n" } else { "" };
+            let req = format!("GET /slow HTTP/1.1\r\nHost: x\r\n{close}\r\n");
+            stream.write_all(req.as_bytes()).await.unwrap();
+            // Read until the end of the chunked body.
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 1024];
+            while !buf.ends_with(b"0\r\n\r\n") {
+                let n = tokio::time::timeout(Duration::from_secs(3), stream.read(&mut chunk)).await.unwrap().unwrap();
+                assert!(n > 0, "connection closed mid-response: {}", String::from_utf8_lossy(&buf));
+                buf.extend_from_slice(&chunk[..n]);
+            }
+            let answer = String::from_utf8_lossy(&buf);
+            assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+            assert_eq!(answer.matches("\r\nchunk\r\n").count(), 3, "{answer}");
+        }
         let _ = tx.send(());
         server.await.unwrap();
     }
