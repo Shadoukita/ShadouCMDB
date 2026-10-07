@@ -154,6 +154,14 @@ REVOKE ALL ON cmdb.audit_log_chain_head FROM :"app_role";
 GRANT SELECT ON cmdb.audit_log_chain_head TO :"app_role";
 -- Server keys are read and added, never changed (migration 0021).
 REVOKE UPDATE, DELETE, TRUNCATE ON cmdb.server_keys FROM :"app_role";
+-- The API role lists a backup.restore entry as exported only through the
+-- function, which now runs as the owner role (migration 0064, GH#706). Both
+-- exist from 0063 and 0064 on; an older install has nothing to narrow.
+SELECT format('REVOKE ALL ON cmdb.audit_export_restores FROM %I', :'app_role'),
+       format('GRANT SELECT ON cmdb.audit_export_restores TO %I', :'app_role')
+WHERE to_regclass('cmdb.audit_export_restores') IS NOT NULL \gexec
+SELECT format('GRANT EXECUTE ON FUNCTION cmdb.audit_export_mark_restore_sent(bigint) TO %I', :'app_role')
+WHERE to_regprocedure('cmdb.audit_export_mark_restore_sent(bigint)') IS NOT NULL \gexec
 ALTER DEFAULT PRIVILEGES FOR ROLE :"owner_role" IN SCHEMA cmdb
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO :"app_role";
 ALTER DEFAULT PRIVILEGES FOR ROLE :"owner_role" IN SCHEMA cmdb

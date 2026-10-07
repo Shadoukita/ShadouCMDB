@@ -319,6 +319,16 @@ async fn open_append(path: &PathBuf) -> std::io::Result<tokio::fs::File> {
     options.open(path).await
 }
 
+/// For `send_restore_entry`: appends to the file only if it exists and is not a
+/// symlink (ELOOP), in one call, so nothing can swap it in between.
+async fn open_existing_no_follow(path: &PathBuf) -> std::io::Result<tokio::fs::File> {
+    let mut options = tokio::fs::OpenOptions::new();
+    options.append(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW);
+    options.open(path).await
+}
+
 async fn write_line<W: AsyncWriteExt + Unpin>(w: &mut W, msg: &str) -> std::io::Result<()> {
     w.write_all(msg.as_bytes()).await?;
     w.write_all(b"\n").await?;
@@ -364,19 +374,24 @@ pub enum RestoreDelivery {
 ///
 /// Not to stdout, which is the operator's terminal here, nor to a file that
 /// does not exist yet: it would belong to whoever runs the restore, and the
-/// server could not append to it.
+/// server could not append to it. Nor through a symlink: `restore` may run as
+/// root, and whoever owns the log directory could point it at any file.
 pub async fn send_restore_entry(
     conn: &mut PgConnection,
     cfg: &AuditExportConfig,
     chain_seq: i64,
 ) -> anyhow::Result<RestoreDelivery> {
-    match &cfg.sink {
+    let file = match &cfg.sink {
         AuditSink::Stdout => return Ok(RestoreDelivery::Skipped("AUDIT_EXPORT is stdout, the server's log")),
-        AuditSink::File(path) if !tokio::fs::try_exists(path).await.unwrap_or(false) => {
-            return Ok(RestoreDelivery::Skipped("the AUDIT_EXPORT file does not exist yet"));
-        }
-        _ => {}
-    }
+        AuditSink::File(path) => match open_existing_no_follow(path).await {
+            Ok(f) => Some(f),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(RestoreDelivery::Skipped("the AUDIT_EXPORT file does not exist yet"));
+            }
+            Err(e) => anyhow::bail!("cannot open {}: {e}", path.display()),
+        },
+        _ => None,
+    };
     let tls = match cfg.sink {
         AuditSink::Tls(_) => Some(tls_connector(cfg.tls_ca_file.as_ref())?),
         _ => None,
@@ -392,7 +407,7 @@ pub async fn send_restore_entry(
         facility: cfg.facility,
         hostname: hostname(),
         tls,
-        conn: None,
+        conn: file.map(Conn::File),
     };
     tokio::time::timeout(Duration::from_secs(30), sink.send(&event))
         .await
@@ -1041,6 +1056,17 @@ mod tests {
             RestoreDelivery::Skipped("the AUDIT_EXPORT file does not exist yet")
         );
         assert!(!restore_path.exists());
+        // Not through a symlink, which could point anywhere `restore` may write.
+        #[cfg(unix)]
+        {
+            let target = restore_path.with_extension("target");
+            std::fs::write(&target, "").unwrap();
+            std::os::unix::fs::symlink(&target, &restore_path).unwrap();
+            assert!(send_restore_entry(&mut cb, &cfg, report.entry.chain_seq).await.is_err());
+            assert_eq!(std::fs::read_to_string(&target).unwrap(), "");
+            std::fs::remove_file(&restore_path).unwrap();
+            std::fs::remove_file(&target).unwrap();
+        }
         std::fs::write(&restore_path, "").unwrap();
         assert_eq!(send_restore_entry(&mut cb, &cfg, report.entry.chain_seq).await.unwrap(), RestoreDelivery::Sent);
         let stdout = AuditExportConfig { sink: AuditSink::Stdout, ..cfg };
