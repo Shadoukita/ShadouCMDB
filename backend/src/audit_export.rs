@@ -11,10 +11,13 @@
 //! from the same row on the next poll. The position is not persisted; after a
 //! restart export resumes at the newest row, and rows written while the server
 //! was down stay in the database only (their gap shows in `chainSeq`). The
-//! exception is the `backup.restore` entry that `shadoucmdb restore` leaves at
-//! the end of the chain: it is sent at start-up (again after every restart
-//! until a newer row follows), so the collector learns which head the restore
-//! went back to (GH#513).
+//! exception is the `backup.restore` entry that `shadoucmdb restore` leaves,
+//! so the collector learns which head the restore went back to (GH#513):
+//! export starts before the oldest such entry not yet sent, so it leaves with
+//! every row after it, also the ones CLI commands (`mfa reset-undecryptable`,
+//! `create-admin`) wrote before the server started (GH#677). A sent entry is
+//! listed in `audit_export_restores` (migration 0060); one whose send fails is
+//! sent again after a restart.
 //!
 //! A row that can never be sent (larger than one UDP datagram) must not hold
 //! the export up: it leaves as a stub without `oldValue` and `newValue`, with
@@ -319,14 +322,29 @@ async fn write_line<W: AsyncWriteExt + Unpin>(w: &mut W, msg: &str) -> std::io::
     w.flush().await
 }
 
-/// The first cursor: the newest row, before any `backup.restore` entries at the end.
-async fn start(pool: &PgPool) -> sqlx::Result<i64> {
-    sqlx::query_scalar(
-        "SELECT coalesce((SELECT chain_seq FROM audit_log WHERE action <> 'backup.restore'
-                          ORDER BY chain_seq DESC LIMIT 1), 0)",
+/// The first cursor: the newest row, or just before the oldest `backup.restore`
+/// entry not yet sent; with the number of those entries.
+async fn start(pool: &PgPool) -> sqlx::Result<(i64, i64)> {
+    sqlx::query_as(
+        "WITH unsent AS (
+             SELECT a.chain_seq FROM audit_log a
+             WHERE a.action = 'backup.restore'
+               AND NOT EXISTS (SELECT 1 FROM audit_export_restores s WHERE s.chain_seq = a.chain_seq)
+         )
+         SELECT coalesce((SELECT min(chain_seq) - 1 FROM unsent), (SELECT max(chain_seq) FROM audit_log), 0),
+                (SELECT count(*) FROM unsent)",
     )
     .fetch_one(pool)
     .await
+}
+
+/// Lists a sent `backup.restore` entry, so a restart does not go back to it.
+async fn mark_restore_sent(pool: &PgPool, chain_seq: i64) -> sqlx::Result<()> {
+    sqlx::query("INSERT INTO audit_export_restores (chain_seq) VALUES ($1) ON CONFLICT DO NOTHING")
+        .bind(chain_seq)
+        .execute(pool)
+        .await
+        .map(|_| ())
 }
 
 #[cfg(test)]
@@ -415,6 +433,12 @@ async fn drain(pool: &PgPool, sink: &mut Sink, mut cursor: i64, health: &mut Hea
                 return cursor;
             }
             cursor = e.chain_seq;
+            if e.action == "backup.restore"
+                && let Err(err) = mark_restore_sent(pool, e.chain_seq).await
+            {
+                // It is sent; a restart would send it (and what follows) again.
+                tracing::warn!(chain_seq = e.chain_seq, error = %err, "audit export: cannot record a sent backup.restore entry");
+            }
         }
         health.ok();
         if !full {
@@ -431,8 +455,17 @@ async fn run(pool: PgPool, cfg: AuditExportConfig, tls: Option<TlsConnector>, mu
     loop {
         cursor = match cursor {
             None => match start(&pool).await {
-                Ok(seq) => {
-                    tracing::info!(after_chain_seq = seq, "audit export started");
+                Ok((seq, restores)) => {
+                    if restores > 0 {
+                        tracing::warn!(
+                            after_chain_seq = seq,
+                            restores,
+                            "audit export started before a backup.restore entry not yet sent; it leaves with every \
+                             row after it"
+                        );
+                    } else {
+                        tracing::info!(after_chain_seq = seq, "audit export started");
+                    }
                     Some(seq)
                 }
                 Err(e) => {
@@ -743,6 +776,59 @@ mod tests {
         assert!(health.failing.is_none());
         assert_eq!(receive(&collector).await["oversize"], json!(true));
         assert_eq!(receive(&collector).await["newValue"]["name"], "after");
+        db.drop().await;
+    }
+
+    /// GH#677: a `backup.restore` entry followed by a CLI row before the server
+    /// starts (`mfa reset-undecryptable` after a restore) is still sent, with
+    /// that row; once sent, a restart resumes at the newest row.
+    #[tokio::test]
+    async fn an_unsent_restore_entry_is_sent_with_the_rows_after_it() {
+        let Some(db) = crate::db::scratch::database("an_unsent_restore_entry_is_sent_with_the_rows_after_it").await
+        else {
+            return;
+        };
+        let insert = |action: &'static str| {
+            sqlx::query_scalar::<_, i64>(
+                "INSERT INTO cmdb.audit_log (actor_type, actor_name, action, entity_type, entity_id, new_value)
+                 VALUES ('system', session_user, $1, $2, gen_random_uuid(), '{}') RETURNING chain_seq",
+            )
+            .bind(action)
+            .bind(if action == "backup.restore" { "audit_log" } else { "users" })
+            .fetch_one(&db.pool)
+        };
+        // Exported before: a restart does not go back to it.
+        let old = insert("backup.restore").await.unwrap();
+        mark_restore_sent(&db.pool, old).await.unwrap();
+        insert("mfa.disable").await.unwrap();
+        assert_eq!(start(&db.pool).await.unwrap(), (head(&db.pool).await.unwrap(), 0));
+
+        let restore = insert("backup.restore").await.unwrap();
+        let after = insert("mfa.disable").await.unwrap();
+        assert_eq!(start(&db.pool).await.unwrap(), (restore - 1, 1), "starts before the unsent entry");
+
+        let path = std::env::temp_dir().join(format!("shadoucmdb-audit-{}.jsonl", Uuid::new_v4()));
+        let mut sink = Sink {
+            target: AuditSink::File(path.clone()),
+            format: AuditFormat::Json,
+            facility: 13,
+            hostname: "h".into(),
+            tls: None,
+            conn: None,
+        };
+        let (cursor, _) = start(&db.pool).await.unwrap();
+        let mut health = Health::default();
+        assert_eq!(drain(&db.pool, &mut sink, cursor, &mut health).await, after);
+        let out = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let sent: Vec<(i64, String)> = out
+            .lines()
+            .map(|l| serde_json::from_str::<Value>(l).unwrap())
+            .map(|v| (v["chainSeq"].as_i64().unwrap(), v["action"].as_str().unwrap().to_owned()))
+            .collect();
+        assert_eq!(sent, [(restore, "backup.restore".into()), (after, "mfa.disable".into())]);
+        assert!(health.failing.is_none());
+        assert_eq!(start(&db.pool).await.unwrap(), (after, 0), "a restart resumes at the newest row");
         db.drop().await;
     }
 
