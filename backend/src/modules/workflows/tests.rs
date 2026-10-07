@@ -1205,3 +1205,86 @@ async fn the_import_refuses_a_state_field_as_a_transition_field() {
     assert_eq!(versions, 1, "no version was published by the refused import");
     db.drop().await;
 }
+
+/// GH#698 (SHAA-2240), the reverse of GH#668: a workflow cannot start driving
+/// a field that a transition of another live workflow takes (it would be
+/// refused from then on), and a workflow whose transition takes the field of
+/// an active driver cannot be activated.
+#[tokio::test]
+async fn activating_a_driver_is_refused_while_another_workflow_takes_its_field() {
+    let Some(db) = scratch::database("workflow_activate_taken_field").await else { return };
+    let w = world(&db).await;
+    let publish = |flow: Uuid, graph: Value| {
+        let w = &w;
+        async move {
+            let (status, v) = w.call("PUT", &format!("{BASE}/{flow}/draft"), Some(graph)).await;
+            assert_eq!(status, 200, "{v}");
+            let sum = v["checksum"].as_str().unwrap().to_owned();
+            let path = format!("{BASE}/{flow}/draft/publish");
+            let (status, v) = w.call("POST", &path, Some(json!({ "expectedDraftChecksum": sum }))).await;
+            assert_eq!(status, 201, "{v}");
+        }
+    };
+    // C: no state field, its transition takes `lifecycle`.
+    let taker =
+        id(&post(&w.app, &w.admin, BASE, json!({ "key": "qa_tf_env", "name": "Taker", "classId": w.server })).await);
+    publish(
+        taker,
+        json!({
+            "initialState": "a",
+            "states": [
+                { "key": "a", "name": "A", "category": "open", "terminal": false },
+                { "key": "b", "name": "B", "category": "done", "terminal": true }
+            ],
+            "transitions": [ { "key": "set_env", "name": "Set", "from": "a", "to": "b", "requiresComment": false,
+                "fields": [ { "attribute": "lifecycle", "required": true } ] } ]
+        }),
+    )
+    .await;
+    let taker_path = format!("{BASE}/{taker}");
+    let (status, v) = w.call("PATCH", &taker_path, Some(json!({ "version": 2, "isActive": true }))).await;
+    assert_eq!(status, 200, "{v}");
+
+    // D drives `lifecycle`: activating it, on create or by PATCH, is refused.
+    let body = json!({ "key": "qa_env_driver", "name": "Driver", "classId": w.server,
+        "stateAttributeId": w.lifecycle, "isActive": true });
+    let (status, v) = w.call("POST", BASE, Some(body)).await;
+    let refused = vec![("stateAttributeId".to_owned(), "state_field_in_transition".to_owned())];
+    assert_eq!((status, details(&v)), (409, refused.clone()), "{v}");
+    let body =
+        json!({ "key": "qa_env_driver", "name": "Driver", "classId": w.server, "stateAttributeId": w.lifecycle });
+    let driver = id(&post(&w.app, &w.admin, BASE, body).await);
+    publish(driver, lifecycle_graph()).await;
+    let driver_path = format!("{BASE}/{driver}");
+    let (status, v) = w.call("PATCH", &driver_path, Some(json!({ "version": 2, "isActive": true }))).await;
+    assert_eq!((status, details(&v)), (409, refused.clone()), "{v}");
+    let message = v["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("set_env") && message.contains("qa_tf_env"), "{v}");
+
+    // An inactive taker with a running instance still holds the field.
+    let ci = w.ci().await;
+    let (status, v) =
+        w.call("POST", "/api/v1/workflow-instances", Some(json!({ "definitionId": taker, "ciId": ci }))).await;
+    assert_eq!(status, 201, "{v}");
+    let (status, v) = w.call("PATCH", &taker_path, Some(json!({ "version": 3, "isActive": false }))).await;
+    assert_eq!(status, 200, "{v}");
+    let (status, v) = w.call("PATCH", &driver_path, Some(json!({ "version": 2, "isActive": true }))).await;
+    assert_eq!((status, details(&v)), (409, refused), "{v}");
+
+    // Once that instance is gone, the driver activates, and then the taker
+    // cannot be activated again.
+    sqlx::query("UPDATE workflow_instances SET status = 'cancelled', ended_at = now() WHERE definition_id = $1")
+        .bind(taker)
+        .execute(&w.pool)
+        .await
+        .unwrap();
+    let (status, v) = w.call("PATCH", &driver_path, Some(json!({ "version": 2, "isActive": true }))).await;
+    assert_eq!(status, 200, "{v}");
+    let (status, v) = w.call("PATCH", &taker_path, Some(json!({ "version": 4, "isActive": true }))).await;
+    assert_eq!(
+        (status, details(&v)),
+        (409, vec![("isActive".to_owned(), "state_field_in_transition".to_owned())]),
+        "{v}"
+    );
+    db.drop().await;
+}

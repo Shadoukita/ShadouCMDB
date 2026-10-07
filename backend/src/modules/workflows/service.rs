@@ -109,7 +109,7 @@ fn no_draft(id: Uuid) -> AppError {
 
 /// The classes a definition covers: its type, and the types below it when it includes subtypes.
 pub(crate) fn covered(model: &Model, d: &WorkflowDefinition) -> Vec<Uuid> {
-    if d.include_subclasses { model.subtree(d.class_id) } else { vec![d.class_id] }
+    coverage(model, d.class_id, d.include_subclasses)
 }
 
 /// What a manager does with a definition.
@@ -295,6 +295,117 @@ async fn check_state_driver(conn: &mut PgConnection, d_id: Option<Uuid>, attribu
     }
 }
 
+/// The classes a workflow on `class_id` covers.
+fn coverage(model: &Model, class_id: Uuid, include_subclasses: bool) -> Vec<Uuid> {
+    if include_subclasses { model.subtree(class_id) } else { vec![class_id] }
+}
+
+fn state_field_conflict(field: &str, message: String) -> AppError {
+    AppError::new(ErrorCode::Conflict, message.clone()).with_details(vec![FieldError {
+        location: FieldLocation::Body,
+        field: field.into(),
+        message,
+        code: "state_field_in_transition".into(),
+    }])
+}
+
+/// A transition of another workflow that takes the field about to be driven.
+#[derive(sqlx::FromRow)]
+struct Taker {
+    definition_key: String,
+    transition_key: String,
+    class_id: Uuid,
+    include_subclasses: bool,
+}
+
+/// GH#698, the reverse of the publish lint of GH#668: a workflow may not
+/// start driving `attribute` while a transition another workflow can still
+/// run on the same CIs takes that field (the current version of an active
+/// workflow, or any version with running instances). The runtime guard would
+/// refuse that transition from then on, stranding its instances.
+async fn check_transition_takers(
+    conn: &mut PgConnection,
+    d_id: Option<Uuid>,
+    class_id: Uuid,
+    include_subclasses: bool,
+    attribute: Uuid,
+) -> Result<(), AppError> {
+    let takers: Vec<Taker> = sqlx::query_as(
+        "SELECT DISTINCT d.key AS definition_key, t.key AS transition_key, d.class_id, d.include_subclasses
+         FROM cmdb.workflow_transition_fields f
+         JOIN cmdb.workflow_transitions t ON t.id = f.transition_id
+         JOIN cmdb.workflow_versions v ON v.id = t.version_id
+         JOIN cmdb.workflow_definitions d ON d.id = v.definition_id
+         WHERE f.attribute_id = $1 AND d.id IS DISTINCT FROM $2 AND v.status <> 'draft'
+           AND ((d.is_active AND v.id = d.current_version_id)
+                OR EXISTS (SELECT 1 FROM cmdb.workflow_instances i WHERE i.version_id = v.id AND i.status = 'active'))
+         ORDER BY 1, 2",
+    )
+    .bind(attribute)
+    .bind(d_id)
+    .fetch_all(&mut *conn)
+    .await?;
+    if takers.is_empty() {
+        return Ok(());
+    }
+    let model = Model::load(&mut *conn).await?;
+    let mine = coverage(&model, class_id, include_subclasses);
+    let Some(t) =
+        takers.iter().find(|t| coverage(&model, t.class_id, t.include_subclasses).iter().any(|c| mine.contains(c)))
+    else {
+        return Ok(());
+    };
+    let field = model.field(attribute).map(|f| f.key.as_str()).unwrap_or_default();
+    Err(state_field_conflict(
+        "stateAttributeId",
+        format!(
+            "Transition {} of the workflow {} takes {field} as a field: it could no longer run once this workflow \
+             drives {field}. Publish a version of {} without that field, and let its running instances finish, first",
+            t.transition_key, t.definition_key, t.definition_key
+        ),
+    ))
+}
+
+/// GH#698, activating a workflow whose current version has a transition
+/// taking the state field of another active workflow on the same CIs: the
+/// publish lint (GH#668) would refuse that version now, and the runtime guard
+/// would refuse the transition.
+async fn check_takes_driven_fields(
+    conn: &mut PgConnection,
+    d: &WorkflowDefinition,
+    include_subclasses: bool,
+) -> Result<(), AppError> {
+    let fields: Vec<(String, Uuid)> = sqlx::query_as(
+        "SELECT t.key, f.attribute_id
+         FROM cmdb.workflow_definitions d
+         JOIN cmdb.workflow_transitions t ON t.version_id = d.current_version_id
+         JOIN cmdb.workflow_transition_fields f ON f.transition_id = t.id
+         WHERE d.id = $1 ORDER BY t.sort_order, t.key, f.sort_order",
+    )
+    .bind(d.id)
+    .fetch_all(&mut *conn)
+    .await?;
+    if fields.is_empty() {
+        return Ok(());
+    }
+    let model = Model::load(&mut *conn).await?;
+    let drivers = StateFields::load(&mut *conn).await?.overlapping(&model, &d.key, d.class_id, include_subclasses);
+    for (transition, attribute) in fields {
+        if let Some(driver) = drivers.iter().find(|x| x.attribute_id == attribute) {
+            let field = model.field(attribute).map(|f| f.key.as_str()).unwrap_or_default();
+            return Err(state_field_conflict(
+                "isActive",
+                format!(
+                    "Transition {transition} of this workflow takes {field}, the state field of the active workflow \
+                     {}: publish a version without that field first",
+                    driver.definition_key
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Definitions
 // ---------------------------------------------------------------------------
@@ -440,6 +551,8 @@ pub(crate) async fn create_in(
         check_state_attribute(&fields, attribute)?;
         if is_active {
             check_state_driver(&mut *tx, None, attribute).await?;
+            check_transition_takers(&mut *tx, None, b.class_id, b.include_subclasses.unwrap_or(true), attribute)
+                .await?;
         }
     }
     let (user_id, user_name) = actor(ctx);
@@ -548,6 +661,18 @@ pub(crate) async fn update_in(
         && (!before.is_active || attribute != before.state_attribute_id)
     {
         check_state_driver(&mut *tx, Some(id), a).await?;
+    }
+    let include_subclasses = b.include_subclasses.unwrap_or(before.include_subclasses);
+    if let Some(a) = attribute
+        && active
+        && (!before.is_active
+            || attribute != before.state_attribute_id
+            || include_subclasses != before.include_subclasses)
+    {
+        check_transition_takers(&mut *tx, Some(id), before.class_id, include_subclasses, a).await?;
+    }
+    if active && (!before.is_active || include_subclasses != before.include_subclasses) {
+        check_takes_driven_fields(&mut *tx, &before, include_subclasses).await?;
     }
     let (user_id, user_name) = actor(ctx);
     let mut columns = b.columns();

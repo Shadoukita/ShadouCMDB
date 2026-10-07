@@ -1015,8 +1015,18 @@ async fn the_final_approval_refuses_a_field_that_became_a_state_field() {
     let (status, v) = request(&w, &w.admin, instance, "close", json!({ "lifecycle": w.value("live") })).await;
     assert_eq!(status, 202, "the transition waits for approval: {v}");
 
-    // server_lifecycle is active again: lifecycle is its state field now.
-    set_active(w.definition, true).await;
+    // server_lifecycle is active again: lifecycle is its state field now. Activating it is
+    // refused while the review can still take the field (GH#698); data from before that
+    // check (forced here) still has the request refused at the final approval.
+    let d = w.ok("GET", &format!("{DEFS}/{}", w.definition), json!(null)).await;
+    let body = json!({ "version": d["version"], "isActive": true });
+    let (status, v) = w.call(&w.admin, "PATCH", &format!("{DEFS}/{}", w.definition), Some(body)).await;
+    assert_eq!((status, details(&v)), (409, pairs(&[("stateAttributeId", "state_field_in_transition")])), "{v}");
+    sqlx::query("UPDATE workflow_definitions SET is_active = true WHERE id = $1")
+        .bind(w.definition)
+        .execute(&w.pool)
+        .await
+        .unwrap();
     let (status, v) = decide(&w, &cab.0, instance, "approve", None).await;
     assert_eq!((status, code(&v)), (409, "WORKFLOW_APPROVAL_STALE"), "{v}");
     assert_eq!(details(&v), pairs(&[("fields.lifecycle", "state_field")]), "{v}");
