@@ -500,14 +500,21 @@ pub(crate) async fn update_in(
 ) -> Result<(WorkflowDefinition, WorkflowDefinition), AppError> {
     let before = load(&mut *tx, id, true).await?;
     if ctx.class_scope(ClassOp::View).is_some() || ctx.class_scope(ClassOp::Edit).is_some() {
-        // The types it covers now and, when this turns subtypes on, after.
+        // The types it covers now: one the caller may not read answers as missing.
         let model = Model::load(&mut *tx).await?;
-        let classes = if b.include_subclasses.unwrap_or(before.include_subclasses) {
-            model.subtree(before.class_id)
-        } else {
-            covered(&model, &before)
-        };
-        require_classes(ctx, &classes, id, Access::Write)?;
+        require_classes(ctx, &covered(&model, &before), id, Access::Write)?;
+        // GH#686: turning subtypes on over a type the caller may not view or
+        // edit is refused like `create_in`, not as missing: they can read it.
+        if b.include_subclasses == Some(true) && !before.include_subclasses {
+            let classes = model.subtree(before.class_id);
+            let edit = ctx.class_scope(ClassOp::Edit);
+            if !ctx.may_view_all(&classes) || edit.is_some_and(|e| classes.iter().any(|c| !e.contains(c))) {
+                return Err(AppError::new(
+                    ErrorCode::Forbidden,
+                    "Including subtypes needs the view and edit rights on every type below this workflow's type",
+                ));
+            }
+        }
     }
     check_version(b.version, before.version)?;
     let attribute = b.state_attribute_id.unwrap_or(before.state_attribute_id);
