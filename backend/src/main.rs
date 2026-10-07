@@ -233,8 +233,9 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         Command::Restore(args) => {
             let cfg = Config::from_env()?;
             let encryption = cfg.encryption.clone();
+            let export = cfg.audit.export.clone();
             let db = cfg.schema_owner_database()?;
-            runtime()?.block_on(maintenance::restore::run(&db, &encryption, args))
+            runtime()?.block_on(maintenance::restore::run(&db, &encryption, export.as_ref(), args))
         }
         Command::FactoryReset(args) => {
             let db = Config::from_env()?.schema_owner_database()?;

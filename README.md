@@ -224,7 +224,10 @@ derived from it, and `restore` refuses a file that was edited after the backup. 
 seal with `ENCRYPTION_KEY_FILE` or `ENCRYPTION_KEY_PREVIOUS_FILE`; a backup without a seal (taken
 before ShadouCMDB sealed backups, or without the key) or sealed with a key that is not configured is
 restored only with `--allow-unsigned`. Each restore records a `backup.restore` audit entry with the
-audit chain head it brought back; compare it with the SIEM copy (`AUDIT_EXPORT`).
+audit chain head it brought back; compare it with the SIEM copy (`AUDIT_EXPORT`). Run `restore` with
+the server's `AUDIT_EXPORT` settings: it sends the entry to the collector as soon as the restore is
+committed (not to `stdout`, nor to an export file that does not exist yet), and the server sends it
+again, with the rows after it, when it starts.
 
 Because `restore`, `factory-reset` and `decommission` each run in one transaction, they hold a lock on
 every table, index and constraint of the installation until they commit, and PostgreSQL keeps those in

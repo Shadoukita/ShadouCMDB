@@ -733,14 +733,19 @@ pub mod scratch {
 
         /// A database migrated as its owner, with the grants to these roles.
         pub async fn database(&self) -> Scratch {
+            let db = self.empty().await;
+            super::MIGRATOR.run(&db.pool).await.expect("migrations");
+            super::reconcile_and_link(&db.pool).await.expect("reconcile after migrate");
+            db
+        }
+
+        /// A database of these roles with no migrations applied, for upgrade tests.
+        pub async fn empty(&self) -> Scratch {
             let settings = [
                 ("shadoucmdb.app_role", self.app.as_str()),
                 ("shadoucmdb.maintenance_role", self.maintenance.as_str()),
             ];
-            let db = create(self.admin.clone(), &settings).await;
-            super::MIGRATOR.run(&db.pool).await.expect("migrations");
-            super::reconcile_and_link(&db.pool).await.expect("reconcile after migrate");
-            db
+            create(self.admin.clone(), &settings).await
         }
 
         /// A pool on `db` that works as the API role, as the running application does.
@@ -992,3 +997,5 @@ mod upgrade_0058;
 mod upgrade_0061;
 #[cfg(test)]
 mod upgrade_0063;
+#[cfg(test)]
+mod upgrade_0064;
