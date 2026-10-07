@@ -191,6 +191,58 @@ async fn the_split_reads_no_table_the_api_role_could_have_made_a_view() {
 }
 
 #[tokio::test]
+async fn the_split_grants_nothing_but_the_list_s_rights_on_cmdb() {
+    const TEST: &str = "the_split_grants_nothing_but_the_list_s_rights_on_cmdb";
+    let Some(_) = psql(TEST) else { return };
+    let Some(roles) = scratch::Roles::create(TEST).await else { return };
+    let plants = [
+        // SQL in a right, past the CHECK constraint the API role dropped.
+        format!(
+            "ALTER TABLE cmdb.api_role_privileges DROP CONSTRAINT api_role_privileges_check;
+             UPDATE cmdb.api_role_privileges
+                SET privileges = ARRAY['SELECT ON cmdb.server_keys TO PUBLIC; ALTER ROLE {app} SUPERUSER; GRANT SELECT']
+              WHERE object = 'cmdb.audit_log';",
+            app = roles.app
+        ),
+        // Rights on objects outside cmdb: read any file, every password verifier.
+        "INSERT INTO cmdb.api_role_privileges VALUES ('pg_catalog.pg_read_file(text)', 'routine', '{EXECUTE}');"
+            .to_owned(),
+        "INSERT INTO cmdb.api_role_privileges VALUES ('pg_catalog.pg_authid', 'table', '{SELECT}');".to_owned(),
+        // An object type the function does not know.
+        "ALTER TABLE cmdb.api_role_privileges DROP CONSTRAINT api_role_privileges_object_type_check,
+           DROP CONSTRAINT api_role_privileges_check;
+         INSERT INTO cmdb.api_role_privileges VALUES ('cmdb.areas', 'schema', '{}');"
+            .to_owned(),
+    ];
+    for plant in &plants {
+        let db = single_role_install(&roles, plant).await;
+        let out = split(psql(TEST).unwrap(), &roles, &db);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "10_split_roles.sql accepted the list after {plant}");
+        assert!(stderr.contains("cmdb.api_role_privileges: "), "{plant}: {stderr}");
+        assert!(!is_superuser(&db.pool, &roles.app).await, "{plant}");
+        let rights: (bool, bool) = sqlx::query_as(
+            "SELECT has_function_privilege($1, 'pg_catalog.pg_read_file(text)', 'EXECUTE'),
+                    has_table_privilege($1, 'pg_catalog.pg_authid', 'SELECT')",
+        )
+        .bind(&roles.app)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(rights, (false, false), "{plant}");
+        db.drop().await;
+    }
+    // The script stopped before it gave the owner role anything to own.
+    let admin = roles.empty().await;
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP ROLE IF EXISTS {}", owner_role(&roles))))
+        .execute(&admin.pool)
+        .await
+        .unwrap();
+    admin.drop().await;
+    roles.drop().await;
+}
+
+#[tokio::test]
 async fn the_migration_repairs_an_install_split_before_it() {
     let Some(roles) = scratch::Roles::create("the_migration_repairs_an_install_split_before_it").await else {
         return;

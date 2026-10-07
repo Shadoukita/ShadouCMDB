@@ -159,8 +159,11 @@ GRANT EXECUTE ON FUNCTION cmdb.prune_audit_log(interval, text, boolean, text) TO
 -- fresh three-role install, from the list the migrations keep
 -- (cmdb.api_role_privileges, migration 0065, GH#713). The function is first
 -- replaced with this copy of migration 0065's, which the API role cannot have
--- changed; it refuses a list that is not a plain table any more.
-CREATE OR REPLACE FUNCTION cmdb.apply_api_role_grants(app_role name)
+-- changed. It refuses a list that is not a plain table any more, and it reads
+-- the rows as data: it grants only the rights it names itself, and only on
+-- objects in cmdb.
+DROP FUNCTION IF EXISTS cmdb.apply_api_role_grants(name);
+CREATE FUNCTION cmdb.apply_api_role_grants(app_role name)
 RETURNS void
 LANGUAGE plpgsql
 SET search_path = pg_catalog, pg_temp
@@ -184,24 +187,49 @@ BEGIN
   EXECUTE format('GRANT USAGE ON SCHEMA cmdb TO %I', app_role);
   EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA cmdb TO %I', app_role);
   EXECUTE format('GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA cmdb TO %I', app_role);
-  -- An object a later migration dropped is skipped.
+  -- The rows are data, not SQL: the statements name the object by its oid
+  -- and the rights from the constants below, and only objects in cmdb (and
+  -- _sqlx_migrations) are touched. Anything else stops the call. An object a
+  -- later migration dropped is skipped.
   FOR p IN
-    SELECT to_regclass(l.object)::text AS relation, NULL::text AS routine, l.privileges
-      FROM ONLY cmdb.api_role_privileges l WHERE l.object_type = 'table' AND to_regclass(l.object) IS NOT NULL
+    SELECT l.object, l.object_type, l.privileges, c.oid::regclass AS relation, n.nspname, c.relname, c.relkind,
+           NULL::regprocedure AS routine
+      FROM ONLY cmdb.api_role_privileges l
+      JOIN pg_class c ON c.oid = to_regclass(l.object) JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE l.object_type = 'table'
     UNION ALL
-    SELECT NULL, to_regprocedure(l.object)::text, l.privileges
-      FROM ONLY cmdb.api_role_privileges l WHERE l.object_type = 'routine' AND to_regprocedure(l.object) IS NOT NULL
+    SELECT l.object, l.object_type, l.privileges, NULL, n.nspname, NULL, NULL, f.oid::regprocedure
+      FROM ONLY cmdb.api_role_privileges l
+      JOIN pg_proc f ON f.oid = to_regprocedure(l.object) JOIN pg_namespace n ON n.oid = f.pronamespace
+     WHERE l.object_type = 'routine'
+    UNION ALL
+    SELECT l.object, l.object_type, l.privileges, NULL, NULL, NULL, NULL, NULL
+      FROM ONLY cmdb.api_role_privileges l
+     WHERE l.object_type IS DISTINCT FROM 'table' AND l.object_type IS DISTINCT FROM 'routine'
   LOOP
-    IF p.relation IS NOT NULL THEN
+    IF p.object_type = 'table' THEN
+      IF NOT (p.relkind IN ('r', 'p', 'v', 'm', 'f')
+              AND (p.nspname = 'cmdb' OR (p.nspname = 'public' AND p.relname = '_sqlx_migrations')))
+         OR (p.privileges <@ ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'REFERENCES']) IS NOT TRUE THEN
+        RAISE EXCEPTION 'cmdb.api_role_privileges: % rights % are not allowed', quote_literal(p.object), quote_literal(p.privileges::text)
+          USING ERRCODE = 'object_not_in_prerequisite_state';
+      END IF;
       EXECUTE format('REVOKE ALL ON %s FROM %I', p.relation, app_role);
-      IF cardinality(p.privileges) > 0 THEN
-        EXECUTE format('GRANT %s ON %s TO %I', array_to_string(p.privileges, ', '), p.relation, app_role);
+      IF 'SELECT' = ANY (p.privileges) THEN EXECUTE format('GRANT SELECT ON %s TO %I', p.relation, app_role); END IF;
+      IF 'INSERT' = ANY (p.privileges) THEN EXECUTE format('GRANT INSERT ON %s TO %I', p.relation, app_role); END IF;
+      IF 'UPDATE' = ANY (p.privileges) THEN EXECUTE format('GRANT UPDATE ON %s TO %I', p.relation, app_role); END IF;
+      IF 'DELETE' = ANY (p.privileges) THEN EXECUTE format('GRANT DELETE ON %s TO %I', p.relation, app_role); END IF;
+      IF 'REFERENCES' = ANY (p.privileges) THEN EXECUTE format('GRANT REFERENCES ON %s TO %I', p.relation, app_role); END IF;
+    ELSIF p.object_type = 'routine' THEN
+      IF p.nspname <> 'cmdb' OR (p.privileges <@ ARRAY['EXECUTE']) IS NOT TRUE THEN
+        RAISE EXCEPTION 'cmdb.api_role_privileges: % rights % are not allowed', quote_literal(p.object), quote_literal(p.privileges::text)
+          USING ERRCODE = 'object_not_in_prerequisite_state';
       END IF;
-    ELSE
       EXECUTE format('REVOKE ALL ON FUNCTION %s FROM %I', p.routine, app_role);
-      IF cardinality(p.privileges) > 0 THEN
-        EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO %I', p.routine, app_role);
-      END IF;
+      IF 'EXECUTE' = ANY (p.privileges) THEN EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO %I', p.routine, app_role); END IF;
+    ELSE
+      RAISE EXCEPTION 'cmdb.api_role_privileges: % has object type %', quote_literal(p.object), quote_literal(p.object_type)
+        USING ERRCODE = 'object_not_in_prerequisite_state';
     END IF;
   END LOOP;
 END;
@@ -209,6 +237,7 @@ $$;
 
 REVOKE ALL ON FUNCTION cmdb.apply_api_role_grants(name) FROM PUBLIC;
 SELECT cmdb.apply_api_role_grants(:'app_role'::name) \gset ignored_
+ALTER FUNCTION cmdb.apply_api_role_grants(name) OWNER TO :"owner_role";
 ALTER DEFAULT PRIVILEGES FOR ROLE :"owner_role" IN SCHEMA cmdb
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO :"app_role";
 ALTER DEFAULT PRIVILEGES FOR ROLE :"owner_role" IN SCHEMA cmdb

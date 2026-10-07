@@ -77,7 +77,10 @@ Credentials never go into this folder or anywhere else in git; they belong in `.
   Do not `REVOKE` from the API role directly: `sql/bootstrap/10_split_roles.sql` grants a split
   single-role install the same list, and only what is in it. The script carries its own copy of
   `cmdb.apply_api_role_grants()`, because it must not run a function the API role could have
-  replaced (GH#725): a migration that changes the function changes that copy too. `upgrade_0065` in `backend/src/db/`
+  replaced (GH#725): a migration that changes the function changes that copy too. The list holds
+  only objects in `cmdb` (and `public._sqlx_migrations`) and the rights `SELECT`, `INSERT`,
+  `UPDATE`, `DELETE`, `REFERENCES` or `EXECUTE`; the function stops on any other row, since the API
+  role may have written it before a split. `upgrade_0065` in `backend/src/db/`
   fails when a fresh install's grants differ from the list or from a split install's, or the copy
   differs;
   [`checks/api_role_privileges.sql`](checks/api_role_privileges.sql) prints them for any database. After 0009, migrations do not write to area schemas: those belong to
