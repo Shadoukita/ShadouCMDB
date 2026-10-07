@@ -447,7 +447,7 @@ const notFound = computed(() => {
               </div>
             </fieldset>
             <div class="form-grid">
-              <FormField id="idp-name" :label="t('idp.col.name')" required :error="fieldErrors.name" :hint="isOidc ? t('idp.edit.nameHintOidc') : t('idp.edit.nameHintLdap')">
+              <FormField id="idp-name" :label="t('idp.col.name')" required :error="fieldErrors.name" :hint="isOidc ? t('idp.edit.nameHintOidc', { name: form.name.trim() || t('idp.col.name') }) : t('idp.edit.nameHintLdap')">
                 <template #default="{ id: fid, invalid, describedBy }">
                   <input :id="fid" v-model="form.name" v-autofocus="isNew" type="text" autocomplete="off" :aria-invalid="invalid" :aria-describedby="describedBy" />
                 </template>

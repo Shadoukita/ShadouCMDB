@@ -912,7 +912,7 @@ export const en = {
   "cust.openBranding": "Open Branding",
   "cust.saveRegion": "Save changes",
   "cust.comment": "Comment for this version",
-  "cust.commentPlaceholder": "Comment for this version (optional)",
+  "cust.commentPlaceholder": "Comment (optional)",
   "cust.branding.settingsTitle": "Name, colours and theme",
   "cust.branding.appName": "Application name",
   "cust.branding.appNameHint": "Header, sign-in page and browser tab. Empty means “{name}”.",

@@ -926,7 +926,7 @@ export const de: { [K in MessageKey]: string } = {
   "cust.openBranding": "Branding öffnen",
   "cust.saveRegion": "Änderungen speichern",
   "cust.comment": "Kommentar zu dieser Version",
-  "cust.commentPlaceholder": "Kommentar zu dieser Version (optional)",
+  "cust.commentPlaceholder": "Kommentar (optional)",
   "cust.branding.settingsTitle": "Name, Farben und Design",
   "cust.branding.appName": "Anwendungsname",
   "cust.branding.appNameHint": "Kopfzeile, Anmeldeseite und Browser-Tab. Leer bedeutet „{name}“.",
