@@ -1112,3 +1112,85 @@ async fn workflow_definitions_follow_the_managers_class_scope() {
     assert_eq!(grants, 0);
     db.drop().await;
 }
+
+/// GH#667 (SHAA-2176): the types a workflow covers include the subtypes when
+/// `includeSubclasses` is on, which is the default. A manager with view and
+/// edit on a type, but not on a subtype below it, can neither create a
+/// workflow that includes subtypes nor turn subtypes on for one they manage.
+#[tokio::test]
+async fn including_subtypes_needs_the_rights_on_every_subtype() {
+    let Some(db) = scratch::database("workflow_definitions_subtype_scope").await else { return };
+    let w = world(&db).await;
+    post(&w.app, &w.admin, "/api/v1/ci-classes", json!({ "key": "blade", "name": "Blade", "parentId": w.server }))
+        .await;
+    let editor = w.scoped_user("server_editor", &["workflows.manage"], &[(w.server, true)]).await;
+
+    // The default includes the subtypes, so the hidden Blade type is refused.
+    let body = json!({ "key": "server_default", "name": "Server default", "classId": w.server });
+    let (status, v, _) = call(&w.app, "POST", BASE, &editor, Some(body)).await;
+    assert_eq!((status, code(&v)), (403, "FORBIDDEN"), "{v}");
+    let body =
+        json!({ "key": "server_alone", "name": "Server alone", "classId": w.server, "includeSubclasses": false });
+    let (status, v, _) = call(&w.app, "POST", BASE, &editor, Some(body)).await;
+    assert_eq!(status, 201, "{v}");
+    let flow = id(&v);
+    let by_id = format!("{BASE}/{flow}");
+    let (status, v, _) = call(&w.app, "GET", BASE, &editor, None).await;
+    assert_eq!((status, v["page"]["total"].as_i64()), (200, Some(1)), "{v}");
+
+    // Turning the subtypes on would cover Blade: refused, and nothing changes.
+    // GH#686: the answer should be 403, since the editor may read this workflow.
+    let (status, v, _) =
+        call(&w.app, "PATCH", &by_id, &editor, Some(json!({ "version": 1, "includeSubclasses": true }))).await;
+    assert!(matches!(status, 403 | 404), "{status} {v}");
+    let (_, v) = w.call("GET", &by_id, None).await;
+    assert_eq!((v["includeSubclasses"].as_bool(), v["version"].as_i64()), (Some(false), Some(1)), "{v}");
+
+    // With the rights on Blade as well, both are allowed.
+    let blade: Uuid =
+        sqlx::query_scalar("SELECT id FROM ci_classes WHERE key = 'blade'").fetch_one(&w.pool).await.unwrap();
+    let manager = w.scoped_user("fleet_manager", &["workflows.manage"], &[(w.server, true), (blade, true)]).await;
+    let (status, v, _) =
+        call(&w.app, "PATCH", &by_id, &manager, Some(json!({ "version": 1, "includeSubclasses": true }))).await;
+    assert_eq!((status, v["includeSubclasses"].as_bool()), (200, Some(true)), "{v}");
+    let body = json!({ "key": "server_default", "name": "Server default", "classId": w.server });
+    let (status, v, _) = call(&w.app, "POST", BASE, &manager, Some(body)).await;
+    assert_eq!(status, 201, "{v}");
+    // The editor no longer sees the workflow that now covers Blade.
+    let (status, v, _) = call(&w.app, "GET", &by_id, &editor, None).await;
+    assert_eq!((status, code(&v)), (404, "NOT_FOUND"), "{v}");
+    db.drop().await;
+}
+
+/// GH#668 (SHAA-2176): the configuration import lints a workflow's graph as
+/// publishing does, so a file whose transition takes the workflow's own state
+/// field is refused with `state_field` and changes nothing.
+#[tokio::test]
+async fn the_import_refuses_a_state_field_as_a_transition_field() {
+    let Some(db) = scratch::database("workflow_import_state_field").await else { return };
+    let w = world(&db).await;
+    let body = json!({ "key": "server_lifecycle", "name": "Server lifecycle", "classId": w.server,
+        "stateAttributeId": w.lifecycle });
+    let flow = id(&post(&w.app, &w.admin, BASE, body).await);
+    let (status, v) = w.call("PUT", &format!("{BASE}/{flow}/draft"), Some(lifecycle_graph())).await;
+    assert_eq!(status, 200, "{v}");
+    let sum = v["checksum"].as_str().unwrap().to_owned();
+    let (status, v) =
+        w.call("POST", &format!("{BASE}/{flow}/draft/publish"), Some(json!({ "expectedDraftChecksum": sum }))).await;
+    assert_eq!(status, 201, "{v}");
+
+    let full = export_config(&w.app, &w.admin).await;
+    let mut file = json!({ "format": full["format"], "formatVersion": full["formatVersion"],
+        "workflows": full["workflows"] });
+    assert_eq!(file["workflows"][0]["graph"]["transitions"][0]["key"], "approve", "{file}");
+    file["workflows"][0]["graph"]["transitions"][0]["fields"] = json!([{ "attribute": "lifecycle", "required": true }]);
+    for mode in ["dry_run", "apply"] {
+        let path = format!("/api/v1/admin/config/import?mode={mode}");
+        let (status, v, _) = call(&w.app, "POST", &path, &w.admin, Some(file.clone())).await;
+        assert_eq!(status, 400, "{mode}: {v}");
+        assert!(details(&v).iter().any(|(_, c)| c == "state_field"), "{mode}: {v}");
+    }
+    let versions = count(&w.pool, "SELECT count(*) FROM workflow_versions WHERE status = 'published'").await;
+    assert_eq!(versions, 1, "no version was published by the refused import");
+    db.drop().await;
+}

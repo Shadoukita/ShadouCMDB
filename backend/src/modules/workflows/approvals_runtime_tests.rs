@@ -953,3 +953,74 @@ async fn exclude_actors_of_refuses_an_approver_of_an_earlier_step() {
     audit_ok(&w).await;
     db.drop().await;
 }
+
+/// GH#668 (SHAA-2176): a request staged while its field was nobody's state
+/// field is refused at the final approval once an active workflow drives that
+/// field, as a direct transition is: 409 WORKFLOW_APPROVAL_STALE with
+/// `state_field`, and the CI keeps its value.
+#[tokio::test]
+async fn the_final_approval_refuses_a_field_that_became_a_state_field() {
+    let Some(db) = scratch::database("workflow_approval_state_field").await else { return };
+    let w = world(&db).await;
+    let set_active = |def: Uuid, active: bool| {
+        let w = &w;
+        async move {
+            let d = w.ok("GET", &format!("{DEFS}/{def}"), json!(null)).await;
+            w.ok("PATCH", &format!("{DEFS}/{def}"), json!({ "version": d["version"], "isActive": active })).await;
+        }
+    };
+
+    // A review workflow on servers, without a state field, whose gated
+    // transition takes `lifecycle`: publishable while server_lifecycle is inactive.
+    let review =
+        id(&w.ok("POST", DEFS, json!({ "key": "server_review", "name": "Server review", "classId": w.server })).await);
+    let graph = json!({
+        "initialState": "open",
+        "states": [
+            { "key": "open", "name": "Open", "category": "open" },
+            { "key": "closed", "name": "Closed", "category": "done", "terminal": true }
+        ],
+        "transitions": [
+            { "key": "close", "name": "Close", "from": "open", "to": "closed",
+              "fields": [ { "attribute": "lifecycle", "required": true } ],
+              "approval": { "steps": [ { "key": "cab", "name": "CAB", "requiredApprovals": 1 } ] } }
+        ]
+    });
+    w.ok("PUT", &format!("{DEFS}/{review}/draft"), graph).await;
+    let cab = w.profile("CAB", &[(w.server, false)]).await;
+    let cab = w.user("cab", &[cab]).await;
+    let d = w.ok("GET", &format!("{DEFS}/{review}"), json!(null)).await;
+    let step = json!({ "transitionKey": "close", "stepKey": "cab", "source": "profile", "profile": "CAB" });
+    w.ok("PUT", &format!("{DEFS}/{review}/approvers"), json!({ "version": d["version"], "approvers": [step] })).await;
+    set_active(w.definition, false).await;
+    let draft = w.ok("GET", &format!("{DEFS}/{review}/draft"), json!(null)).await;
+    let (status, v) = w
+        .call(
+            &w.admin,
+            "POST",
+            &format!("{DEFS}/{review}/draft/publish"),
+            Some(json!({ "expectedDraftChecksum": draft["checksum"] })),
+        )
+        .await;
+    assert_eq!(status, 201, "{v}");
+    set_active(review, true).await;
+
+    // The request stages a lifecycle value while no active workflow drives it.
+    let ci = w.ci(w.server).await;
+    let before = w.ci_values(ci).await["attributes"]["lifecycle"].clone();
+    let (status, v) =
+        w.call(&w.admin, "POST", RUN, Some(json!({ "definitionKey": "server_review", "ciId": ci }))).await;
+    assert_eq!(status, 201, "{v}");
+    let instance = id(&v["instance"]);
+    let (status, v) = request(&w, &w.admin, instance, "close", json!({ "lifecycle": w.value("live") })).await;
+    assert_eq!(status, 202, "the transition waits for approval: {v}");
+
+    // server_lifecycle is active again: lifecycle is its state field now.
+    set_active(w.definition, true).await;
+    let (status, v) = decide(&w, &cab.0, instance, "approve", None).await;
+    assert_eq!((status, code(&v)), (409, "WORKFLOW_APPROVAL_STALE"), "{v}");
+    assert_eq!(details(&v), pairs(&[("fields.lifecycle", "state_field")]), "{v}");
+    assert_eq!(w.ci_values(ci).await["attributes"]["lifecycle"], before);
+    assert_eq!(pending(&w, instance).await.2, "cab", "the request is still pending");
+    db.drop().await;
+}
