@@ -30,6 +30,9 @@ jobs:
   linux:
     name: Linux x64 + arm64 (PostgreSQL integration, systemd)
     runs-on: ubuntu-latest
+    # Green runs take 20-30 min. Without a limit a hung step holds the check
+    # open for GitHub's 6 h default (runs 37674294922, 37682966008).
+    timeout-minutes: 60
     services:
       postgres:
         image: postgres:17
@@ -242,9 +245,14 @@ jobs:
           # Not grep -q: it stops reading at the first match, and under pipefail the writer's SIGPIPE fails the step.
           sudo journalctl -u shadoucmdb --no-pager | grep "server stopped" > /dev/null
 
+      # apt-get on its own step: both hung runs above stalled in this step, and
+      # a separate limit names the stalled part when it happens again.
+      - name: Install the aarch64 cross toolchain and QEMU
+        timeout-minutes: 10
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user
       - name: aarch64-unknown-linux-gnu (cross-build, run verify under QEMU)
+        timeout-minutes: 25
         run: |
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user
           export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
           cargo build --release --locked --target aarch64-unknown-linux-gnu
           file target/aarch64-unknown-linux-gnu/release/shadoucmdb
@@ -253,6 +261,7 @@ jobs:
   windows:
     name: Windows x64 (MSVC, Windows Service)
     runs-on: windows-latest
+    timeout-minutes: 45
     defaults:
       run:
         shell: pwsh
@@ -408,6 +417,7 @@ jobs:
   docker:
     name: Docker image (linux/amd64 + linux/arm64)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     services:
       postgres:
         image: postgres:17
