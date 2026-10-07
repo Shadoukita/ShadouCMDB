@@ -321,10 +321,13 @@ pub fn routes() -> Vec<Route> {
                  row on the CI with `actor_type = system`, naming the caller in `requestedBy`. `dryRun: true` only \
                  counts. `stateFromAttribute` must be true. 409 CONFLICT `no_state_field`, `unpublished`, \
                  `inactive`, or `changed_during_bootstrap` when the workflow is deactivated or published again while \
-                 it runs. 403 when the workflow covers types the caller may not view.",
+                 it runs. 404 NOT_FOUND, as for a missing workflow, when it covers types the caller may not view. \
+                 403 FORBIDDEN on a real run unless the caller may also edit every type it covers; a dry run \
+                 needs only the view right.",
             )
             .requires(manage)
             .session_only()
+            .class_checked()
             .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])
             .handle(
                 |api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<WorkflowBootstrap>>| async move {
@@ -439,8 +442,9 @@ pub fn routes() -> Vec<Route> {
                  400 VALIDATION_ERROR: `unknown_version` or `not_newer` on the version numbers; `unknown_state`, \
                  `terminal_source`, `unknown_target_state` or `terminal_target` on `stateMap.<key>`; `unmapped` on \
                  `stateMap.<key>` for a state with running instances and nowhere to go (in a dry run too). 409 \
-                 CONFLICT `not_published` when the target version is a draft or retired. 403 FORBIDDEN unless the \
-                 caller may view and edit every type the workflow runs on. A real run moves up to 1,000 instances \
+                 CONFLICT `not_published` when the target version is a draft or retired. 404 NOT_FOUND, as for a \
+                 missing workflow, when the caller may not view every type it runs on; 403 FORBIDDEN when they may \
+                 view but not edit them all. A real run moves up to 1,000 instances \
                  per transaction, locking each CI before its instance: a run cut short leaves the moved batches \
                  moved, and running it again moves the rest. Each moved instance keeps its CI and its history, gets \
                  a `migrate` event, and is audited on its CI as `workflow.migrate` (version and state before and \

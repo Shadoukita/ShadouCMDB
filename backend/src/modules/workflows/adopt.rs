@@ -27,6 +27,7 @@ use super::runtime::{self, NewEvent, PinnedState};
 use super::schemas::*;
 use super::service;
 use crate::api::context::RequestContext;
+use crate::auth::permissions::ClassOp;
 use crate::data::crud::{AuditAction, AuditEntry};
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
 use crate::schema::model::{Field, Model};
@@ -293,9 +294,21 @@ struct Target {
     classes: Vec<Uuid>,
 }
 
-async fn target(conn: &mut PgConnection, ctx: &RequestContext, id: Uuid) -> Result<Target, AppError> {
-    let d = service::load(conn, id, false).await?;
+/// GH#695: a workflow the caller may not read answers like a missing one,
+/// before any check that would tell its key or state. GH#694: a real run
+/// starts instances on every covered CI, so it needs the edit right on every
+/// covered type, as a single start does on the CI's type. A dry run only
+/// counts the CIs and values the view right already shows.
+async fn target(conn: &mut PgConnection, ctx: &RequestContext, id: Uuid, dry_run: bool) -> Result<Target, AppError> {
+    let d = service::load_for(conn, ctx, id, false, service::Access::Read).await?;
     let model = Model::load(conn).await?;
+    let classes = service::covered(&model, &d);
+    if !dry_run && ctx.class_scope(ClassOp::Edit).is_some_and(|e| classes.iter().any(|c| !e.contains(c))) {
+        return Err(AppError::new(
+            ErrorCode::Forbidden,
+            "Starting this workflow on its CIs needs the edit right on every type it runs on",
+        ));
+    }
     let Some(field) = d.state_attribute_id.and_then(|a| model.field(a)).cloned() else {
         return Err(conflict(
             format!("Workflow {} drives no state field: start its instances one by one", d.key),
@@ -312,14 +325,6 @@ async fn target(conn: &mut PgConnection, ctx: &RequestContext, id: Uuid) -> Resu
     };
     if !d.is_active {
         return Err(conflict(format!("Workflow {} is inactive: it starts no new instances", d.key), "inactive"));
-    }
-    let classes = service::covered(&model, &d);
-    // The counts would tell about CIs the caller may not view.
-    if !ctx.may_view_all(&classes) {
-        return Err(AppError::new(
-            ErrorCode::Forbidden,
-            "This workflow covers types you may not view; ask an administrator who may view them all",
-        ));
     }
     Ok(Target { definition: d, version_id, field, classes })
 }
@@ -425,7 +430,7 @@ pub async fn bootstrap(
     b: &WorkflowBootstrap,
 ) -> Result<WorkflowBootstrapResult, AppError> {
     let mut conn = pool.acquire().await?;
-    let t = target(&mut conn, ctx, id).await?;
+    let t = target(&mut conn, ctx, id, b.dry_run).await?;
     let model = Model::load(&mut conn).await?;
     let p = runtime::pinned(&mut conn, t.version_id).await?;
     let version_no: i32 = sqlx::query_scalar("SELECT version_no FROM cmdb.workflow_versions WHERE id = $1")

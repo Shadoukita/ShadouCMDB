@@ -120,7 +120,20 @@ async fn instances_migrate_to_a_newer_version_after_a_dry_run() {
     .await
     .unwrap();
     let (manager, _) = w.user("network_manager", &[managers]).await;
+    // GH#695: a workflow on a type they may not view answers like a missing one.
     let (status, v) = w.call(&manager, "POST", &path, Some(body(1, 2, json!({ "planned": "proposed" }), true))).await;
+    assert_eq!((status, code(&v)), (404, "NOT_FOUND"), "{v}");
+    assert!(!v.to_string().contains("server_lifecycle"), "{v}");
+    let viewers = w.profile("Server viewers", &[(w.server, false)]).await;
+    sqlx::query(
+        "INSERT INTO permission_profile_global_permissions (profile_id, permission) VALUES ($1, 'workflows.manage')",
+    )
+    .bind(viewers)
+    .execute(&w.pool)
+    .await
+    .unwrap();
+    let (viewer, _) = w.user("server_viewer", &[viewers]).await;
+    let (status, v) = w.call(&viewer, "POST", &path, Some(body(1, 2, json!({ "planned": "proposed" }), true))).await;
     assert_eq!((status, code(&v)), (403, "FORBIDDEN"), "{v}");
 
     // planned → approved (named, and the state field changes), approved → approved (same key).
