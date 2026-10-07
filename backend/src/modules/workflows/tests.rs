@@ -85,8 +85,14 @@ impl World {
         (status, v)
     }
 
-    /// A signed-in user holding a profile with these global rights (and view on every type).
+    /// A signed-in user holding a profile with these global rights and no class rights.
     async fn user(&self, name: &str, globals: &[&str]) -> Creds {
+        self.scoped_user(name, globals, &[]).await
+    }
+
+    /// A signed-in user holding a profile with these global rights, and view
+    /// (with edit when `true`) on these types.
+    async fn scoped_user(&self, name: &str, globals: &[&str], classes: &[(Uuid, bool)]) -> Creds {
         let profile: Uuid = sqlx::query_scalar("INSERT INTO permission_profiles (name) VALUES ($1) RETURNING id")
             .bind(format!("{name} profile"))
             .fetch_one(&self.pool)
@@ -99,6 +105,19 @@ impl World {
                 .execute(&self.pool)
                 .await
                 .unwrap();
+        }
+        for (class, edit) in classes {
+            sqlx::query(
+                "INSERT INTO permission_profile_class_permissions
+                   (profile_id, class_id, can_view, can_create, can_edit, can_delete)
+                 VALUES ($1, $2, true, $3, $3, $3)",
+            )
+            .bind(profile)
+            .bind(class)
+            .bind(edit)
+            .execute(&self.pool)
+            .await
+            .unwrap();
         }
         let body = json!({ "username": name, "email": format!("{name}@example.test"), "displayName": name,
             "password": self.password, "profileIds": [profile] });
@@ -569,7 +588,7 @@ async fn workflow_definitions_are_designed_published_and_retired() {
 }
 
 /// Every route needs `workflows.manage` (403 FORBIDDEN otherwise), and a
-/// holder without other rights can use them.
+/// holder who may view the workflow's type, without other rights, can read it.
 #[tokio::test]
 async fn workflow_definitions_need_workflows_manage() {
     let Some(db) = scratch::database("workflow_definitions_need_manage").await else { return };
@@ -600,7 +619,7 @@ async fn workflow_definitions_need_workflows_manage() {
         let (status, v, _) = call(&w.app, method, path, &modeller, body.clone()).await;
         assert_eq!((status, code(&v)), (403, "FORBIDDEN"), "{method} {path}: {v}");
     }
-    let designer = w.user("designer", &["workflows.manage"]).await;
+    let designer = w.scoped_user("designer", &["workflows.manage"], &[(w.server, false)]).await;
     let (status, v, _) = call(&w.app, "GET", BASE, &designer, None).await;
     assert_eq!((status, v["page"]["total"].as_i64()), (200, Some(1)), "{v}");
     let (status, v, _) = call(&w.app, "GET", &format!("{by_id}/draft"), &designer, None).await;
@@ -986,5 +1005,110 @@ async fn grants_on_draft_only_transitions_go_with_the_draft() {
                 .await;
         assert_eq!(status, 200, "{mode}: {v}");
     }
+    db.drop().await;
+}
+
+/// GH#667: `workflows.manage` reaches only the workflows on types the manager
+/// may view, every one of them, to read them, and edit as well, to change
+/// them. One on a type they may not view answers 404 on every route, as at run
+/// time, and is left out of the list, the export and the import.
+#[tokio::test]
+async fn workflow_definitions_follow_the_managers_class_scope() {
+    let Some(db) = scratch::database("workflow_definitions_class_scope").await else { return };
+    let w = world(&db).await;
+    let network =
+        id(&post(&w.app, &w.admin, "/api/v1/ci-classes", json!({ "key": "network", "name": "Network" })).await);
+    let body = json!({ "key": "server_lifecycle", "name": "Server lifecycle", "classId": w.server,
+        "stateAttributeId": w.lifecycle });
+    let server_flow = id(&post(&w.app, &w.admin, BASE, body).await);
+    let draft = format!("{BASE}/{server_flow}/draft");
+    let (status, v) = w.call("PUT", &draft, Some(lifecycle_graph())).await;
+    assert_eq!(status, 200, "{v}");
+    let sum = v["checksum"].as_str().unwrap().to_owned();
+    let (status, v) = w.call("POST", &format!("{draft}/publish"), Some(json!({ "expectedDraftChecksum": sum }))).await;
+    assert_eq!(status, 201, "{v}");
+    let net_flow =
+        id(&post(&w.app, &w.admin, BASE, json!({ "key": "net_review", "name": "Network review", "classId": network }))
+            .await);
+
+    let globals = ["workflows.manage", "config.export_import"];
+    let net_manager = w.scoped_user("net_manager", &globals, &[(network, true)]).await;
+    let by_id = format!("{BASE}/{server_flow}");
+
+    // The list holds only the network workflow.
+    let (status, v, _) = call(&w.app, "GET", BASE, &net_manager, None).await;
+    assert_eq!((status, v["page"]["total"].as_i64()), (200, Some(1)), "{v}");
+    assert_eq!(v["data"][0]["key"], "net_review");
+
+    // Every route on the server workflow answers as for a missing one.
+    let routes: Vec<(&str, String, Option<Value>)> = vec![
+        ("GET", by_id.clone(), None),
+        ("PATCH", by_id.clone(), Some(json!({ "version": 2, "isActive": false }))),
+        ("DELETE", by_id.clone(), None),
+        ("GET", format!("{by_id}/versions"), None),
+        ("GET", format!("{by_id}/versions/1"), None),
+        ("POST", format!("{by_id}/versions/1/retire"), None),
+        ("GET", format!("{by_id}/draft"), None),
+        ("PUT", format!("{by_id}/draft"), Some(lifecycle_graph())),
+        ("DELETE", format!("{by_id}/draft"), None),
+        ("POST", format!("{by_id}/draft/validate"), None),
+        ("POST", format!("{by_id}/draft/publish"), Some(json!({ "expectedDraftChecksum": "0".repeat(64) }))),
+        ("GET", format!("{by_id}/grants"), None),
+        ("PUT", format!("{by_id}/grants"), Some(json!({ "version": 2, "grants": [] }))),
+        ("GET", format!("{by_id}/approvers"), None),
+        ("PUT", format!("{by_id}/approvers"), Some(json!({ "version": 2, "approvers": [] }))),
+        ("GET", format!("{by_id}/approvers/preview?transition=approve&step=cab"), None),
+    ];
+    for (method, path, body) in &routes {
+        let (status, v, _) = call(&w.app, method, path, &net_manager, body.clone()).await;
+        assert_eq!((status, code(&v)), (404, "NOT_FOUND"), "{method} {path}: {v}");
+    }
+    let (_, v) = w.call("GET", &by_id, None).await;
+    assert_eq!((v["isActive"].as_bool(), v["version"].as_i64()), (Some(false), Some(2)), "unchanged: {v}");
+
+    // Creating one needs view and edit on the type.
+    let flow = |key: &str, class: Uuid| json!({ "key": key, "name": key, "classId": class });
+    let (status, v, _) = call(&w.app, "POST", BASE, &net_manager, Some(flow("server_two", w.server))).await;
+    assert_eq!((status, code(&v)), (403, "FORBIDDEN"), "{v}");
+    let (status, v, _) = call(&w.app, "POST", BASE, &net_manager, Some(flow("net_two", network))).await;
+    assert_eq!(status, 201, "{v}");
+    let (status, v, _) = call(&w.app, "GET", &format!("{BASE}/{net_flow}/grants"), &net_manager, None).await;
+    assert_eq!(status, 200, "{v}");
+
+    // View without edit: it reads the workflow, and changes nothing.
+    let server_viewer = w.scoped_user("server_viewer", &["workflows.manage"], &[(w.server, false)]).await;
+    let (status, v, _) = call(&w.app, "GET", &by_id, &server_viewer, None).await;
+    assert_eq!(status, 200, "{v}");
+    let patch = json!({ "version": 2, "isActive": true });
+    let (status, v, _) = call(&w.app, "PATCH", &by_id, &server_viewer, Some(patch)).await;
+    assert_eq!((status, code(&v)), (403, "FORBIDDEN"), "{v}");
+
+    // A subtype it may not view hides a workflow that includes subtypes.
+    post(&w.app, &w.admin, "/api/v1/ci-classes", json!({ "key": "router", "name": "Router", "parentId": network }))
+        .await;
+    let (status, v, _) = call(&w.app, "GET", &format!("{BASE}/{net_flow}"), &net_manager, None).await;
+    assert_eq!((status, code(&v)), (404, "NOT_FOUND"), "{v}");
+
+    // The configuration file: the export leaves the server workflow out, and
+    // an import that changes its grants skips it with a warning.
+    sqlx::query("INSERT INTO permission_profiles (name) VALUES ('Network approvers')").execute(&w.pool).await.unwrap();
+    let mine = export_config(&w.app, &net_manager).await;
+    assert_eq!(mine["workflows"], json!([]), "{mine}");
+    let full = export_config(&w.app, &w.admin).await;
+    let mut file = json!({ "format": full["format"], "formatVersion": full["formatVersion"],
+        "workflows": full["workflows"] });
+    assert_eq!(file["workflows"][0]["key"], "server_lifecycle");
+    file["workflows"][0]["grants"] = json!([{ "transition": "approve", "profiles": ["Network approvers"] }]);
+    for mode in ["dry_run", "apply"] {
+        let path = format!("/api/v1/admin/config/import?mode={mode}");
+        let (status, res, _) = call(&w.app, "POST", &path, &net_manager, Some(file.clone())).await;
+        assert_eq!(status, 200, "{res}");
+        assert_eq!(res["changes"], json!([]), "{res}");
+        assert_eq!(res["warnings"][0]["path"], "workflows.0", "{res}");
+        let section = res["summary"].as_array().unwrap().iter().find(|s| s["section"] == "workflows").unwrap();
+        assert_eq!(section["notInFile"], 0, "the hidden workflows are not counted: {res}");
+    }
+    let grants = count(&w.pool, "SELECT count(*) FROM workflow_transition_grants").await;
+    assert_eq!(grants, 0);
     db.drop().await;
 }

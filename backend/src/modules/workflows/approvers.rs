@@ -605,9 +605,9 @@ async fn problems(conn: &mut PgConnection, d: &WorkflowDefinition) -> Result<Vec
 // GET and PUT
 // ---------------------------------------------------------------------------
 
-pub async fn get(pool: &PgPool, id: Uuid) -> Result<WorkflowApprovers, AppError> {
+pub async fn get(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<WorkflowApprovers, AppError> {
     let mut conn = pool.acquire().await?;
-    let d = service::load(&mut conn, id, false).await?;
+    let d = service::load_for(&mut conn, ctx, id, false, service::Access::Read).await?;
     let approvers = load(&mut conn, id).await?.iter().map(Assignment::api).collect();
     let problems = problems(&mut conn, &d).await?;
     Ok(WorkflowApprovers { version: d.version, approvers, problems })
@@ -624,7 +624,7 @@ pub async fn replace(
     b: &WorkflowApproversReplace,
 ) -> Result<WorkflowApprovers, AppError> {
     let mut tx = pool.begin().await?;
-    let before = service::load(&mut tx, id, true).await?;
+    let before = service::load_for(&mut tx, ctx, id, true, service::Access::Write).await?;
     service::check_version(b.version, before.version)?;
     let known = known_steps(&mut tx, id).await?;
     let fields = Fields::load(&mut tx, before.class_id).await?;
@@ -855,7 +855,7 @@ pub async fn preview(
     q: &WorkflowApproverPreviewQuery,
 ) -> Result<WorkflowApproverPreview, AppError> {
     let mut conn = pool.acquire().await?;
-    let d = service::load(&mut conn, id, false).await?;
+    let d = service::load_for(&mut conn, ctx, id, false, service::Access::Read).await?;
     if !known_steps(&mut conn, id).await?.contains(&(q.transition.clone(), q.step.clone())) {
         return Err(param("step", unknown_step(&d.key, &q.transition, &q.step), "unknown_step"));
     }

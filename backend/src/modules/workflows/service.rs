@@ -17,6 +17,7 @@ use super::schemas::*;
 use crate::api::context::{Count, RequestContext};
 use crate::api::schemas::{Page, Paged, like_pattern};
 use crate::api::validate;
+use crate::auth::permissions::ClassOp;
 use crate::data::crud::{self, AuditAction, AuditEntry, Val, Where};
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
 use crate::modules::classes::AttributeDataType;
@@ -107,6 +108,62 @@ fn no_draft(id: Uuid) -> AppError {
 /// The classes a definition covers: its type, and the types below it when it includes subtypes.
 pub(crate) fn covered(model: &Model, d: &WorkflowDefinition) -> Vec<Uuid> {
     if d.include_subclasses { model.subtree(d.class_id) } else { vec![d.class_id] }
+}
+
+/// What a manager does with a definition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Access {
+    Read,
+    Write,
+}
+
+/// GH#667: `workflows.manage` reaches only the workflows on types the manager
+/// may view, every one of them (to read it), and edit as well (to change it),
+/// as bootstrap and instance migrations require. One whose types they may not
+/// all view answers like a missing one, as at run time.
+pub(crate) fn require_classes(
+    ctx: &RequestContext,
+    classes: &[Uuid],
+    id: Uuid,
+    access: Access,
+) -> Result<(), AppError> {
+    if !ctx.may_view_all(classes) {
+        return Err(AppError::missing(LABEL, id));
+    }
+    if access == Access::Write && ctx.class_scope(ClassOp::Edit).is_some_and(|e| classes.iter().any(|c| !e.contains(c)))
+    {
+        return Err(AppError::new(
+            ErrorCode::Forbidden,
+            "Changing this workflow needs the view and edit rights on every type it runs on",
+        ));
+    }
+    Ok(())
+}
+
+/// [`require_classes`] on the types `d` covers.
+pub(crate) async fn require_covered(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    d: &WorkflowDefinition,
+    access: Access,
+) -> Result<(), AppError> {
+    if ctx.class_scope(ClassOp::View).is_none() && ctx.class_scope(ClassOp::Edit).is_none() {
+        return Ok(());
+    }
+    require_classes(ctx, &covered(&Model::load(conn).await?, d), d.id, access)
+}
+
+/// The definition, when the caller may `access` it (see [`require_classes`]).
+pub(crate) async fn load_for(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    id: Uuid,
+    for_update: bool,
+    access: Access,
+) -> Result<WorkflowDefinition, AppError> {
+    let d = load(&mut *conn, id, for_update).await?;
+    require_covered(conn, ctx, &d, access).await?;
+    Ok(d)
 }
 
 pub(crate) async fn grant_rows(conn: &mut PgConnection, definition: Uuid) -> Result<Vec<WorkflowGrant>, AppError> {
@@ -240,8 +297,36 @@ async fn check_state_driver(conn: &mut PgConnection, d_id: Option<Uuid>, attribu
 // Definitions
 // ---------------------------------------------------------------------------
 
-pub async fn list(pool: &PgPool, q: &WorkflowDefinitionList) -> Result<Page<WorkflowDefinition>, AppError> {
+pub async fn list(
+    pool: &PgPool,
+    ctx: &RequestContext,
+    q: &WorkflowDefinitionList,
+) -> Result<Page<WorkflowDefinition>, AppError> {
+    let mut conn = pool.acquire().await?;
+    // Only workflows whose every type the caller may view (`require_classes`):
+    // on a type with all its subtypes viewable, or on a viewable type alone.
+    let scope = match ctx.class_scope(ClassOp::View) {
+        None => None,
+        Some(view) => {
+            let model = Model::load(&mut conn).await?;
+            let whole: Vec<Uuid> = model
+                .classes
+                .iter()
+                .map(|c| c.id)
+                .filter(|c| model.subtree(*c).iter().all(|s| view.contains(s)))
+                .collect();
+            Some((view, whole))
+        }
+    };
     let filter = |w: &mut Where<'_>| {
+        if let Some((view, whole)) = &scope {
+            w.and()
+                .push("(d.class_id = ANY(")
+                .push_bind(whole.clone())
+                .push(") OR (NOT d.include_subclasses AND d.class_id = ANY(")
+                .push_bind(view.clone())
+                .push(")))");
+        }
         if let Some(text) = &q.q {
             let p = like_pattern(text);
             w.and()
@@ -268,14 +353,7 @@ pub async fn list(pool: &PgPool, q: &WorkflowDefinitionList) -> Result<Page<Work
     };
     let order = format!("{column} {}, d.key, d.id", q.sort.dir());
     let (data, total) = crud::select_page_counted::<WorkflowDefinition>(
-        &mut *pool.acquire().await?,
-        FROM,
-        FROM,
-        COLUMNS,
-        &filter,
-        &order,
-        q.limit,
-        q.offset,
+        &mut conn, FROM, FROM, COLUMNS, &filter, &order, q.limit, q.offset,
     )
     .await?;
     Ok(Page { data, page: q.page_meta(total) })
@@ -283,7 +361,7 @@ pub async fn list(pool: &PgPool, q: &WorkflowDefinitionList) -> Result<Page<Work
 
 pub async fn get(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<WorkflowDefinitionDetail, AppError> {
     let mut conn = pool.acquire().await?;
-    let d = load(&mut conn, id, false).await?;
+    let d = load_for(&mut conn, ctx, id, false, Access::Read).await?;
     let warnings = activation_warnings(&mut conn, ctx, &d, true).await?;
     detail(&mut conn, d, warnings).await
 }
@@ -327,6 +405,18 @@ pub(crate) async fn create_in(
         .await?;
     if class.is_none() {
         return Err(AppError::field("classId", "Type does not exist", "not_found"));
+    }
+    if ctx.class_scope(ClassOp::View).is_some() || ctx.class_scope(ClassOp::Edit).is_some() {
+        let model = Model::load(&mut *tx).await?;
+        let classes = if b.include_subclasses.unwrap_or(true) { model.subtree(b.class_id) } else { vec![b.class_id] };
+        let edit = ctx.class_scope(ClassOp::Edit);
+        if !ctx.may_view_all(&classes) || edit.is_some_and(|e| classes.iter().any(|c| !e.contains(c))) {
+            return Err(AppError::new(
+                ErrorCode::Forbidden,
+                "Creating a workflow needs the view and edit rights on its type and, with includeSubclasses, on \
+                 every type below it",
+            ));
+        }
     }
     let taken: Option<String> =
         sqlx::query_scalar("SELECT key FROM cmdb.workflow_definitions WHERE lower(key) = lower($1)")
@@ -407,6 +497,16 @@ pub(crate) async fn update_in(
     b: &WorkflowDefinitionUpdate,
 ) -> Result<(WorkflowDefinition, WorkflowDefinition), AppError> {
     let before = load(&mut *tx, id, true).await?;
+    if ctx.class_scope(ClassOp::View).is_some() || ctx.class_scope(ClassOp::Edit).is_some() {
+        // The types it covers now and, when this turns subtypes on, after.
+        let model = Model::load(&mut *tx).await?;
+        let classes = if b.include_subclasses.unwrap_or(before.include_subclasses) {
+            model.subtree(before.class_id)
+        } else {
+            covered(&model, &before)
+        };
+        require_classes(ctx, &classes, id, Access::Write)?;
+    }
     check_version(b.version, before.version)?;
     let attribute = b.state_attribute_id.unwrap_or(before.state_attribute_id);
     if attribute != before.state_attribute_id {
@@ -460,7 +560,7 @@ pub(crate) async fn update_in(
 
 pub async fn remove(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<(), AppError> {
     let mut tx = pool.begin().await?;
-    let before = load(&mut tx, id, true).await?;
+    let before = load_for(&mut tx, ctx, id, true, Access::Write).await?;
     let instances: i64 = sqlx::query_scalar("SELECT count(*) FROM cmdb.workflow_instances WHERE definition_id = $1")
         .bind(id)
         .fetch_one(&mut *tx)
@@ -524,7 +624,7 @@ pub async fn versions(
     q: &WorkflowVersionList,
 ) -> Result<Page<WorkflowVersionSummary>, AppError> {
     let mut conn = pool.acquire().await?;
-    let d = load(&mut conn, id, false).await?;
+    let d = load_for(&mut conn, ctx, id, false, Access::Read).await?;
     let total: i64 = sqlx::query_scalar("SELECT count(*) FROM cmdb.workflow_versions WHERE definition_id = $1")
         .bind(id)
         .fetch_one(&mut *conn)
@@ -571,18 +671,18 @@ async fn render(conn: &mut PgConnection, d: &WorkflowDefinition, row: VersionRow
     Ok(stored.render(&model, is_current))
 }
 
-pub async fn version(pool: &PgPool, id: Uuid, no: i32) -> Result<WorkflowVersion, AppError> {
+pub async fn version(pool: &PgPool, ctx: &RequestContext, id: Uuid, no: i32) -> Result<WorkflowVersion, AppError> {
     let mut conn = pool.acquire().await?;
-    let d = load(&mut conn, id, false).await?;
+    let d = load_for(&mut conn, ctx, id, false, Access::Read).await?;
     let row = version_row(&mut conn, id, "version_no = $2", Some(no), false)
         .await?
         .ok_or_else(|| AppError::new(ErrorCode::NotFound, format!("Workflow {} has no version {no}", d.key)))?;
     render(&mut conn, &d, row).await
 }
 
-pub async fn draft(pool: &PgPool, id: Uuid) -> Result<WorkflowVersion, AppError> {
+pub async fn draft(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<WorkflowVersion, AppError> {
     let mut conn = pool.acquire().await?;
-    let d = load(&mut conn, id, false).await?;
+    let d = load_for(&mut conn, ctx, id, false, Access::Read).await?;
     let row = draft_row(&mut conn, id, false).await?.ok_or_else(|| no_draft(id))?;
     render(&mut conn, &d, row).await
 }
@@ -594,7 +694,7 @@ pub async fn replace_draft(
     b: &WorkflowDraftReplace,
 ) -> Result<WorkflowVersion, AppError> {
     let mut tx = pool.begin().await?;
-    let d = load(&mut tx, id, true).await?;
+    let d = load_for(&mut tx, ctx, id, true, Access::Write).await?;
     let current = draft_row(&mut tx, id, true).await?;
     if let Some(expected) = &b.expected_checksum {
         let sum = current.as_ref().and_then(|v| v.checksum.as_ref()).map(hex::encode);
@@ -641,7 +741,7 @@ pub async fn replace_draft(
 
 pub async fn delete_draft(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<(), AppError> {
     let mut tx = pool.begin().await?;
-    load(&mut tx, id, true).await?;
+    load_for(&mut tx, ctx, id, true, Access::Write).await?;
     let row = draft_row(&mut tx, id, true).await?.ok_or_else(|| no_draft(id))?;
     sqlx::query("DELETE FROM cmdb.workflow_versions WHERE id = $1").bind(row.id).execute(&mut *tx).await?;
     prune_grants(&mut tx, ctx, id).await?;
@@ -681,9 +781,9 @@ async fn lint_draft(
     Ok((stored, fields, problems, sum))
 }
 
-pub async fn validate_draft(pool: &PgPool, id: Uuid) -> Result<WorkflowValidation, AppError> {
+pub async fn validate_draft(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<WorkflowValidation, AppError> {
     let mut conn = pool.acquire().await?;
-    let d = load(&mut conn, id, false).await?;
+    let d = load_for(&mut conn, ctx, id, false, Access::Read).await?;
     let (_, _, problems, checksum) = lint_draft(&mut conn, &d, false).await?;
     let valid = !problems.iter().any(|p| p.severity == WorkflowProblemSeverity::Error);
     Ok(WorkflowValidation { valid, checksum, problems })
@@ -696,7 +796,7 @@ pub async fn publish(
     b: &WorkflowPublish,
 ) -> Result<WorkflowVersion, AppError> {
     let mut tx = pool.begin().await?;
-    let d = load(&mut tx, id, true).await?;
+    let d = load_for(&mut tx, ctx, id, true, Access::Write).await?;
     let (stored, fields, problems, sum) = lint_draft(&mut tx, &d, true).await?;
     let saved = stored.version.checksum.as_ref().map(hex::encode);
     if saved.as_deref() != Some(b.expected_draft_checksum.as_str()) {
@@ -821,7 +921,7 @@ pub async fn retire(
     no: i32,
 ) -> Result<WorkflowVersionSummary, AppError> {
     let mut tx = pool.begin().await?;
-    let d = load(&mut tx, id, true).await?;
+    let d = load_for(&mut tx, ctx, id, true, Access::Write).await?;
     let row = version_row(&mut tx, id, "version_no = $2", Some(no), true)
         .await?
         .ok_or_else(|| AppError::new(ErrorCode::NotFound, format!("Workflow {} has no version {no}", d.key)))?;
@@ -892,9 +992,9 @@ pub async fn retire(
 // Grants
 // ---------------------------------------------------------------------------
 
-pub async fn grants(pool: &PgPool, id: Uuid) -> Result<WorkflowGrants, AppError> {
+pub async fn grants(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<WorkflowGrants, AppError> {
     let mut conn = pool.acquire().await?;
-    let d = load(&mut conn, id, false).await?;
+    let d = load_for(&mut conn, ctx, id, false, Access::Read).await?;
     Ok(WorkflowGrants { version: d.version, grants: grant_rows(&mut conn, id).await? })
 }
 
@@ -905,7 +1005,7 @@ pub async fn replace_grants(
     b: &WorkflowGrantsReplace,
 ) -> Result<WorkflowGrants, AppError> {
     let mut tx = pool.begin().await?;
-    let before = load(&mut tx, id, true).await?;
+    let before = load_for(&mut tx, ctx, id, true, Access::Write).await?;
     check_version(b.version, before.version)?;
     let profiles: Vec<(Uuid, String)> =
         sqlx::query_as("SELECT id, name FROM cmdb.permission_profiles").fetch_all(&mut *tx).await?;

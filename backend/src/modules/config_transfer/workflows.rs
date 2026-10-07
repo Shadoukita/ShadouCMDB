@@ -27,6 +27,7 @@ use uuid::Uuid;
 
 use super::format::{ConfigFile, WorkflowGrantSpec, WorkflowGraphSpec, WorkflowSpec};
 use super::{ChangeAction, FieldChange, Ids, ImportWarning, Importer, at, diff, not_in_file, problem};
+use crate::api::context::RequestContext;
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
 use crate::modules::classes::ClassSystemRole;
 use crate::modules::workflows::approvers::{self, Assignment, Facts, PersonFields, Source};
@@ -35,7 +36,7 @@ use crate::modules::workflows::schemas::{
     WorkflowApproverSpec, WorkflowDefinition, WorkflowDefinitionCreate, WorkflowDefinitionUpdate, WorkflowDraftReplace,
     WorkflowGrant, WorkflowProblemSeverity,
 };
-use crate::modules::workflows::service;
+use crate::modules::workflows::service::{self, Access};
 use crate::schema::model::Model;
 
 /// The change note of a version an import publishes.
@@ -56,6 +57,15 @@ struct Row {
     auto_start: bool,
     is_active: bool,
     current_version_id: Uuid,
+}
+
+/// GH#667: whether the caller may read workflow `w` of the export (every type it covers viewable).
+pub(super) fn exportable(ctx: &RequestContext, model: &Model, ids: &Ids, w: &WorkflowSpec) -> bool {
+    let Some(class) = ids.classes.get(&w.class).copied() else {
+        return false;
+    };
+    let classes = if w.include_subclasses { model.subtree(class) } else { vec![class] };
+    service::require_classes(ctx, &classes, Uuid::nil(), Access::Read).is_ok()
 }
 
 /// Every workflow with a current published version, ordered by key.
@@ -442,8 +452,20 @@ impl Importer<'_> {
         current: &[WorkflowSpec],
         warnings: &mut Vec<ImportWarning>,
     ) -> Result<(), AppError> {
-        let here: Vec<String> =
-            sqlx::query_scalar("SELECT lower(key) FROM cmdb.workflow_definitions").fetch_all(&mut *self.conn).await?;
+        // GH#667: the workflows on types the importer may not all view and edit
+        // are left alone, as the definition API refuses them; the ones they may
+        // not view are not even counted.
+        let model = Model::load(self.conn).await?;
+        let stored: Vec<(String, Uuid, bool)> =
+            sqlx::query_as("SELECT lower(key), class_id, include_subclasses FROM cmdb.workflow_definitions")
+                .fetch_all(&mut *self.conn)
+                .await?;
+        let covers = |class: Uuid, subtypes: bool| if subtypes { model.subtree(class) } else { vec![class] };
+        let here: Vec<String> = stored
+            .iter()
+            .filter(|(_, class, subtypes)| self.ctx.may_view_all(&covers(*class, *subtypes)))
+            .map(|(key, ..)| key.clone())
+            .collect();
         let keys: HashSet<String> = list.iter().map(|w| w.key.to_lowercase()).collect();
         self.section(SECTION, not_in_file(here.iter(), &keys));
         let old: HashMap<String, &WorkflowSpec> = current.iter().map(|w| (w.key.to_lowercase(), w)).collect();
@@ -460,6 +482,20 @@ impl Importer<'_> {
         for (i, w) in list.iter().enumerate() {
             let path = format!("{SECTION}.{i}");
             let class_id = self.ids.classes[&w.class];
+            let mut classes = covers(class_id, w.include_subclasses);
+            if let Some((_, class, subtypes)) = stored.iter().find(|(key, ..)| *key == w.key.to_lowercase()) {
+                classes.extend(covers(*class, *subtypes));
+            }
+            if service::require_classes(self.ctx, &classes, Uuid::nil(), Access::Write).is_err() {
+                warnings.push(ImportWarning {
+                    path,
+                    message: format!(
+                        "You cannot view and edit every type workflow \"{}\" runs on; it was skipped",
+                        w.key
+                    ),
+                });
+                continue;
+            }
             let fields = Fields::load(self.conn, class_id).await?;
             let state_attribute = match &w.state_attribute {
                 None => None,

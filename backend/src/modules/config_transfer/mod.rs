@@ -50,6 +50,7 @@ use crate::auth::permissions::{ClassOp, ClassRights, GlobalPermission};
 use crate::data::crud::{self, ColumnSet};
 use crate::data::ui_settings as ui_data;
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
+use crate::schema::model::Model;
 use crate::schema::naming::{self, NameKind};
 use crate::schema::{self as engine, SchemaChange};
 
@@ -532,6 +533,7 @@ pub async fn export(pool: &PgPool, ctx: &RequestContext) -> Result<ConfigFile, A
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY").execute(&mut *tx).await?;
     let Snapshot { mut file, ids, .. } = snapshot(&mut tx).await?;
     let catalogue = saved_views::resolve::Catalogue::load(&mut tx).await?;
+    let model = Model::load(&mut tx).await?;
     tx.commit().await?;
     let reads_profiles =
         ctx.require(GlobalPermission::ProfilesManage).or_else(|_| ctx.require(GlobalPermission::UsersManage));
@@ -560,6 +562,8 @@ pub async fn export(pool: &PgPool, ctx: &RequestContext) -> Result<ConfigFile, A
 
     if ctx.require(GlobalPermission::WorkflowsManage).is_err() {
         file.workflows = None;
+    } else if let Some(list) = file.workflows.as_mut() {
+        list.retain(|w| workflows::exportable(ctx, &model, &ids, w));
     }
 
     // GH#407: one `export` row per download, in its own transaction (the
