@@ -757,3 +757,84 @@ async fn approvals_survive_backup_and_restore_and_go_with_a_factory_reset() {
     a.drop().await;
     b.drop().await;
 }
+
+/// GH#513 (SHAA-2143): `restore` refuses a backup whose seal it cannot check,
+/// unsigned or sealed under a key that is not configured, unless
+/// `--allow-unsigned` is given, and tells the operator what to do. The check
+/// comes before the database is touched: the target here does not exist, so
+/// getting past it shows as a connection error.
+#[cfg(unix)]
+#[tokio::test]
+async fn restore_needs_allow_unsigned_for_a_seal_it_cannot_check() {
+    use std::os::unix::fs::PermissionsExt;
+
+    use crate::config::{DatabaseConfig, EncryptionConfig, RoleNames, SslMode};
+    use crate::secrets::{Keyring, encode_key, new_key};
+
+    let Some(a) = scratch::database("restore_allow_unsigned").await else { return };
+    populate(&a.pool).await;
+    let (old, new) = (new_key(), new_key());
+    let mut ca = a.pool.acquire().await.unwrap();
+    let (unsigned, _) = take_backup(&mut ca).await;
+    let mut sealed = Vec::new();
+    backup::write(&mut ca, &mut sealed, Some(&Keyring::from_keys(&old, None))).await.unwrap();
+    drop(ca);
+
+    let dir = std::env::temp_dir().join(format!("shadoucmdb-restore-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir(&dir).unwrap();
+    let write = |name: &str, bytes: &[u8]| {
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        path
+    };
+    let (unsigned, sealed) = (write("unsigned.jsonl.gz", &unsigned), write("sealed.jsonl.gz", &sealed));
+    let (old_key, new_key) =
+        (write("old.key", encode_key(&old).as_bytes()), write("new.key", encode_key(&new).as_bytes()));
+    let nowhere = DatabaseConfig {
+        url: Some("postgres://nobody@127.0.0.1:1/shadoucmdb_restore_gate".into()),
+        host: None,
+        port: 1,
+        database: None,
+        user: None,
+        password: None,
+        ssl: SslMode::Disable,
+        ssl_ca_file: None,
+        pool_max: 1,
+        statement_timeout: std::time::Duration::ZERO,
+        connect_timeout: std::time::Duration::from_secs(2),
+        roles: RoleNames::default(),
+    };
+    let restore = |file: &std::path::Path, key: Option<&std::path::Path>, previous: Option<&std::path::Path>, allow| {
+        let encryption =
+            EncryptionConfig { key_file: key.map(Into::into), previous_key_file: previous.map(Into::into) };
+        let args =
+            restore::RestoreArgs { file: file.into(), replace: false, dry_run: true, yes: true, allow_unsigned: allow };
+        let nowhere = nowhere.clone();
+        async move { restore::run(&nowhere, &encryption, args).await.unwrap_err().to_string() }
+    };
+    let refused = |e: &str| e.contains("re-run with --allow-unsigned") && !e.contains("connect");
+
+    // Written before backups were sealed (or without a key): refused, then accepted with the flag.
+    let e = restore(&unsigned, Some(&new_key), None, false).await;
+    assert!(refused(&e) && e.contains("has no HMAC"), "{e}");
+    let e = restore(&unsigned, Some(&new_key), None, true).await;
+    assert!(e.contains("connect"), "--allow-unsigned gets past the check: {e}");
+
+    // Sealed under a key that is not configured, or with no key at all.
+    for key in [Some(new_key.as_path()), None] {
+        let e = restore(&sealed, key, None, false).await;
+        assert!(refused(&e) && e.contains("which is not configured"), "{e}");
+        let e = restore(&sealed, key, None, true).await;
+        assert!(e.contains("connect"), "--allow-unsigned gets past the check: {e}");
+    }
+
+    // The key it was sealed with, as the current or the previous key: no flag needed.
+    for (key, previous) in [(&old_key, None), (&new_key, Some(old_key.as_path()))] {
+        let e = restore(&sealed, Some(key), previous, false).await;
+        assert!(e.contains("connect"), "a verified seal needs no flag: {e}");
+    }
+
+    std::fs::remove_dir_all(&dir).unwrap();
+    a.drop().await;
+}
