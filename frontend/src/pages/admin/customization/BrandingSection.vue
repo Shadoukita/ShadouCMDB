@@ -115,7 +115,7 @@ function readBase64(file: File): Promise<string> {
 // ---------- Preview: the rail and the sign-in card, in each theme ----------
 const THEMES: Theme[] = ["light", "dark"];
 /** The draft's brand colours for one theme, set on that preview only (tokens.css re-declares the defaults there). */
-const previewStyle = (theme: Theme) => brandVariables(b.value.primaryColor, b.value.accentColor, theme);
+const previewStyle = (theme: Theme) => brandVariables(b.value.primaryColor ?? null, b.value.accentColor ?? null, theme);
 const pickerValue = (c: (typeof COLORS)[number]) => b.value[c.key] ?? c.fallback[branding.theme];
 const assetLabel = (kind: AssetKind | null) => ASSETS.find((a) => a.kind === kind)?.label ?? "";
 </script>

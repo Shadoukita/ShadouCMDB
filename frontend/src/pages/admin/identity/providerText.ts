@@ -1,5 +1,5 @@
 import type { ProviderKind } from "../../../api/identityProviders";
-import { t } from "../../../i18n";
+import { t } from "../../../i18n/index";
 import type { SecretField } from "./secretReentry";
 
 /** "OpenID Connect" or "LDAP / Active Directory", in the active language. */

@@ -23,7 +23,7 @@ async function save(page: Page, comment: string) {
   await bar.getByLabel("Comment for this version").fill(`${comment} ${stamp}`);
   await bar.getByRole("button", { name: "Save" }).click();
   await expect(page.getByRole("status").filter({ hasText: /Saved as version \d+/ })).toBeVisible();
-  await expect(bar.getByText("No unsaved changes")).toBeVisible();
+  await expect(bar.getByText("Unsaved changes")).toHaveCount(0);
 }
 
 // Servers created for the sort walk. They are deleted afterwards: "e2e-sort-…" sorts before the demo
@@ -301,7 +301,7 @@ test("layouts: Edit CI opens the layout editor on a Server, whose layout the det
   await expect(bar).toContainText("Layout editor · Server");
 
   // A second tab, its section renamed and given a two-column grid.
-  await tabBar.getByRole("button", { name: "+ Tab" }).click();
+  await tabBar.getByRole("button", { name: "Add a tab" }).click();
   await tabBar.getByLabel("Tab name").fill("Hardware");
   await editor.keyboard.press("Enter");
   await section("Hardware").getByRole("button", { name: "Hardware", exact: true }).click();
@@ -428,7 +428,7 @@ test("a concurrent save is reported, not overwritten", async ({ page, request })
   await expect(page.getByRole("alert").filter({ hasText: "Someone else saved the settings" })).toBeVisible();
   await page.getByRole("button", { name: "Load the latest version" }).click();
   await expect(page.getByLabel("Application name")).toHaveValue(`${APP} theirs`);
-  await expect(page.getByRole("region", { name: "Save changes" }).getByText("No unsaved changes")).toBeVisible();
+  await expect(page.getByRole("region", { name: "Save changes" }).getByText("Unsaved changes")).toHaveCount(0);
 });
 
 test("export/import: download, dry run shows the diff, apply changes the app", async ({ page }) => {

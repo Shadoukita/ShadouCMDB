@@ -100,8 +100,8 @@ test("a new template, laid out in the editor and made the class default, is what
   // A blank template has the record details and the relationships from the start, as windows to move or remove.
   await expect(editor.getByRole("region", { name: "Section Record", exact: true })).toBeVisible();
   await expect(editor.getByRole("region", { name: "Section Relationships", exact: true })).toBeVisible();
-  await expect(editor.getByLabel("Add a panel to General").locator("option")).toHaveText(["+ Panel", "History", "Audit trail"]);
-  await tabBar(editor).getByRole("button", { name: "+ Tab" }).click();
+  await expect(editor.getByLabel("Add a panel to General").locator("option")).toHaveText(["Add panel…", "History", "Audit trail"]);
+  await tabBar(editor).getByRole("button", { name: "Add a tab" }).click();
   await tabBar(editor).getByLabel("Tab name").fill(TAB);
   await editor.keyboard.press("Enter");
   await addNote(editor, TAB, "Restart order: app, then database.");

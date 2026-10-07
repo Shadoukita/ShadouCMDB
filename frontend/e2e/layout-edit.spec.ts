@@ -74,7 +74,7 @@ test("the editor window: add a tab and a section, move fields, save, and a viewe
   await expect(bar(page)).toContainText("Layout editor · Server");
   await expect(bar(page).getByTestId("le-target")).toContainText("Template: Standard");
   await expect(bar(page)).toContainText("Saving to the template changes every class and CI that uses it");
-  await expect(bar(page).getByText("No unsaved changes")).toBeVisible();
+  await expect(bar(page).getByText("Unsaved changes")).toHaveCount(0);
   // The canvas is the real page: the CI's own values, the built-in General tab, its sections as windows.
   await expect(tabBar(page).getByRole("button", { name: "General", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(field(page, "Ident")).toContainText(ci.ident);
@@ -83,11 +83,11 @@ test("the editor window: add a tab and a section, move fields, save, and a viewe
   // One placement only: no Grid / Free switch, no preview widths, no designer; snapping and layers always there.
   for (const name of ["Grid", "Free", "Desktop", "Phone", "Open in the designer"]) await expect(bar(page).getByRole("button", { name, exact: true })).toHaveCount(0);
   await expect(bar(page).getByRole("link", { name: "Open in the designer" })).toHaveCount(0);
-  await expect(bar(page).getByRole("button", { name: /^Snap (on|off)$/ })).toBeVisible();
+  await expect(bar(page).getByRole("button", { name: "Snap", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(bar(page).getByTestId("le-layer")).toHaveText("No window selected");
 
   // + Tab: added at the end of the tab bar, named in place.
-  await tabBar(page).getByRole("button", { name: "+ Tab" }).click();
+  await tabBar(page).getByRole("button", { name: "Add a tab" }).click();
   await expect(tabBar(page).getByLabel("Tab name")).toBeFocused();
   await tabBar(page).getByLabel("Tab name").fill("Hardware");
   await page.keyboard.press("Enter");
@@ -151,7 +151,7 @@ test("the editor window: add a tab and a section, move fields, save, and a viewe
 
   // Save with a note: a new settings version.
   await saveLayout(page, `e2e in-place layout ${stamp}`);
-  await expect(bar(page).getByText("No unsaved changes")).toBeVisible();
+  await expect(bar(page).getByText("Unsaved changes")).toHaveCount(0);
   // The page the editor was opened from shows the saved layout without a reload.
   const tabs = origin.getByRole("tablist", { name: "CI sections" }).getByRole("tab");
   await expect(tabs).toHaveText(["General", "Hardware", "Relationship map", "Impact", "History"]);
@@ -209,13 +209,13 @@ test("the editor on the form: the CI's values in place, read-only fields, and ba
   await expect(tabBar(page).getByRole("button", { name: "Hardware", exact: true })).toHaveCount(0);
   await bar(page).getByRole("button", { name: "Undo" }).click();
   await expect(tabBar(page).getByRole("button", { name: "Hardware", exact: true })).toBeVisible();
-  await expect(bar(page).getByText("No unsaved changes")).toBeVisible();
+  await expect(bar(page).getByText("Unsaved changes")).toHaveCount(0);
   // Redo resets again; Discard goes back to the saved layout.
   await bar(page).getByRole("button", { name: "Redo" }).click();
   await expect(bar(page).getByText("Unsaved changes")).toBeVisible();
   await bar(page).getByRole("button", { name: "Discard" }).click();
   await expect(tabBar(page).getByRole("button", { name: "Hardware", exact: true })).toBeVisible();
-  await expect(bar(page).getByText("No unsaved changes")).toBeVisible();
+  await expect(bar(page).getByText("Unsaved changes")).toHaveCount(0);
   await snap(page, "layout-edit-form");
 });
 
@@ -235,7 +235,7 @@ test("a concurrent save is reported with a way to reload", async ({ page, reques
   await page.getByRole("dialog", { name: /^Save to the template/ }).getByRole("button", { name: "Save to template", exact: true }).click();
   await expect(bar(page).getByRole("alert").filter({ hasText: "Someone else saved while you were editing" })).toBeVisible();
   await bar(page).getByRole("button", { name: "Load the latest version" }).click();
-  await expect(bar(page).getByText("No unsaved changes")).toBeVisible();
+  await expect(bar(page).getByText("Unsaved changes")).toHaveCount(0);
   await expect(bar(page).getByRole("alert")).toHaveCount(0);
 });
 
@@ -351,7 +351,7 @@ test("a layout sent on the grid (an older export or API client) opens as windows
   for (const key of ["general", "side", "below"]) await expect(page.locator(`[data-window="${key}"]`)).toBeVisible();
   await expect(section(page, "Side by side").locator(".le-field")).toHaveCount(2);
   await expect(bar(page).getByRole("button", { name: "Grid", exact: true })).toHaveCount(0);
-  await expect(bar(page).getByText("No unsaved changes")).toBeVisible();
+  await expect(bar(page).getByText("Unsaved changes")).toHaveCount(0);
   await snap(page, "layout-edit-from-grid");
   await page.close();
   await resetUiSettings(request);
@@ -386,7 +386,7 @@ test("content blocks: a note and built-in panels placed in the editor, on the de
 
   // The relationships (placed from the start) moved to a tab of their own, + Panel adds the audit trail there;
   // each panel once per layout.
-  await tabBar(page).getByRole("button", { name: "+ Tab" }).click();
+  await tabBar(page).getByRole("button", { name: "Add a tab" }).click();
   await tabBar(page).getByLabel("Tab name").fill("Links");
   await page.keyboard.press("Enter");
   await tabBar(page).getByRole("button", { name: "General", exact: true }).click();
@@ -396,7 +396,7 @@ test("content blocks: a note and built-in panels placed in the editor, on the de
   await expect(section(page, "Relationships")).toContainText("Relationships panel");
   await page.getByLabel("Add a panel to Links").selectOption("audit");
   await expect(section(page, "Audit trail").getByRole("columnheader", { name: "Request id" })).toBeVisible();
-  await expect(page.getByLabel("Add a panel to Links").locator("option")).toHaveText(["+ Panel", "History"]);
+  await expect(page.getByLabel("Add a panel to Links").locator("option")).toHaveText(["Add panel…", "History"]);
   // The tab's empty field section goes.
   await section(page, "Links").hover();
   await section(page, "Links").getByRole("button", { name: "Remove section Links" }).click();
@@ -630,7 +630,7 @@ test("record details and relationships are panels: moved, removed and added back
   await expect(section(page, "Record")).toContainText(ci.id);
   await expect(section(page, "Relationships")).toContainText("Relationships panel");
   await expect(page.getByText(/record details come last/i)).toHaveCount(0);
-  await expect(panelOptions).toHaveText(["+ Panel", "History", "Audit trail"]);
+  await expect(panelOptions).toHaveText(["Add panel…", "History", "Audit trail"]);
 
   // Removed: off the detail page, and offered by + Panel again.
   await section(page, "Relationships").hover();
@@ -638,10 +638,10 @@ test("record details and relationships are panels: moved, removed and added back
   await expect(page.getByRole("dialog")).toContainText("The Relationships panel is no longer shown on the detail page.");
   await page.getByRole("dialog").getByRole("button", { name: "Remove" }).click();
   await expect(section(page, "Relationships")).toHaveCount(0);
-  await expect(panelOptions).toHaveText(["+ Panel", "Relationships", "History", "Audit trail"]);
+  await expect(panelOptions).toHaveText(["Add panel…", "Relationships", "History", "Audit trail"]);
 
   // The record details moved to a tab of their own (its empty field section removed).
-  await tabBar(page).getByRole("button", { name: "+ Tab" }).click();
+  await tabBar(page).getByRole("button", { name: "Add a tab" }).click();
   await tabBar(page).getByLabel("Tab name").fill("Meta");
   await page.keyboard.press("Enter");
   await section(page, "Meta").hover();
