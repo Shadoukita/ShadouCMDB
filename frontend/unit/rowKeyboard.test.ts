@@ -49,6 +49,19 @@ describe("rowKeyboard", () => {
     const [tr] = table([{ id: "b", hrefs: [`${base}/cis/x`, `${base}/cis/b`] }]);
     assert.equal(rowFocusTarget(tr as unknown as Element), tr.links[1]);
   });
+  test("a row with no page of its own focuses its marked actions button, not the owner link", () => {
+    // An API token row: the first link is the owner's user page; ⋯ carries data-row-focus.
+    const [a, b] = table([
+      { id: "a", hrefs: [`${base}/admin/users/u`] },
+      { id: "b", hrefs: [`${base}/admin/users/u`] },
+    ]);
+    const menu = { tagName: "BUTTON", focused: false, focus: () => (menu.focused = true) };
+    b.querySelector = ((s: string) => (s === "[data-row-focus]:not(:disabled)" ? menu : null)) as never;
+    assert.equal(rowFocusTarget(b as unknown as Element), menu);
+    onRowKeydown(key("ArrowDown", a.links[0]));
+    assert.ok(menu.focused);
+    assert.equal(b.links[0].focused, false);
+  });
   test("↓ and ↑ move to the next and previous row and keep the page from scrolling", () => {
     const [a, b] = table([
       { id: "a", hrefs: [`${base}/cis/a`] },
