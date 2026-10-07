@@ -45507,6 +45507,50 @@
         },
         "additionalProperties": false
       },
+      "WorkflowApprovalDroppedSource": {
+        "type": "object",
+        "description": "An approver source of a step that was not used: its field was set by someone who may not decide the request\n(GH#664). The step falls back on its other sources.",
+        "required": [
+          "source",
+          "label",
+          "reason",
+          "message",
+          "fieldLastChanged"
+        ],
+        "properties": {
+          "source": {
+            "type": "string",
+            "description": "Where the approvers of an assignment come from: the holders of a permission `profile`, the members of a user\n`group`, one named `user`, the user linked to the Person a reference field of the CI points at (`ci_attribute`,\nfor example the CI's owner), or the owners in one role of the business services the CI is a direct member of\n(`service_owner`)",
+            "enum": [
+              "profile",
+              "group",
+              "user",
+              "ci_attribute",
+              "service_owner"
+            ]
+          },
+          "label": {
+            "type": "string",
+            "description": "e.g. `field server.owner`"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why an approver source that names its approvers through a CI field may not decide a request",
+            "enum": [
+              "field_set_by_requester",
+              "field_set_by_unattributed"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "description": "The reason, in words"
+          },
+          "fieldLastChanged": {
+            "$ref": "#/components/schemas/WorkflowFieldChange"
+          }
+        },
+        "additionalProperties": false
+      },
       "WorkflowApprovalEligibility": {
         "type": "object",
         "description": "Whether the caller may decide the active step now, and why not",
@@ -45561,7 +45605,8 @@
           "kind",
           "id",
           "source",
-          "label"
+          "label",
+          "fieldLastChanged"
         ],
         "properties": {
           "role": {
@@ -45598,6 +45643,17 @@
           "label": {
             "type": "string",
             "description": "The assignment that made it eligible, e.g. \"group CAB\""
+          },
+          "fieldLastChanged": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowFieldChange",
+                "description": "For a CI field source: the audited change that set the field when the step was resolved; null otherwise or\nwhen the field has no audit history"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false
@@ -45950,6 +46006,7 @@
           "approvals",
           "eligibleCount",
           "understaffed",
+          "droppedSources",
           "decisions"
         ],
         "properties": {
@@ -46011,11 +46068,18 @@
               "null"
             ],
             "format": "int32",
-            "description": "Distinct active users who could decide it when it was last resolved (the requester never counts); null\nbefore the step is active"
+            "description": "Distinct active users who could decide it when it was last resolved (the requester never counts). Every\nstep is resolved when the request is made; null only for a waiting step of a request made before that"
           },
           "understaffed": {
             "type": "boolean",
             "description": "Active, and fewer users could decide it than approvals are still needed"
+          },
+          "droppedSources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowApprovalDroppedSource"
+            },
+            "description": "Approver sources not used at the last resolution, with why: a CI field naming the approvers that the\nrequester set (GH#664)"
           },
           "decisions": {
             "type": "array",
@@ -46334,7 +46398,9 @@
           "source",
           "label",
           "userCount",
-          "note"
+          "note",
+          "fieldLastChanged",
+          "dropped"
         ],
         "properties": {
           "role": {
@@ -46371,6 +46437,33 @@
               "null"
             ],
             "description": "Why it resolved to nobody, or that it is resolved per CI; null otherwise"
+          },
+          "fieldLastChanged": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowFieldChange",
+                "description": "A reference field source on a CI: the audited change that set the field's current value; null for other\nsources, without `ciId`, or when the field has no audit history"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dropped": {
+            "oneOf": [
+              {
+                "type": "string",
+                "description": "Why an approver source that names its approvers through a CI field may not decide a request",
+                "enum": [
+                  "field_set_by_requester",
+                  "field_set_by_unattributed"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set when the source would be dropped for a request by `requestedBy` (see `WorkflowApprovalDroppedSource`);\nit then resolves to nobody and `note` says why"
           }
         },
         "additionalProperties": false
@@ -47365,6 +47458,41 @@
           },
           "page": {
             "$ref": "#/components/schemas/PageMeta"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowFieldChange": {
+        "type": "object",
+        "description": "The audited change that set a CI field's current value (GH#664)",
+        "required": [
+          "actorType",
+          "actorId",
+          "actorName",
+          "changedAt"
+        ],
+        "properties": {
+          "actorType": {
+            "type": "string",
+            "description": "`user`, `api_client` (an API token), `import` or `system`"
+          },
+          "actorId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The user who made it; null for the system, or an API token or import that recorded no user"
+          },
+          "actorName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "changedAt": {
+            "type": "string",
+            "format": "date-time"
           }
         },
         "additionalProperties": false

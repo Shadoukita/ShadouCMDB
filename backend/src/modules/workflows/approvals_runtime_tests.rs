@@ -1024,3 +1024,467 @@ async fn the_final_approval_refuses_a_field_that_became_a_state_field() {
     assert_eq!(pending(&w, instance).await.2, "cab", "the request is still pending");
     db.drop().await;
 }
+
+// ---------------------------------------------------------------------------
+// GH#664: a requester does not pick the approver of a field step
+// ---------------------------------------------------------------------------
+
+/// A world whose `approve` (ready → approved) needs one approval by the Person
+/// in the server's `owner` field, and whose `go_live` (ready → done) needs a
+/// technical check and then the owner. `prepare` (planned → ready) and
+/// `finish` (approved → done) are not gated.
+struct Owners {
+    w: World,
+    /// Granted every transition; may edit servers and view people.
+    req: (Creds, Uuid),
+    /// The same rights as req.
+    req2: (Creds, Uuid),
+    /// Edits servers and views people; granted nothing.
+    ed: (Creds, Uuid),
+    /// The technical check of go_live.
+    tech: (Creds, Uuid),
+    /// Server viewers whose Persons can be named in `owner`.
+    owner: (Creds, Uuid),
+    pal: (Creds, Uuid),
+    owner_person: Uuid,
+    pal_person: Uuid,
+    /// Edits servers and views people (for a token of req).
+    editor_profile: Uuid,
+}
+
+async fn owners(db: &scratch::Scratch) -> Owners {
+    let w = world(db).await;
+    let person: Uuid =
+        sqlx::query_scalar("SELECT id FROM ci_classes WHERE system_role = 'person'").fetch_one(&w.pool).await.unwrap();
+    w.ok(
+        "POST",
+        "/api/v1/attribute-definitions",
+        json!({ "classId": w.server, "key": "owner", "label": "Owner", "dataType": "reference",
+            "referenceClassId": person }),
+    )
+    .await;
+    let list: Uuid = sqlx::query_scalar("SELECT list_id FROM lookup_list_values WHERE id = $1")
+        .bind(w.value("planned"))
+        .fetch_one(&w.pool)
+        .await
+        .unwrap();
+    w.ok("POST", "/api/v1/lookup-list-values", json!({ "listId": list, "key": "ready", "name": "ready" })).await;
+    let step = |key: &str| json!({ "key": key, "name": key, "requiredApprovals": 1 });
+    publish(
+        &w,
+        json!({
+            "initialState": "planned",
+            "states": [
+                { "key": "planned", "name": "Planned", "category": "open", "stateValue": "planned" },
+                { "key": "ready", "name": "Ready", "category": "active", "stateValue": "ready" },
+                { "key": "approved", "name": "Approved", "category": "active", "stateValue": "approved" },
+                { "key": "done", "name": "Done", "category": "done", "terminal": true, "stateValue": "live" }
+            ],
+            "transitions": [
+                { "key": "prepare", "name": "Prepare", "from": "planned", "to": "ready" },
+                { "key": "approve", "name": "Approve", "from": "ready", "to": "approved",
+                  "approval": { "steps": [ step("owner") ] } },
+                { "key": "go_live", "name": "Go live", "from": "ready", "to": "done",
+                  "approval": { "steps": [ step("check"), step("owner") ] } },
+                { "key": "finish", "name": "Finish", "from": "approved", "to": "done" }
+            ]
+        }),
+    )
+    .await;
+    let def = w.ok("GET", &format!("{DEFS}/{}", w.definition), json!(null)).await;
+    let v = w
+        .ok(
+            "PUT",
+            &format!("{DEFS}/{}/grants", w.definition),
+            json!({ "version": def["version"], "grants": [
+                { "transitionKey": "prepare", "profiles": ["Approvers"] },
+                { "transitionKey": "approve", "profiles": ["Approvers"] },
+                { "transitionKey": "go_live", "profiles": ["Approvers"] },
+                { "transitionKey": "_cancel", "profiles": ["Approvers"] }
+            ] }),
+        )
+        .await;
+    let tech = w.profile("Tech", &[(w.server, false)]).await;
+    let viewers = w.profile("Viewers", &[(w.server, false)]).await;
+    let people = w.profile("People", &[(person, false)]).await;
+    let editor_profile = w.profile("Server and people editors", &[(w.server, true), (person, false)]).await;
+    let owner = json!({ "source": "ci_attribute", "attribute": "owner" });
+    let field = |t: &str| {
+        let mut a = owner.clone();
+        a["transitionKey"] = json!(t);
+        a["stepKey"] = json!("owner");
+        a
+    };
+    w.ok(
+        "PUT",
+        &format!("{DEFS}/{}/approvers", w.definition),
+        json!({ "version": v["version"], "approvers": [
+            field("approve"), field("go_live"),
+            { "transitionKey": "go_live", "stepKey": "check", "source": "profile", "profile": "Tech" }
+        ] }),
+    )
+    .await;
+    let req = w.user("req", &[w.approvers, people]).await;
+    let req2 = w.user("req2", &[w.approvers, people]).await;
+    let ed = w.user("ed", &[w.editors, people]).await;
+    let tech = w.user("tech", &[tech]).await;
+    let owner = w.user("owner", &[viewers]).await;
+    let pal = w.user("pal", &[viewers]).await;
+    let person_of = |u: Uuid| {
+        let pool = w.pool.clone();
+        async move {
+            let p: Option<Uuid> = sqlx::query_scalar("SELECT person_ci_id FROM users WHERE id = $1")
+                .bind(u)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            p.expect("a user gets a Person")
+        }
+    };
+    let (owner_person, pal_person) = (person_of(owner.1).await, person_of(pal.1).await);
+    Owners { w, req, req2, ed, tech, owner, pal, owner_person, pal_person, editor_profile }
+}
+
+impl Owners {
+    /// Sets the server's owner as `creds`.
+    async fn set_owner(&self, creds: &Creds, ci: Uuid, person: Uuid) {
+        self.patch(creds, ci, json!({ "owner": person })).await;
+    }
+
+    async fn patch(&self, creds: &Creds, ci: Uuid, attributes: Value) {
+        let version = self.w.ci_values(ci).await["version"].clone();
+        let body = json!({ "version": version, "attributes": attributes });
+        let (status, v) = self.w.call(creds, "PATCH", &format!("/api/v1/configuration-items/{ci}"), Some(body)).await;
+        assert_eq!(status, 200, "{v}");
+    }
+
+    /// A server owned by owner's Person (set by the administrator), with an
+    /// instance in state `ready`; returns (CI, instance).
+    async fn ready(&self) -> (Uuid, Uuid) {
+        let (ci, instance) = started(&self.w).await;
+        self.set_owner(&self.w.admin, ci, self.owner_person).await;
+        self.prepare(&self.w.admin, instance).await;
+        (ci, instance)
+    }
+
+    async fn prepare(&self, creds: &Creds, instance: Uuid) {
+        let (status, v) = request(&self.w, creds, instance, "prepare", json!({})).await;
+        assert_eq!((status, v["state"]["key"].as_str()), (200, Some("ready")), "{v}");
+    }
+
+    /// The pending request of `instance` as the administrator sees it.
+    async fn view(&self, instance: Uuid) -> Value {
+        let (request, _, _) = pending(&self.w, instance).await;
+        let (status, v) = self.w.call(&self.w.admin, "GET", &format!("{REQUESTS}/{request}"), None).await;
+        assert_eq!(status, 200, "{v}");
+        v
+    }
+}
+
+/// The `(reason, actorName)` of each source a step dropped.
+fn dropped(step: &Value) -> Vec<(String, String)> {
+    step["droppedSources"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no droppedSources: {step}"))
+        .iter()
+        .map(|d| {
+            (
+                d["reason"].as_str().unwrap().to_owned(),
+                d["fieldLastChanged"]["actorName"].as_str().unwrap_or("").to_owned(),
+            )
+        })
+        .collect()
+}
+
+fn by(reason: &str, actor: &str) -> Vec<(String, String)> {
+    vec![(reason.to_owned(), actor.to_owned())]
+}
+
+/// GH#664 as reported: the requester points the owner field at a colleague,
+/// then requests. The colleague may not decide, and the request and the
+/// approver preview say why.
+#[tokio::test]
+async fn a_requester_who_set_the_owner_field_does_not_pick_the_approver() {
+    let Some(db) = scratch::database("workflow_approvals_field_repro").await else { return };
+    let o = owners(&db).await;
+    let w = &o.w;
+    let (ci, instance) = o.ready().await;
+    o.set_owner(&o.req.0, ci, o.pal_person).await;
+    let (status, v) = request(w, &o.req.0, instance, "approve", json!({})).await;
+    assert_eq!(status, 202, "{v}");
+    let (status, v) = decide(w, &o.pal.0, instance, "approve", None).await;
+    assert_eq!((status, reason(&v)), (403, refused("FORBIDDEN", "not_eligible")), "{v}");
+    let v = o.view(instance).await;
+    let step = &v["steps"][0];
+    assert_eq!(dropped(step), by("field_set_by_requester", "req"), "{v}");
+    let d = &step["droppedSources"][0];
+    assert_eq!((d["source"].as_str(), d["label"].as_str()), (Some("ci_attribute"), Some("field server.owner")));
+    assert_eq!(
+        (d["fieldLastChanged"]["actorType"].as_str(), d["fieldLastChanged"]["actorId"].clone()),
+        (Some("user"), json!(o.req.1))
+    );
+    assert!(d["message"].as_str().unwrap().contains("req set field server.owner"), "{d}");
+    assert_eq!(v["approvers"], json!([]), "nobody is left: {v}");
+
+    // The preview for req tells the same; for anyone else the field resolves to pal.
+    let preview = format!("{DEFS}/{}/approvers/preview?transition=approve&step=owner&ciId={ci}", w.definition);
+    let (status, v) = w.call(&w.admin, "GET", &format!("{preview}&requestedBy={}", o.req.1), None).await;
+    assert_eq!(status, 200, "{v}");
+    let source = &v["sources"][0];
+    assert_eq!(
+        (source["dropped"].as_str(), source["userCount"].as_i64(), v["eligibleCount"].as_i64()),
+        (Some("field_set_by_requester"), Some(0), Some(0)),
+        "{v}"
+    );
+    assert!(source["note"].as_str().unwrap().contains("Separation of duties"), "{source}");
+    assert_eq!(source["fieldLastChanged"]["actorName"], "req");
+    let (_, v) = w.call(&w.admin, "GET", &format!("{preview}&requestedBy={}", o.req2.1), None).await;
+    assert_eq!((v["sources"][0]["dropped"].clone(), v["eligibleCount"].as_i64()), (Value::Null, Some(1)), "{v}");
+    audit_ok(w).await;
+    db.drop().await;
+}
+
+/// Changing state between the edit and the request does not launder it: who
+/// set the field counts, however long ago.
+#[tokio::test]
+async fn moving_the_ci_on_before_requesting_does_not_launder_the_edit() {
+    let Some(db) = scratch::database("workflow_approvals_field_state").await else { return };
+    let o = owners(&db).await;
+    let w = &o.w;
+    let (ci, instance) = started(w).await;
+    o.set_owner(&w.admin, ci, o.owner_person).await;
+    o.set_owner(&o.req.0, ci, o.pal_person).await;
+    o.prepare(&o.req.0, instance).await;
+    assert_eq!(request(w, &o.req.0, instance, "approve", json!({})).await.0, 202);
+    let (status, v) = decide(w, &o.pal.0, instance, "approve", None).await;
+    assert_eq!((status, reason(&v)), (403, refused("FORBIDDEN", "not_eligible")), "{v}");
+    assert_eq!(dropped(&o.view(instance).await["steps"][0]), by("field_set_by_requester", "req"));
+    db.drop().await;
+}
+
+/// An edit through the requester's API token is theirs; so is an edit by the
+/// creator of the token a request is made with.
+#[tokio::test]
+async fn an_edit_through_a_token_counts_as_its_owner_and_its_creator() {
+    let Some(db) = scratch::database("workflow_approvals_field_token").await else { return };
+    let o = owners(&db).await;
+    let w = &o.w;
+    let (ci, instance) = o.ready().await;
+    let (own, _) = token(w, o.req.1, o.editor_profile, Some(o.req.1)).await;
+    o.set_owner(&own, ci, o.pal_person).await;
+    assert_eq!(request(w, &o.req.0, instance, "approve", json!({})).await.0, 202);
+    let (status, v) = decide(w, &o.pal.0, instance, "approve", None).await;
+    assert_eq!((status, reason(&v)), (403, refused("FORBIDDEN", "not_eligible")), "{v}");
+    let v = o.view(instance).await;
+    assert_eq!(dropped(&v["steps"][0]), by("field_set_by_requester", "req"));
+    assert_eq!(v["steps"][0]["droppedSources"][0]["fieldLastChanged"]["actorType"], "api_client");
+
+    // req sets the field, req2 requests through a token req minted for them.
+    let (ci, instance) = o.ready().await;
+    o.set_owner(&o.req.0, ci, o.pal_person).await;
+    let (lent, _) = token(w, o.req2.1, w.approvers, Some(o.req.1)).await;
+    assert_eq!(request(w, &lent, instance, "approve", json!({})).await.0, 202);
+    let (status, v) = decide(w, &o.pal.0, instance, "approve", None).await;
+    assert_eq!((status, reason(&v)), (403, refused("FORBIDDEN", "not_eligible")), "{v}");
+    assert_eq!(dropped(&o.view(instance).await["steps"][0]), by("field_set_by_requester", "req"));
+    db.drop().await;
+}
+
+/// A bulk import writes as its owner, so it counts as theirs; an import that
+/// recorded no user (discovery) counts as nobody's, and the field is not used.
+#[tokio::test]
+async fn an_edit_through_an_import_counts_and_an_unattributed_one_is_not_trusted() {
+    use crate::api::context::RequestContext;
+    use crate::auth::{Credential, Principal};
+    let Some(db) = scratch::database("workflow_approvals_field_import").await else { return };
+    let o = owners(&db).await;
+    let w = &o.w;
+    let body: crate::modules::items::schemas::UpdateItemBody =
+        serde_json::from_value(json!({ "attributes": { "owner": o.pal_person } })).unwrap();
+
+    // As the import commit writes a row (imports::dry_run::owner_context).
+    let (ci, instance) = o.ready().await;
+    let mut conn = w.pool.acquire().await.unwrap();
+    let permissions = crate::data::auth::load_permissions(&mut conn, o.req.1).await.unwrap();
+    drop(conn);
+    let principal = Principal {
+        user_id: o.req.1,
+        username: "req".into(),
+        credential: Credential::Token { profile_id: None, creator_id: None, token_id: None, minted_by: None },
+        permissions,
+    };
+    let ctx = RequestContext::import_for_user(std::sync::Arc::new(principal), Uuid::new_v4());
+    crate::modules::items::service::update(&w.pool, &ctx, ci, &body).await.unwrap();
+    assert_eq!(request(w, &o.req.0, instance, "approve", json!({})).await.0, 202);
+    let (status, v) = decide(w, &o.pal.0, instance, "approve", None).await;
+    assert_eq!((status, reason(&v)), (403, refused("FORBIDDEN", "not_eligible")), "{v}");
+    let v = o.view(instance).await;
+    assert_eq!(dropped(&v["steps"][0]), by("field_set_by_requester", "req"));
+    assert_eq!(v["steps"][0]["droppedSources"][0]["fieldLastChanged"]["actorType"], "import");
+
+    // A discovery run: no user recorded.
+    let (ci, instance) = o.ready().await;
+    let ctx = RequestContext::import("discovery", "run-1");
+    crate::modules::items::service::update(&w.pool, &ctx, ci, &body).await.unwrap();
+    assert_eq!(request(w, &o.req.0, instance, "approve", json!({})).await.0, 202);
+    let (status, v) = decide(w, &o.pal.0, instance, "approve", None).await;
+    assert_eq!((status, reason(&v)), (403, refused("FORBIDDEN", "not_eligible")), "{v}");
+    let v = o.view(instance).await;
+    assert_eq!(dropped(&v["steps"][0]), by("field_set_by_unattributed", "discovery"), "{v}");
+    assert_eq!(v["steps"][0]["droppedSources"][0]["fieldLastChanged"]["actorId"], Value::Null);
+    db.drop().await;
+}
+
+/// Someone else saving the CI, even with the same owner sent again, does not
+/// hide who set the field; an administrator's refresh judges it the same way.
+#[tokio::test]
+async fn a_later_save_that_keeps_the_value_does_not_hide_who_set_it() {
+    let Some(db) = scratch::database("workflow_approvals_field_resave").await else { return };
+    let o = owners(&db).await;
+    let w = &o.w;
+    let (ci, instance) = o.ready().await;
+    o.set_owner(&o.req.0, ci, o.pal_person).await;
+    o.patch(&o.ed.0, ci, json!({ "owner_team": "ops" })).await;
+    o.patch(&o.ed.0, ci, json!({ "owner": o.pal_person, "owner_team": "ops2" })).await;
+    assert_eq!(request(w, &o.req.0, instance, "approve", json!({})).await.0, 202);
+    let (status, v) = decide(w, &o.pal.0, instance, "approve", None).await;
+    assert_eq!((status, reason(&v)), (403, refused("FORBIDDEN", "not_eligible")), "{v}");
+    assert_eq!(dropped(&o.view(instance).await["steps"][0]), by("field_set_by_requester", "req"));
+    let (request_id, _, _) = pending(w, instance).await;
+    let (status, v) = w.call(&w.admin, "POST", &format!("{REQUESTS}/{request_id}/refresh"), None).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(dropped(&v["steps"][0]), by("field_set_by_requester", "req"), "{v}");
+    let (status, v) = decide(w, &o.pal.0, instance, "approve", None).await;
+    assert_eq!((status, reason(&v)), (403, refused("FORBIDDEN", "not_eligible")), "{v}");
+    let refresh: Value = sqlx::query_scalar(
+        "SELECT new_value FROM audit_log WHERE action = 'workflow.approval_refresh' AND entity_id = $1",
+    )
+    .bind(ci)
+    .fetch_one(&w.pool)
+    .await
+    .unwrap();
+    assert_eq!(refresh["droppedSources"][0]["reason"], "field_set_by_requester", "{refresh}");
+    audit_ok(w).await;
+    db.drop().await;
+}
+
+/// Every step's approvers are fixed when the request is made: pointing the
+/// field at someone else while step 1 runs changes nothing for step 2.
+#[tokio::test]
+async fn an_edit_while_the_request_is_pending_does_not_change_a_later_step() {
+    let Some(db) = scratch::database("workflow_approvals_field_pending").await else { return };
+    let o = owners(&db).await;
+    let w = &o.w;
+    let (ci, instance) = o.ready().await;
+    assert_eq!(request(w, &o.req.0, instance, "go_live", json!({})).await.0, 202);
+    let v = o.view(instance).await;
+    assert_eq!(v["steps"][1]["eligibleCount"], 1, "step 2 is resolved with the request: {v}");
+    o.set_owner(&o.req.0, ci, o.pal_person).await;
+    let (status, v) = decide(w, &o.tech.0, instance, "approve", None).await;
+    assert_eq!((status, v["instance"]["pendingApproval"]["stepKey"].as_str()), (200, Some("owner")), "{v}");
+    assert_eq!(v["request"]["steps"][1]["droppedSources"], json!([]), "{v}");
+    let (status, v) = decide(w, &o.pal.0, instance, "approve", None).await;
+    assert_eq!((status, reason(&v)), (403, refused("FORBIDDEN", "not_eligible")), "{v}");
+    let (_, v) = w.call(&o.owner.0, "GET", &format!("{REQUESTS}/{}", pending(w, instance).await.0), None).await;
+    assert_eq!(v["approvers"][0]["fieldLastChanged"]["actorName"], "admin", "{v}");
+    let (status, v) = decide(w, &o.owner.0, instance, "approve", None).await;
+    assert_eq!((status, v["instance"]["state"]["key"].as_str()), (200, Some("done")), "{v}");
+    audit_ok(w).await;
+    db.drop().await;
+}
+
+/// When the dropped field was the step's only source, the request still
+/// exists but nobody can decide it: the step is understaffed, and a manager
+/// can cancel it.
+#[tokio::test]
+async fn a_step_left_without_approvers_is_understaffed() {
+    let Some(db) = scratch::database("workflow_approvals_field_empty").await else { return };
+    let o = owners(&db).await;
+    let w = &o.w;
+    let (ci, instance) = o.ready().await;
+    o.set_owner(&o.req.0, ci, o.pal_person).await;
+    let (status, v) = request(w, &o.req.0, instance, "approve", json!({})).await;
+    assert_eq!(status, 202, "{v}");
+    let v = o.view(instance).await;
+    let step = &v["steps"][0];
+    assert_eq!(
+        (step["eligibleCount"].as_i64(), step["understaffed"].as_bool(), step["status"].as_str()),
+        (Some(0), Some(true), Some("active")),
+        "{v}"
+    );
+    for (who, creds) in [("pal", &o.pal.0), ("owner", &o.owner.0), ("req", &o.req.0)] {
+        let (status, _) = decide(w, creds, instance, "approve", None).await;
+        assert_eq!(status, 403, "{who}");
+    }
+    let (request_id, version, _) = pending(w, instance).await;
+    let body = json!({ "expectedVersion": version, "comment": "owner set by the requester" });
+    let (status, v) = w.call(&w.admin, "POST", &format!("{REQUESTS}/{request_id}/cancel"), Some(body)).await;
+    assert_eq!((status, v["request"]["status"].as_str()), (200, Some("cancelled")), "{v}");
+    let audit: Value = sqlx::query_scalar(
+        "SELECT new_value FROM audit_log WHERE action = 'workflow.approval_request' AND entity_id = $1",
+    )
+    .bind(ci)
+    .fetch_one(&w.pool)
+    .await
+    .unwrap();
+    assert_eq!(audit["steps"][0]["eligibleCount"], 0, "{audit}");
+    assert_eq!(audit["steps"][0]["droppedSources"][0]["reason"], "field_set_by_requester", "{audit}");
+    audit_ok(w).await;
+    db.drop().await;
+}
+
+/// Control: a field someone else set names the approver as before, and the
+/// request says who set it.
+#[tokio::test]
+async fn a_field_set_by_someone_else_still_names_the_approver() {
+    let Some(db) = scratch::database("workflow_approvals_field_other").await else { return };
+    let o = owners(&db).await;
+    let w = &o.w;
+    let (ci, instance) = o.ready().await;
+    o.set_owner(&o.ed.0, ci, o.pal_person).await;
+    assert_eq!(request(w, &o.req.0, instance, "approve", json!({})).await.0, 202);
+    let v = o.view(instance).await;
+    assert_eq!(v["steps"][0]["droppedSources"], json!([]), "{v}");
+    let changed = &v["approvers"][0]["fieldLastChanged"];
+    assert_eq!((changed["actorName"].as_str(), changed["actorId"].clone()), (Some("ed"), json!(o.ed.1)), "{v}");
+    let (status, v) = decide(w, &o.pal.0, instance, "approve", None).await;
+    assert_eq!((status, v["instance"]["state"]["key"].as_str()), (200, Some("approved")), "{v}");
+    audit_ok(w).await;
+    db.drop().await;
+}
+
+/// Control: a field with no audit history (older than the log, or pruned)
+/// keeps its approvers, so approvals on older CIs go on working.
+#[tokio::test]
+async fn a_field_without_audit_history_keeps_its_approvers() {
+    let Some(db) = scratch::database("workflow_approvals_field_history").await else { return };
+    let o = owners(&db).await;
+    let w = &o.w;
+    let (ci, instance) = started(w).await;
+    o.prepare(&w.admin, instance).await;
+    // Written straight into the type table, as a value older than the log.
+    let (schema, table): (String, String) = sqlx::query_as(
+        "SELECT table_schema::text, table_name::text FROM information_schema.columns
+         WHERE column_name = 'owner' AND table_schema <> 'cmdb' AND table_name NOT LIKE 'v\\_%'",
+    )
+    .fetch_one(&w.pool)
+    .await
+    .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!(r#"UPDATE "{schema}"."{table}" SET owner = $2 WHERE id = $1"#)))
+        .bind(ci)
+        .bind(o.pal_person)
+        .execute(&w.pool)
+        .await
+        .unwrap();
+    assert_eq!(w.ci_values(ci).await["attributes"]["owner"], json!(o.pal_person.to_string()));
+    assert_eq!(request(w, &o.req.0, instance, "approve", json!({})).await.0, 202);
+    let v = o.view(instance).await;
+    assert_eq!(
+        (v["steps"][0]["droppedSources"].clone(), v["approvers"][0]["fieldLastChanged"].clone()),
+        (json!([]), Value::Null),
+        "{v}"
+    );
+    let (status, v) = decide(w, &o.pal.0, instance, "approve", None).await;
+    assert_eq!((status, v["instance"]["state"]["key"].as_str()), (200, Some("approved")), "{v}");
+    db.drop().await;
+}

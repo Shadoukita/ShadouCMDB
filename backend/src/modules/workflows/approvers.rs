@@ -826,6 +826,69 @@ pub async fn audit_value(conn: &mut PgConnection, id: Uuid) -> Result<Value, App
 }
 
 // ---------------------------------------------------------------------------
+// Who set the field that names the approvers (GH#664)
+// ---------------------------------------------------------------------------
+
+/// An audit row's actor type, actor id, actor name and time.
+type ChangeRow = (String, Option<String>, Option<String>, chrono::DateTime<chrono::Utc>);
+
+/// Why a field source is dropped, and the reason in words.
+type Dropped = Option<(WorkflowApprovalDropReason, String)>;
+
+/// The audited change that set the current value of field `key` of CI `ci`:
+/// the latest create, update or restore row whose old and new values of the
+/// field differ, so a save that left the field as it was does not hide who
+/// set it. None when no audit row changed it (pruned, or older than the log).
+pub async fn last_change(
+    conn: &mut PgConnection,
+    ci: Uuid,
+    key: &str,
+) -> Result<Option<WorkflowFieldChange>, AppError> {
+    let row: Option<ChangeRow> = sqlx::query_as(
+        "SELECT actor_type, actor_id, actor_name, occurred_at FROM audit_log
+         WHERE entity_type = 'configuration_items' AND entity_id = $1 AND action IN ('create', 'update', 'restore')
+           AND coalesce(new_value->'attributes'->$2, 'null') IS DISTINCT FROM coalesce(old_value->'attributes'->$2, 'null')
+           AND new_value ? 'attributes'
+         ORDER BY occurred_at DESC, id DESC LIMIT 1",
+    )
+    .bind(ci)
+    .bind(key)
+    .fetch_optional(&mut *conn)
+    .await?;
+    Ok(row.map(|(actor_type, actor_id, actor_name, changed_at)| WorkflowFieldChange {
+        actor_type,
+        actor_id: actor_id.and_then(|a| a.parse().ok()),
+        actor_name,
+        changed_at,
+    }))
+}
+
+/// Why the approvers field `label` names may not decide a request that the
+/// users `excluded` may not decide, given the change that set the field: the
+/// change was theirs, or an API token or import made it with no user recorded.
+/// A system change (a first-run setup, an upgrade) counts as nobody's.
+pub fn drop_reason(change: &WorkflowFieldChange, excluded: &[Uuid], label: &str) -> Dropped {
+    let by = change.actor_name.as_deref().unwrap_or("an unnamed user");
+    match change.actor_id {
+        Some(user) if excluded.contains(&user) => Some((
+            WorkflowApprovalDropReason::FieldSetByRequester,
+            format!(
+                "Separation of duties: {by} set {label} and may not decide this request, so the approvers it names \
+                 are not used"
+            ),
+        )),
+        None if matches!(change.actor_type.as_str(), "api_client" | "import") => Some((
+            WorkflowApprovalDropReason::FieldSetByUnattributed,
+            format!(
+                "Separation of duties: {label} was set through an API token or an import that recorded no user, so \
+                 the approvers it names are not used"
+            ),
+        )),
+        _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Preview
 // ---------------------------------------------------------------------------
 
@@ -905,8 +968,18 @@ pub async fn preview(
             .unwrap_or_default(),
         None => Default::default(),
     };
-    let mut resolved: Vec<(Vec<Uuid>, Option<String>)> = Vec::with_capacity(assignments.len());
+    // A field source on a CI: who set the field, and whether a request by `requestedBy` drops it (GH#664).
+    let mut fields: Vec<(Option<WorkflowFieldChange>, Dropped)> = Vec::with_capacity(assignments.len());
     for a in &assignments {
+        let change = match (&a.source, q.ci_id) {
+            (Source::Attribute { key, .. }, Some(ci)) => last_change(&mut conn, ci, key).await?,
+            _ => None,
+        };
+        let dropped = change.as_ref().zip(q.requested_by).and_then(|(c, r)| drop_reason(c, &[r], &a.source.label()));
+        fields.push((change, dropped));
+    }
+    let mut resolved: Vec<(Vec<Uuid>, Option<String>)> = Vec::with_capacity(assignments.len());
+    for (a, (_, dropped)) in assignments.iter().zip(&fields) {
         let users: Vec<Uuid> = match &a.source {
             Source::Profile { id, .. } => {
                 sqlx::query_scalar("SELECT user_id FROM cmdb.user_permission_profiles WHERE profile_id = $1")
@@ -931,6 +1004,10 @@ pub async fn preview(
                     resolved.push((Vec::new(), Some(format!("The CI's field {key} is empty"))));
                     continue;
                 };
+                if let Some((_, message)) = dropped {
+                    resolved.push((Vec::new(), Some(message.clone())));
+                    continue;
+                }
                 let user: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM cmdb.users WHERE person_ci_id = $1")
                     .bind(person)
                     .fetch_all(&mut *conn)
@@ -1033,12 +1110,15 @@ pub async fn preview(
     let sources = assignments
         .iter()
         .zip(resolved)
-        .map(|(a, (users, note))| WorkflowApproverPreviewSource {
+        .zip(fields)
+        .map(|((a, (users, note)), (change, dropped))| WorkflowApproverPreviewSource {
             role: a.role,
             source: a.source.kind(),
             label: a.source.label(),
             user_count: users.len() as i64,
             note,
+            field_last_changed: change,
+            dropped: dropped.map(|(reason, _)| reason),
         })
         .collect();
     Ok(WorkflowApproverPreview {

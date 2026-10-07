@@ -1212,6 +1212,55 @@ pub struct WorkflowApproverPreviewSource {
     /// Why it resolved to nobody, or that it is resolved per CI; null otherwise
     #[schema(required = true)]
     pub note: Option<String>,
+    /// A reference field source on a CI: the audited change that set the field's current value; null for other
+    /// sources, without `ciId`, or when the field has no audit history
+    #[schema(required = true)]
+    pub field_last_changed: Option<WorkflowFieldChange>,
+    /// Set when the source would be dropped for a request by `requestedBy` (see `WorkflowApprovalDroppedSource`);
+    /// it then resolves to nobody and `note` says why
+    #[schema(required = true, inline)]
+    pub dropped: Option<WorkflowApprovalDropReason>,
+}
+
+/// The audited change that set a CI field's current value (GH#664)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowFieldChange {
+    /// `user`, `api_client` (an API token), `import` or `system`
+    pub actor_type: String,
+    /// The user who made it; null for the system, or an API token or import that recorded no user
+    #[schema(required = true)]
+    pub actor_id: Option<Uuid>,
+    #[schema(required = true)]
+    pub actor_name: Option<String>,
+    #[serde(serialize_with = "ts::serialize")]
+    pub changed_at: DateTime<Utc>,
+}
+
+/// Why an approver source that names its approvers through a CI field may not decide a request
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowApprovalDropReason {
+    /// The field's current value was set by the requester (or the creator of the token the request was made with)
+    FieldSetByRequester,
+    /// The field's current value was set through an API token or an import that recorded no user
+    FieldSetByUnattributed,
+}
+
+/// An approver source of a step that was not used: its field was set by someone who may not decide the request
+/// (GH#664). The step falls back on its other sources.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowApprovalDroppedSource {
+    #[schema(inline)]
+    pub source: WorkflowApproverSource,
+    /// e.g. `field server.owner`
+    pub label: String,
+    #[schema(inline)]
+    pub reason: WorkflowApprovalDropReason,
+    /// The reason, in words
+    pub message: String,
+    pub field_last_changed: WorkflowFieldChange,
 }
 
 /// Who could decide one step, and why each user is in or out
