@@ -818,6 +818,8 @@ async fn restore_needs_allow_unsigned_for_a_seal_it_cannot_check() {
     // Written before backups were sealed (or without a key): refused, then accepted with the flag.
     let e = restore(&unsigned, Some(&new_key), None, false).await;
     assert!(refused(&e) && e.contains("has no HMAC"), "{e}");
+    // GH#678: no key can verify it, so the remedy must not send the operator looking for one.
+    assert!(!e.contains("Configure the key") && e.contains("cannot be verified with any key"), "{e}");
     let e = restore(&unsigned, Some(&new_key), None, true).await;
     assert!(e.contains("connect"), "--allow-unsigned gets past the check: {e}");
 
@@ -825,6 +827,7 @@ async fn restore_needs_allow_unsigned_for_a_seal_it_cannot_check() {
     for key in [Some(new_key.as_path()), None] {
         let e = restore(&sealed, key, None, false).await;
         assert!(refused(&e) && e.contains("which is not configured"), "{e}");
+        assert!(e.contains("Configure the key the backup was taken with"), "{e}");
         let e = restore(&sealed, key, None, true).await;
         assert!(e.contains("connect"), "--allow-unsigned gets past the check: {e}");
     }
