@@ -183,8 +183,8 @@ pub struct CiWorkflows {
     /// Running instances first, then the 20 that ended last
     pub data: Vec<WorkflowInstanceView>,
     /// Active workflows of the CI's type that are not running on it and that the caller may start (the edit right
-    /// on the type; where an instance of the workflow ended, also `workflows.manage` or its `_start` grant); empty
-    /// for a deleted CI
+    /// on the type; where an instance of the workflow ended, or where another workflow on the same state field ran,
+    /// also `workflows.manage` or its `_start` grant); empty for a deleted CI
     pub startable: Vec<WorkflowStartable>,
     /// Keys of the CI's fields an active workflow drives (its state fields): they change only through the
     /// workflow, so a form shows them read-only (a direct write is 409 WORKFLOW_CONTROLLED_FIELD)

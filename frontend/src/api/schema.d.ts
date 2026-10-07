@@ -3162,7 +3162,7 @@ export interface paths {
         put?: never;
         /**
          * Start a workflow on a CI
-         * @description Needs the edit right on the CI's type. Starting the workflow again on a CI where an instance of it completed or was cancelled also needs `workflows.manage` or the workflow's `_start` grant (else 403 FORBIDDEN), since it sets the state field back to the initial state. The instance starts in the initial state of the workflow's current version and stays on that version. When the workflow drives a state field and the initial state maps to one of its values, the CI's field is set (a CI `update` audit row). 404 when the CI or the workflow does not exist or is of a type the caller may not view. 400 VALIDATION_ERROR `not_covered` when the workflow does not run on the CI's type. 409 CONFLICT `deleted` (the CI is deleted), `unpublished`, `inactive` or `already_running` (one running instance per workflow and CI). Audited on the CI as `workflow.start`.
+         * @description Needs the edit right on the CI's type. Starting the workflow again on a CI where an instance of it completed or was cancelled, or where another workflow on the same state field ran (the workflow replaced the field's driver), also needs `workflows.manage` or the workflow's `_start` grant (else 403 FORBIDDEN), since it sets the state field back to the initial state. The instance starts in the initial state of the workflow's current version and stays on that version. When the workflow drives a state field and the initial state maps to one of its values, the CI's field is set (a CI `update` audit row). 404 when the CI or the workflow does not exist or is of a type the caller may not view. 400 VALIDATION_ERROR `not_covered` when the workflow does not run on the CI's type. 409 CONFLICT `deleted` (the CI is deleted), `unpublished`, `inactive` or `already_running` (one running instance per workflow and CI). Audited on the CI as `workflow.start`.
          */
         post: operations["startWorkflowInstance"];
         delete?: never;
@@ -3949,8 +3949,8 @@ export interface components {
             data: components["schemas"]["WorkflowInstanceView"][];
             /**
              * @description Active workflows of the CI's type that are not running on it and that the caller may start (the edit right
-             *     on the type; where an instance of the workflow ended, also `workflows.manage` or its `_start` grant); empty
-             *     for a deleted CI
+             *     on the type; where an instance of the workflow ended, or where another workflow on the same state field ran,
+             *     also `workflows.manage` or its `_start` grant); empty for a deleted CI
              */
             startable: components["schemas"]["WorkflowStartable"][];
             /**
