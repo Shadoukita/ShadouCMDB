@@ -23,11 +23,16 @@ const menu = ref<HTMLElement>();
 const menuId = `row-menu-${useId()}`;
 /** The menu sits under <body> at the button's place: a table cell clips what overflows it. */
 const place = ref<{ top: string; left: string }>({ top: "0", left: "0" });
-/** Puts the menu under the button; false when the button is out of view. */
+/**
+ * Puts the menu under the button, or above it when it does not fit below (the last rows of a page); false when the
+ * button is out of view.
+ */
 function align(): boolean {
   const r = button.value?.getBoundingClientRect();
   if (!r) return false;
-  place.value = { top: `${r.bottom + 4}px`, left: `${Math.max(8, r.right - 200)}px` };
+  const height = menu.value?.offsetHeight ?? 0;
+  const above = r.bottom + 4 + height > window.innerHeight && r.top - 4 - height >= 0;
+  place.value = { top: `${above ? r.top - 4 - height : r.bottom + 4}px`, left: `${Math.max(8, r.right - 200)}px` };
   return r.bottom > 0 && r.top < window.innerHeight;
 }
 
@@ -38,6 +43,8 @@ async function show(at: "first" | "last" = "first") {
   document.addEventListener("pointerdown", onOutside, true);
   window.addEventListener("scroll", onScroll, true);
   await nextTick();
+  // Rendered now: place it again with its height.
+  align();
   const all = entries();
   (at === "first" ? all[0] : all[all.length - 1])?.focus();
 }
