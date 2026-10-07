@@ -154,7 +154,9 @@ Upgrade
 
 If the database still has only shadoucmdb_app (installed before the three-role
 setup), shadoucmdb_owner does not exist yet. Split the roles once first, in the
-order given in the header of sql\bootstrap\10_split_roles.sql:
+order given in the header of sql\bootstrap\10_split_roles.sql. Use the script
+that comes with the new binary: it grants the API role what the migrations of
+that release list, and stops if they are not applied yet:
   1. stop the service and copy the new binary (first two commands below),
      then run migrate as before, without MIGRATION_DATABASE_URL:
        & 'C:\Program Files\ShadouCMDB\shadoucmdb.exe' --env-file 'C:\ProgramData\ShadouCMDB\shadoucmdb.env' migrate

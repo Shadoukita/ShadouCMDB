@@ -54,10 +54,28 @@ Credentials never go into this folder or anywhere else in git; they belong in `.
   against a migrated database with `SQLX_OFFLINE_DIR=$PWD/.sqlx DATABASE_URL=... cargo build` in `backend/`
   and commit the updated files (delete stale ones first).
 - Commit the migration, the code change and any ERD update in the same pull request.
-- Migrations run as `shadoucmdb_owner`. Tables they create get `SELECT, INSERT, UPDATE, DELETE` for
-  `shadoucmdb_app` automatically (default privileges set by `0007` for `public` and `0008` for
-  `cmdb`). A table the API must not change, like `audit_log`, revokes those rights explicitly in
-  its migration. After 0009, migrations do not write to area schemas: those belong to
+- Migrations run as `shadoucmdb_owner`. Tables they create in `cmdb` get `SELECT, INSERT, UPDATE,
+  DELETE` for `shadoucmdb_app` automatically (default privileges set by `0008`). A table or routine
+  the API role may use only in part, like `audit_log`, gets a row in `cmdb.api_role_privileges` with
+  exactly the rights it keeps, and the migration then applies the list (0065, GH#713):
+
+  ```sql
+  INSERT INTO cmdb.api_role_privileges (object, object_type, privileges)
+    VALUES ('cmdb.new_history', 'table', '{SELECT,INSERT}');
+  DO $$
+  DECLARE
+    app_role name := COALESCE(NULLIF(current_setting('shadoucmdb.app_role', true), ''), 'shadoucmdb_app');
+  BEGIN
+    IF EXISTS (SELECT FROM pg_roles WHERE rolname = app_role) AND current_user <> app_role THEN
+      PERFORM cmdb.apply_api_role_grants(app_role);
+    END IF;
+  END $$;
+  ```
+
+  Do not `REVOKE` from the API role directly: `sql/bootstrap/10_split_roles.sql` grants a split
+  single-role install the same list, and only what is in it. `upgrade_0065` in `backend/src/db/`
+  fails when a fresh install's grants differ from the list or from a split install's;
+  [`checks/api_role_privileges.sql`](checks/api_role_privileges.sql) prints them for any database. After 0009, migrations do not write to area schemas: those belong to
   `shadoucmdb_app`. The one
   exception is 0016, which moves the fixed CI columns into type tables; it runs as the schema owner,
   a member of `shadoucmdb_app`, so the tables keep their owner.
