@@ -37,7 +37,7 @@ test("Administration has its own sub-navigation", async ({ page }) => {
   await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Administration", exact: true }).click();
   await expect(page).toHaveURL(/\/admin\/users$/);
   const sub = page.getByRole("navigation", { name: "Administration" });
-  await expect(sub.getByRole("link")).toHaveText(["Users", "Groups", "Permission profiles", "API tokens", "Identity providers", "Areas", "CI classes", "Relationship types", "Dropdowns", "Templates", "Workflows", "Customization", "Import", "Export / import", "Audit log"]);
+  await expect(sub.getByRole("link")).toHaveText(["Users", "Groups", "Permission profiles", "API tokens", "Identity providers", "Areas", "CI classes", "Relationship types", "Dropdowns", "Starter templates", "Workflows", "Customization", "Import", "Export / import", "Audit log"]);
   await expect(page.getByRole("heading", { level: 1, name: "Users" })).toBeVisible();
   await expect(page.getByRole("cell", { name: E2E_USER.username, exact: true })).toBeVisible();
 });
@@ -231,7 +231,7 @@ test("the audit log filters offer every OpenAPI value and show sign-in events as
   await expect(page).toHaveURL(/action=login\.failure/);
   const row = page.getByRole("row").filter({ hasText: hostile });
   await expect(row).toHaveCount(1);
-  expect((await row.getByRole("cell").nth(4).textContent())?.startsWith(`${hostile} from `)).toBe(true);
+  expect((await row.getByRole("cell").nth(5).textContent())?.startsWith(`${hostile} from `)).toBe(true);
   await expect(row.locator("img")).toHaveCount(0);
   expect(await page.evaluate(() => (window as { __xss?: number }).__xss)).toBeUndefined();
 

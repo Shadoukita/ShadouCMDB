@@ -33,8 +33,10 @@ interface Attr {
 test("the sub-navigation groups Access, Data model, Processes and System", async ({ page }) => {
   await page.goto("/admin/templates");
   const sub = page.getByRole("navigation", { name: "Administration" });
-  await expect(sub.getByRole("heading")).toHaveText(["Access", "Data model", "Processes", "System"]);
-  await expect(sub.getByRole("link")).toHaveText(["Users", "Groups", "Permission profiles", "API tokens", "Identity providers", "Areas", "CI classes", "Relationship types", "Dropdowns", "Templates", "Workflows", "Customization", "Import", "Export / import", "Audit log"]);
+  // Named groups, not headings: the page h1 is the first heading of the content (audit A2).
+  await expect(sub.getByRole("heading")).toHaveCount(0);
+  for (const name of ["Access", "Data model", "Processes", "System"]) await expect(sub.getByRole("group", { name })).toBeVisible();
+  await expect(sub.getByRole("link")).toHaveText(["Users", "Groups", "Permission profiles", "API tokens", "Identity providers", "Areas", "CI classes", "Relationship types", "Dropdowns", "Starter templates", "Workflows", "Customization", "Import", "Export / import", "Audit log"]);
   await expect(sub.getByRole("link", { name: "Templates" })).toHaveAttribute("aria-current", "page");
 });
 

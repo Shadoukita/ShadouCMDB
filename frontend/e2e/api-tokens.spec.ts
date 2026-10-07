@@ -130,7 +130,7 @@ test("search and filters live in the URL and survive a reload", async ({ page })
 
   await page.getByLabel("Status", { exact: true }).selectOption("revoked");
   await expect(page.getByRole("heading", { name: "No API tokens match these filters" })).toBeVisible();
-  await page.getByRole("button", { name: "Clear filters" }).click();
+  await page.getByRole("button", { name: "Clear filters" }).first().click();
   await expect(page).toHaveURL(at("/admin/api-tokens"));
 });
 
@@ -151,7 +151,7 @@ test("revoke asks first, keeps the token listed as revoked, and the secret stops
   await row.getByRole("button", { name: `Actions for ${NAME}` }).click();
   await expect(page.getByRole("menu", { name: `Actions for ${NAME}` }).getByRole("menuitem", { name: "Revoke…" })).toHaveCount(0);
   await page.keyboard.press("Escape");
-  await page.getByRole("button", { name: "Clear filters" }).click();
+  await page.getByRole("button", { name: "Clear filters" }).first().click();
   await snap(page, "43-api-tokens-list");
 
   await page.getByLabel("Status", { exact: true }).selectOption("revoked");
@@ -230,7 +230,7 @@ test("a token refused because its owner must use two-factor authentication is ba
   await expect(page.getByLabel("Refused for two-factor only")).toBeChecked();
   await expect(page.getByRole("cell", { name: refusedName, exact: true })).toBeVisible();
   await expect(page.getByRole("cell", { name: NAME, exact: true })).toHaveCount(0);
-  await page.getByRole("button", { name: "Clear filters" }).click();
+  await page.getByRole("button", { name: "Clear filters" }).first().click();
   await expect(page).toHaveURL(at("/admin/api-tokens"));
 
   // A new token for the account from this session would be refused too: the dialog shows the server's reason.

@@ -51,7 +51,7 @@ test("Groups sits under Access, and an empty list says what groups are for", asy
 
 test("create a group; a duplicate name is refused next to the field", async ({ page, request }) => {
   await page.goto("/admin/groups");
-  await page.getByRole("link", { name: "+ Create group" }).click();
+  await page.getByRole("link", { name: "Create group" }).first().click();
   await expect(page).toHaveURL(/\/admin\/groups\/new$/);
   await page.getByRole("button", { name: "Create group" }).click();
   await expect(page.locator("#group-name")).toHaveAttribute("aria-invalid", "true");

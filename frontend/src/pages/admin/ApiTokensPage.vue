@@ -210,7 +210,7 @@ const rowMenu = (tok: ApiToken): RowMenuItem[] => [
           <tbody @keydown="onRowKeydown($event)">
             <tr v-for="tok in rows" :key="tok.id" :data-id="tok.id" :class="{ disabled: tok.status !== 'active' }">
               <td dir="auto">{{ tok.name }}</td>
-              <td class="mono">{{ tok.tokenPrefix }}…</td>
+              <td><code>{{ tok.tokenPrefix }}…</code></td>
               <td>
                 <span class="name-badges">
                   <RouterLink :to="`/admin/users/${tok.userId}`" class="mono">{{ tok.username }}</RouterLink>
