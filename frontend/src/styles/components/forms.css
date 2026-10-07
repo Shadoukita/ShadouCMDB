@@ -173,7 +173,8 @@ fieldset.group {
   padding: 0;
   min-width: 0;
 }
-fieldset.group + fieldset.group {
+fieldset.group + fieldset.group,
+.stack > * + fieldset.group {
   margin-top: var(--space-5);
 }
 fieldset.group legend {

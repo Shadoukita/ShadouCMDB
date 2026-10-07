@@ -124,7 +124,8 @@ test("dismissing a toast by keyboard keeps focus in the page (WCAG 2.4.3)", asyn
   await page.getByRole("button", { name: "Create group" }).click();
   await expect(page).toHaveURL(/\/admin\/groups\/[^/]+$/);
   await expect(page).not.toHaveURL(/\/new$/);
-  await page.getByRole("button", { name: "Delete group" }).click();
+  await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "Delete group" }).click();
   await page.getByRole("dialog", { name: `Delete group ${name}?` }).getByRole("button", { name: "Delete group" }).click();
   await expect(page).toHaveURL(/\/admin\/groups$/);
 

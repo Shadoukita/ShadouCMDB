@@ -366,7 +366,8 @@ test("11: groups admin: create a group, add a member, delete it while it owns se
   await checkA11y(page, testInfo, "groups list", { strict: true });
 
   await page.getByRole("link", { name: GROUP11 }).click();
-  await page.getByRole("button", { name: "Delete group" }).click();
+  await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "Delete group" }).click();
   const dialog = page.getByRole("dialog", { name: `Delete group ${GROUP11}?` });
   await expect(dialog.getByTestId("group-delete-services")).toHaveText("It is owner of 2 business services; it is removed as owner from all of them.");
   await checkA11y(page, testInfo, "group delete dialog", { strict: true });

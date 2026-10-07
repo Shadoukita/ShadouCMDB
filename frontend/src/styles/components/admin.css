@@ -169,3 +169,6 @@ table.matrix .matrix-note {
   flex: 1;
   min-width: 0;
 }
+.profile-picker-hint {
+  margin: 0 0 var(--space-3);
+}

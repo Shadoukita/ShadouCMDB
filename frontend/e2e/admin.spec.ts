@@ -88,7 +88,8 @@ test("the built-in Administrator profile is read-only but for its two-factor req
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(`Copy of ${PROFILE}`);
   await expect(page.getByLabel("edit on Server", { exact: true })).toBeChecked();
 
-  await page.getByRole("button", { name: "Delete" }).click();
+  await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "Delete profile" }).click();
   const confirm = page.getByRole("dialog", { name: `Delete profile “Copy of ${PROFILE}”?` });
   await expect(confirm).toContainText("No user holds this profile");
   await confirm.getByRole("button", { name: "Delete profile" }).click();
@@ -169,7 +170,7 @@ test("disable, enable and reset the password; the audit log names who did it", a
   const confirm = page.getByRole("dialog", { name: `Disable ${USERNAME}?` });
   await expect(confirm).toContainText("signed out everywhere");
   await confirm.getByRole("button", { name: "Disable account" }).click();
-  await expect(page.locator(".page-header .badge").first()).toHaveText("Disabled");
+  await expect(page.getByTestId("record-meta")).toContainText("Disabled");
 
   const blocked = await signInAs(browser, USERNAME, PASSWORD);
   await expect(blocked.getByRole("alert")).toContainText("Wrong username or password, or the account is disabled");
@@ -177,7 +178,7 @@ test("disable, enable and reset the password; the audit log names who did it", a
 
   await page.getByRole("button", { name: "Enable account" }).click();
   await page.getByRole("dialog", { name: `Enable ${USERNAME}?` }).getByRole("button", { name: "Enable account" }).click();
-  await expect(page.locator(".page-header .badge").first()).toHaveText("Active");
+  await expect(page.getByTestId("record-meta")).toContainText("Active");
 
   await page.locator("#reset-password").fill(NEW_PASSWORD);
   await page.locator("#reset-confirm").fill(NEW_PASSWORD);
