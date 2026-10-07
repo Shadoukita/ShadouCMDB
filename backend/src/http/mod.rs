@@ -2160,7 +2160,8 @@ mod tests {
     /// steadily is not dropped, though the socket's send buffer drains much
     /// more slowly than the send limit. Without `TCP_NOTSENT_LOWAT` the
     /// server sees no progress until a third of that buffer has drained, and
-    /// drops this client.
+    /// drops this client, so the test runs only where the option is set.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     #[tokio::test]
     async fn steady_slow_http1_readers_are_not_dropped() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
