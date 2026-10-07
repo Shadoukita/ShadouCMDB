@@ -1,4 +1,4 @@
-//! Migration 0060 (sent backup.restore entries) against an install with
+//! Migration 0061 (sent backup.restore entries) against an install with
 //! restores: an entry counts as sent only when a user or API client wrote a row
 //! after it, so one a CLI command buried (GH#677) is still sent.
 
@@ -25,9 +25,9 @@ async fn restores(pool: &PgPool, sql: &'static str) -> Vec<i64> {
 async fn only_restores_a_user_row_follows_count_as_sent() {
     let Some(db) = scratch::empty("only_restores_a_user_row_follows_count_as_sent").await else { return };
     let pool = &db.pool;
-    MIGRATOR.run_to(59, pool).await.expect("migrations up to 0059");
+    MIGRATOR.run_to(60, pool).await.expect("migrations up to 0060");
     pool.execute(BEFORE).await.expect("data before the upgrade");
-    MIGRATOR.run(pool).await.expect("migration 0060");
+    MIGRATOR.run(pool).await.expect("migration 0061");
 
     let all = restores(pool, "SELECT chain_seq FROM audit_log WHERE action = 'backup.restore' ORDER BY 1").await;
     assert_eq!(all.len(), 3);

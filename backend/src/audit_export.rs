@@ -16,7 +16,7 @@
 //! export starts before the oldest such entry not yet sent, so it leaves with
 //! every row after it, also the ones CLI commands (`mfa reset-undecryptable`,
 //! `create-admin`) wrote before the server started (GH#677). A sent entry is
-//! listed in `audit_export_restores` (migration 0060); one whose send fails is
+//! listed in `audit_export_restores` (migration 0061); one whose send fails is
 //! sent again after a restart.
 //!
 //! A row that can never be sent (larger than one UDP datagram) must not hold
