@@ -2584,12 +2584,19 @@ pub(crate) mod tests {
         // Accepts the connection and never answers: the TLS handshake waits for the timeout.
         let silent = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("ldaps://127.0.0.1:{}", silent.local_addr().unwrap().port());
+        // Whether a sign-in asked the directory is counted here, not timed: under
+        // full-suite load a skipped sign-in can queue for the password hashing
+        // permits for seconds (GH#701).
+        let asked = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let accepted = asked.clone();
         tokio::spawn(async move {
             let mut held = vec![];
             while let Ok((socket, _)) = silent.accept().await {
+                accepted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 held.push(socket);
             }
         });
+        let asked = move || asked.load(std::sync::atomic::Ordering::SeqCst);
         let ldap = crate::modules::mfa::tests::provider(pool, "ldap", true, &url).await;
         let mut tx = pool.begin().await.unwrap();
         let linked = crate::data::identity_providers::NewLinkedUser {
@@ -2619,10 +2626,14 @@ pub(crate) mod tests {
         // of it was not kept waiting, however loaded the machine (CI) is.
         let waited = crate::auth::sso::ldap::TIMEOUT / 2;
         assert!(first >= waited, "the first lookup waits for the timeout: {first:?}");
+        assert_eq!(asked(), 1, "the first lookup asks the directory");
+        // Skipped: none of these connects to the directory, so none waits for
+        // its timeout, and each is held to the floor like a local account's.
         for name in ["owner", "nobody-2"] {
             let (code, took) = answer_time(name).await;
             assert_eq!(code, ErrorCode::Unauthenticated, "{name}");
-            assert!(took >= floor && took < waited, "{name}: held to the floor, not the timeout: {took:?}");
+            assert!(took >= floor, "{name}: held to the floor: {took:?}");
+            assert_eq!(asked(), 1, "{name}: skipped, not asked");
         }
         let failures = auth_rows(pool, "login.failure").await;
         assert_eq!(failures[2].3["attemptedUsername"], "nobody-2");
@@ -2631,16 +2642,18 @@ pub(crate) mod tests {
         // A directory account gets the 503 without the timeout, held to the floor (GH#586).
         let (code, took) = answer_time("erin").await;
         assert_eq!(code, ErrorCode::IdentityProviderUnavailable, "a directory account");
-        assert!(took >= floor && took < waited, "skipped, not asked: {took:?}");
+        assert!(took >= floor, "held to the floor: {took:?}");
+        assert_eq!(asked(), 1, "skipped, not asked");
 
         // After the window, sign-ins sent at once (GH#595): none asks the
         // directory, so none waits for the timeout; a background probe does.
         crate::modules::sso::expire_skip(ldap);
         let burst = ["owner", "nobody-3", "nobody-4", "nobody-5", "nobody-6", "nobody-7"];
         let answers = futures_util::future::join_all(burst.map(&answer_time)).await;
-        let late: Vec<_> = burst.iter().zip(&answers).filter(|(_, (_, took))| *took >= waited).collect();
-        assert!(answers.iter().all(|(code, _)| *code == ErrorCode::Unauthenticated), "{answers:?}");
-        assert!(late.is_empty(), "no sign-in waits for the directory: {late:?}");
+        assert!(
+            answers.iter().all(|(code, took)| *code == ErrorCode::Unauthenticated && *took >= floor),
+            "{answers:?}"
+        );
         assert_eq!(crate::modules::sso::skip_state(ldap), Some((false, true)), "the probe runs");
         // The probe times out too: skipped for another window, still at the floor.
         let deadline = tokio::time::Instant::now() + 2 * crate::auth::sso::ldap::TIMEOUT;
@@ -2648,10 +2661,12 @@ pub(crate) mod tests {
             assert!(tokio::time::Instant::now() < deadline, "{:?}", crate::modules::sso::skip_state(ldap));
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
+        assert_eq!(asked(), 2, "only the background probe asked the directory");
         for name in ["owner", "nobody-8"] {
             let (code, took) = answer_time(name).await;
             assert_eq!(code, ErrorCode::Unauthenticated, "{name}");
-            assert!(took >= floor && took < waited, "{name}: held to the floor after the probe: {took:?}");
+            assert!(took >= floor, "{name}: held to the floor after the probe: {took:?}");
+            assert_eq!(asked(), 2, "{name}: skipped after the probe, not asked");
         }
         db.drop().await;
     }
