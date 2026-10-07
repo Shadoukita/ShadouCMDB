@@ -38,18 +38,20 @@ onBeforeUnmount(() => observer?.disconnect());
 const layout = computed(() => (width.value >= MIN_WIDTH ? layoutTopology(props.topology, width.value) : null));
 const arrow = `topology-arrow-${useId()}`;
 
-/** A horizontal S-curve from the parent's facing side to the child's. */
+/** A horizontal S-curve from the parent's facing side, then straight into the child's (where the label sits). */
 function path(e: PlacedEdge): string {
-  const dx = (e.x2 - e.x1) / 2;
-  return `M ${e.x1} ${e.y1} C ${e.x1 + dx} ${e.y1}, ${e.x2 - dx} ${e.y2}, ${e.x2} ${e.y2}`;
+  const dx = (e.xm - e.x1) / 2;
+  return `M ${e.x1} ${e.y1} C ${e.x1 + dx} ${e.y1}, ${e.xm - dx} ${e.y2}, ${e.xm} ${e.y2} L ${e.x2} ${e.y2}`;
 }
 /** The arrow sits at the relationship's target: the child when the parent is the source. */
 const markerEnd = (e: PlacedEdge) => (e.directional && e.outward ? `url(#${arrow})` : undefined);
 const markerStart = (e: PlacedEdge) => (e.directional && !e.outward ? `url(#${arrow})` : undefined);
+/** On the straight run into the child, its end against the child: right-aligned when the child is to the right. */
 const labelStyle = (e: PlacedEdge) => ({
-  left: `${(e.x1 + e.x2) / 2}px`,
-  top: `${(e.y1 + e.y2) / 2}px`,
-  maxWidth: `${Math.max(48, Math.abs(e.x2 - e.x1) - 12)}px`,
+  left: `${e.lx}px`,
+  top: `${e.ly}px`,
+  maxWidth: `${e.labelRoom}px`,
+  transform: e.x2 > e.x1 ? "translate(-100%, -50%)" : "translate(0, -50%)",
 });
 const boxStyle = (n: { x: number; y: number }) => ({ left: `${n.x}px`, top: `${n.y}px`, width: `${layout.value?.boxWidth}px` });
 

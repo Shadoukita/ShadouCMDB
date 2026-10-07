@@ -174,6 +174,27 @@ describe("layoutTopology", () => {
     assert.equal(l.edges.length, 7);
   });
 
+  test("labels sit on each child's own straight run, not where the edges converge (GH#671)", () => {
+    const l = layoutTopology(star(7, 7), 1000);
+    for (const side of [-1, 1]) {
+      const edges = l.edges.filter((e) => l.nodes.find((n) => n.id === e.to)!.side === side);
+      assert.equal(edges.length, 7);
+      for (const e of edges) {
+        const child = l.nodes.find((n) => n.id === e.to)!;
+        // At the child's height, between the end of the curve and the child, clear of the arrowhead.
+        assert.equal(e.ly, child.y + BOX_HEIGHT / 2);
+        assert.ok(side === 1 ? e.xm < e.lx && e.lx < e.x2 : e.x2 < e.lx && e.lx < e.xm);
+        // And no wider than the run, so it hides none of the curves beside it.
+        assert.ok(Math.abs(e.lx - e.xm) >= e.labelRoom);
+        // Every curve of the column ends before any run begins: no edge crosses another's run.
+        for (const f of edges) assert.ok(side === 1 ? f.xm <= e.xm : f.xm >= e.xm);
+      }
+      // One row apart: a 16px label never overlaps the next one.
+      const ys = edges.map((e) => e.ly).sort((a, b) => a - b);
+      for (let i = 1; i < ys.length; i++) assert.ok(ys[i] - ys[i - 1] >= BOX_HEIGHT);
+    }
+  });
+
   test("the canvas is as tall as its tallest column", () => {
     assert.ok(layoutTopology(star(1, 1), 900).height < layoutTopology(star(1, 6), 900).height);
   });
