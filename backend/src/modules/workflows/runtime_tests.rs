@@ -849,3 +849,78 @@ async fn a_transition_racing_a_ci_delete_never_deadlocks() {
     assert_eq!(problems, vec![]);
     db.drop().await;
 }
+
+/// GH#668: a workflow state field is never a transition field. Publishing
+/// refuses this workflow's own state field and another active workflow's;
+/// a version that already takes one (published before the lint) is refused
+/// at run time, so a granted user cannot set the field to any value.
+#[tokio::test]
+async fn a_transition_never_takes_a_workflow_state_field() {
+    let Some(db) = scratch::database("workflow_transition_state_field").await else { return };
+    let w = world(&db).await;
+    let refused = pairs(&[("transitions[0].fields[0].attribute", "state_field")]);
+    let publish = |def: Uuid, draft: Value| {
+        let w = &w;
+        async move {
+            let path = format!("{DEFS}/{def}/draft/publish");
+            w.call(&w.admin, "POST", &path, Some(json!({ "expectedDraftChecksum": draft["checksum"] }))).await
+        }
+    };
+
+    // The issue's repro: a state without a value, reached by a transition taking the state field.
+    let graph = json!({
+        "initialState": "planned",
+        "states": [
+            { "key": "planned", "name": "Planned", "category": "open", "stateValue": "planned" },
+            { "key": "limbo", "name": "Limbo", "category": "active" },
+            { "key": "done", "name": "Done", "category": "done", "terminal": true, "stateValue": "live" }
+        ],
+        "transitions": [
+            { "key": "approve", "name": "Approve", "from": "planned", "to": "limbo",
+              "fields": [ { "attribute": "lifecycle" } ] },
+            { "key": "go_live", "name": "Go live", "from": "limbo", "to": "done" }
+        ]
+    });
+    let draft = w.ok("PUT", &format!("{DEFS}/{}/draft", w.definition), graph.clone()).await;
+    let (status, v) = publish(w.definition, draft).await;
+    assert_eq!((status, details(&v)), (400, refused.clone()), "{v}");
+    w.call(&w.admin, "DELETE", &format!("{DEFS}/{}/draft", w.definition), None).await;
+
+    // Another workflow on the type, with no state field of its own, cannot take the active one's.
+    let other =
+        id(&w.ok("POST", DEFS, json!({ "key": "server_review", "name": "Server review", "classId": w.server })).await);
+    let mut graph = graph;
+    for s in graph["states"].as_array_mut().unwrap() {
+        s.as_object_mut().unwrap().remove("stateValue");
+    }
+    let draft = w.ok("PUT", &format!("{DEFS}/{other}/draft"), graph).await;
+    let (status, v) = publish(other, draft).await;
+    assert_eq!((status, details(&v)), (400, refused), "{v}");
+    assert!(v["error"]["details"][0]["message"].as_str().unwrap().contains("server_lifecycle"), "{v}");
+
+    // While server_lifecycle is inactive the review may take the field and publishes; once it is
+    // active again, the published review version is refused at run time.
+    let set_active = |def: Uuid, active: bool| {
+        let w = &w;
+        async move {
+            let d = w.ok("GET", &format!("{DEFS}/{def}"), json!(null)).await;
+            w.ok("PATCH", &format!("{DEFS}/{def}"), json!({ "version": d["version"], "isActive": active })).await;
+        }
+    };
+    set_active(w.definition, false).await;
+    let (status, v) = publish(other, w.ok("GET", &format!("{DEFS}/{other}/draft"), json!(null)).await).await;
+    assert_eq!(status, 201, "{v}");
+    set_active(other, true).await;
+    set_active(w.definition, true).await;
+    let ci = w.ci(w.server).await;
+    let (status, v) = w.start(&w.admin, ci).await;
+    assert_eq!(status, 201, "{v}");
+    let (status, v) =
+        w.call(&w.admin, "POST", RUN, Some(json!({ "definitionKey": "server_review", "ciId": ci }))).await;
+    assert_eq!(status, 201, "{v}");
+    let review = id(&v["instance"]);
+    let body = json!({ "transitionKey": "approve", "expectedVersion": 1, "fields": { "lifecycle": w.value("live") } });
+    let (status, v) = w.transition(&w.admin, review, body).await;
+    assert_eq!((status, details(&v)), (400, pairs(&[("fields.lifecycle", "state_field")])), "{v}");
+    assert_eq!(w.ci_values(ci).await["attributes"]["lifecycle"], json!(w.value("planned").to_string()));
+}

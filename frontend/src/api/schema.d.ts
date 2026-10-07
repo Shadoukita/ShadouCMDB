@@ -3259,7 +3259,7 @@ export interface paths {
         put?: never;
         /**
          * Move a workflow instance along a transition, or request approval for one that needs it
-         * @description One transaction: the fields sent are validated as PATCH /configuration-items/{id} validates them (400 VALIDATION_ERROR on `fields.<key>`, and `not_a_transition_field` for a field the transition does not list); required fields, the comment and the conditions are then checked on the CI's values with the ones sent (422 WORKFLOW_CONDITION_FAILED, one detail each: `required`, `comment_required`, `condition`). The fields and the state field are written to the CI (a CI `update` audit row), the instance moves on (and completes on a terminal state), and the step is audited on the CI as `workflow.transition`. Needs the edit right on the CI's type and a grant of the transition to one of the caller's profiles; with an API token, to the token's profile as well (403 FORBIDDEN). 400 `unknown_transition` for a key the version does not have; 409 CONFLICT `not_from_current_state` or `not_active`; 409 VERSION_CONFLICT on a stale `expectedVersion`. **Approval:** a transition with an approval policy (`requiresApproval` in `availableTransitions`) is checked the same way, but writes nothing to the CI: it creates an approval request that stages the fields and the comment, and answers 202 with the instance, still in its state, and its `pendingApproval`. The transition runs when the request's last step is approved. Audited on the CI as `workflow.approval_request`. While a request is pending, every transition of the instance is refused with 409 WORKFLOW_APPROVAL_PENDING.
+         * @description One transaction: the fields sent are validated as PATCH /configuration-items/{id} validates them (400 VALIDATION_ERROR on `fields.<key>`, `not_a_transition_field` for a field the transition does not list, `state_field` for a workflow state field of the CI); required fields, the comment and the conditions are then checked on the CI's values with the ones sent (422 WORKFLOW_CONDITION_FAILED, one detail each: `required`, `comment_required`, `condition`). The fields and the state field are written to the CI (a CI `update` audit row), the instance moves on (and completes on a terminal state), and the step is audited on the CI as `workflow.transition`. Needs the edit right on the CI's type and a grant of the transition to one of the caller's profiles; with an API token, to the token's profile as well (403 FORBIDDEN). 400 `unknown_transition` for a key the version does not have; 409 CONFLICT `not_from_current_state` or `not_active`; 409 VERSION_CONFLICT on a stale `expectedVersion`. **Approval:** a transition with an approval policy (`requiresApproval` in `availableTransitions`) is checked the same way, but writes nothing to the CI: it creates an approval request that stages the fields and the comment, and answers 202 with the instance, still in its state, and its `pendingApproval`. The transition runs when the request's last step is approved. Audited on the CI as `workflow.approval_request`. While a request is pending, every transition of the instance is refused with 409 WORKFLOW_APPROVAL_PENDING.
          */
         post: operations["runWorkflowTransition"];
         delete?: never;
@@ -7819,7 +7819,8 @@ export interface components {
             /**
              * @description Machine-readable: no_states, no_initial_state, initial_state_terminal, unreachable_state, dead_end,
              *     no_terminal_reachable, terminal_has_transitions, unknown_attribute, inactive_attribute, attribute_type,
-             *     unknown_value, op_type, no_state_attribute, state_value_list, state_value_inactive, ungranted_transition, ...
+             *     unknown_value, op_type, no_state_attribute, state_value_list, state_value_inactive, state_field,
+             *     ungranted_transition, ...
              */
             code: string;
             message: string;
@@ -30559,7 +30560,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Conflict: CONFLICT (the request is not pending, the step is no longer active, or you already decided it), VERSION_CONFLICT (stale `expectedVersion`), or WORKFLOW_APPROVAL_STALE (the final approval cannot apply the transition: details[].field `fields.<key>` with code changed, not_a_transition_field, required or condition). Nothing was changed, not even the decision */
+            /** @description Conflict: CONFLICT (the request is not pending, the step is no longer active, or you already decided it), VERSION_CONFLICT (stale `expectedVersion`), or WORKFLOW_APPROVAL_STALE (the final approval cannot apply the transition: details[].field `fields.<key>` with code changed, not_a_transition_field, state_field, required or condition). Nothing was changed, not even the decision */
             409: {
                 headers: {
                     [name: string]: unknown;

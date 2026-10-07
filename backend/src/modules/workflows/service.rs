@@ -14,6 +14,7 @@ use uuid::Uuid;
 use super::approvers::{self, Facts};
 use super::graph::{self, Fields, LintContext, Stored, VERSION_COLUMNS, VersionRow};
 use super::schemas::*;
+use super::state_field::StateFields;
 use crate::api::context::{Count, RequestContext};
 use crate::api::schemas::{Page, Paged, like_pattern};
 use crate::api::validate;
@@ -773,9 +774,16 @@ async fn lint_draft(
     let granted = granted_keys(conn, d.id).await?;
     let assignments = approvers::load(conn, d.id).await?;
     let facts = Facts::gather(conn, d.class_id, &fields, assignments).await?;
+    let others = StateFields::load(conn).await?.overlapping(&fields.model, &d.key, d.class_id, d.include_subclasses);
     let problems = graph::lint(
         &stored,
-        &LintContext { fields: &fields, state_attribute: d.state_attribute_id, granted: &granted, approvers: &facts },
+        &LintContext {
+            fields: &fields,
+            state_attribute: d.state_attribute_id,
+            granted: &granted,
+            approvers: &facts,
+            other_drivers: &others,
+        },
     );
     let sum = stored.checksum(&fields.model);
     Ok((stored, fields, problems, sum))

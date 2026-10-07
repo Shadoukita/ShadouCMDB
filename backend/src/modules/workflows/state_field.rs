@@ -90,6 +90,28 @@ impl StateFields {
         Ok(StateFields::Guarded(drivers))
     }
 
+    /// The active workflows other than `definition_key` that drive a field on
+    /// a CI a workflow on `class_id` (with `include_subclasses`) may cover: a
+    /// transition of that workflow must not take their state field (GH#668).
+    pub fn overlapping(
+        &self,
+        model: &Model,
+        definition_key: &str,
+        class_id: Uuid,
+        include_subclasses: bool,
+    ) -> Vec<Driver> {
+        let StateFields::Guarded(drivers) = self else { return Vec::new() };
+        drivers
+            .iter()
+            .filter(|d| d.definition_key != definition_key)
+            .filter(|d| {
+                d.covers(model, class_id)
+                    || (include_subclasses && model.lineage(d.class_id).iter().any(|c| c.id == class_id))
+            })
+            .cloned()
+            .collect()
+    }
+
     /// The driven fields among `defs` for a CI of `class_id`, with their workflow.
     fn driven<'a, 'd>(
         &'a self,

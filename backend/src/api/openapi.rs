@@ -224,7 +224,7 @@ fn error_status(code: ErrorCode) -> (u16, &'static str) {
             "Conflict: CONFLICT (the request is not pending, the step is no longer active, or you already decided \
              it), VERSION_CONFLICT (stale `expectedVersion`), or WORKFLOW_APPROVAL_STALE (the final approval cannot \
              apply the transition: details[].field `fields.<key>` with code changed, not_a_transition_field, \
-             required or condition). Nothing was changed, not even the decision",
+             state_field, required or condition). Nothing was changed, not even the decision",
         ),
         ErrorCode::InvalidName | ErrorCode::SchemaChangeRefused => (
             422,

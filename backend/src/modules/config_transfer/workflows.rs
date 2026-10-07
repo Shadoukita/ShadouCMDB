@@ -37,6 +37,7 @@ use crate::modules::workflows::schemas::{
     WorkflowGrant, WorkflowProblemSeverity,
 };
 use crate::modules::workflows::service::{self, Access};
+use crate::modules::workflows::state_field::StateFields;
 use crate::schema::model::Model;
 
 /// The change note of a version an import publishes.
@@ -431,9 +432,17 @@ impl Importer<'_> {
             .map_err(|e| at(&gpath, e))?;
         let row = service::draft_row(self.conn, d.id, false).await?.ok_or_else(AppError::internal)?;
         let stored = graph::load(self.conn, row).await?;
+        let others =
+            StateFields::load(self.conn).await?.overlapping(&fields.model, &d.key, d.class_id, d.include_subclasses);
         let problems = graph::lint(
             &stored,
-            &LintContext { fields, state_attribute: d.state_attribute_id, granted, approvers: facts },
+            &LintContext {
+                fields,
+                state_attribute: d.state_attribute_id,
+                granted,
+                approvers: facts,
+                other_drivers: &others,
+            },
         );
         let sum = stored.checksum(&fields.model);
         for p in problems.iter().filter(|p| p.severity == WorkflowProblemSeverity::Warning) {
