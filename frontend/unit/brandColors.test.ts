@@ -53,7 +53,7 @@ describe("brandVariables", () => {
   });
 
   // A spread of brand colours: very light, very dark, saturated, mid grey.
-  const samples = ["#0a6c7d", "#4cc3d9", "#2457d6", "#ffd400", "#0b1f3a", "#e4002b", "#00a19a", "#808080", "#f2f2f2", "#6c2bd9"];
+  const samples = ["#0b6e7f", "#1e95a8", "#0a6c7d", "#4cc3d9", "#2457d6", "#ffd400", "#0b1f3a", "#e4002b", "#00a19a", "#808080", "#f2f2f2", "#6c2bd9"];
   for (const theme of THEMES) {
     for (const color of samples) {
       test(`${theme} ${color}: text, link, focus and accent keep their contrast`, () => {
@@ -73,7 +73,7 @@ describe("brandVariables", () => {
 
   test("the default primary on its subtle tint keeps AA for text", () => {
     for (const theme of THEMES) {
-      const v = brandVariables("#0a6c7d", null, theme);
+      const v = brandVariables("#0b6e7f", null, theme);
       assert.ok(contrast(v["--c-link"], v["--c-primary-subtle"]) >= 4.5, theme);
     }
   });

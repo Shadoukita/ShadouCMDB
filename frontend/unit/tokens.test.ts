@@ -1,4 +1,4 @@
-// Design tokens (SHAA-1670, direction 04 "Control Room"): every text and control-boundary pair the
+// Design tokens (SHAA-1670, the user's reference mockups from revision 29): every text and control-boundary pair the
 // components draw keeps WCAG 2.1 AA in both themes. Run: npm run test:unit -w frontend
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -31,6 +31,7 @@ const SURFACES = ["--c-surface", "--c-bg", "--c-surface-alt", "--c-row-hover"];
 /** [foreground, backgrounds, minimum ratio] */
 const PAIRS: [string, string[], number][] = [
   ["--c-text", [...SURFACES, "--c-row-selected"], 4.5],
+  ["--c-text-body", [...SURFACES, "--c-row-selected"], 4.5],
   ["--c-text-secondary", [...SURFACES, "--c-row-selected", "--c-surface-sunken"], 4.5],
   ["--c-text-tertiary", [...SURFACES, "--c-surface-sunken"], 4.5],
   ["--c-link", [...SURFACES, "--c-primary-subtle", "--c-row-selected"], 4.5],
@@ -38,6 +39,7 @@ const PAIRS: [string, string[], number][] = [
   ["--c-success-text", ["--c-success-subtle"], 4.5],
   ["--c-warning-text", ["--c-warning-subtle"], 4.5],
   ["--c-info-text", ["--c-info-subtle"], 4.5],
+  ["--c-purple-text", ["--c-purple-subtle"], 4.5],
   ["--c-primary-text", ["--c-primary", "--c-primary-hover"], 4.5],
   ["--c-on-solid", ["--c-danger-solid", "--c-danger-solid-hover"], 4.5],
   ["--badge-neutral-fg", ["--badge-neutral-bg"], 4.5],
@@ -57,10 +59,9 @@ const PAIRS: [string, string[], number][] = [
   ["--c-success", ["--c-surface"], 3],
   ["--c-warning", ["--c-surface"], 3],
   ["--c-danger-solid", ["--c-surface"], 3],
-  // Chart series (the change histogram), on the plot and on a hovered column.
-  ["--c-viz-1", ["--c-surface", "--c-surface-alt"], 3],
-  ["--c-viz-2", ["--c-surface", "--c-surface-alt"], 3],
-  ["--c-viz-3", ["--c-surface", "--c-surface-alt"], 3],
+  ["--c-purple", ["--c-surface"], 3],
+  // Chart series (change histogram, class bars), on the plot and on a hovered column.
+  ...[1, 2, 3, 4, 5, 6, 7, 8].map((n): [string, string[], number] => [`--c-viz-${n}`, ["--c-surface", "--c-surface-alt"], 3]),
 ];
 
 for (const [theme, vars] of Object.entries(THEMES)) {

@@ -54,7 +54,7 @@ h2 {
 h3 {
   font-size: var(--fs-h3);
 }
-/* Identifiers (idents, hostnames, IPs, keys, timestamps): JetBrains Mono, sized to Inter's x-height. */
+/* Identifiers (idents, hostnames, IPs, keys, timestamps): IBM Plex Mono, which shares Plex Sans's metrics. */
 code,
 kbd,
 .mono {

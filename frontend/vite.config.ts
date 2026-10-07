@@ -5,8 +5,8 @@ import vue from "@vitejs/plugin-vue";
 // The fonts' OFL-1.1 licences and the Lucide icons' ISC licence have to ship with them, so the
 // build puts them in dist/assets/ next to the content-hashed files.
 const FONT_LICENSES = {
-  "assets/Inter-LICENSE.txt": "./src/assets/fonts/inter/LICENSE.txt",
-  "assets/JetBrainsMono-LICENSE.txt": "./src/assets/fonts/jetbrains-mono/LICENSE.txt",
+  "assets/IBMPlexSans-LICENSE.txt": "./src/assets/fonts/ibm-plex-sans/LICENSE.txt",
+  "assets/IBMPlexMono-LICENSE.txt": "./src/assets/fonts/ibm-plex-mono/LICENSE.txt",
   "assets/Lucide-LICENSE.txt": "./src/icons/LICENSE.txt",
 };
 
