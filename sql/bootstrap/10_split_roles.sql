@@ -10,7 +10,9 @@
 --
 -- Order:
 --   1. Install the new binary and run `shadoucmdb migrate` as before (as
---      shadoucmdb_app), so migrations 0007 to 0021 are applied.
+--      shadoucmdb_app), so migrations 0007 to 0065 are applied. The script
+--      takes the API role's rights from migration 0065 on (GH#713); use the
+--      script of the release you migrated with.
 --   2. Stop the server. Run this script as an administrator, connected to the
 --      ShadouCMDB database:
 --        psql "postgres://admin@db.example.internal:5432/shadoucmdb" \
@@ -63,9 +65,8 @@ DO $$
 BEGIN
   IF to_regprocedure('cmdb.prune_audit_log(interval, text, boolean, text)') IS NULL
      OR to_regclass('cmdb.areas') IS NULL
-     OR to_regclass('cmdb.audit_log_chain_head') IS NULL
-     OR to_regclass('cmdb.server_keys') IS NULL THEN
-    RAISE EXCEPTION 'migrations 0007 to 0021 are not applied: run `shadoucmdb migrate` first';
+     OR to_regprocedure('cmdb.apply_api_role_grants(name)') IS NULL THEN
+    RAISE EXCEPTION 'migrations 0007 to 0065 are not applied: run `shadoucmdb migrate` of this release first';
   END IF;
 END;
 $$;
@@ -139,29 +140,13 @@ SELECT format('GRANT CONNECT ON DATABASE %I TO %I, %I', current_database(), :'ap
 -- New areas are new schemas, created by the API.
 SELECT format('GRANT CREATE ON DATABASE %I TO %I', current_database(), :'app_role') \gexec
 
--- Same grants as migrations 0007, 0008, 0018, 0021 and 0038 make on a fresh three-role install.
-GRANT USAGE ON SCHEMA cmdb TO :"app_role", :"maintenance_role";
+-- The maintenance role prunes the audit log (migrations 0007 and 0008).
+GRANT USAGE ON SCHEMA cmdb TO :"maintenance_role";
 GRANT EXECUTE ON FUNCTION cmdb.prune_audit_log(interval, text, boolean, text) TO :"maintenance_role";
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA cmdb TO :"app_role";
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA cmdb TO :"app_role";
-REVOKE UPDATE, DELETE, TRUNCATE ON cmdb.audit_log, cmdb.schema_changes FROM :"app_role";
-GRANT REFERENCES ON cmdb.configuration_items, cmdb.lookup_list_values TO :"app_role";
-GRANT SELECT ON public._sqlx_migrations TO :"app_role";
-REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public._sqlx_migrations FROM :"app_role";
--- Only the audit_log trigger moves the hash-chain head (migration 0018); the
--- API role reads it, for `shadoucmdb backup` (migration 0038).
-REVOKE ALL ON cmdb.audit_log_chain_head FROM :"app_role";
-GRANT SELECT ON cmdb.audit_log_chain_head TO :"app_role";
--- Server keys are read and added, never changed (migration 0021).
-REVOKE UPDATE, DELETE, TRUNCATE ON cmdb.server_keys FROM :"app_role";
--- The API role lists a backup.restore entry as exported only through the
--- function, which now runs as the owner role (migration 0064, GH#706). Both
--- exist from 0063 and 0064 on; an older install has nothing to narrow.
-SELECT format('REVOKE ALL ON cmdb.audit_export_restores FROM %I', :'app_role'),
-       format('GRANT SELECT ON cmdb.audit_export_restores TO %I', :'app_role')
-WHERE to_regclass('cmdb.audit_export_restores') IS NOT NULL \gexec
-SELECT format('GRANT EXECUTE ON FUNCTION cmdb.audit_export_mark_restore_sent(bigint) TO %I', :'app_role')
-WHERE to_regprocedure('cmdb.audit_export_mark_restore_sent(bigint)') IS NOT NULL \gexec
+-- The API role gets the same rights on the system tables and routines as on a
+-- fresh three-role install, from the list the migrations keep
+-- (cmdb.api_role_privileges, migration 0065, GH#713).
+SELECT cmdb.apply_api_role_grants(:'app_role') \gset ignored_
 ALTER DEFAULT PRIVILEGES FOR ROLE :"owner_role" IN SCHEMA cmdb
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO :"app_role";
 ALTER DEFAULT PRIVILEGES FOR ROLE :"owner_role" IN SCHEMA cmdb
