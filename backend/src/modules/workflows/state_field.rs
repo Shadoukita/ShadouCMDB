@@ -12,6 +12,7 @@ use serde_json::{Map, Value};
 use sqlx::PgConnection;
 use uuid::Uuid;
 
+use crate::api::context::RequestContext;
 use crate::data::classes::EffectiveAttributeRow;
 use crate::data::items::StoredValue;
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
@@ -26,9 +27,23 @@ pub struct Driver {
     pub attribute_id: Uuid,
     /// The value its current version's initial state sets (a new CI may start with it).
     pub initial_value_id: Option<Uuid>,
+    /// GH#718: the caller may not view every type it covers, so it answers 404
+    /// to them and a message must not name it (see [`Driver::named`]).
+    #[sqlx(skip)]
+    pub hidden: bool,
 }
 
 impl Driver {
+    /// "the active workflow `key`", or a phrase that does not name it when it
+    /// is hidden from the caller.
+    pub fn named(&self) -> String {
+        if self.hidden {
+            "another active workflow on these CIs".to_owned()
+        } else {
+            format!("the active workflow {}", self.definition_key)
+        }
+    }
+
     fn covers(&self, model: &Model, class_id: Uuid) -> bool {
         self.class_id == class_id
             || (self.include_subclasses && model.lineage(class_id).iter().any(|c| c.id == self.class_id))
@@ -93,8 +108,10 @@ impl StateFields {
     /// The active workflows other than `definition_key` that drive a field on
     /// a CI a workflow on `class_id` (with `include_subclasses`) may cover: a
     /// transition of that workflow must not take their state field (GH#668).
+    /// The ones `ctx` may not view are marked [`Driver::hidden`] (GH#718).
     pub fn overlapping(
         &self,
+        ctx: &RequestContext,
         model: &Model,
         definition_key: &str,
         class_id: Uuid,
@@ -108,7 +125,10 @@ impl StateFields {
                 d.covers(model, class_id)
                     || (include_subclasses && model.lineage(d.class_id).iter().any(|c| c.id == class_id))
             })
-            .cloned()
+            .map(|d| {
+                let covered = if d.include_subclasses { model.subtree(d.class_id) } else { vec![d.class_id] };
+                Driver { hidden: !ctx.may_view_all(&covered), ..d.clone() }
+            })
             .collect()
     }
 

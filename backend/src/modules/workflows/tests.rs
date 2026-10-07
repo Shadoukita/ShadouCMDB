@@ -1124,6 +1124,119 @@ async fn workflow_definitions_follow_the_managers_class_scope() {
     db.drop().await;
 }
 
+/// GH#718: a conflict with a workflow the manager may not view (it answers
+/// 404 to them, GH#695) is still refused, with its code, but the message does
+/// not name that workflow or its transition: driving a field another workflow
+/// takes, driving a field another workflow drives, and activating (or
+/// linting) a workflow whose transition takes another's state field.
+#[tokio::test]
+async fn activation_conflicts_do_not_name_workflows_the_manager_cannot_view() {
+    let Some(db) = scratch::database("workflow_conflict_class_scope").await else { return };
+    let w = world(&db).await;
+    let publish = |flow: Uuid, graph: Value, who: Creds| {
+        let w = &w;
+        async move {
+            let draft = format!("{BASE}/{flow}/draft");
+            let (status, v, _) = call(&w.app, "PUT", &draft, &who, Some(graph)).await;
+            assert_eq!(status, 200, "{v}");
+            let sum = v["checksum"].as_str().unwrap().to_owned();
+            let body = json!({ "expectedDraftChecksum": sum });
+            let (status, v, _) = call(&w.app, "POST", &format!("{draft}/publish"), &who, Some(body)).await;
+            assert_eq!(status, 201, "{v}");
+        }
+    };
+    let taking = |transition: &str| {
+        json!({
+            "initialState": "a",
+            "states": [
+                { "key": "a", "name": "A", "category": "open", "terminal": false },
+                { "key": "b", "name": "B", "category": "done", "terminal": true }
+            ],
+            "transitions": [ { "key": transition, "name": "Set", "from": "a", "to": "b", "requiresComment": false,
+                "fields": [ { "attribute": "lifecycle", "required": true } ] } ]
+        })
+    };
+    let silent = |v: &Value, what: &str| {
+        for name in ["hidden_taker", "secret_step", "hidden_driver"] {
+            assert!(!v.to_string().contains(name), "{what} names {name}: {v}");
+        }
+    };
+
+    // An active workflow on Server and its subtypes takes `lifecycle`.
+    let body = json!({ "key": "hidden_taker", "name": "Hidden taker", "classId": w.server });
+    let hidden_taker = id(&post(&w.app, &w.admin, BASE, body).await);
+    publish(hidden_taker, taking("secret_step"), w.admin.clone()).await;
+    let taker_path = format!("{BASE}/{hidden_taker}");
+    let (status, v) = w.call("PATCH", &taker_path, Some(json!({ "version": 2, "isActive": true }))).await;
+    assert_eq!(status, 200, "{v}");
+
+    // A manager of Blade only, which may not view it.
+    post(&w.app, &w.admin, "/api/v1/ci-classes", json!({ "key": "blade", "name": "Blade", "parentId": w.server }))
+        .await;
+    let blade: Uuid =
+        sqlx::query_scalar("SELECT id FROM ci_classes WHERE key = 'blade'").fetch_one(&w.pool).await.unwrap();
+    let manager = w.scoped_user("blade_manager", &["workflows.manage"], &[(blade, true)]).await;
+    let (status, v, _) = call(&w.app, "GET", &taker_path, &manager, None).await;
+    assert_eq!((status, code(&v)), (404, "NOT_FOUND"), "{v}");
+
+    // Driving `lifecycle` on Blade: refused, without naming the taker.
+    let driver = json!({ "key": "blade_driver", "name": "Blade driver", "classId": blade,
+        "stateAttributeId": w.lifecycle, "isActive": true });
+    let (status, v, _) = call(&w.app, "POST", BASE, &manager, Some(driver.clone())).await;
+    let taken = vec![("stateAttributeId".to_owned(), "state_field_in_transition".to_owned())];
+    assert_eq!((status, details(&v)), (409, taken.clone()), "{v}");
+    silent(&v, "the taker conflict");
+    // The administrator, who may view it, is told which one.
+    let mut by_admin = driver.clone();
+    by_admin["key"] = json!("admin_driver");
+    by_admin["classId"] = json!(w.server);
+    let (status, v) = w.call("POST", BASE, Some(by_admin)).await;
+    assert_eq!((status, details(&v)), (409, taken), "{v}");
+    let message = v["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("secret_step") && message.contains("hidden_taker"), "{v}");
+
+    // The manager's own workflow on Blade takes `lifecycle` too (no driver yet).
+    let body = json!({ "key": "blade_taker", "name": "Blade taker", "classId": blade });
+    let blade_taker = id(&call(&w.app, "POST", BASE, &manager, Some(body)).await.1);
+    publish(blade_taker, taking("set_env"), manager.clone()).await;
+
+    // The administrator retires the taker and makes Server's `lifecycle` driven.
+    let (status, v) = w.call("PATCH", &taker_path, Some(json!({ "version": 3, "isActive": false }))).await;
+    assert_eq!(status, 200, "{v}");
+    let body = json!({ "key": "hidden_driver", "name": "Hidden driver", "classId": w.server, "stateAttributeId": w.lifecycle });
+    let hidden_driver = id(&post(&w.app, &w.admin, BASE, body).await);
+    publish(hidden_driver, lifecycle_graph(), w.admin.clone()).await;
+    let (status, v) =
+        w.call("PATCH", &format!("{BASE}/{hidden_driver}"), Some(json!({ "version": 2, "isActive": true }))).await;
+    assert_eq!(status, 200, "{v}");
+
+    // Driving the same field: refused, without naming the driver.
+    let (status, v, _) = call(&w.app, "POST", BASE, &manager, Some(driver)).await;
+    let driven = vec![("stateAttributeId".to_owned(), "state_attribute_driven".to_owned())];
+    assert_eq!((status, details(&v)), (409, driven), "{v}");
+    silent(&v, "the driver conflict");
+
+    // Activating the manager's taker: refused, without naming the driver.
+    let mine = format!("{BASE}/{blade_taker}");
+    let (status, v, _) = call(&w.app, "PATCH", &mine, &manager, Some(json!({ "version": 2, "isActive": true }))).await;
+    let takes = vec![("isActive".to_owned(), "state_field_in_transition".to_owned())];
+    assert_eq!((status, details(&v)), (409, takes), "{v}");
+    silent(&v, "the activation conflict");
+    assert!(v["error"]["message"].as_str().unwrap_or_default().contains("set_env"), "its own transition: {v}");
+
+    // The publish lint of its draft: the same problem, the driver unnamed.
+    let (status, v, _) = call(&w.app, "PUT", &format!("{mine}/draft"), &manager, Some(taking("set_env"))).await;
+    assert_eq!(status, 200, "{v}");
+    let (status, v, _) = call(&w.app, "POST", &format!("{mine}/draft/validate"), &manager, None).await;
+    assert_eq!(status, 200, "{v}");
+    let problems = v["problems"].as_array().unwrap();
+    assert!(problems.iter().any(|p| p["code"] == "state_field"), "{v}");
+    silent(&v, "the lint");
+    let (_, v) = w.call("POST", &format!("{mine}/draft/validate"), None).await;
+    assert!(v.to_string().contains("hidden_driver"), "the administrator is told: {v}");
+    db.drop().await;
+}
+
 /// GH#667 (SHAA-2176): the types a workflow covers include the subtypes when
 /// `includeSubclasses` is on, which is the default. A manager with view and
 /// edit on a type, but not on a subtype below it, can neither create a
