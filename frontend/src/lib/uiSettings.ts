@@ -6,6 +6,7 @@ import type {
   UiNavEntry,
   UiPage,
   UiSettingsDocument,
+  UiWidget,
   UiWidgetType,
 } from "../api/uiSettings";
 import type { components } from "../api/schema";
@@ -391,6 +392,19 @@ export const WIDGET_TYPES: { type: UiWidgetType; label: string; hint: string }[]
 export function widgetLabel(type: UiWidgetType): string {
   const key = `dashboard.widget.${type}`;
   return hasMessage(key) ? t(key) : (WIDGET_TYPES.find((w) => w.type === type)?.label ?? type);
+}
+
+/**
+ * The built-in dashboard: CIs by class, by status when there is a lookup list with key "status", and the
+ * recently changed CIs. Customization › Dashboard starts from the same widgets, so switching to custom
+ * widgets changes nothing until edited. Titles stay null, so each reads in the user's language.
+ */
+export function builtInWidgets(statusListKey: string | undefined): UiWidget[] {
+  return [
+    { id: "by_class", type: "count_by_class", title: null, size: "medium" },
+    ...(statusListKey ? [{ id: "by_status", type: "count_by_lookup", title: null, size: "medium", lookupListKey: statusListKey } as UiWidget] : []),
+    { id: "recent", type: "recent_changes", title: null, size: "large", limit: 12 },
+  ];
 }
 
 // ---------- Detail and form layouts ----------

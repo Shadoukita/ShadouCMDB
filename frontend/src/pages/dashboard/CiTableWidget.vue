@@ -86,7 +86,13 @@ const viewAll = computed(() => {
 <template>
   <section class="panel">
     <div class="panel-header">
-      <h2>{{ title }} <span v-if="search && !loading && !error" class="muted">{{ formatNumber(total) }}</span></h2>
+      <div class="panel-title">
+        <h2>{{ title }}</h2>
+        <span v-if="search && !loading && !error" class="count">
+          <span aria-hidden="true">{{ formatNumber(total) }}</span>
+          <span class="sr-only">{{ t("dashboard.matches", { n: total }) }}</span>
+        </span>
+      </div>
       <RouterLink v-if="viewAll" :to="viewAll">{{ t("dashboard.viewAll") }}</RouterLink>
     </div>
     <div class="panel-body flush">
