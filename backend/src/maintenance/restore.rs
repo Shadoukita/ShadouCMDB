@@ -396,6 +396,16 @@ pub async fn restore<R: Read>(
         bail!("the restored data has no built-in Administrator profile");
     }
     let users: i64 = sqlx::query_scalar("SELECT count(*) FROM users").fetch_one(&mut *tx).await?;
+    // The table was loaded with triggers off: drop what lists no restored
+    // backup.restore entry, a planted chainSeq past the head above all, which
+    // would otherwise mark the entry written next as sent (GH#696).
+    exec(
+        &mut tx,
+        "DELETE FROM cmdb.audit_export_restores s
+         WHERE NOT EXISTS (SELECT FROM cmdb.audit_log a WHERE a.chain_seq = s.chain_seq AND a.action = 'backup.restore')"
+            .into(),
+    )
+    .await?;
     let (restored_head, entry) = record(&mut tx, checked, wipe).await?;
 
     if commit {
