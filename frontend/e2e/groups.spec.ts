@@ -143,7 +143,8 @@ test("the delete dialog names the owned business services, or says the count is 
   const real = await (await page.request.get(`/api/v1/admin/groups/${groupId}`)).json();
 
   await page.route(detail, (route) => route.fulfill({ json: { ...real, ownedServiceCount: 7 } }));
-  await page.getByRole("button", { name: "Delete group" }).click();
+  await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "Delete group" }).click();
   const dialog = page.getByRole("dialog", { name: `Delete group ${RENAMED}?` });
   await expect(dialog.getByTestId("group-delete-services")).toHaveText(
     "It is owner of 7 business services; it is removed as owner from all of them.",
@@ -154,14 +155,16 @@ test("the delete dialog names the owned business services, or says the count is 
 
   await page.unroute(detail);
   await page.route(detail, (route) => route.fulfill({ json: { ...real, ownedServiceCount: null } }));
-  await page.getByRole("button", { name: "Delete group" }).click();
+  await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "Delete group" }).click();
   await expect(dialog.getByTestId("group-delete-services")).toHaveText(
     "It may be owner of business services you cannot view; it is removed as owner from all of them.",
   );
   await dialog.getByRole("button", { name: "Cancel" }).click();
   await page.unroute(detail);
 
-  await page.getByRole("button", { name: "Delete group" }).click();
+  await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "Delete group" }).click();
   await expect(dialog.getByTestId("group-delete-services")).toHaveText("It is not owner of any business service.");
   await dialog.getByRole("button", { name: "Delete group" }).click();
   await expect(page).toHaveURL(/\/admin\/groups$/);
@@ -172,7 +175,8 @@ test("the delete dialog names the owned business services, or says the count is 
 test("deleting a user says how many business services lost them as owner", async ({ page, request }) => {
   const id = await createUser(request, `e2e-grp-del-${stamp}`);
   await page.goto(`/admin/users/${id}`);
-  await page.getByRole("button", { name: "Delete user" }).click();
+  await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "Delete user" }).click();
   const dialog = page.getByRole("dialog", { name: `Delete user e2e-grp-del-${stamp}?` });
   await expect(dialog.getByTestId("user-delete-services")).toContainText("If they are owner of business services, they are removed as owner");
   await dialog.getByRole("button", { name: "Delete user" }).click();
