@@ -323,7 +323,8 @@ test("9: a restricted user sees 2 members, the note, and never the hidden CI", a
 
 test("10: deleting a nested service names its memberships and parents; the parents lose it", async ({ page, request }, testInfo) => {
   await page.goto(`/services/${ids.inner10}`);
-  await page.getByRole("button", { name: "Delete", exact: true }).click();
+  await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "Delete" }).click();
   const dialog = page.getByRole("dialog", { name: `Delete business service ${INNER10}?` });
   await expect(dialog).toContainText("Its 2 memberships are removed. The member CIs themselves are not deleted.");
   await expect(dialog).toContainText("It is also part of 2 other business services; it is removed from them.");
@@ -419,7 +420,8 @@ test("13: with the locale forced to German, the list, picker and dialogs are Ger
   await page.getByRole("dialog", { name: "Auswahl verwerfen?" }).getByRole("button", { name: "Verwerfen" }).click();
   await expect(dialog).toBeHidden();
 
-  await page.getByRole("button", { name: "Löschen", exact: true }).click();
+  await page.getByRole("button", { name: "Weitere Aktionen" }).click();
+  await page.getByRole("menuitem", { name: "Löschen" }).click();
   const del = page.getByRole("dialog", { name: `Business-Service ${SHOP} löschen?` });
   await expect(del).toContainText("Die Mitglieds-CIs selbst werden nicht gelöscht.");
   await expect(del.getByRole("button", { name: "Business-Service löschen" })).toBeVisible();
