@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from "../../i18n";
+import { adminCrumbs } from "./sections";
 import { computed, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import {
@@ -182,11 +184,7 @@ async function submit() {
   }
 }
 
-const crumbs = computed(() => [
-  { label: "Administration", to: "/admin" },
-  { label: "Permission profiles", to: "/admin/profiles" },
-  { label: isNew.value ? "New" : (profile.data.value?.name ?? "…") },
-]);
+const crumbs = computed(() => adminCrumbs("profiles", { label: isNew.value ? t("admin.crumb.new") : (profile.data.value?.name ?? "…") }));
 const notFound = computed(() => {
   const e = profile.error.value;
   return e instanceof ApiError && (e.code === "NOT_FOUND" || (e.code === "VALIDATION_ERROR" && e.details.some((d) => d.in === "params")));

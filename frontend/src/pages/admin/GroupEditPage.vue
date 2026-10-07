@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { adminCrumbs } from "./sections";
 import { computed, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import type { User } from "../../api/admin";
@@ -219,11 +220,7 @@ function confirmDelete() {
   });
 }
 
-const crumbs = computed(() => [
-  { label: t("common.administration"), to: "/admin" },
-  { label: t("groups.title"), to: "/admin/groups" },
-  { label: isNew.value ? t("groups.new") : (group.data.value?.name ?? "…") },
-]);
+const crumbs = computed(() => adminCrumbs("groups", { label: isNew.value ? t("groups.new") : (group.data.value?.name ?? "…") }));
 const notFound = computed(() => {
   const e = group.error.value;
   return e instanceof ApiError && (e.code === "NOT_FOUND" || (e.code === "VALIDATION_ERROR" && e.details.some((d) => d.in === "params")));

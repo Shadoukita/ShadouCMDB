@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { adminCrumbs } from "./sections";
 import { computed, ref } from "vue";
 import { RouterLink } from "vue-router";
 import { useInstallTemplate, useTemplates } from "../../api/datamodel";
@@ -71,7 +72,7 @@ const buttonLabel = (t: Template) =>
 </script>
 
 <template>
-  <Breadcrumbs :items="[{ label: 'Administration', to: '/admin' }, { label: 'Data model' }, { label: 'Templates' }]" />
+  <Breadcrumbs :items="adminCrumbs('templates')" />
   <div class="page-header">
     <div class="title"><h1>Starter templates</h1></div>
   </div>

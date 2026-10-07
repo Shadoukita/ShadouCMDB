@@ -1,19 +1,24 @@
 <script setup lang="ts">
+import { adminCrumbs } from "./sections";
 import { computed, ref, watch } from "vue";
 import { RouterLink } from "vue-router";
-import { useGroupList, type GroupListQuery } from "../../api/groups";
+import { useGroupList, type GroupListQuery, type UserGroup } from "../../api/groups";
 import Breadcrumbs from "../../components/Breadcrumbs.vue";
 import EmptyState from "../../components/EmptyState.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
-import LoadingState from "../../components/LoadingState.vue";
+import Icon from "../../components/Icon.vue";
+import KeyboardHints from "../../components/KeyboardHints.vue";
 import PaginationBar from "../../components/PaginationBar.vue";
-import { t } from "../../i18n";
+import RowMenu from "../../components/RowMenu.vue";
+import SkeletonRows from "../../components/SkeletonRows.vue";
+import { formatNumber, t } from "../../i18n";
 import { useDebounced, useDocumentTitle } from "../../lib/composables";
-import { formatRelative } from "../../lib/format";
+import { formatDateTime, formatRelative } from "../../lib/format";
+import { onRowKeydown } from "../../lib/rowKeyboard";
 import { useListQuery } from "../../lib/listQuery";
 import SortIcon from "../../components/SortIcon.vue";
 
-/** Administration › Groups. Search, sort and page live in the URL; the API searches and pages. */
+/** Administration › Groups, an explorer list (design §2.7): search, sort and page live in the URL; the API searches and pages. */
 useDocumentTitle(t("groups.title"));
 type SortField = NonNullable<GroupListQuery["sort"]>;
 
@@ -33,7 +38,6 @@ const query = computed<GroupListQuery>(() => ({
   offset: offset.value,
 }));
 const list = useGroupList(query);
-// Set by the edit page after a delete.
 
 const qText = ref(get("q"));
 const debouncedQ = useDebounced(qText, 300);
@@ -47,6 +51,9 @@ const filtered = computed(() => !!get("q"));
 const total = computed(() => list.data.value?.page.total ?? 0);
 const rows = computed(() => list.data.value?.data ?? []);
 
+const pastEnd = computed(() => !!list.data.value && total.value > 0 && rows.value.length === 0);
+const rowMenu = (g: UserGroup) => [{ label: t("inventory.row.open"), to: `/admin/groups/${g.id}` }];
+
 function clearSearch() {
   qText.value = "";
   update({ q: undefined });
@@ -54,45 +61,49 @@ function clearSearch() {
 </script>
 
 <template>
-  <Breadcrumbs :items="[{ label: t('common.administration'), to: '/admin' }, { label: t('groups.title') }]" />
+  <Breadcrumbs :items="adminCrumbs('groups')" />
   <div class="page-header">
     <div class="title">
       <h1>{{ t("groups.title") }}</h1>
-      <span v-if="list.data.value" class="muted">{{ t("common.total", { n: total.toLocaleString() }) }}</span>
-      <span v-if="list.isFetching.value && !list.isLoading.value" class="spinner" :aria-label="t('common.refreshing')" />
+      <span v-if="list.data.value" class="muted count">{{ t("common.total", { n: formatNumber(total) }) }}</span>
+      <span v-if="list.isFetching.value && !list.isPending.value" class="spinner" :aria-label="t('common.refreshing')" />
     </div>
     <div class="actions">
-      <RouterLink class="btn btn-primary" to="/admin/groups/new">+ {{ t("groups.create") }}</RouterLink>
+      <RouterLink class="btn btn-primary" to="/admin/groups/new"><Icon name="plus" />{{ t("groups.create") }}</RouterLink>
     </div>
   </div>
+  <p class="page-intro">{{ t("admin.groups.intro") }}</p>
 
-  <section class="panel" :aria-label="t('groups.title')">
+  <section class="panel explorer" :aria-label="t('groups.title')">
     <form class="toolbar" role="search" @submit.prevent>
       <div class="field search">
         <label for="g-q">{{ t("groups.search") }}</label>
-        <input id="g-q" v-model="qText" type="search" :placeholder="t('groups.searchPlaceholder')" />
+        <div class="input-icon">
+          <Icon name="search" />
+          <input id="g-q" v-model="qText" type="search" :placeholder="t('groups.searchPlaceholder')" />
+        </div>
       </div>
-      <button v-if="filtered" type="button" class="btn" @click="clearSearch">{{ t("groups.clearSearch") }}</button>
+      <button v-if="filtered" type="button" class="btn btn-ghost" @click="clearSearch"><Icon name="x" />{{ t("groups.clearSearch") }}</button>
     </form>
 
     <div v-if="list.isError.value" class="panel-body">
       <ErrorAlert :error="list.error.value" :on-retry="() => list.refetch()" />
     </div>
-    <LoadingState v-if="list.isLoading.value" :label="t('groups.loading')" />
-    <EmptyState v-if="list.data.value && total === 0 && filtered" :title="t('groups.noMatch')">
+    <SkeletonRows v-else-if="list.isPending.value" :label="t('groups.loading')" />
+    <EmptyState v-else-if="total === 0 && filtered" icon="search" :title="t('groups.noMatch')">
       <template #actions><button type="button" class="btn" @click="clearSearch">{{ t("groups.clearSearch") }}</button></template>
     </EmptyState>
-    <EmptyState v-else-if="list.data.value && total === 0" data-testid="groups-empty">
+    <EmptyState v-else-if="total === 0" icon="user" :title="t('admin.groups.empty.title')" data-testid="groups-empty">
       {{ t("groups.empty") }}
-      <template #actions><RouterLink class="btn btn-primary" to="/admin/groups/new">{{ t("groups.create") }}</RouterLink></template>
+      <template #actions><RouterLink class="btn btn-primary" to="/admin/groups/new"><Icon name="plus" />{{ t("groups.create") }}</RouterLink></template>
     </EmptyState>
-    <EmptyState v-if="list.data.value && total > 0 && rows.length === 0" :title="t('common.pastEnd')">
+    <EmptyState v-else-if="pastEnd" :title="t('common.pastEnd')">
       <template #actions><button type="button" class="btn" @click="update({})">{{ t("common.firstPage") }}</button></template>
     </EmptyState>
 
-    <template v-if="rows.length > 0">
-      <div class="table-wrap">
-        <table :class="['data', { loading: list.isPlaceholderData.value }]">
+    <template v-if="rows.length > 0 && !list.isError.value">
+      <div class="table-wrap table-scroll">
+        <table :class="['data', { loading: list.isPlaceholderData.value }]" aria-describedby="groups-keys">
           <thead>
             <tr>
               <th v-for="c in COLUMNS" :key="c.key" scope="col" :class="{ num: c.num }" :aria-sort="c.sort ? lq.ariaSort(c.sort) : undefined">
@@ -101,19 +112,24 @@ function clearSearch() {
                 </button>
                 <template v-else>{{ c.label }}</template>
               </th>
+              <th scope="col" class="row-actions"><span class="sr-only">{{ t("inventory.actions") }}</span></th>
             </tr>
           </thead>
-          <tbody>
-            <tr v-for="g in rows" :key="g.id">
-              <td><RouterLink :to="`/admin/groups/${g.id}`">{{ g.name }}</RouterLink></td>
-              <td :title="g.description ?? undefined">{{ g.description ?? "" }}</td>
-              <td class="num">{{ g.memberCount.toLocaleString() }}</td>
-              <td :title="g.updatedAt">{{ formatRelative(g.updatedAt) }}</td>
+          <tbody @keydown="onRowKeydown($event)">
+            <tr v-for="g in rows" :key="g.id" :data-id="g.id">
+              <td><RouterLink :to="`/admin/groups/${g.id}`" dir="auto">{{ g.name }}</RouterLink></td>
+              <td :title="g.description ?? undefined" dir="auto">{{ g.description ?? "" }}</td>
+              <td class="num">{{ formatNumber(g.memberCount) }}</td>
+              <td><time :datetime="g.updatedAt" :title="formatDateTime(g.updatedAt)">{{ formatRelative(g.updatedAt) }}</time></td>
+              <td class="row-actions">
+                <RowMenu :label="t('inventory.rowMenu', { name: g.name })" :items="rowMenu(g)" />
+              </td>
             </tr>
           </tbody>
         </table>
       </div>
       <PaginationBar :total="total" :limit="limit" :offset="offset" @change="lq.onPage" />
+      <KeyboardHints id="groups-keys" />
     </template>
   </section>
 </template>

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { adminCrumbs } from "../sections";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { onBeforeRouteLeave, RouterLink, useRoute } from "vue-router";
 import { ApiError } from "../../../api/client";
@@ -132,7 +133,7 @@ onBeforeUnmount(() => window.removeEventListener("beforeunload", onBeforeUnload)
 </script>
 
 <template>
-  <Breadcrumbs :items="[{ label: 'Administration', to: '/admin' }, { label: 'Customization', to: '/admin/customization' }, { label: current?.label ?? section }]" />
+  <Breadcrumbs :items="adminCrumbs('customization', { label: current?.label ?? section })" />
   <div class="page-header">
     <div class="title">
       <h1>Customization</h1>

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { adminCrumbs } from "./sections";
 import { computed, ref, watch } from "vue";
 import { RouterLink } from "vue-router";
 import { useApiTokenList, useRevokeApiToken, useUserList, type ApiToken, type ApiTokenListQuery } from "../../api/admin";
@@ -7,38 +8,43 @@ import Breadcrumbs from "../../components/Breadcrumbs.vue";
 import ConfirmDialog from "../../components/ConfirmDialog.vue";
 import EmptyState from "../../components/EmptyState.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
-import LoadingState from "../../components/LoadingState.vue";
+import Icon from "../../components/Icon.vue";
+import KeyboardHints from "../../components/KeyboardHints.vue";
 import PaginationBar from "../../components/PaginationBar.vue";
+import RowMenu, { type RowMenuItem } from "../../components/RowMenu.vue";
+import SkeletonRows from "../../components/SkeletonRows.vue";
+import { formatNumber, t, type MessageKey } from "../../i18n";
 import { useDebounced, useDocumentTitle } from "../../lib/composables";
 import { formatDate, formatDateTime, formatRelative } from "../../lib/format";
+import { onRowKeydown } from "../../lib/rowKeyboard";
+import { useFlashStore } from "../../stores/flash";
 import { useListQuery } from "../../lib/listQuery";
 import CreateApiTokenDialog from "./CreateApiTokenDialog.vue";
 import SortIcon from "../../components/SortIcon.vue";
 
 /**
- * Administration › API tokens. Search, filters, sort and page live in the URL;
- * the API filters and pages. A token's secret is only ever shown by the create
- * dialog; this list knows tokens by name and prefix.
+ * Administration › API tokens, an explorer list (design §2.7). Search, filters, sort and page live in the URL;
+ * the API filters and pages. A token's secret is only ever shown by the create dialog; this list knows tokens
+ * by name and prefix. Revoke sits in the row menu and asks first.
  */
-useDocumentTitle("API tokens");
+useDocumentTitle(() => t("admin.section.apiTokens"));
 type SortField = NonNullable<ApiTokenListQuery["sort"]>;
 type Status = NonNullable<ApiTokenListQuery["status"]>;
 const STATUSES: { value: Status; label: string; badge: string }[] = [
-  { value: "active", label: "Active", badge: "ok" },
-  { value: "expired", label: "Expired", badge: "off" },
-  { value: "revoked", label: "Revoked", badge: "danger" },
+  { value: "active", label: t("common.active"), badge: "ok" },
+  { value: "expired", label: t("admin.tokens.status.expired"), badge: "off" },
+  { value: "revoked", label: t("admin.tokens.status.revoked"), badge: "danger" },
 ];
 
-const COLUMNS: { key: string; label: string; sort?: string }[] = [
-  { key: "name", label: "Name", sort: "name" },
-  { key: "prefix", label: "Prefix" },
-  { key: "owner", label: "Owner" },
-  { key: "profile", label: "Profile" },
-  { key: "status", label: "Status" },
-  { key: "expires", label: "Expires", sort: "expiresAt" },
-  { key: "lastUsed", label: "Last used", sort: "lastUsedAt" },
-  { key: "created", label: "Created", sort: "createdAt" },
-  { key: "actions", label: "" },
+const COLUMNS: { key: string; label: MessageKey; sort?: string }[] = [
+  { key: "name", label: "admin.tokens.col.name", sort: "name" },
+  { key: "prefix", label: "admin.tokens.col.prefix" },
+  { key: "owner", label: "admin.tokens.col.owner" },
+  { key: "profile", label: "admin.tokens.col.profile" },
+  { key: "status", label: "admin.col.status" },
+  { key: "expires", label: "admin.tokens.col.expires", sort: "expiresAt" },
+  { key: "lastUsed", label: "admin.tokens.col.lastUsed", sort: "lastUsedAt" },
+  { key: "created", label: "common.created", sort: "createdAt" },
 ];
 
 const lq = useListQuery({ sort: "-createdAt" });
@@ -75,9 +81,8 @@ function clearFilters() {
   update({ q: undefined, status: undefined, userId: undefined, refusedForMfa: undefined });
 }
 
-const REFUSED_TITLE =
-  "The owner must use two-factor authentication, and this token was not created from a session signed in with a second factor, " +
-  "so every request with it is refused. Create a new token from a session signed in with a second factor, then revoke this one.";
+const REFUSED_TITLE = t("admin.tokens.refusedTitle");
+const pastEnd = computed(() => !!list.data.value && total.value > 0 && rows.value.length === 0);
 
 const creating = ref(false);
 const statusBadge = (s: Status) => STATUSES.find((x) => x.value === s)!;
@@ -85,140 +90,164 @@ const statusBadge = (s: Status) => STATUSES.find((x) => x.value === s)!;
 // ---------- Revoke ----------
 const revoke = useRevokeApiToken();
 const revoking = ref<ApiToken | null>(null);
-const notice = ref("");
+const flash = useFlashStore();
 
-function askRevoke(t: ApiToken) {
+function askRevoke(tok: ApiToken) {
   revoke.reset();
-  revoking.value = t;
+  revoking.value = tok;
 }
 
 function confirmRevoke() {
-  const t = revoking.value;
-  if (!t) return;
-  revoke.mutate(t.id, {
+  const tok = revoking.value;
+  if (!tok) return;
+  revoke.mutate(tok.id, {
     onSuccess: () => {
-      notice.value = `Revoked API token ${t.name} (owner ${t.username}).`;
+      flash.show(t("admin.tokens.revoked", { name: tok.name, owner: tok.username }));
       revoking.value = null;
     },
   });
 }
 
-function revokedTitle(t: ApiToken): string | undefined {
-  if (t.status !== "revoked") return undefined;
-  return `Revoked ${formatDateTime(t.revokedAt)}${t.revokedBy ? ` by ${t.revokedBy}` : ""}`;
+function revokedTitle(tok: ApiToken): string | undefined {
+  if (tok.status !== "revoked") return undefined;
+  return tok.revokedBy
+    ? t("admin.tokens.revokedAtBy", { at: formatDateTime(tok.revokedAt), by: tok.revokedBy })
+    : t("admin.tokens.revokedAt", { at: formatDateTime(tok.revokedAt) });
 }
+
+function lastUsedTitle(tok: ApiToken): string | undefined {
+  if (!tok.lastUsedAt) return undefined;
+  return tok.lastUsedIp ? t("admin.tokens.lastUsedFrom", { at: formatDateTime(tok.lastUsedAt), ip: tok.lastUsedIp }) : formatDateTime(tok.lastUsedAt);
+}
+
+const rowMenu = (tok: ApiToken): RowMenuItem[] => [
+  { label: t("admin.tokens.row.owner"), to: `/admin/users/${tok.userId}` },
+  ...(tok.profile ? [{ label: t("admin.tokens.row.profile"), to: `/admin/profiles/${tok.profile.id}` }] : []),
+  ...(tok.status === "active" ? [{ label: t("admin.tokens.row.revoke"), action: () => askRevoke(tok), danger: true }] : []),
+];
 </script>
 
 <template>
-  <Breadcrumbs :items="[{ label: 'Administration', to: '/admin' }, { label: 'API tokens' }]" />
+  <Breadcrumbs :items="adminCrumbs('api-tokens')" />
   <div class="page-header">
     <div class="title">
-      <h1>API tokens</h1>
-      <span v-if="list.data.value" class="muted">{{ total.toLocaleString() }} total</span>
-      <span v-if="list.isFetching.value && !list.isLoading.value" class="spinner" aria-label="Refreshing" />
+      <h1>{{ t("admin.section.apiTokens") }}</h1>
+      <span v-if="list.data.value" class="muted count">{{ t("common.total", { n: formatNumber(total) }) }}</span>
+      <span v-if="list.isFetching.value && !list.isPending.value" class="spinner" :aria-label="t('common.refreshing')" />
     </div>
     <div class="actions">
-      <button type="button" class="btn btn-primary" @click="creating = true">+ New API token</button>
+      <button type="button" class="btn btn-primary" @click="creating = true"><Icon name="plus" />{{ t("admin.tokens.new") }}</button>
     </div>
   </div>
-  <div v-if="notice" class="alert alert-success" role="status">{{ notice }}</div>
+  <p class="page-intro">{{ t("admin.tokens.intro") }}</p>
 
-  <section class="panel" aria-label="API tokens">
+  <section class="panel explorer" :aria-label="t('admin.section.apiTokens')">
     <form class="toolbar" role="search" @submit.prevent>
       <div class="field search">
-        <label for="t-q">Search</label>
-        <input id="t-q" v-model="qText" type="search" placeholder="Name, prefix, owner…" />
+        <label for="t-q">{{ t("admin.search") }}</label>
+        <div class="input-icon">
+          <Icon name="search" />
+          <input id="t-q" v-model="qText" type="search" :placeholder="t('admin.tokens.searchPlaceholder')" />
+        </div>
       </div>
       <div class="field">
-        <label for="t-status">Status</label>
+        <label for="t-status">{{ t("admin.col.status") }}</label>
         <select id="t-status" :value="status ?? ''" @change="update({ status: ($event.target as HTMLSelectElement).value || undefined })">
-          <option value="">Any status</option>
+          <option value="">{{ t("admin.filter.anyStatus") }}</option>
           <option v-for="s in STATUSES" :key="s.value" :value="s.value">{{ s.label }}</option>
         </select>
       </div>
       <div class="field">
-        <label for="t-owner">Owner</label>
+        <label for="t-owner">{{ t("admin.tokens.col.owner") }}</label>
         <select id="t-owner" :value="get('userId')" @change="update({ userId: ($event.target as HTMLSelectElement).value || undefined })">
-          <option value="">Any owner</option>
+          <option value="">{{ t("admin.tokens.filter.anyOwner") }}</option>
           <option v-for="u in users.data.value?.data ?? []" :key="u.id" :value="u.id">{{ u.username }}</option>
         </select>
       </div>
-      <label class="checkbox-row" :title="REFUSED_TITLE">
-        <input type="checkbox" :checked="refusedOnly" @change="update({ refusedForMfa: ($event.target as HTMLInputElement).checked ? 'true' : undefined })" />
-        Refused for two-factor only
-      </label>
-      <button v-if="filtered" type="button" class="btn" @click="clearFilters">Clear filters</button>
+      <div class="field">
+        <span class="label">{{ t("admin.tokens.filter.mfa") }}</span>
+        <label class="checkbox-row" :title="REFUSED_TITLE">
+          <input type="checkbox" :checked="refusedOnly" @change="update({ refusedForMfa: ($event.target as HTMLInputElement).checked ? 'true' : undefined })" />
+          {{ t("admin.tokens.filter.refusedOnly") }}
+        </label>
+      </div>
+      <button v-if="filtered" type="button" class="btn btn-ghost" @click="clearFilters"><Icon name="x" />{{ t("admin.filter.clear") }}</button>
     </form>
 
     <div v-if="list.isError.value" class="panel-body">
       <ErrorAlert :error="list.error.value" :on-retry="() => list.refetch()" />
     </div>
-    <LoadingState v-if="list.isLoading.value" label="Loading API tokens…" />
-    <EmptyState v-if="list.data.value && total === 0" :title="filtered ? 'No API tokens match these filters' : 'No API tokens yet'">
-      <template v-if="refusedOnly && !get('q') && !get('status') && !get('userId')">
-        No working token is refused for two-factor authentication: every owner who must use a second factor has tokens created from a
-        session signed in with one.
-      </template>
-      <template v-else-if="filtered">Adjust or clear the filters above.</template>
-      <template v-else>
-        A token lets a script or integration call the API as its owner, limited to a permission profile. Its secret is shown once, when
-        you create it.
-      </template>
-      <template v-if="!filtered" #actions>
-        <button type="button" class="btn btn-primary" @click="creating = true">+ New API token</button>
+    <SkeletonRows v-else-if="list.isPending.value" :label="t('admin.tokens.loading')" />
+    <EmptyState v-else-if="total === 0 && filtered" icon="search" :title="t('admin.tokens.noMatch')">
+      <template v-if="refusedOnly && !get('q') && !get('status') && !get('userId')">{{ t("admin.tokens.noneRefused") }}</template>
+      <template v-else>{{ t("admin.filter.noMatchBody") }}</template>
+      <template #actions><button type="button" class="btn" @click="clearFilters">{{ t("admin.filter.clear") }}</button></template>
+    </EmptyState>
+    <EmptyState v-else-if="total === 0" icon="lock" :title="t('admin.tokens.empty.title')">
+      {{ t("admin.tokens.empty.body") }}
+      <template #actions>
+        <button type="button" class="btn btn-primary" @click="creating = true"><Icon name="plus" />{{ t("admin.tokens.new") }}</button>
       </template>
     </EmptyState>
-    <EmptyState v-if="list.data.value && total > 0 && rows.length === 0" title="This page is past the end of the results">
-      <template #actions><button class="btn" @click="update({})">Go to first page</button></template>
+    <EmptyState v-else-if="pastEnd" :title="t('common.pastEnd')">
+      <template #actions><button type="button" class="btn" @click="update({})">{{ t("common.firstPage") }}</button></template>
     </EmptyState>
 
-    <template v-if="rows.length > 0">
-      <div class="table-wrap">
-        <table :class="['data', { loading: list.isPlaceholderData.value }]">
+    <template v-if="rows.length > 0 && !list.isError.value">
+      <div class="table-wrap table-scroll">
+        <table :class="['data', 'token-table', { loading: list.isPlaceholderData.value }]" aria-describedby="tokens-keys">
           <thead>
             <tr>
               <th v-for="c in COLUMNS" :key="c.key" scope="col" :aria-sort="c.sort ? lq.ariaSort(c.sort) : undefined">
                 <button v-if="c.sort" type="button" class="sort" @click="lq.toggleSort(c.sort)">
-                  {{ c.label }} <SortIcon :dir="lq.ariaSort(c.sort)" />
+                  {{ t(c.label) }} <SortIcon :dir="lq.ariaSort(c.sort)" />
                 </button>
-                <template v-else-if="c.label">{{ c.label }}</template>
-                <span v-else class="sr-only">Actions</span>
+                <template v-else>{{ t(c.label) }}</template>
               </th>
+              <th scope="col" class="row-actions"><span class="sr-only">{{ t("inventory.actions") }}</span></th>
             </tr>
           </thead>
-          <tbody>
-            <tr v-for="t in rows" :key="t.id" :class="{ disabled: t.status !== 'active' }">
-              <td>{{ t.name }}</td>
-              <td><code>{{ t.tokenPrefix }}…</code></td>
+          <tbody @keydown="onRowKeydown($event)">
+            <tr v-for="tok in rows" :key="tok.id" :data-id="tok.id" :class="{ disabled: tok.status !== 'active' }">
+              <td dir="auto">{{ tok.name }}</td>
+              <td class="mono">{{ tok.tokenPrefix }}…</td>
               <td>
-                <RouterLink :to="`/admin/users/${t.userId}`">{{ t.username }}</RouterLink>
-                <span v-if="!t.ownerIsActive" class="badge off" title="A disabled owner's tokens are refused"> Owner disabled</span>
+                <span class="name-badges">
+                  <RouterLink :to="`/admin/users/${tok.userId}`" class="mono">{{ tok.username }}</RouterLink>
+                  <span v-if="!tok.ownerIsActive" class="badge off" :title="t('admin.tokens.ownerDisabledTitle')">{{ t("admin.tokens.ownerDisabled") }}</span>
+                </span>
               </td>
               <td>
-                <RouterLink v-if="t.profile" :to="`/admin/profiles/${t.profile.id}`">{{ t.profile.name }}</RouterLink>
-                <span v-else class="muted" title="The profile was deleted; the token is refused">Profile deleted</span>
+                <RouterLink v-if="tok.profile" :to="`/admin/profiles/${tok.profile.id}`" dir="auto">{{ tok.profile.name }}</RouterLink>
+                <span v-else class="muted" :title="t('admin.tokens.profileDeletedTitle')">{{ t("admin.tokens.profileDeleted") }}</span>
               </td>
-              <td :title="revokedTitle(t)">
-                <span :class="['badge', statusBadge(t.status).badge]">{{ statusBadge(t.status).label }}</span>
-                <span v-if="t.status === 'revoked' && t.revokedBy" class="muted"> by {{ t.revokedBy }}</span>
-                <span v-if="t.refusedForMfa" class="badge danger" :title="REFUSED_TITLE"> Refused: owner requires MFA</span>
+              <td :title="revokedTitle(tok)">
+                <span class="name-badges">
+                  <span :class="['badge', statusBadge(tok.status).badge]">{{ statusBadge(tok.status).label }}</span>
+                  <span v-if="tok.status === 'revoked' && tok.revokedBy" class="muted">{{ t("admin.tokens.by", { name: tok.revokedBy }) }}</span>
+                  <span v-if="tok.refusedForMfa" class="badge danger" :title="REFUSED_TITLE">{{ t("admin.tokens.refused") }}</span>
+                </span>
               </td>
-              <td :title="formatDateTime(t.expiresAt)">{{ formatDate(t.expiresAt) }}</td>
-              <td :title="t.lastUsedAt ? `${formatDateTime(t.lastUsedAt)}${t.lastUsedIp ? ` from ${t.lastUsedIp}` : ''}` : undefined">
-                <template v-if="t.lastUsedAt">{{ formatRelative(t.lastUsedAt) }}</template>
-                <span v-else class="muted">Never</span>
+              <td><time :datetime="tok.expiresAt" :title="formatDateTime(tok.expiresAt)">{{ formatDate(tok.expiresAt) }}</time></td>
+              <td>
+                <time v-if="tok.lastUsedAt" :datetime="tok.lastUsedAt" :title="lastUsedTitle(tok)">{{ formatRelative(tok.lastUsedAt) }}</time>
+                <span v-else class="muted">{{ t("admin.never") }}</span>
               </td>
-              <td :title="`${formatDateTime(t.createdAt)}${t.createdBy ? ` by ${t.createdBy}` : ''}`">{{ formatRelative(t.createdAt) }}</td>
+              <td>
+                <time
+                  :datetime="tok.createdAt"
+                  :title="tok.createdBy ? t('admin.tokens.createdAtBy', { at: formatDateTime(tok.createdAt), by: tok.createdBy }) : formatDateTime(tok.createdAt)"
+                >{{ formatRelative(tok.createdAt) }}</time>
+              </td>
               <td class="row-actions">
-                <button v-if="t.status === 'active'" type="button" class="btn btn-sm btn-quiet-danger" :aria-label="`Revoke ${t.name}`" @click="askRevoke(t)">
-                  Revoke
-                </button>
+                <RowMenu :label="t('inventory.rowMenu', { name: tok.name })" :items="rowMenu(tok)" />
               </td>
             </tr>
           </tbody>
         </table>
       </div>
       <PaginationBar :total="total" :limit="limit" :offset="offset" @change="lq.onPage" />
+      <KeyboardHints id="tokens-keys" />
     </template>
   </section>
 
@@ -226,22 +255,21 @@ function revokedTitle(t: ApiToken): string | undefined {
 
   <ConfirmDialog
     :open="!!revoking"
-    :title="`Revoke API token “${revoking?.name ?? ''}”?`"
-    confirm-label="Revoke token"
+    :title="t('admin.tokens.revoke.title', { name: revoking?.name ?? '' })"
+    :confirm-label="t('admin.tokens.revoke.confirm')"
     :busy="revoke.isPending.value"
     @cancel="revoking = null"
     @confirm="confirmRevoke"
   >
     <template v-if="revoking">
-      <ErrorAlert v-if="revoke.isError.value" :error="revoke.error.value" title="Not revoked" />
+      <ErrorAlert v-if="revoke.isError.value" :error="revoke.error.value" :title="t('admin.tokens.revoke.failed')" />
       <p>
-        Token <code>{{ revoking.tokenPrefix }}…</code>, owned by <strong>{{ revoking.username }}</strong>
-        <template v-if="revoking.profile"> with profile {{ revoking.profile.name }}</template>.
+        {{ t(revoking.profile ? "admin.tokens.revoke.whoProfile" : "admin.tokens.revoke.who", { prefix: `${revoking.tokenPrefix}…`, owner: revoking.username, profile: revoking.profile?.name }) }}
       </p>
       <p>
-        Every script or integration that sends it is refused from now on
-        <template v-if="revoking.lastUsedAt">(last used {{ formatRelative(revoking.lastUsedAt) }}<template v-if="revoking.lastUsedIp"> from {{ revoking.lastUsedIp }}</template>)</template>.
-        This cannot be undone; the token stays listed as revoked.
+        {{ revoking.lastUsedAt
+          ? t(revoking.lastUsedIp ? "admin.tokens.revoke.effectUsedFrom" : "admin.tokens.revoke.effectUsed", { when: formatRelative(revoking.lastUsedAt), ip: revoking.lastUsedIp })
+          : t("admin.tokens.revoke.effect") }}
       </p>
     </template>
   </ConfirmDialog>

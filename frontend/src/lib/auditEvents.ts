@@ -32,28 +32,59 @@ export const EVENT_SOURCES: readonly { source: EventSource; actorType: AuditEntr
 
 export const sourceLabel = (s: EventSource) => t(`event.source.${s}` satisfies MessageKey);
 
-/** Creating and restoring add, deleting removes, workflow steps are information; everything else is neutral. */
-export function actionTone(action: string): "ok" | "danger" | "info" | "" {
-  if (action === "create" || action === "restore") return "ok";
-  if (action === "delete") return "danger";
+/**
+ * Creating and restoring add, deleting removes, workflow steps are information; failed and refused
+ * sign-ins and second factors are dangers, a lock-out or a refused schema change a warning (audit A7).
+ */
+export function actionTone(action: string): "ok" | "danger" | "warn" | "info" | "" {
+  if (action === "create" || action === "restore" || action === "login.success") return "ok";
+  if (action === "delete" || action === "login.failure" || action === "mfa.failure") return "danger";
+  if (action === "login.locked" || action === "schema_change.refused" || action === "session.reauthentication_required") return "warn";
   if (action.startsWith("workflow.")) return "info";
   return "";
 }
 
-const ACTION_KEYS = new Set([
+/** Every action the audit log records, in the order the Audit log's filter offers them. */
+export const AUDIT_ACTIONS = [
   "create",
   "update",
   "delete",
   "restore",
+  "login.success",
+  "login.failure",
+  "login.locked",
+  "logout",
+  "session.revoke",
+  "session.reauthenticate",
+  "session.reauthentication_required",
+  "audit.purge",
+  "backup.restore",
+  "token.use",
+  "mfa.enrol",
+  "mfa.disable",
+  "mfa.failure",
+  "mfa.recovery_code_used",
+  "mfa.recovery_codes",
+  "schema_change.refused",
   "export",
+  "import.commit",
+  "import.report_read",
+  "workflow.publish",
   "workflow.start",
-  "workflow.transition",
   "workflow.cancel",
+  "workflow.transition",
   "workflow.migrate",
   "workflow.force",
-]);
+  "workflow.approval_request",
+  "workflow.approval_decide",
+  "workflow.approval_close",
+  "workflow.approval_overdue",
+  "workflow.approval_refresh",
+] as const;
+export type AuditAction = (typeof AUDIT_ACTIONS)[number];
+const ACTION_KEYS = new Set<string>(AUDIT_ACTIONS);
 
-/** A readable name for the actions a record's history shows; the raw action otherwise (it stays in the title). */
+/** A readable name for an action; an action newer than this client shows raw (the raw action stays in the title). */
 export function actionLabel(action: string): string {
   return ACTION_KEYS.has(action) ? t(`event.action.${action}` as MessageKey) : action;
 }

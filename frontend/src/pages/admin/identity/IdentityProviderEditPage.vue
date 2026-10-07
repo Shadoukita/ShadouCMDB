@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from "../../../i18n";
+import { adminCrumbs } from "../sections";
 import { computed, nextTick, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import { ApiError } from "../../../api/client";
@@ -363,11 +365,7 @@ async function copyRedirect() {
   }
 }
 
-const crumbs = computed(() => [
-  { label: "Administration", to: "/admin" },
-  { label: "Identity providers", to: "/admin/identity-providers" },
-  { label: isNew.value ? "New" : (p.value?.name ?? "…") },
-]);
+const crumbs = computed(() => adminCrumbs("identity-providers", { label: isNew.value ? t("admin.crumb.new") : (p.value?.name ?? "…") }));
 const notFound = computed(() => {
   const e = provider.error.value;
   return e instanceof ApiError && (e.code === "NOT_FOUND" || (e.code === "VALIDATION_ERROR" && e.details.some((d) => d.in === "params")));

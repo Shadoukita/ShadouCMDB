@@ -15,6 +15,7 @@
 @import "./components/record.css";
 @import "./components/dashboard.css";
 @import "./components/services.css";
+@import "./components/admin.css";
 
 /*
  * Page and shell rules. The primitives (SHAA-1670 design document, §2.7) live in base.css and
@@ -235,42 +236,6 @@ dl.props .group-title:first-child {
   letter-spacing: 0.2px;
 }
 
-/* ---------- Administration ---------- */
-.admin {
-  display: grid;
-  grid-template-columns: 190px 1fr;
-  gap: var(--sp-5);
-  align-items: start;
-}
-.admin-nav {
-  background: var(--c-surface);
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius);
-  padding: var(--sp-2) 0;
-  position: sticky;
-  top: 0;
-}
-.admin-nav h2 {
-  color: var(--c-text-muted);
-  padding: var(--sp-3) var(--sp-4) var(--sp-2);
-}
-.admin-nav a {
-  display: block;
-  padding: 5px var(--sp-4);
-  color: var(--c-text);
-}
-.admin-nav a:hover {
-  background: var(--c-row-hover);
-  text-decoration: none;
-}
-.admin-nav a.active {
-  background: var(--c-row-selected);
-  box-shadow: inset 3px 0 0 var(--c-primary);
-  font-weight: 600;
-}
-.admin-body {
-  min-width: 0;
-}
 .check-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
