@@ -158,7 +158,11 @@ test("the data model keeps the Person's Name and Email", async ({ page, request 
   for (const label of ["Name", "Email"]) {
     const row = page.locator("tbody tr", { has: page.getByRole("button", { name: label, exact: true }) });
     await expect(row.getByTestId("system-attribute")).toBeVisible();
-    await expect(row.getByRole("button", { name: `Archive ${label}` })).toBeDisabled();
+    // A system attribute's row menu offers no Archive.
+    await row.getByRole("button", { name: `Actions for ${label}` }).click();
+    await expect(page.getByRole("menuitem", { name: "Edit" })).toBeVisible();
+    await expect(page.getByRole("menuitem", { name: "Archive" })).toHaveCount(0);
+    await page.keyboard.press("Escape");
   }
   await page.getByRole("button", { name: "Email", exact: true }).click();
   await expect(page.locator("#ad-required")).toBeDisabled();

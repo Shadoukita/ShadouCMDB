@@ -1,5 +1,6 @@
 import { reactive } from "vue";
 import { ApiError } from "../api/client";
+import { hasMessage, t } from "../i18n";
 import { previewSchemaChange, type PreviewRequest, type SchemaChangePreview } from "../api/schemaChanges";
 
 /**
@@ -121,3 +122,9 @@ export type SchemaChangeFlow = ReturnType<typeof useSchemaChangeFlow>;
 
 /** Impact kinds that lose or rewrite data, highlighted in the preview. */
 export const DESTRUCTIVE_IMPACT = new Set(["drop_column", "drop_table", "drop_schema", "rewrite", "not_null", "data_deleted", "warning"]);
+
+/** The translated label of an impact kind ("drop column"); an unknown kind shows as sent. */
+export function impactLabel(kind: string): string {
+  const key = `dm.schemaChange.impact.${kind}`;
+  return hasMessage(key) ? t(key) : kind;
+}

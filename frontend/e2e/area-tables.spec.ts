@@ -81,7 +81,7 @@ const VM_COLUMNS: Column[] = [
 ];
 
 async function addField(page: Page, label: string, key: string, type: string) {
-  await page.getByRole("button", { name: "+ Add attribute" }).click();
+  await page.getByRole("button", { name: "Add attribute", exact: true }).click();
   await page.locator("#ad-label").fill(label);
   // The technical name is derived from the label (umlauts transliterated) and previewed before anything runs.
   await expect(page.locator("#ad-key")).toHaveValue(key);
@@ -93,7 +93,7 @@ async function addField(page: Page, label: string, key: string, type: string) {
 
 async function createType(page: Page, name: string, key: string): Promise<string> {
   await page.goto("/admin/areas");
-  await page.getByRole("row", { name: /Bestand/ }).getByRole("link", { name: "+ Class in Bestand" }).click();
+  await page.getByRole("row", { name: /Bestand/ }).getByRole("link", { name: "Class in Bestand" }).click();
   await page.locator("#class-name").fill(name);
   await expect(page.locator("#class-key")).toHaveValue(key);
   await expect(page.locator("#class-area")).toHaveValue(areaId);
@@ -122,7 +122,7 @@ test.describe("the source install", () => {
   test("the area Bestand is a menu tab and the PostgreSQL schema bestand", async ({ page, request }) => {
     expect(sql(sourceDb!, "SELECT 1 FROM information_schema.schemata WHERE schema_name = 'bestand'")).toEqual([]);
     await page.goto("/admin/areas");
-    await page.getByRole("button", { name: "+ New area" }).first().click();
+    await page.getByRole("button", { name: "New area", exact: true }).first().click();
     await page.locator("#area-name").fill("Bestand");
     await expect(page.locator("#area-key")).toHaveValue("bestand");
     await expect(page.locator("#area-key-hint")).toContainText("Will be created as bestand");
@@ -272,7 +272,8 @@ test.describe("the source install", () => {
 
   test("an archived field keeps its column; purging it, typed to confirm, drops the column", async ({ page }) => {
     await page.goto(`/admin/classes/${vmClassId}`);
-    await page.getByRole("button", { name: "Archive Überwacht" }).click();
+    await page.getByRole("button", { name: "Actions for Überwacht" }).click();
+    await page.getByRole("menuitem", { name: "Archive" }).click();
     await applySchemaChange(page, "Archive attribute");
     await expect(page.getByRole("status").filter({ hasText: "Archived Überwacht" })).toBeVisible();
     // Archived: hidden from forms, but the column and its values are still there.
@@ -282,7 +283,8 @@ test.describe("the source install", () => {
     await expect(page.locator("#attr-ueberwacht")).toHaveCount(0);
 
     await page.goto(`/admin/classes/${vmClassId}`);
-    await page.getByRole("button", { name: "Purge Überwacht" }).click();
+    await page.getByRole("button", { name: "Actions for Überwacht" }).click();
+    await page.getByRole("menuitem", { name: "Purge…" }).click();
     const dialog = page.locator("dialog.schema-change[open]");
     await expect(dialog.locator(".sc-ddl")).toContainText('DROP COLUMN "ueberwacht"');
     const purge = dialog.getByRole("button", { name: "Purge attribute" });
@@ -358,8 +360,8 @@ test.describe("the source install", () => {
     for (const path of ["/admin/areas", "/admin/classes/new", `/admin/classes/${vmClassId}`]) {
       await ui.goto(path);
       await expect(ui.getByRole("heading", { name: "You do not have access to Administration" }), path).toBeVisible();
-      await expect(ui.getByRole("button", { name: "+ New area" }), path).toHaveCount(0);
-      await expect(ui.getByRole("button", { name: "+ Add attribute" }), path).toHaveCount(0);
+      await expect(ui.getByRole("button", { name: "New area", exact: true }), path).toHaveCount(0);
+      await expect(ui.getByRole("button", { name: "Add attribute", exact: true }), path).toHaveCount(0);
     }
     await snap(ui, "65-restricted-no-data-model");
     await context.close();

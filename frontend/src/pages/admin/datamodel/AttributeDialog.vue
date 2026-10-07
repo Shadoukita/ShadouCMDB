@@ -16,7 +16,7 @@ import AttributeInput from "../../../components/AttributeInput.vue";
 import FormDialog from "../../../components/FormDialog.vue";
 import SchemaChangeDialog from "../../../components/SchemaChangeDialog.vue";
 import TechnicalNameField from "../../../components/TechnicalNameField.vue";
-import { t } from "../../../i18n";
+import { t, type MessageKey } from "../../../i18n";
 import { toApiValue, toFormValue, type AttributeShape } from "../../../lib/attributeValues";
 import { changedFields } from "../../../lib/changes";
 import { DATA_TYPES, validationKind } from "../../../lib/dataTypes";
@@ -116,9 +116,9 @@ function seed() {
   initial = d ? updateBody() : {};
 }
 // A default belongs to one type; changing the type clears it.
-watch(dataType, (t) => {
+watch(dataType, (type) => {
   const d = props.def;
-  defaultValue.value = d && t === d.dataType ? toFormValue(d, d.defaultValue) : "";
+  defaultValue.value = d && type === d.dataType ? toFormValue(d, d.defaultValue) : "";
 });
 
 /** Types a stored column can be converted between; reference and lookup columns are foreign keys and stay what they are. */
@@ -126,7 +126,12 @@ const CONVERTIBLE = new Set<DataType>(["text", "number", "integer", "boolean", "
 /** The Person's Name and Email (SHAA-1505): the API refuses to archive them, make them optional or change their type. */
 const systemField = computed(() => !!props.def?.systemRole);
 const typeLocked = computed(() => !isNew.value && (systemField.value || !CONVERTIBLE.has(props.def!.dataType as DataType)));
-const typeOptions = computed(() => (isNew.value ? DATA_TYPES : DATA_TYPES.filter((t) => (typeLocked.value ? t.key === dataType.value : CONVERTIBLE.has(t.key as DataType)))));
+const typeOptions = computed(() =>
+  (isNew.value ? DATA_TYPES : DATA_TYPES.filter((d) => (typeLocked.value ? d.key === dataType.value : CONVERTIBLE.has(d.key)))).map((d) => ({
+    key: d.key,
+    label: t(`dm.attr.type.${d.key}` as MessageKey),
+  })),
+);
 const typeChanged = computed(() => !isNew.value && dataType.value !== props.def?.dataType);
 
 const enumValues = computed(() =>
@@ -146,7 +151,7 @@ const draft = computed<AttributeShape>(() => ({
 }));
 const vKind = computed(() => validationKind(dataType.value));
 const concreteClasses = computed(() => flattenTree(classes.data.value ?? []));
-const typeHint = computed(() => DATA_TYPES.find((t) => t.key === dataType.value)?.hint || undefined);
+const typeHint = computed(() => (DATA_TYPES.find((d) => d.key === dataType.value)?.hint ? t(`dm.attr.typeHint.${dataType.value}` as MessageKey) : undefined));
 const refClassName = computed(() => classes.data.value?.find((c) => c.id === referenceClassId.value)?.name);
 const listName = computed(() => lists.data.value?.find((l) => l.id === lookupListId.value)?.name);
 /** The parent list of the chosen list, if it depends on one. */
@@ -154,6 +159,11 @@ const parentList = computed(() => {
   const pid = lists.data.value?.find((l) => l.id === lookupListId.value)?.parentListId;
   return pid ? lists.data.value?.find((l) => l.id === pid) : undefined;
 });
+/** A parent-field choice: "Site (from Hardware) (retired)". */
+function candidateName(a: { label: string; inherited: boolean; definedOn: { name: string }; isActive: boolean }): string {
+  const name = a.inherited ? t("dm.attr.parent.from", { name: a.label, cls: a.definedOn.name }) : a.label;
+  return a.isActive ? name : t("dm.attr.parent.retired", { name });
+}
 /** Lookup attributes of this class and its ancestors bound to the parent list. */
 const parentCandidates = computed(() =>
   parentList.value
@@ -208,16 +218,16 @@ function validation(): Validation | null {
 
 function checkLocal(): Record<string, string> {
   const errs: Record<string, string> = {};
-  if (!label.value.trim()) errs.label = "Required";
+  if (!label.value.trim()) errs.label = t("common.required");
   if (isNew.value) {
     const k = keyError(key.value);
     if (k) errs.key = k;
-    if (dataType.value === "reference" && !referenceClassId.value) errs.referenceClassId = "Choose the class it refers to";
-    if (dataType.value === "lookup" && !lookupListId.value) errs.lookupListId = "Choose a lookup list";
+    if (dataType.value === "reference" && !referenceClassId.value) errs.referenceClassId = t("dm.attr.err.referenceClass");
+    if (dataType.value === "lookup" && !lookupListId.value) errs.lookupListId = t("dm.attr.err.lookupList");
   }
-  if (dataType.value === "enum" && enumValues.value.length === 0) errs.enumValues = "Enter at least one value";
+  if (dataType.value === "enum" && enumValues.value.length === 0) errs.enumValues = t("dm.attr.err.enumValues");
   for (const [field, raw] of [["validation.min", vMin.value], ["validation.max", vMax.value], ["validation.maxLength", vMaxLength.value]] as const) {
-    if (String(raw).trim() !== "" && numberOrUndefined(raw) === undefined) errs[field] = "Must be a number";
+    if (String(raw).trim() !== "" && numberOrUndefined(raw) === undefined) errs[field] = t("dm.attr.err.number");
   }
   return errs;
 }
@@ -273,15 +283,15 @@ async function submit() {
         ...(dv !== null ? { defaultValue: dv } : {}),
       };
     const outcome = await flow.run({
-      title: `Add attribute “${body.label}” to ${props.cls.name}`,
-      intro: `Adds the column “${body.key}” to the table ${props.cls.tableName}.`,
+      title: t("dm.attr.create.title", { name: body.label, cls: props.cls.name }),
+      intro: t("dm.attr.create.intro", { key: body.key, table: props.cls.tableName }),
       preview: { operation: "createField", body },
       apply: () => create.mutateAsync(body),
-      applyLabel: "Add attribute",
+      applyLabel: t("dm.attr.add"),
       alwaysShow: true,
     });
     if (outcome.status === "applied") {
-      emit("saved", `Added attribute ${(outcome.result as AttributeDefinition).label}. It shows on ${props.cls.name} forms now.`);
+      emit("saved", t("dm.attr.toast.added", { name: (outcome.result as AttributeDefinition).label, cls: props.cls.name }));
       emit("close");
     } else if (outcome.status === "refused") error.value = outcome.error;
     return;
@@ -298,17 +308,15 @@ async function submit() {
     return;
   }
   const outcome = await flow.run({
-    title: `Save attribute “${full.label}”`,
-    intro: typeChanged.value
-      ? `Converts the column “${d.key}” from ${d.dataType} to ${dataType.value}. Every stored value was converted in a dry run; the change is refused if any would not convert.`
-      : undefined,
+    title: t("dm.attr.save.title", { name: full.label ?? d.label }),
+    intro: typeChanged.value ? t("dm.attr.save.convertIntro", { key: d.key, from: d.dataType, to: dataType.value }) : undefined,
     preview: { operation: "updateField", id: d.id, body },
     apply: () => update.mutateAsync({ id: d.id, body }),
-    applyLabel: "Save attribute",
+    applyLabel: t("dm.attr.save.apply"),
     alwaysShow: typeChanged.value || (isRequired.value && !d.isRequired),
   });
   if (outcome.status === "applied") {
-    emit("saved", `Saved attribute ${(outcome.result as AttributeDefinition).label}.`);
+    emit("saved", t("dm.attr.toast.saved", { name: (outcome.result as AttributeDefinition).label }));
     emit("close");
   } else if (outcome.status === "refused") error.value = outcome.error;
 }
@@ -317,8 +325,8 @@ async function submit() {
 <template>
   <FormDialog
     :open="open"
-    :title="isNew ? `New attribute on ${cls.name}` : `Edit attribute “${def?.label}”`"
-    :submit-label="isNew ? 'Preview and add…' : 'Save attribute'"
+    :title="isNew ? t('dm.attr.dialog.newTitle', { cls: cls.name }) : t('dm.attr.dialog.editTitle', { name: def?.label ?? '' })"
+    :submit-label="isNew ? t('dm.attr.dialog.submitNew') : t('dm.attr.save.apply')"
     :busy="busy"
     wide
     @submit="submit"
@@ -326,7 +334,7 @@ async function submit() {
   >
     <FormErrorBanner v-if="error" :error="error" :unplaced="unplaced" />
     <div class="form-grid">
-      <FormField id="ad-label" v-slot="p" label="Label" required :error="errorFor('label')">
+      <FormField id="ad-label" v-slot="p" :label="t('dm.attr.col.label')" required :error="errorFor('label')">
         <input :id="p.id" v-model="label" type="text" maxlength="200" autofocus :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy" />
       </FormField>
       <TechnicalNameField
@@ -342,108 +350,116 @@ async function submit() {
       <FormField
         id="ad-type"
         v-slot="p"
-        label="Data type"
+        :label="t('dm.attr.f.dataType')"
         required
         :error="errorFor('dataType')"
         :hint="
           systemField
             ? t('people.datamodel.systemTitle')
             : typeLocked
-            ? 'Reference and lookup columns cannot change type'
+            ? t('dm.attr.f.typeLocked')
             : typeChanged
-              ? 'Stored values are converted; refused if any would not convert'
+              ? t('dm.attr.f.typeChanged')
               : typeHint
         "
       >
         <select :id="p.id" v-model="dataType" :disabled="typeLocked" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy">
-          <option v-for="t in typeOptions" :key="t.key" :value="t.key">{{ t.label }}</option>
+          <option v-for="o in typeOptions" :key="o.key" :value="o.key">{{ o.label }}</option>
         </select>
       </FormField>
-      <FormField v-if="dataType === 'reference'" id="ad-ref-class" v-slot="p" label="Refers to class" :required="isNew" :error="errorFor('referenceClassId')" hint="Its subclasses are allowed too">
+      <FormField
+        v-if="dataType === 'reference'"
+        id="ad-ref-class"
+        v-slot="p"
+        :label="t('dm.attr.f.refClass')"
+        :required="isNew"
+        :error="errorFor('referenceClassId')"
+        :hint="t('dm.attr.f.refClassHint')"
+      >
         <select v-if="isNew" :id="p.id" v-model="referenceClassId" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy">
-          <option value="">Choose a class…</option>
+          <option value="">{{ t("dm.attr.f.chooseClass") }}</option>
           <option v-for="n in concreteClasses" :key="n.item.id" :value="n.item.id">{{ "  ".repeat(n.depth) }}{{ n.item.name }}</option>
         </select>
         <input v-else :id="p.id" type="text" readonly :value="refClassName ?? referenceClassId" :aria-describedby="p.describedBy" />
       </FormField>
-      <FormField v-if="dataType === 'lookup'" id="ad-list" v-slot="p" label="Lookup list" :required="isNew" :error="errorFor('lookupListId')">
+      <FormField v-if="dataType === 'lookup'" id="ad-list" v-slot="p" :label="t('dm.attr.f.lookupList')" :required="isNew" :error="errorFor('lookupListId')">
         <select v-if="isNew" :id="p.id" v-model="lookupListId" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy">
-          <option value="">{{ lists.isLoading.value ? "Loading…" : lists.data.value?.length ? "Choose a list…" : "No lists yet" }}</option>
-          <option v-for="l in lists.data.value ?? []" :key="l.id" :value="l.id">{{ l.name }}{{ l.isActive ? "" : " (archived)" }}</option>
+          <option value="">{{ lists.isLoading.value ? t("common.loading") : lists.data.value?.length ? t("dm.attr.f.chooseList") : t("dm.attr.f.noLists") }}</option>
+          <option v-for="l in lists.data.value ?? []" :key="l.id" :value="l.id">{{ l.isActive ? l.name : t("dm.attr.f.listArchived", { name: l.name }) }}</option>
         </select>
         <input v-else :id="p.id" type="text" readonly :value="listName ?? lookupListId" :aria-describedby="p.describedBy" />
-        <span v-if="isNew" class="hint"><RouterLink to="/admin/dropdowns">Manage dropdowns</RouterLink></span>
+        <span v-if="isNew" class="hint"><RouterLink to="/admin/dropdowns">{{ t("dm.attr.f.manageDropdowns") }}</RouterLink></span>
       </FormField>
       <FormField
         v-if="dataType === 'lookup' && parentList"
         id="ad-parent-attr"
         v-slot="p"
-        :label="`Parent field (${parentList.name})`"
+        :label="t('dm.attr.parent.label', { list: parentList.name })"
         :error="errorFor('parentAttributeId')"
         :hint="
           parentCandidates.length
-            ? `CI forms offer only the ${listName ?? 'values'} of the ${parentList.name} chosen in this field`
-            : `No attribute of ${cls.name} or its parents uses the list ${parentList.name}: add one first. Without a parent field every value can be chosen.`
+            ? t('dm.attr.parent.hint', { values: listName ?? t('dm.attr.parent.values'), parent: parentList.name })
+            : t('dm.attr.parent.none', { cls: cls.name, list: parentList.name })
         "
       >
         <select :id="p.id" v-model="parentAttributeId" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy">
-          <option value="">— none: every value can be chosen —</option>
+          <option value="">{{ t("dm.attr.parent.noneOption") }}</option>
           <option v-for="a in parentCandidates" :key="a.id" :value="a.id">
-            {{ a.label }}{{ a.inherited ? ` (from ${a.definedOn.name})` : "" }}{{ a.isActive ? "" : " (retired)" }}
+            {{ candidateName(a) }}
           </option>
         </select>
       </FormField>
-      <FormField id="ad-section" v-slot="p" label="Form section" :error="errorFor('groupName')" hint="Attributes with the same section are shown together">
-        <input :id="p.id" v-model="groupName" type="text" list="ad-sections" maxlength="100" placeholder="e.g. Hardware" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy" />
+      <FormField id="ad-section" v-slot="p" :label="t('dm.attr.f.section')" :error="errorFor('groupName')" :hint="t('dm.attr.f.sectionHint')">
+        <input :id="p.id" v-model="groupName" type="text" list="ad-sections" maxlength="100" :placeholder="t('dm.attr.f.sectionPlaceholder')" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy" />
         <datalist id="ad-sections">
           <option v-for="s in sections" :key="s" :value="s" />
         </datalist>
       </FormField>
       <div class="field">
-        <span class="label">Required</span>
+        <span class="label">{{ t("common.required") }}</span>
         <label class="checkbox-row">
           <input id="ad-required" v-model="isRequired" type="checkbox" :disabled="systemField" />
-          Every CI of this class must have a value
+          {{ t("dm.attr.f.requiredText") }}
         </label>
         <span v-if="systemField" class="hint">{{ t("people.datamodel.systemTitle") }}</span>
-        <span v-if="!isNew && isRequired && !def?.isRequired" class="hint">Refused while a CI of this class has no value</span>
+        <span v-if="!isNew && isRequired && !def?.isRequired" class="hint">{{ t("dm.attr.f.requiredRefused") }}</span>
         <span v-if="errorFor('isRequired')" class="error">{{ errorFor("isRequired") }}</span>
       </div>
       <FormField
         v-if="dataType === 'enum'"
         id="ad-enum"
         v-slot="p"
-        label="Allowed values"
+        :label="t('dm.attr.f.enum')"
         required
         wide
         :error="errorFor('enumValues')"
-        hint="One per line. A value that CIs still hold cannot be removed."
+        :hint="t('dm.attr.f.enumHint')"
       >
         <textarea :id="p.id" v-model="enumText" rows="4" class="mono" spellcheck="false" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy" />
       </FormField>
       <template v-if="vKind === 'number'">
-        <FormField id="ad-min" v-slot="p" label="Minimum" :error="errorFor('validation.min')">
+        <FormField id="ad-min" v-slot="p" :label="t('dm.attr.f.min')" :error="errorFor('validation.min')">
           <input :id="p.id" v-model="vMin" type="number" step="any" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy" />
         </FormField>
-        <FormField id="ad-max" v-slot="p" label="Maximum" :error="errorFor('validation.max')">
+        <FormField id="ad-max" v-slot="p" :label="t('dm.attr.f.max')" :error="errorFor('validation.max')">
           <input :id="p.id" v-model="vMax" type="number" step="any" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy" />
         </FormField>
-        <FormField id="ad-unit" v-slot="p" label="Unit" :error="errorFor('validation.unit')" hint="Shown next to the value, e.g. GB">
+        <FormField id="ad-unit" v-slot="p" :label="t('dm.attr.f.unit')" :error="errorFor('validation.unit')" :hint="t('dm.attr.f.unitHint')">
           <input :id="p.id" v-model="vUnit" type="text" maxlength="20" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy" />
         </FormField>
       </template>
       <template v-if="vKind === 'text'">
-        <FormField id="ad-maxlength" v-slot="p" label="Maximum length" :error="errorFor('validation.maxLength')">
+        <FormField id="ad-maxlength" v-slot="p" :label="t('dm.attr.f.maxLength')" :error="errorFor('validation.maxLength')">
           <input :id="p.id" v-model="vMaxLength" type="number" min="1" step="1" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy" />
         </FormField>
-        <FormField id="ad-pattern" v-slot="p" label="Pattern" :error="errorFor('validation.pattern')" hint="Regular expression the value must match">
+        <FormField id="ad-pattern" v-slot="p" :label="t('dm.attr.f.pattern')" :error="errorFor('validation.pattern')" :hint="t('dm.attr.f.patternHint')">
           <input :id="p.id" v-model="vPattern" type="text" class="mono" spellcheck="false" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy" />
         </FormField>
         <div class="field">
-          <span class="label">Multiline</span>
+          <span class="label">{{ t("dm.attr.f.multiline") }}</span>
           <label class="checkbox-row">
             <input id="ad-multiline" v-model="vMultiline" type="checkbox" :aria-describedby="validationError ? 'ad-multiline-error' : undefined" />
-            Text area that keeps line breaks, e.g. notes or runbook steps
+            {{ t("dm.attr.f.multilineText") }}
           </label>
           <span v-if="validationError" id="ad-multiline-error" class="error">{{ validationError }}</span>
         </div>
@@ -451,17 +467,17 @@ async function submit() {
       <FormField
         id="ad-default"
         v-slot="p"
-        label="Default value"
+        :label="t('dm.attr.f.default')"
         :error="errorFor('defaultValue')"
-        :hint="dataType === 'reference' ? 'References have no default' : 'Pre-filled on new CIs, and applied when a CI is created without a value'"
+        :hint="dataType === 'reference' ? t('dm.attr.f.defaultNone') : t('dm.attr.f.defaultHint')"
       >
         <input v-if="dataType === 'reference'" :id="p.id" type="text" disabled value="" :aria-describedby="p.describedBy" />
         <AttributeInput v-else :id="p.id" v-model="defaultValue" :def="draft" :invalid="p.invalid" :described-by="p.describedBy" />
       </FormField>
-      <FormField id="ad-help" v-slot="p" label="Help text" wide :error="errorFor('helpText')" hint="Shown under the field on CI forms">
+      <FormField id="ad-help" v-slot="p" :label="t('dm.attr.f.help')" wide :error="errorFor('helpText')" :hint="t('dm.attr.f.helpHint')">
         <input :id="p.id" v-model="helpText" type="text" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy" />
       </FormField>
-      <FormField id="ad-description" v-slot="p" label="Description" wide :error="errorFor('description')" hint="For administrators: what the attribute is for">
+      <FormField id="ad-description" v-slot="p" :label="t('dm.attr.f.description')" wide :error="errorFor('description')" :hint="t('dm.attr.f.descriptionHint')">
         <textarea :id="p.id" v-model="description" rows="2" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy" />
       </FormField>
     </div>

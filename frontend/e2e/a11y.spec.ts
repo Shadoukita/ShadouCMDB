@@ -87,10 +87,10 @@ test("Customization › Layouts: the class picker and Edit CI", async ({ page },
 
 test("class and attribute editor", async ({ page, request }, testInfo) => {
   await page.goto(`/admin/classes/${await classIdByName(request, "Server")}`);
-  await expect(page.getByRole("button", { name: "+ Add attribute" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add attribute", exact: true })).toBeVisible();
   await checkA11y(page, testInfo, "class-editor");
 
-  await page.getByRole("button", { name: "+ Add attribute" }).click();
+  await page.getByRole("button", { name: "Add attribute", exact: true }).click();
   await expect(page.getByRole("dialog")).toBeVisible();
   await checkA11y(page, testInfo, "attribute-dialog");
 });

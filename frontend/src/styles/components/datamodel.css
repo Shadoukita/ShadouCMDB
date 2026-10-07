@@ -3,14 +3,77 @@
  * explorer pattern (explorer.css) and admin.css; only what those do not cover is here.
  */
 
+/* The reorder hint at the end of a list toolbar (audit A4: no inline-styled hints). */
+.toolbar-hint {
+  margin: 0 0 0 auto;
+  align-self: center;
+  color: var(--c-text-secondary);
+  font-size: var(--fs-sm);
+}
+
 /* ---- 9a/A begin: classes ---- */
 /* ---- 9a/A end ---- */
 
 /* ---- 9a/B begin: attributes ---- */
+/* The add button ends the attribute panel's header, after the reorder hint. */
+.panel-header .attrs-add {
+  margin-left: auto;
+}
+.panel-header .toolbar-hint + .attrs-add {
+  margin-left: 0;
+}
+/* A form section of the attribute table reads as a table group header, not as an overline (audit A8). */
+table.attributes tr.section-row th,
+table.attributes tr.section-row td {
+  background: var(--c-surface-alt);
+}
+table.attributes tr.section-row th {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--c-text-secondary);
+}
 /* ---- 9a/B end ---- */
 
 /* ---- 9a/C begin: relationship types and dropdowns ---- */
+/* The values panel header: title, count and spinner together, the add button at the end. */
+.lookup-values-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
 /* ---- 9a/C end ---- */
 
 /* ---- 9a/D begin: areas and schema changes ---- */
+/* The DDL preview's subheadings: sentence case, like any other heading (audit A8). */
+dialog.schema-change h3 {
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semibold);
+  color: var(--c-text);
+  margin: var(--sp-4) 0 var(--sp-2);
+}
+dialog.schema-change section:first-of-type h3 {
+  margin-top: 0;
+}
+/* The purge's typed confirmation: a plain form field; only the warning sentence is red (audit A8). */
+.sc-confirm {
+  margin-top: var(--sp-4);
+}
+.sc-confirm input {
+  max-width: 320px;
+}
+.sc-warning {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  color: var(--c-danger-text);
+  font-weight: var(--fw-semibold);
+}
+/* "+ Class in Bestand" under an area's classes: the plus is an icon. */
+.area-new-class {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
 /* ---- 9a/D end ---- */

@@ -46,7 +46,8 @@ test("editing a list's description sends only the description, not its stored na
   page.on("request", (r) => r.method() === "PATCH" && r.url().endsWith(`/lookup-lists/${list.id}`) && sent.push(r.postDataJSON()));
 
   await page.goto("/admin/dropdowns");
-  await page.getByRole("button", { name: `Edit list ${legacy}` }).click();
+  await page.getByRole("button", { name: `Actions for ${legacy}` }).click();
+  await page.getByRole("menuitem", { name: "Edit" }).click();
   await page.locator("#ll-description").fill("Kept for the 2026 audit");
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByRole("status").filter({ hasText: "Saved list" })).toBeVisible();

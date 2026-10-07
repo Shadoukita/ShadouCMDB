@@ -10,11 +10,14 @@ import ClassBadge from "../../../components/ClassBadge.vue";
 import EmptyState from "../../../components/EmptyState.vue";
 import ErrorAlert from "../../../components/ErrorAlert.vue";
 import LoadingState from "../../../components/LoadingState.vue";
+import RowMenu, { type RowMenuItem } from "../../../components/RowMenu.vue";
 import SchemaChangeDialog from "../../../components/SchemaChangeDialog.vue";
+import { formatNumber, t } from "../../../i18n";
 import { useDocumentTitle } from "../../../lib/composables";
 import { useListQuery } from "../../../lib/listQuery";
 import { moveItem, useDragReorder } from "../../../lib/reorder";
 import { useSchemaChangeFlow } from "../../../lib/schemaChange";
+import { useFlashStore } from "../../../stores/flash";
 import AreaDialog from "./AreaDialog.vue";
 import SchemaChangesPanel from "./SchemaChangesPanel.vue";
 import Icon from "../../../components/Icon.vue";
@@ -26,7 +29,7 @@ import Icon from "../../../components/Icon.vue";
  * arrows); deleting one archives it (schema and data kept, hidden from the
  * menu), and only a purge, typed to confirm, drops the schema.
  */
-useDocumentTitle("Areas");
+useDocumentTitle(t("dm.areas.title"));
 const lq = useListQuery({ sort: "sortOrder" });
 const showArchived = computed(() => lq.get("archived") === "show");
 const areas = useAreas();
@@ -36,9 +39,17 @@ const patch = usePatch<Area>("areas");
 const remove = useRemove("areas");
 const purge = usePurge("areas");
 const flow = useSchemaChangeFlow();
-const notice = ref<string | null>(null);
+const flash = useFlashStore();
 const failure = ref<unknown>(null);
 const pendingOrder = ref<string[] | null>(null);
+
+/** The intro with its two example names set as code, in the translator's word order. */
+const INTRO_CODE: Record<string, string> = { "\u0000": "bestand.netzwerk", "\u0001": "bestand.v_netzwerk" };
+const intro = computed(() =>
+  t("dm.areas.intro", { table: "\u0000", view: "\u0001" })
+    .split(/([\u0000\u0001])/)
+    .map((part) => ({ text: part, code: Object.hasOwn(INTRO_CODE, part) ? INTRO_CODE[part] : null })),
+);
 
 const all = computed(() => {
   const list = areas.data.value ?? [];
@@ -58,11 +69,12 @@ function commit(dragId: string, targetId: string) {
   if (from < 0 || to < 0) return;
   const moved = moveItem(list, from, to);
   pendingOrder.value = moved.map((a) => a.id);
-  notice.value = null;
   reorder.mutate(
     moved.map((a) => ({ id: a.id, sortOrder: a.sortOrder })),
     {
-      onSuccess: (n) => (notice.value = n > 0 ? `Moved ${list[from].name}. The menu tabs use the new order.` : null),
+      onSuccess: (n) => {
+        if (n > 0) flash.show(t("dm.areas.moved", { name: list[from].name }));
+      },
       onSettled: () => (pendingOrder.value = null),
     },
   );
@@ -74,58 +86,63 @@ function step(a: Area, delta: -1 | 1) {
 const dnd = useDragReorder(commit, () => !reorder.isPending.value);
 
 async function report(outcome: Awaited<ReturnType<typeof flow.run>>, message: string) {
-  if (outcome.status === "applied") notice.value = message;
+  if (outcome.status === "applied") flash.show(message);
   if (outcome.status === "refused") failure.value = outcome.error;
 }
 
 async function archive(a: Area) {
-  notice.value = null;
   failure.value = null;
   report(
     await flow.run({
-      title: `Archive area “${a.name}”?`,
-      intro: `The tab and its ${a.typeCount} ${a.typeCount === 1 ? "type" : "types"} disappear from the menu. The schema “${a.key}”, its tables and every stored value are kept; restore the area to bring it back.`,
+      title: t("dm.areas.archive.title", { name: a.name }),
+      intro: t("dm.areas.archive.intro", { n: a.typeCount, key: a.key }),
       preview: { operation: "deleteArea", id: a.id },
       apply: () => remove.mutateAsync(a.id),
-      applyLabel: "Archive area",
+      applyLabel: t("dm.areas.archive.apply"),
       alwaysShow: true,
     }),
-    `Archived ${a.name}: its schema and data are kept.`,
+    t("dm.areas.archive.done", { name: a.name }),
   );
 }
 
 async function restore(a: Area) {
-  notice.value = null;
   failure.value = null;
   report(
     await flow.run({
-      title: `Restore area “${a.name}”`,
+      title: t("dm.areas.restore.title", { name: a.name }),
       preview: { operation: "updateArea", id: a.id, body: { isActive: true } },
       apply: () => patch.mutateAsync({ id: a.id, body: { isActive: true } }),
-      applyLabel: "Restore area",
+      applyLabel: t("dm.areas.restore.apply"),
     }),
-    `Restored ${a.name}: it is a menu tab again.`,
+    t("dm.areas.restore.done", { name: a.name }),
   );
 }
 
 async function purgeArea(a: Area) {
-  notice.value = null;
   failure.value = null;
   report(
     await flow.run({
-      title: `Purge area “${a.name}”?`,
-      intro:
-        a.typeCount > 0
-          ? `The area still holds ${a.typeCount} ${a.typeCount === 1 ? "type" : "types"}. Purge those first (Administration › CI classes); the preview below shows the refusal otherwise.`
-          : `Drops the PostgreSQL schema “${a.key}”. The change is recorded in the database change history.`,
+      title: t("dm.areas.purge.title", { name: a.name }),
+      intro: a.typeCount > 0 ? t("dm.areas.purge.introTypes", { n: a.typeCount }) : t("dm.areas.purge.intro", { key: a.key }),
       preview: { operation: "purgeArea", id: a.id, body: { confirm: a.key } },
       apply: (confirm) => purge.mutateAsync({ id: a.id, confirm }),
-      applyLabel: "Purge area",
+      applyLabel: t("dm.areas.purge.apply"),
       danger: true,
       confirmName: a.key,
     }),
-    `Purged ${a.name}: schema ${a.key} was dropped.`,
+    t("dm.areas.purge.done", { name: a.name, key: a.key }),
   );
+}
+
+/** Edit first, then Archive or Restore, then the destructive Purge… */
+function rowMenu(a: Area): RowMenuItem[] {
+  const items: RowMenuItem[] = [{ label: t("common.edit"), action: () => openEdit(a) }];
+  if (a.isActive) items.push({ label: t("dm.areas.row.archive"), action: () => archive(a) });
+  else {
+    items.push({ label: t("dm.areas.row.restore"), action: () => restore(a) });
+    items.push({ label: t("dm.areas.row.purge"), action: () => purgeArea(a), danger: true });
+  }
+  return items;
 }
 
 // ---------- Create / edit dialog ----------
@@ -145,48 +162,48 @@ function openEdit(a: Area) {
   <Breadcrumbs :items="adminCrumbs('areas')" />
   <div class="page-header">
     <div class="title">
-      <h1>Areas</h1>
-      <span v-if="areas.data.value" class="muted">{{ areas.data.value.length }} total</span>
-      <span v-if="reorder.isPending.value || (areas.isFetching.value && !areas.isLoading.value)" class="spinner" aria-label="Saving" />
+      <h1>{{ t("dm.areas.title") }}</h1>
+      <span v-if="areas.data.value" class="muted count">{{ t("common.total", { n: formatNumber(areas.data.value.length) }) }}</span>
+      <span v-if="reorder.isPending.value || (areas.isFetching.value && !areas.isLoading.value)" class="spinner" :aria-label="t('common.saving')" />
     </div>
     <div class="actions">
-      <button type="button" class="btn btn-primary" @click="openNew">+ New area</button>
+      <button type="button" class="btn btn-primary" @click="openNew"><Icon name="plus" />{{ t("dm.areas.create") }}</button>
     </div>
   </div>
 
-  <p class="page-intro muted">
-    An area is a tab of the main menu and a PostgreSQL schema. Each CI class in it gets its own table there, e.g.
-    <code>bestand.netzwerk</code>, with one typed column per attribute, and a read-only reporting view
-    (<code>bestand.v_netzwerk</code>).
+  <p class="page-intro">
+    <template v-for="(part, i) in intro" :key="i">
+      <code v-if="part.code">{{ part.code }}</code>
+      <template v-else>{{ part.text }}</template>
+    </template>
   </p>
 
-  <div v-if="notice" class="alert alert-success" role="status">{{ notice }}</div>
   <ErrorAlert v-if="failure" :error="failure" />
-  <ErrorAlert v-if="reorder.isError.value" :error="reorder.error.value" title="The new order was not saved completely" />
+  <ErrorAlert v-if="reorder.isError.value" :error="reorder.error.value" :title="t('dm.areas.orderFailed')" />
 
-  <section class="panel" aria-label="Areas">
+  <section class="panel explorer" :aria-label="t('dm.areas.title')">
     <div class="toolbar">
       <label class="checkbox-row">
         <input type="checkbox" :checked="showArchived" @change="lq.update({ archived: ($event.target as HTMLInputElement).checked ? 'show' : undefined })" />
-        Show archived areas<span v-if="archivedCount" class="muted">&nbsp;({{ archivedCount }})</span>
+        {{ t("dm.areas.showArchived") }}<span v-if="archivedCount" class="muted">&nbsp;({{ formatNumber(archivedCount) }})</span>
       </label>
-      <span class="muted" style="margin-left: auto">Drag a row, or use the arrows, to order the menu tabs.</span>
+      <p class="toolbar-hint">{{ t("dm.areas.reorderHint") }}</p>
     </div>
     <div v-if="areas.isError.value" class="panel-body">
       <ErrorAlert :error="areas.error.value" :on-retry="() => areas.refetch()" />
     </div>
-    <LoadingState v-if="areas.isLoading.value" label="Loading areas…" />
-    <EmptyState v-if="areas.data.value && areas.data.value.length === 0" title="No areas yet">
-      Create an area such as “Bestand” to get a menu tab and a database schema for its classes, or install the IT
-      infrastructure starter template, which brings the area “Infrastruktur”.
+    <LoadingState v-if="areas.isLoading.value" :label="t('dm.areas.loading')" />
+    <EmptyState v-if="areas.data.value && areas.data.value.length === 0" icon="layers" :title="t('dm.areas.empty.title')">
+      {{ t("dm.areas.empty.body") }}
       <template #actions>
-        <button type="button" class="btn btn-primary" @click="openNew">+ New area</button>
-        <RouterLink class="btn" to="/admin/templates">Install a starter template</RouterLink>
+        <button type="button" class="btn btn-primary" @click="openNew"><Icon name="plus" />{{ t("dm.areas.create") }}</button>
+        <RouterLink class="btn" to="/admin/templates">{{ t("dm.areas.empty.template") }}</RouterLink>
       </template>
     </EmptyState>
-    <EmptyState v-else-if="areas.data.value && rows.length === 0" title="Every area is archived">
+    <EmptyState v-else-if="areas.data.value && rows.length === 0" icon="layers" :title="t('dm.areas.allArchived.title')">
+      {{ t("dm.areas.allArchived.body") }}
       <template #actions>
-        <button type="button" class="btn" @click="lq.update({ archived: 'show' })">Show archived areas</button>
+        <button type="button" class="btn" @click="lq.update({ archived: 'show' })">{{ t("dm.areas.showArchived") }}</button>
       </template>
     </EmptyState>
 
@@ -194,47 +211,44 @@ function openEdit(a: Area) {
       <table class="data reorderable">
         <thead>
           <tr>
-            <th scope="col" class="drag-col"><span class="sr-only">Drag to reorder</span></th>
-            <th scope="col">Area</th>
-            <th scope="col">Schema</th>
-            <th scope="col">Classes</th>
-            <th scope="col">Status</th>
-            <th scope="col">Order</th>
-            <th scope="col"><span class="sr-only">Actions</span></th>
+            <th scope="col" class="drag-col"><span class="sr-only">{{ t("dm.areas.dragToReorder") }}</span></th>
+            <th scope="col">{{ t("dm.areas.col.area") }}</th>
+            <th scope="col">{{ t("dm.areas.col.schema") }}</th>
+            <th scope="col">{{ t("dm.areas.col.classes") }}</th>
+            <th scope="col">{{ t("admin.col.status") }}</th>
+            <th scope="col">{{ t("dm.areas.col.order") }}</th>
+            <th scope="col" class="row-actions"><span class="sr-only">{{ t("inventory.actions") }}</span></th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="(a, i) in rows" :key="a.id" v-bind="dnd.row(a.id)" :class="{ disabled: !a.isActive }">
-            <td class="drag-handle" aria-hidden="true" title="Drag to reorder"><Icon name="grip-vertical" /></td>
+          <tr v-for="(a, i) in rows" :key="a.id" v-bind="dnd.row(a.id)" :data-id="a.id" :class="{ disabled: !a.isActive }">
+            <td class="drag-handle" aria-hidden="true" :title="t('dm.areas.dragToReorder')"><Icon name="grip-vertical" /></td>
             <td>
-              <button type="button" class="btn-link" :title="`Edit ${a.name}`" @click="openEdit(a)">
+              <button type="button" class="btn-link" :title="t('dm.areas.editName', { name: a.name })" @click="openEdit(a)">
                 <ClassBadge :icon="a.icon" :color="a.color" :name="a.name" />
               </button>
               <div v-if="a.description" class="muted cell-note">{{ a.description }}</div>
             </td>
             <td class="mono">{{ a.key }}</td>
             <td class="wrap">
-              <span v-if="typesOf(a).length === 0" class="muted">none</span>
+              <span v-if="typesOf(a).length === 0" class="muted">{{ t("dm.areas.noClasses") }}</span>
               <template v-for="(c, j) in typesOf(a)" :key="c.id">
                 <RouterLink :to="`/admin/classes/${c.id}`" :class="{ muted: !c.isActive }">{{ c.name }}</RouterLink><template v-if="j < typesOf(a).length - 1">, </template>
               </template>
-              <div><RouterLink class="cell-note" :to="{ path: '/admin/classes/new', query: { areaId: a.id } }">+ Class in {{ a.name }}</RouterLink></div>
+              <div>
+                <RouterLink class="cell-note area-new-class" :to="{ path: '/admin/classes/new', query: { areaId: a.id } }"><Icon name="plus" :size="14" />{{ t("dm.areas.classIn", { name: a.name }) }}</RouterLink>
+              </div>
             </td>
             <td>
-              <span v-if="a.isActive" class="badge ok">Active</span>
-              <span v-else class="badge off">Archived</span>
+              <span v-if="a.isActive" class="badge ok">{{ t("common.active") }}</span>
+              <span v-else class="badge off">{{ t("dm.areas.archived") }}</span>
             </td>
             <td class="order-buttons">
-              <button type="button" class="btn btn-sm btn-icon" :disabled="reorder.isPending.value || i === 0" :aria-label="`Move ${a.name} up`" @click="step(a, -1)"><Icon name="arrow-up" /></button>
-              <button type="button" class="btn btn-sm btn-icon" :disabled="reorder.isPending.value || i === rows.length - 1" :aria-label="`Move ${a.name} down`" @click="step(a, 1)"><Icon name="arrow-down" /></button>
+              <button type="button" class="btn btn-sm btn-icon" :disabled="reorder.isPending.value || i === 0" :aria-label="t('dm.areas.moveUp', { name: a.name })" @click="step(a, -1)"><Icon name="arrow-up" /></button>
+              <button type="button" class="btn btn-sm btn-icon" :disabled="reorder.isPending.value || i === rows.length - 1" :aria-label="t('dm.areas.moveDown', { name: a.name })" @click="step(a, 1)"><Icon name="arrow-down" /></button>
             </td>
             <td class="row-actions">
-              <button type="button" class="btn btn-sm" @click="openEdit(a)">Edit</button>
-              <button v-if="a.isActive" type="button" class="btn btn-sm" :aria-label="`Archive ${a.name}`" @click="archive(a)">Archive</button>
-              <template v-else>
-                <button type="button" class="btn btn-sm" :aria-label="`Restore ${a.name}`" @click="restore(a)">Restore</button>
-                <button type="button" class="btn btn-sm btn-quiet-danger" :aria-label="`Purge ${a.name}`" @click="purgeArea(a)">Purge…</button>
-              </template>
+              <RowMenu :label="t('inventory.rowMenu', { name: a.name })" :items="rowMenu(a)" />
             </td>
           </tr>
         </tbody>
@@ -244,6 +258,6 @@ function openEdit(a: Area) {
 
   <SchemaChangesPanel />
 
-  <AreaDialog :open="dialogOpen" :area="editing" :next-sort-order="nextSortOrder" @close="dialogOpen = false" @saved="(m) => (notice = m)" />
+  <AreaDialog :open="dialogOpen" :area="editing" :next-sort-order="nextSortOrder" @close="dialogOpen = false" @saved="(m) => flash.show(m)" />
   <SchemaChangeDialog :flow="flow" />
 </template>

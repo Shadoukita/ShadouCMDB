@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useSchemaChanges } from "../../../api/schemaChanges";
+import EmptyState from "../../../components/EmptyState.vue";
 import ErrorAlert from "../../../components/ErrorAlert.vue";
 import LoadingState from "../../../components/LoadingState.vue";
 import PaginationBar from "../../../components/PaginationBar.vue";
+import { t } from "../../../i18n";
 import { formatDateTime } from "../../../lib/format";
+import { impactLabel } from "../../../lib/schemaChange";
 
 /** The DDL the data model administration ran (cmdb.schema_changes), newest first; each row opens to its exact SQL. */
 const limit = ref(25);
@@ -16,22 +19,22 @@ const rows = computed(() => changes.data.value?.data ?? []);
 <template>
   <section class="panel" aria-labelledby="sc-history-title">
     <div class="panel-header">
-      <h2 id="sc-history-title">Database changes</h2>
-      <span class="muted">Every schema, table and column change, with the SQL that ran</span>
-      <span v-if="changes.isFetching.value && !changes.isLoading.value" class="spinner" aria-label="Loading" />
+      <h2 id="sc-history-title">{{ t("dm.schemaChanges.title") }}</h2>
+      <span class="muted">{{ t("dm.schemaChanges.subtitle") }}</span>
+      <span v-if="changes.isFetching.value && !changes.isLoading.value" class="spinner" :aria-label="t('common.refreshing')" />
     </div>
-    <LoadingState v-if="changes.isLoading.value" label="Loading database changes…" />
+    <LoadingState v-if="changes.isLoading.value" :label="t('dm.schemaChanges.loading')" />
     <div v-else-if="changes.isError.value" class="panel-body">
       <ErrorAlert :error="changes.error.value" :on-retry="() => changes.refetch()" />
     </div>
-    <div v-else-if="rows.length === 0" class="panel-body"><p class="muted" style="margin: 0">No database changes yet.</p></div>
+    <EmptyState v-else-if="rows.length === 0" icon="database" :title="t('dm.schemaChanges.empty.title')">{{ t("dm.schemaChanges.empty.body") }}</EmptyState>
     <div v-else class="table-wrap">
       <table class="data schema-changes">
         <thead>
           <tr>
-            <th scope="col">When</th>
-            <th scope="col">Who</th>
-            <th scope="col">Change</th>
+            <th scope="col">{{ t("dm.schemaChanges.col.when") }}</th>
+            <th scope="col">{{ t("dm.schemaChanges.col.who") }}</th>
+            <th scope="col">{{ t("dm.schemaChanges.col.change") }}</th>
           </tr>
         </thead>
         <tbody>
@@ -40,12 +43,12 @@ const rows = computed(() => changes.data.value?.data ?? []);
             <td>{{ c.actorName ?? c.actorType }}</td>
             <td>
               <details>
-                <summary>{{ c.summary }} <span class="muted">({{ c.statements.length }} {{ c.statements.length === 1 ? "statement" : "statements" }})</span></summary>
+                <summary>{{ c.summary }} <span class="muted">({{ t("dm.schemaChanges.statements", { n: c.statements.length }) }})</span></summary>
                 <ol class="sc-ddl">
                   <li v-for="(sql, i) in c.statements" :key="i"><pre>{{ sql }}</pre></li>
                 </ol>
                 <ul v-if="c.impact.length" class="sc-impact">
-                  <li v-for="(x, i) in c.impact" :key="i"><span class="badge">{{ x.kind.replace(/_/g, " ") }}</span> {{ x.message }}</li>
+                  <li v-for="(x, i) in c.impact" :key="i"><span class="badge">{{ impactLabel(x.kind) }}</span> {{ x.message }}</li>
                 </ul>
               </details>
             </td>

@@ -11,13 +11,16 @@ import Breadcrumbs from "../../../components/Breadcrumbs.vue";
 import ClassBadge from "../../../components/ClassBadge.vue";
 import EmptyState from "../../../components/EmptyState.vue";
 import ErrorAlert from "../../../components/ErrorAlert.vue";
+import Icon from "../../../components/Icon.vue";
 import LoadingState from "../../../components/LoadingState.vue";
+import RowMenu, { type RowMenuItem } from "../../../components/RowMenu.vue";
+import SaveBar from "../../../components/SaveBar.vue";
 import SchemaChangeDialog from "../../../components/SchemaChangeDialog.vue";
 import TechnicalNameField from "../../../components/TechnicalNameField.vue";
 import { CLASS_ICONS, classIcon } from "../../../lib/classIcons";
-import { useDocumentTitle } from "../../../lib/composables";
+import { useDocumentTitle, useUnsavedGuard } from "../../../lib/composables";
 import { vAutofocus } from "../../../lib/directives";
-import { formatDateTime } from "../../../lib/format";
+import { formatDateTime, formatRelative } from "../../../lib/format";
 import { changedFields } from "../../../lib/changes";
 import { keyError } from "../../../lib/keys";
 import { useSchemaChangeFlow } from "../../../lib/schemaChange";
@@ -31,7 +34,8 @@ import AttributesEditor from "./AttributesEditor.vue";
  * Create or edit a CI class (a type): name, area and technical name (both fixed
  * after creation: they place the class's table, e.g. bestand.netzwerk), parent,
  * abstract, icon, colour and title attribute; archive, restore or purge it. Every change is
- * previewed as DDL first. Below the form, the class's attribute editor
+ * previewed as DDL first. Title row, `⋯` menu and save bar as on the other admin
+ * edit pages (design §2.7, audit A3). Below the form, the class's attribute editor
  * (existing classes only).
  */
 const route = useRoute();
@@ -48,7 +52,7 @@ const remove = useRemove("ci-classes");
 const purge = usePurge("ci-classes");
 const flow = useSchemaChangeFlow();
 const pending = computed(() => create.isPending.value || update.isPending.value || remove.isPending.value || flow.state.loading);
-useDocumentTitle(() => (isNew.value ? "New class" : cls.data.value?.name));
+useDocumentTitle(() => (isNew.value ? t("dm.class.docTitleNew") : cls.data.value?.name));
 
 const name = ref("");
 const key = ref("");
@@ -64,7 +68,6 @@ const color = ref("");
 const titleAttributeId = ref("");
 const error = ref<unknown>(null);
 const local = ref<Record<string, string>>({});
-const saved = ref<string | null>(null);
 
 function seed(c: CiClass | undefined) {
   name.value = c?.name ?? "";
@@ -78,9 +81,12 @@ function seed(c: CiClass | undefined) {
   color.value = c?.color ?? "";
   titleAttributeId.value = c?.titleAttributeId ?? "";
   initial = c ? formBody() : {};
+  baseline.value = { id: c?.id, body: formBody() };
 }
 /** The form as loaded, to send only changed fields on save. */
 let initial: ClassUpdateBody = {};
+/** The form as seeded (a new class: as opened), for the save bar's count of changed fields. */
+const baseline = ref<{ id: string | undefined; body: ClassUpdateBody }>({ id: undefined, body: {} });
 function formBody(): ClassUpdateBody {
   return {
     name: name.value.trim(),
@@ -92,12 +98,21 @@ function formBody(): ClassUpdateBody {
     titleAttributeId: titleAttributeId.value || null,
   };
 }
-watch(() => cls.data.value, seed, { immediate: true });
+const changes = computed(() => Object.keys(changedFields(formBody(), baseline.value.body)).length);
+const dirty = computed(() => changes.value > 0);
+const guard = useUnsavedGuard(() => dirty.value, () => t("admin.unsaved.leave"));
+// Seed from the record, and again when it is refetched, unless that would overwrite unsaved edits.
+watch(
+  () => cls.data.value,
+  (c) => {
+    if (!dirty.value || baseline.value.id !== c?.id) seed(c);
+  },
+  { immediate: true },
+);
 watch(id, () => {
   if (!id.value) seed(undefined);
   error.value = null;
   local.value = {};
-  saved.value = null;
 });
 const activeAreas = computed(() => (areas.data.value ?? []).filter((a) => a.isActive));
 const area = computed(() => areas.data.value?.find((a) => a.id === (cls.data.value?.areaId ?? areaId.value)));
@@ -130,14 +145,13 @@ const unplaced = computed(() => (error.value instanceof ApiError ? error.value.d
 
 async function submit() {
   error.value = null;
-  saved.value = null;
   const errs: Record<string, string> = {};
-  if (!name.value.trim()) errs.name = "Required";
+  if (!name.value.trim()) errs.name = t("common.required");
   if (isNew.value) {
     const k = keyError(key.value);
     if (k) errs.key = k;
     // Without any area the API creates the default area "infrastruktur" for the class.
-    if (!areaId.value && activeAreas.value.length > 0) errs.areaId = "Choose the area its table goes into";
+    if (!areaId.value && activeAreas.value.length > 0) errs.areaId = t("dm.class.areaRequired");
   }
   local.value = errs;
   if (Object.keys(errs).length > 0) {
@@ -153,18 +167,17 @@ async function submit() {
     const createBody: ClassCreateBody = { ...body, name: body.name!, key: key.value, sortOrder: last + 10, ...(areaId.value ? { areaId: areaId.value } : {}) };
     const where = `${area.value?.key ?? "infrastruktur"}.${key.value}`;
     const outcome = await flow.run({
-      title: `Create class “${createBody.name}”`,
-      intro: body.isAbstract
-        ? `An abstract class holds no CIs of its own, but its attributes are columns of the table ${where}, which its subclasses' CIs fill.`
-        : `Its CIs are stored in the new table ${where}, one typed column per attribute.`,
+      title: t("dm.class.create.title", { name: createBody.name }),
+      intro: t(body.isAbstract ? "dm.class.create.introAbstract" : "dm.class.create.intro", { table: where }),
       preview: { operation: "createType", body: createBody },
       apply: () => create.mutateAsync(createBody),
-      applyLabel: "Create class",
+      applyLabel: t("dm.class.create"),
       alwaysShow: true,
     });
     if (outcome.status === "applied") {
       const created = outcome.result as CiClass;
-      flash.show(`Created class ${created.name} (table ${created.tableName}). Add its attributes below.`);
+      flash.show(t("dm.class.created", { name: created.name, table: created.tableName }));
+      guard.allow();
       await router.push(`/admin/classes/${created.id}`);
     } else if (outcome.status === "refused") error.value = outcome.error;
     return;
@@ -172,63 +185,81 @@ async function submit() {
   // Only what changed (a changed title attribute relabels every CI of the class).
   const changed = changedFields(formBody(), initial);
   if (Object.keys(changed).length === 0) {
-    saved.value = "Nothing changed.";
+    flash.show(t("common.nothingChanged"));
     return;
   }
   const outcome = await flow.run({
-    title: `Save class “${body.name}”`,
+    title: t("dm.class.save.title", { name: body.name ?? "" }),
     preview: { operation: "updateType", id: id.value!, body: changed },
     apply: () => update.mutateAsync({ id: id.value!, body: changed }),
-    applyLabel: "Save class",
+    applyLabel: t("dm.class.save"),
   });
-  if (outcome.status === "applied") saved.value = `Saved ${(outcome.result as CiClass).name}.`;
-  else if (outcome.status === "refused") error.value = outcome.error;
+  if (outcome.status === "applied") {
+    const next = outcome.result as CiClass;
+    seed(next);
+    flash.show(t("dm.class.saved", { name: next.name }));
+  } else if (outcome.status === "refused") error.value = outcome.error;
 }
 
 async function setActive(isActive: boolean) {
   const c = cls.data.value!;
   error.value = null;
-  saved.value = null;
   const outcome = isActive
     ? await flow.run({
-        title: `Restore class “${c.name}”`,
+        title: t("dm.class.restore.title", { name: c.name }),
         preview: { operation: "updateType", id: c.id, body: { isActive: true } },
         apply: () => update.mutateAsync({ id: c.id, body: { isActive: true } }),
-        applyLabel: "Restore class",
+        applyLabel: t("dm.class.restore.apply"),
       })
     : await flow.run({
-        title: `Archive class “${c.name}”?`,
-        intro: `Its table ${c.tableName}, its CIs and every stored value are kept and stay readable, but no new CIs can be created and the menu hides it. Restore it at any time; only a purge deletes the data.`,
+        title: t("dm.class.archive.title", { name: c.name }),
+        intro: t("dm.class.archive.intro", { table: c.tableName }),
         preview: { operation: "deleteType", id: c.id },
         apply: () => remove.mutateAsync(c.id),
-        applyLabel: "Archive class",
+        applyLabel: t("dm.class.archive.apply"),
         alwaysShow: true,
       });
-  if (outcome.status === "applied")
-    saved.value = isActive
-      ? `Restored ${c.name}: new CIs of this class can be created again.`
-      : `Archived ${c.name}: its CIs are kept, but no new ones can be created.`;
+  if (outcome.status === "applied") flash.show(t(isActive ? "dm.class.restored" : "dm.class.archived", { name: c.name }));
   else if (outcome.status === "refused") error.value = outcome.error;
 }
 
 async function purgeClass() {
   const c = cls.data.value!;
   error.value = null;
-  saved.value = null;
   const outcome = await flow.run({
-    title: `Purge class “${c.name}”?`,
-    intro: `Deletes every CI of this class (deleted ones included) with their relationships, its attributes and relationship rules, and drops the table ${c.tableName} and the view ${c.viewName}.`,
+    title: t("dm.class.purge.title", { name: c.name }),
+    intro: t("dm.class.purge.intro", { table: c.tableName, view: c.viewName }),
     preview: { operation: "purgeType", id: c.id, body: { confirm: c.key } },
     apply: (confirm) => purge.mutateAsync({ id: c.id, confirm }),
-    applyLabel: "Purge class and its CIs",
+    applyLabel: t("dm.class.purge.apply"),
     danger: true,
     confirmName: c.key,
   });
   if (outcome.status === "applied") {
-    flash.show(`Purged class ${c.name}: table ${c.tableName} was dropped.`);
+    flash.show(t("dm.class.purged", { name: c.name, table: c.tableName }));
+    guard.allow();
     await router.replace("/admin/classes");
   } else if (outcome.status === "refused") error.value = outcome.error;
 }
+
+/** Back to the stored values. */
+function discard() {
+  seed(cls.data.value);
+  error.value = null;
+  local.value = {};
+}
+
+/** The `⋯` menu: archive or restore, and the purge of an archived class. */
+const moreActions = computed<RowMenuItem[]>(() => {
+  const c = cls.data.value;
+  if (!c) return [];
+  return c.isActive
+    ? [{ label: t("dm.class.archive"), action: () => void setActive(false) }]
+    : [
+        { label: t("dm.class.restore"), action: () => void setActive(true) },
+        { label: t("dm.class.purge"), danger: true, action: () => void purgeClass() },
+      ];
+});
 
 const crumbs = computed(() => adminCrumbs("classes", { label: isNew.value ? t("admin.crumb.new") : (cls.data.value?.name ?? "…") }));
 const notFound = computed(() => {
@@ -239,61 +270,73 @@ const notFound = computed(() => {
 
 <template>
   <Breadcrumbs :items="crumbs" />
-  <LoadingState v-if="!isNew && cls.isLoading.value" label="Loading class…" />
+  <LoadingState v-if="!isNew && cls.isLoading.value" :label="t('dm.class.loading')" />
   <template v-else-if="!isNew && cls.isError.value">
-    <EmptyState v-if="notFound" title="CI class not found">
-      No class has the id <code>{{ id }}</code>. It may have been deleted.
-      <template #actions><RouterLink class="btn" to="/admin/classes">Back to CI classes</RouterLink></template>
+    <EmptyState v-if="notFound" icon="search" :title="t('dm.class.notFound.title')">
+      {{ t("dm.class.notFound.body", { id: id ?? "" }) }}
+      <template #actions><RouterLink class="btn" to="/admin/classes">{{ t("dm.class.back") }}</RouterLink></template>
     </EmptyState>
     <ErrorAlert v-else :error="cls.error.value" :on-retry="() => cls.refetch()" />
   </template>
   <template v-else>
-    <div class="page-header">
-      <div class="title">
-        <h1>
-          <ClassBadge v-if="!isNew" :icon="cls.data.value?.icon" :color="cls.data.value?.color" />
-          {{ isNew ? "New CI class" : cls.data.value?.name }}
-        </h1>
-        <span v-if="cls.data.value?.isAbstract" class="badge warn">Abstract</span>
-        <span v-if="cls.data.value && !cls.data.value.isActive" class="badge off">Archived</span>
+    <div class="page-header record-header">
+      <div class="record-heading">
+        <div class="title">
+          <ClassBadge v-if="!isNew && cls.data.value && (cls.data.value.icon || cls.data.value.color)" :icon="cls.data.value.icon" :color="cls.data.value.color" />
+          <Icon v-else name="layers" class="class-icon" />
+          <h1 dir="auto">{{ isNew ? t("dm.class.new") : cls.data.value?.name }}</h1>
+        </div>
+        <p v-if="cls.data.value && !isNew" class="record-meta" data-testid="record-meta">
+          <span v-if="area">{{ area.name }}</span>
+          <span v-if="area" class="sep" aria-hidden="true">·</span>
+          <span class="ident">{{ cls.data.value.tableName }}</span>
+          <template v-if="cls.data.value.isAbstract">
+            <span class="sep" aria-hidden="true">·</span>
+            <span class="badge warn" :title="t('dm.class.abstractTitle')">{{ t("dm.class.abstract") }}</span>
+          </template>
+          <template v-if="!cls.data.value.isActive">
+            <span class="sep" aria-hidden="true">·</span>
+            <span class="badge off">{{ t("dm.class.archivedBadge") }}</span>
+          </template>
+          <span class="sep" aria-hidden="true">·</span>
+          <time :datetime="cls.data.value.updatedAt" :title="formatDateTime(cls.data.value.updatedAt)">
+            {{ t("record.meta.updated", { when: formatRelative(cls.data.value.updatedAt) }) }}
+          </time>
+        </p>
       </div>
       <div v-if="cls.data.value && !isNew" class="actions">
-        <RouterLink class="btn" :to="`/cis?classId=${cls.data.value.id}`">Open inventory</RouterLink>
-        <button v-if="cls.data.value.isActive" type="button" class="btn" :disabled="pending" @click="setActive(false)">Archive</button>
-        <button v-else type="button" class="btn" :disabled="pending" @click="setActive(true)">Restore</button>
-        <button v-if="!cls.data.value.isActive" type="button" class="btn btn-danger" :disabled="pending" @click="purgeClass">Purge…</button>
+        <RouterLink class="btn" :to="`/cis?classId=${cls.data.value.id}`">{{ t("dm.class.openInventory") }}</RouterLink>
+        <RowMenu :label="t('record.actions.more')" :items="moreActions" large />
       </div>
     </div>
     <div v-if="cls.data.value && !cls.data.value.isActive" class="alert alert-warn" role="note">
-      This class is archived: its CIs and its table <code>{{ cls.data.value.tableName }}</code> are kept and still shown, but
-      no new CIs can be created. Restore it to allow new CIs, or purge it to drop the table and delete its CIs.
+      {{ t("dm.class.archivedNote", { table: cls.data.value.tableName }) }}
     </div>
     <FormErrorBanner v-if="error" :error="error" :unplaced="unplaced" />
-    <div v-if="saved" class="alert alert-success" role="status">{{ saved }}</div>
 
-    <form novalidate class="panel" aria-label="Class" @submit.prevent="submit">
-      <div class="panel-header"><h2>Class</h2></div>
+    <form id="class-form" novalidate class="panel" :aria-label="t('dm.class.form')" @submit.prevent="submit">
+      <div class="panel-header"><h2>{{ t("dm.class.form") }}</h2></div>
       <div class="panel-body form-grid">
-        <FormField id="class-name" v-slot="p" label="Name" required :error="fieldErrors.name">
+        <FormField id="class-name" v-slot="p" :label="t('dm.class.field.name')" required :error="fieldErrors.name">
           <input :id="p.id" v-model="name" v-autofocus="isNew" type="text" maxlength="200" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy" />
         </FormField>
         <FormField
           id="class-area"
           v-slot="p"
-          label="Area"
+          :label="t('dm.class.field.area')"
           :required="isNew"
           :error="fieldErrors.areaId"
-          :hint="isNew ? 'The menu tab and database schema its table goes into. Cannot change later.' : 'Fixed after creation'"
+          :hint="isNew ? t('dm.class.field.areaHint') : t('dm.class.field.areaFixed')"
         >
           <select v-if="isNew" :id="p.id" v-model="areaId" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy" @change="areaTouched = true">
             <option value="" :disabled="activeAreas.length > 0">
-              {{ areas.isLoading.value ? "Loading…" : activeAreas.length ? "Choose an area…" : "Infrastruktur (created with the class)" }}
+              {{ areas.isLoading.value ? t("common.loading") : activeAreas.length ? t("dm.class.field.areaChoose") : t("dm.class.field.areaDefault") }}
             </option>
             <option v-for="a in activeAreas" :key="a.id" :value="a.id">{{ a.name }} ({{ a.key }})</option>
           </select>
           <input v-else :id="p.id" type="text" readonly :value="area ? `${area.name} (${area.key})` : ''" :aria-describedby="p.describedBy" />
           <span v-if="isNew && areas.data.value && activeAreas.length === 0" class="hint">
-            No areas yet: the class goes into the default area Infrastruktur, or <RouterLink to="/admin/areas">create an area first</RouterLink>.
+            {{ t("dm.class.field.noAreas") }} <RouterLink to="/admin/areas">{{ t("dm.class.field.createArea") }}</RouterLink>
           </span>
         </FormField>
         <TechnicalNameField
@@ -306,36 +349,36 @@ const notFound = computed(() => {
           :location="cls.data.value?.tableName"
           :error="fieldErrors.key"
         />
-        <FormField id="class-parent" v-slot="p" label="Parent class" :error="fieldErrors.parentId" hint="CIs of this class also carry the parent's attributes">
+        <FormField id="class-parent" v-slot="p" :label="t('dm.class.field.parent')" :error="fieldErrors.parentId" :hint="t('dm.class.field.parentHint')">
           <select :id="p.id" v-model="parentId" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy">
-            <option value="">— none (top level) —</option>
+            <option value="">{{ t("dm.class.field.parentNone") }}</option>
             <option v-for="n in parentOptions" :key="n.item.id" :value="n.item.id">
-              {{ "  ".repeat(n.depth) }}{{ n.item.name }}{{ n.item.isActive ? "" : " (archived)" }}
+              {{ "  ".repeat(n.depth) }}{{ n.item.isActive ? n.item.name : t("dm.class.archivedName", { name: n.item.name }) }}
             </option>
           </select>
         </FormField>
-        <FormField id="class-icon" v-slot="p" label="Icon" :error="fieldErrors.icon">
+        <FormField id="class-icon" v-slot="p" :label="t('dm.class.field.icon')" :error="fieldErrors.icon">
           <div class="inline-control">
             <select :id="p.id" v-model="icon" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy">
-              <option value="">— none —</option>
+              <option value="">{{ t("dm.class.field.iconNone") }}</option>
               <option v-for="i in CLASS_ICONS" :key="i.key" :value="i.key">{{ i.label }}</option>
-              <option v-if="unknownIcon" :value="icon">{{ icon }} (custom)</option>
+              <option v-if="unknownIcon" :value="icon">{{ t("dm.class.field.iconCustom", { icon }) }}</option>
             </select>
             <ClassBadge :icon="icon" :color="color || '#56606d'" />
           </div>
         </FormField>
-        <FormField id="class-color" v-slot="p" label="Colour" :error="fieldErrors.color" hint="Shown with the icon in menus and lists">
+        <FormField id="class-color" v-slot="p" :label="t('dm.class.field.color')" :error="fieldErrors.color" :hint="t('dm.class.field.colorHint')">
           <div class="inline-control">
             <input :id="p.id" type="color" :value="color || '#1f5fbf'" :aria-describedby="p.describedBy" @input="color = ($event.target as HTMLInputElement).value" />
-            <span class="mono">{{ color || "none" }}</span>
-            <button v-if="color" type="button" class="btn btn-sm" @click="color = ''">No colour</button>
+            <span class="mono">{{ color || t("dm.class.field.colorUnset") }}</span>
+            <button v-if="color" type="button" class="btn btn-sm" @click="color = ''">{{ t("dm.class.field.colorClear") }}</button>
           </div>
         </FormField>
         <div class="field">
-          <span class="label">Kind</span>
+          <span class="label">{{ t("dm.class.field.kind") }}</span>
           <label class="checkbox-row">
             <input id="class-abstract" v-model="isAbstract" type="checkbox" />
-            Abstract: groups other classes, holds no CIs itself
+            {{ t("dm.class.field.abstract") }}
           </label>
           <span v-if="fieldErrors.isAbstract" class="error">{{ fieldErrors.isAbstract }}</span>
         </div>
@@ -343,44 +386,53 @@ const notFound = computed(() => {
           v-if="!isNew"
           id="class-title"
           v-slot="p"
-          label="Title attribute"
+          :label="t('dm.class.field.title')"
           :error="fieldErrors.titleAttributeId"
-          hint="Its value is the label of the class's CIs in lists, references, the graph and search"
+          :hint="t('dm.class.field.titleHint')"
         >
           <select :id="p.id" v-model="titleAttributeId" :disabled="attrs.isLoading.value" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy">
-            <option value="">None – label by ident</option>
+            <option value="">{{ t("dm.class.field.titleNone") }}</option>
             <option v-for="a in titleOptions" :key="a.id" :value="a.id">
-              {{ a.label }} ({{ a.key }}){{ a.inherited ? ` · from ${a.definedOn.name}` : "" }}{{ a.isActive ? "" : " (retired)" }}
+              {{ a.label }} ({{ a.key }}){{ a.inherited ? ` · ${t("dm.class.field.titleFrom", { name: a.definedOn.name })}` : "" }}{{
+                a.isActive ? "" : ` ${t("dm.class.field.titleRetired")}`
+              }}
             </option>
             <option v-if="titleAttributeId && attrs.data.value && !titleOptions.some((a) => a.id === titleAttributeId)" :value="titleAttributeId">
-              Current attribute (not listed)
+              {{ t("dm.class.field.titleCurrent") }}
             </option>
           </select>
         </FormField>
-        <FormField id="class-description" v-slot="p" label="Description" wide :error="fieldErrors.description">
+        <FormField id="class-description" v-slot="p" :label="t('dm.class.field.description')" wide :error="fieldErrors.description">
           <textarea :id="p.id" v-model="description" rows="2" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy" />
         </FormField>
       </div>
-      <div class="form-footer">
-        <button type="submit" class="btn btn-primary" :disabled="pending">{{ pending ? "Saving…" : isNew ? "Create class" : "Save class" }}</button>
-        <RouterLink class="btn" to="/admin/classes">{{ isNew ? "Cancel" : "Back to classes" }}</RouterLink>
-        <span v-if="cls.data.value && !isNew" class="muted" style="margin-left: auto; font-size: var(--fs-sm)">
-          Created {{ formatDateTime(cls.data.value.createdAt) }} · updated {{ formatDateTime(cls.data.value.updatedAt) }}
-        </span>
-      </div>
     </form>
+
+    <SaveBar :label="t('record.save.region')" :dirty="!isNew && dirty" :changes="isNew ? 0 : changes">
+      <RouterLink class="btn" to="/admin/classes">{{ t("common.cancel") }}</RouterLink>
+      <button v-if="!isNew && dirty" type="button" class="btn" :disabled="pending" @click="discard">{{ t("record.save.discard") }}</button>
+      <button type="submit" form="class-form" class="btn btn-primary" :disabled="pending">
+        {{ pending ? t("common.saving") : isNew ? t("dm.class.create") : t("dm.class.save") }}
+      </button>
+    </SaveBar>
 
     <section v-if="cls.data.value && !isNew" class="panel" aria-labelledby="class-db-title">
       <div class="panel-header">
-        <h2 id="class-db-title">In the database</h2>
-        <span class="muted">For reporting tools and DBAs; the reporting view is read-only</span>
+        <h2 id="class-db-title">{{ t("dm.class.db.title") }}</h2>
+        <span class="muted">{{ t("dm.class.db.subtitle") }}</span>
       </div>
-      <div class="panel-body"><dl class="props">
-        <dt>Table</dt>
-        <dd><code>{{ cls.data.value.tableName }}</code> <span class="muted">(one row per CI, one typed column per attribute)</span></dd>
-        <dt>Reporting view</dt>
-        <dd><code>{{ cls.data.value.viewName }}</code> <span class="muted">(general CI fields plus every attribute, inherited ones included)</span></dd>
-      </dl></div>
+      <div class="panel-body">
+        <dl class="props">
+          <dt>{{ t("dm.class.db.table") }}</dt>
+          <dd><code>{{ cls.data.value.tableName }}</code> <span class="muted">{{ t("dm.class.db.tableNote") }}</span></dd>
+          <dt>{{ t("dm.class.db.view") }}</dt>
+          <dd><code>{{ cls.data.value.viewName }}</code> <span class="muted">{{ t("dm.class.db.viewNote") }}</span></dd>
+          <dt>{{ t("common.created") }}</dt>
+          <dd>{{ formatDateTime(cls.data.value.createdAt) }}</dd>
+          <dt>{{ t("common.updated") }}</dt>
+          <dd>{{ formatDateTime(cls.data.value.updatedAt) }}</dd>
+        </dl>
+      </div>
     </section>
 
     <AttributesEditor v-if="cls.data.value && !isNew" :cls="cls.data.value" />

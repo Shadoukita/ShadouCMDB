@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useTechnicalName, type TechnicalNameKind } from "../api/schemaChanges";
+import { t, type MessageKey } from "../i18n";
 import { useDebounced } from "../lib/composables";
 import { suggestKey } from "../lib/keys";
 import Icon from "./Icon.vue";
@@ -71,11 +72,11 @@ function useDerived() {
   emit("update:modelValue", suggestKey(props.name));
 }
 
-const WHAT: Record<TechnicalNameKind, string> = { area: "schema", type: "table", field: "column" };
-const label = computed(() => `Technical name (${WHAT[props.kind]})`);
+const WHAT: Record<TechnicalNameKind, MessageKey> = { area: "dm.key.what.area", type: "dm.key.what.type", field: "dm.key.what.field" };
+const label = computed(() => t("dm.key.label", { what: t(WHAT[props.kind]) }));
 /** The API's verdict, once it matches what is in the box. */
 const current = computed(() => (result.value && (!touched.value || result.value.technicalName === props.modelValue.trim()) ? result.value : undefined));
-const apiError = computed(() => (current.value && !current.value.valid ? (current.value.message ?? "This name cannot be used") : undefined));
+const apiError = computed(() => (current.value && !current.value.valid ? (current.value.message ?? t("dm.key.unusable")) : undefined));
 const shownError = computed(() => props.error || apiError.value);
 const describedBy = computed(() => [shownError.value ? `${props.id}-err` : "", `${props.id}-hint`].filter(Boolean).join(" "));
 </script>
@@ -98,19 +99,20 @@ const describedBy = computed(() => [shownError.value ? `${props.id}-err` : "", `
         :aria-describedby="describedBy"
         @input="onInput"
       />
-      <span v-if="editable && check.isFetching.value" class="spinner" aria-label="Checking the name" />
+      <span v-if="editable && check.isFetching.value" class="spinner" :aria-label="t('dm.key.checking')" />
       <Icon v-else-if="editable && current?.valid" name="check" class="tn-ok" />
-      <button v-if="editable && touched" type="button" class="btn btn-sm" @click="useDerived">From name</button>
+      <button v-if="editable && touched" type="button" class="btn btn-sm" @click="useDerived">{{ t("dm.key.fromName") }}</button>
     </div>
     <span v-if="shownError" :id="`${id}-err`" class="error">{{ shownError }}</span>
     <span :id="`${id}-hint`" class="hint">
       <template v-if="!editable">
-        Fixed after creation<template v-if="location">: <code>{{ location }}</code></template>
+        <template v-if="location">{{ t("dm.key.fixedAt") }} <code>{{ location }}</code></template>
+        <template v-else>{{ t("dm.key.fixed") }}</template>
       </template>
       <template v-else-if="current?.valid">
-        Will be created as <code>{{ current.qualifiedName ?? current.technicalName }}</code>. Cannot be changed later; renaming changes only the display name.
+        {{ t("dm.key.willCreate") }} <code>{{ current.qualifiedName ?? current.technicalName }}</code>. {{ t("dm.key.willCreateNote") }}
       </template>
-      <template v-else>Lower-case a–z, digits and _, starting with a letter. Cannot be changed later.</template>
+      <template v-else>{{ t("dm.key.pattern") }}</template>
     </span>
   </div>
 </template>

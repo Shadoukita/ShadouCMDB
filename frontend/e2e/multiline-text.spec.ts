@@ -53,7 +53,7 @@ test("the class editor sets and clears Multiline, keeping the other text rules",
     (await apiGet<{ data: Attr[] }>(request, `/ci-classes/${cls.id}/attributes`)).data.find((a) => a.key === "runbook");
 
   await page.goto(`/admin/classes/${cls.id}`);
-  await page.getByRole("button", { name: "+ Add attribute" }).click();
+  await page.getByRole("button", { name: "Add attribute", exact: true }).click();
   await page.locator("#ad-label").fill("Runbook");
   await page.locator("#ad-type").selectOption({ label: "Text" });
   await page.locator("#ad-maxlength").fill("2000");
