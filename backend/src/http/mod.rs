@@ -20,6 +20,8 @@ use axum::extract::{DefaultBodyLimit, Request};
 use axum::http::{HeaderName, HeaderValue, Method, header};
 use axum::response::{IntoResponse, Response};
 use std::sync::Arc;
+use std::sync::atomic::Ordering::Relaxed;
+use std::sync::atomic::{AtomicU64, AtomicUsize};
 
 use sqlx::PgPool;
 use tokio::net::TcpListener;
@@ -1036,32 +1038,229 @@ impl Drop for PeerHold {
     }
 }
 
-/// The requests a connection is serving, from the request head until the
-/// response body is dropped.
-struct InFlight(Arc<tokio::sync::watch::Sender<usize>>);
+/// What one connection is doing, for the limits `accept_loop` applies to it
+/// (GH#665, GH#682). Times are milliseconds since `start`.
+struct Activity {
+    start: tokio::time::Instant,
+    /// Requests from the request head until the response body is dropped.
+    requests: AtomicUsize,
+    /// Response bodies that handed hyper a frame, or none yet, and wait for
+    /// hyper to take the next one: hyper only does once the client has taken
+    /// enough of the response (HTTP/2 flow control, a full socket buffer).
+    waiting: AtomicUsize,
+    /// When a request last started or ended, or a refused write went through.
+    last_activity: AtomicU64,
+    /// When a response frame was last taken, a body started waiting, or a
+    /// refused write went through.
+    last_transfer: AtomicU64,
+    /// One more than when a write to the socket was refused with none going
+    /// through since; 0 if writes go through.
+    blocked_since: AtomicU64,
+}
+
+impl Activity {
+    fn new() -> Self {
+        Activity {
+            start: tokio::time::Instant::now(),
+            requests: AtomicUsize::new(0),
+            waiting: AtomicUsize::new(0),
+            last_activity: AtomicU64::new(0),
+            last_transfer: AtomicU64::new(0),
+            blocked_since: AtomicU64::new(0),
+        }
+    }
+
+    fn now(&self) -> u64 {
+        u64::try_from(self.start.elapsed().as_millis()).unwrap_or(u64::MAX)
+    }
+
+    fn wait(&self) {
+        if self.waiting.fetch_add(1, Relaxed) == 0 {
+            self.last_transfer.store(self.now(), Relaxed);
+        }
+    }
+
+    fn written(&self, refused: bool) {
+        if refused {
+            let _ = self.blocked_since.compare_exchange(0, self.now() + 1, Relaxed, Relaxed);
+        } else if self.blocked_since.swap(0, Relaxed) != 0 {
+            let now = self.now();
+            self.last_activity.store(now, Relaxed);
+            self.last_transfer.store(now, Relaxed);
+        }
+    }
+}
+
+/// A request in progress, from the request head until its response body is dropped.
+struct InFlight(Arc<Activity>);
 
 impl InFlight {
-    fn new(requests: &Arc<tokio::sync::watch::Sender<usize>>) -> Self {
-        requests.send_modify(|n| *n += 1);
-        InFlight(requests.clone())
+    fn new(activity: &Arc<Activity>) -> Self {
+        activity.requests.fetch_add(1, Relaxed);
+        activity.last_activity.store(activity.now(), Relaxed);
+        InFlight(activity.clone())
     }
 }
 
 impl Drop for InFlight {
     fn drop(&mut self) {
-        self.0.send_modify(|n| *n -= 1);
+        self.0.last_activity.store(self.0.now(), Relaxed);
+        self.0.requests.fetch_sub(1, Relaxed);
     }
 }
 
-/// Resolves once the connection has served no request for `limit`.
-async fn idle_for(requests: &mut tokio::sync::watch::Receiver<usize>, limit: Duration) {
-    loop {
-        // The sender lives as long as the connection task, so neither wait fails.
-        let _ = requests.wait_for(|n| *n == 0).await;
-        tokio::select! {
-            () = tokio::time::sleep(limit) => return,
-            _ = requests.wait_for(|n| *n > 0) => {}
+/// A response body that tells `Activity` whether it waits for the client.
+struct TrackedBody {
+    inner: axum::body::Body,
+    waiting: bool,
+    in_flight: InFlight,
+}
+
+impl TrackedBody {
+    fn new(inner: axum::body::Body, in_flight: InFlight) -> Self {
+        in_flight.0.wait();
+        TrackedBody { inner, waiting: true, in_flight }
+    }
+}
+
+impl hyper::body::Body for TrackedBody {
+    type Data = axum::body::Bytes;
+    type Error = axum::Error;
+
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<hyper::body::Frame<Self::Data>, Self::Error>>> {
+        let activity = self.in_flight.0.clone();
+        if std::mem::take(&mut self.waiting) {
+            activity.waiting.fetch_sub(1, Relaxed);
         }
+        let polled = std::pin::Pin::new(&mut self.inner).poll_frame(cx);
+        match &polled {
+            std::task::Poll::Ready(Some(Ok(_))) => {
+                activity.last_transfer.store(activity.now(), Relaxed);
+                activity.wait();
+                self.waiting = true;
+            }
+            std::task::Poll::Ready(_) => activity.last_transfer.store(activity.now(), Relaxed),
+            // The response itself is slow to come, which is not the client's doing.
+            std::task::Poll::Pending => {}
+        }
+        polled
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.inner.is_end_stream()
+    }
+
+    fn size_hint(&self) -> hyper::body::SizeHint {
+        self.inner.size_hint()
+    }
+}
+
+impl Drop for TrackedBody {
+    fn drop(&mut self) {
+        if self.waiting {
+            self.in_flight.0.waiting.fetch_sub(1, Relaxed);
+        }
+    }
+}
+
+/// The client socket, telling `Activity` when the client stops taking what is
+/// written to it.
+struct TrackedIo {
+    inner: tokio::net::TcpStream,
+    activity: Arc<Activity>,
+}
+
+impl TrackedIo {
+    fn track(&self, polled: &std::task::Poll<std::io::Result<usize>>) {
+        match polled {
+            std::task::Poll::Pending => self.activity.written(true),
+            std::task::Poll::Ready(Ok(n)) if *n > 0 => self.activity.written(false),
+            std::task::Poll::Ready(_) => {}
+        }
+    }
+}
+
+impl tokio::io::AsyncRead for TrackedIo {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl tokio::io::AsyncWrite for TrackedIo {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        let polled = std::pin::Pin::new(&mut self.inner).poll_write(cx, buf);
+        self.track(&polled);
+        polled
+    }
+
+    fn poll_write_vectored(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        bufs: &[std::io::IoSlice<'_>],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        let polled = std::pin::Pin::new(&mut self.inner).poll_write_vectored(cx, bufs);
+        self.track(&polled);
+        polled
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.inner.is_write_vectored()
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+/// What a connection's limits call for (see `accept_loop`).
+#[derive(Debug, PartialEq)]
+enum Verdict {
+    Keep,
+    /// Served nothing for the limit: ask it to close.
+    Idle,
+    /// Served nothing for the limit since it was asked to close, or the
+    /// client took none of its response for the limit: drop it.
+    Drop(&'static str),
+}
+
+fn verdict(activity: &Activity, limit: u64, shut_down_at: Option<u64>) -> Verdict {
+    let now = activity.now();
+    let blocked_since = activity.blocked_since.load(Relaxed);
+    if blocked_since != 0 && now.saturating_sub(blocked_since - 1) >= limit {
+        return Verdict::Drop("client stopped reading its response");
+    }
+    if activity.waiting.load(Relaxed) > 0 && now.saturating_sub(activity.last_transfer.load(Relaxed)) >= limit {
+        return Verdict::Drop("client took none of its response");
+    }
+    if blocked_since != 0 || activity.requests.load(Relaxed) > 0 {
+        return Verdict::Keep;
+    }
+    let since = activity.last_activity.load(Relaxed).max(shut_down_at.unwrap_or(0));
+    match (now.saturating_sub(since) >= limit, shut_down_at) {
+        (false, _) => Verdict::Keep,
+        (true, None) => Verdict::Idle,
+        (true, Some(_)) => Verdict::Drop("idle connection did not close after its shutdown"),
     }
 }
 
@@ -1073,9 +1272,13 @@ async fn idle_for(requests: &mut tokio::sync::watch::Receiver<usize>, limit: Dur
 ///
 /// hyper's header read timeout covers HTTP/1 only, not the protocol preface
 /// read before it nor HTTP/2, so a connection that serves no request for
-/// `header_read_timeout` (from accept, or since its last response) is shut
-/// down here whatever its protocol (GH#665): HTTP/2 gets a GOAWAY. One that
-/// has not closed another `header_read_timeout` later is dropped.
+/// `header_read_timeout` (from accept, or since its last request started or
+/// ended) is shut down here whatever its protocol (GH#665): HTTP/2 gets a
+/// GOAWAY. One that has not closed another `header_read_timeout` later is
+/// dropped. So is one whose client takes none of a response for
+/// `header_read_timeout`, by not reading the socket or by holding the HTTP/2
+/// flow-control window shut, as the response would otherwise never end
+/// (GH#682). A response that is slow to come is not limited here.
 async fn accept_loop(
     listener: TcpListener,
     app: Router,
@@ -1142,7 +1345,7 @@ async fn accept_loop(
         };
         let _ = stream.set_nodelay(true);
         // The peer address is the client IP of last resort for the audit trail (auth::session::client_ip).
-        let requests = Arc::new(tokio::sync::watch::Sender::new(0usize));
+        let activity = Arc::new(Activity::new());
         let service = app
             .clone()
             .map_request(move |req: axum::http::Request<hyper::body::Incoming>| {
@@ -1151,50 +1354,46 @@ async fn accept_loop(
                 req
             })
             .map_future({
-                let requests = requests.clone();
+                let activity = activity.clone();
                 move |response| {
-                    let in_flight = InFlight::new(&requests);
+                    let in_flight = InFlight::new(&activity);
                     async move {
                         let response: Response = response.await?;
-                        Ok::<_, std::convert::Infallible>(response.map(|body| {
-                            use http_body_util::BodyExt;
-                            axum::body::Body::new(body.map_frame(move |frame| {
-                                let _ = &in_flight;
-                                frame
-                            }))
-                        }))
+                        Ok::<_, std::convert::Infallible>(response.map(|body| TrackedBody::new(body, in_flight)))
                     }
                 }
             });
-        let conn = builder
-            .serve_connection_with_upgrades(TokioIo::new(stream), TowerToHyperService::new(service))
-            .into_owned();
+        let io = TrackedIo { inner: stream, activity: activity.clone() };
+        let conn =
+            builder.serve_connection_with_upgrades(TokioIo::new(io), TowerToHyperService::new(service)).into_owned();
         let mut stop = stop.clone();
         tokio::spawn(async move {
             let mut conn = std::pin::pin!(conn);
-            let mut idle = requests.subscribe();
-            let mut shut_down = false;
+            let limit = u64::try_from(idle_limit.as_millis()).unwrap_or(u64::MAX);
+            let mut check = tokio::time::interval((idle_limit / 4).max(Duration::from_millis(10)));
+            check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            let mut shut_down_at: Option<u64> = None;
             let result = loop {
                 tokio::select! {
-                    result = conn.as_mut() => break Some(result),
-                    _ = stop.wait_for(|stop| *stop), if !shut_down => {
+                    result = conn.as_mut() => break Ok(result),
+                    _ = stop.wait_for(|stop| *stop), if shut_down_at.is_none() => {
                         conn.as_mut().graceful_shutdown();
-                        shut_down = true;
+                        shut_down_at = Some(activity.now());
                     }
-                    () = idle_for(&mut idle, idle_limit) => {
-                        if shut_down {
-                            // A client that ignores the shutdown while it is served nothing.
-                            break None;
+                    _ = check.tick() => match verdict(&activity, limit, shut_down_at) {
+                        Verdict::Keep => {}
+                        Verdict::Idle => {
+                            conn.as_mut().graceful_shutdown();
+                            shut_down_at = Some(activity.now());
                         }
-                        conn.as_mut().graceful_shutdown();
-                        shut_down = true;
-                    }
+                        Verdict::Drop(why) => break Err(why),
+                    },
                 }
             };
             match result {
-                Some(Err(e)) => tracing::debug!(error = %e, "connection closed with an error"),
-                None => tracing::debug!("idle connection dropped after its shutdown"),
-                Some(Ok(())) => {}
+                Ok(Err(e)) => tracing::debug!(error = %e, "connection closed with an error"),
+                Err(why) => tracing::debug!("connection dropped: {why}"),
+                Ok(Ok(())) => {}
             }
             drop(held);
         });
@@ -1771,6 +1970,142 @@ mod tests {
             assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
             assert_eq!(answer.matches("\r\nchunk\r\n").count(), 3, "{answer}");
         }
+        let _ = tx.send(());
+        server.await.unwrap();
+    }
+
+    /// GH#665 review: a keep-alive connection whose requests each start and
+    /// end between two checks is busy, not idle, and is never asked to close.
+    #[tokio::test]
+    async fn busy_keep_alive_connections_are_not_treated_as_idle() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let http = crate::config::HttpConfig {
+            header_read_timeout: Duration::from_millis(200),
+            request_timeout: Duration::from_secs(5),
+            body_timeout: Duration::from_secs(5),
+            max_concurrent_requests: 512,
+        };
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(async move {
+            accept_loop(listener, app(), &http, 16, PeerConnections::new(16, Default::default()), async {
+                let _ = rx.await;
+            })
+            .await
+        });
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        // A request every 50 ms for 1 s: five times the 200 ms limit.
+        for i in 0..20 {
+            stream.write_all(b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n").await.unwrap();
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 1024];
+            while !String::from_utf8_lossy(&buf).contains("\r\n\r\n") {
+                let n = tokio::time::timeout(Duration::from_secs(3), stream.read(&mut chunk)).await.unwrap().unwrap();
+                assert!(n > 0, "request {i}: connection closed");
+                buf.extend_from_slice(&chunk[..n]);
+            }
+            let head = String::from_utf8_lossy(&buf).to_ascii_lowercase();
+            assert!(head.starts_with("http/1.1 200"), "request {i}: {head}");
+            assert!(!head.contains("connection: close"), "request {i}: asked to close: {head}");
+            // /healthz answers with a Content-Length body; read the rest of it.
+            let length: usize = head
+                .lines()
+                .find_map(|line| line.strip_prefix("content-length:"))
+                .map(|n| n.trim().parse().unwrap())
+                .unwrap_or(0);
+            let body_start = head.find("\r\n\r\n").unwrap() + 4;
+            while buf.len() < body_start + length {
+                let n = tokio::time::timeout(Duration::from_secs(3), stream.read(&mut chunk)).await.unwrap().unwrap();
+                assert!(n > 0, "request {i}: connection closed mid-body");
+                buf.extend_from_slice(&chunk[..n]);
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let _ = tx.send(());
+        server.await.unwrap();
+    }
+
+    /// A server that allows one open connection and has a large response.
+    async fn one_connection_server(
+        tx_rx: tokio::sync::oneshot::Receiver<()>,
+    ) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let http = crate::config::HttpConfig {
+            header_read_timeout: Duration::from_millis(200),
+            request_timeout: Duration::from_secs(30),
+            body_timeout: Duration::from_secs(30),
+            max_concurrent_requests: 512,
+        };
+        // 256 MiB in 64 KiB chunks: more than any socket buffer holds.
+        let routes = Router::new()
+            .route(
+                "/big",
+                axum::routing::get(|| async {
+                    let chunks = futures_util::StreamExt::map(futures_util::stream::iter(0..4096), |_| {
+                        Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(vec![b'x'; 64 * 1024]))
+                    });
+                    Body::from_stream(chunks)
+                }),
+            )
+            .route("/small", axum::routing::get(|| async { "ok" }));
+        let server = tokio::spawn(async move {
+            let peers = PeerConnections::new(1, crate::auth::session::TrustedProxies::parse("127.0.0.0/8").unwrap());
+            accept_loop(listener, routes, &http, 1, peers, async {
+                let _ = tx_rx.await;
+            })
+            .await
+        });
+        (addr, server)
+    }
+
+    /// Asserts that a new client is served, so the one open connection was freed.
+    async fn assert_served(addr: std::net::SocketAddr) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream.write_all(b"GET /small HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").await.unwrap();
+        let mut buf = Vec::new();
+        tokio::time::timeout(Duration::from_secs(3), stream.read_to_end(&mut buf)).await.unwrap().unwrap();
+        let answer = String::from_utf8_lossy(&buf);
+        assert!(answer.starts_with("HTTP/1.1 200"), "the stalled connection kept the only place: {answer}");
+    }
+
+    /// GH#682: an HTTP/1 client that asks for a large response and stops
+    /// reading it is dropped, and its place is freed.
+    #[tokio::test]
+    async fn clients_that_stop_reading_their_response_are_dropped() {
+        use tokio::io::AsyncWriteExt;
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let (addr, server) = one_connection_server(rx).await;
+        let mut stalled = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stalled.write_all(b"GET /big HTTP/1.1\r\nHost: x\r\n\r\n").await.unwrap();
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert_served(addr).await;
+        drop(stalled);
+        let _ = tx.send(());
+        server.await.unwrap();
+    }
+
+    /// GH#682: an HTTP/2 client that shuts its flow-control window and asks
+    /// for a response is dropped, and its place is freed.
+    #[tokio::test]
+    async fn http2_clients_with_a_shut_window_are_dropped() {
+        use tokio::io::AsyncWriteExt;
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let (addr, server) = one_connection_server(rx).await;
+        let mut stalled = tokio::net::TcpStream::connect(addr).await.unwrap();
+        // SETTINGS_INITIAL_WINDOW_SIZE = 0.
+        const SETTINGS: &[u8] = &[0, 0, 6, 4, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0];
+        // HPACK: :method GET, :scheme http, :path /big, :authority x.
+        const BLOCK: &[u8] = &[0x82, 0x86, 0x44, 4, b'/', b'b', b'i', b'g', 0x41, 1, b'x'];
+        // HEADERS, END_STREAM | END_HEADERS, stream 1.
+        let headers = [&[0, 0, BLOCK.len() as u8, 1, 5, 0, 0, 0, 1][..], BLOCK].concat();
+        let sent = [&b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"[..], SETTINGS, &headers].concat();
+        stalled.write_all(&sent).await.unwrap();
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert_served(addr).await;
+        drop(stalled);
         let _ = tx.send(());
         server.await.unwrap();
     }
