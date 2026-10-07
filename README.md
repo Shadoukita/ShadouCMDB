@@ -58,7 +58,8 @@ the same flow for a source checkout.
    the audit log). None needs superuser. An install made with the older single-role
    setup is upgraded with `sql/bootstrap/10_split_roles.sql`, from the same release as the binary you
    migrated with: it gives the API role the rights the migrations list in `cmdb.api_role_privileges`,
-   so a split install ends up with the same grants as a fresh one. Migrations run `CREATE EXTENSION IF NOT EXISTS pg_trgm`;
+   so a split install ends up with the same grants as a fresh one. If the API role's credentials may
+   have been compromised before the split, check the `cmdb` schema or restore a known-good backup first. Migrations run `CREATE EXTENSION IF NOT EXISTS pg_trgm`;
    `pg_trgm` is a *trusted* extension, so the database owner can create it on PostgreSQL 13+ and
    on RDS / Cloud SQL / Azure Flexible Server. If your provider restricts extensions, have an admin
    run `CREATE EXTENSION pg_trgm;` in the database once beforehand.

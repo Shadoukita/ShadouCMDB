@@ -40,10 +40,53 @@ fn psql(test: &str) -> Option<std::process::Command> {
     Some(std::process::Command::new("psql"))
 }
 
+/// A single-role install as the older bootstrap script made it: the API role
+/// owns the database and migrated it itself. `plant` then runs as the API role.
+async fn single_role_install(roles: &scratch::Roles, plant: &str) -> scratch::Scratch {
+    let single = roles.empty().await;
+    sqlx::query(sqlx::AssertSqlSafe(format!("ALTER DATABASE {} OWNER TO {}", single.name(), roles.app)))
+        .execute(&single.pool)
+        .await
+        .unwrap();
+    let as_app = roles.api_pool(&single).await;
+    MIGRATOR.run(&as_app).await.expect("migrations as the API role");
+    sqlx::raw_sql(sqlx::AssertSqlSafe(plant.to_owned())).execute(&as_app).await.expect("plant as the API role");
+    as_app.close().await;
+    single
+}
+
+/// Runs 10_split_roles.sql as the administrator.
+fn split(mut psql: std::process::Command, roles: &scratch::Roles, db: &scratch::Scratch) -> std::process::Output {
+    let mut url = url::Url::parse(&std::env::var("SHADOUCMDB_TEST_DATABASE_URL").unwrap()).unwrap();
+    url.set_path(&format!("/{}", db.name()));
+    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../sql/bootstrap/10_split_roles.sql");
+    psql.args(["-X", "-q", "-v", "ON_ERROR_STOP=1", "-d", url.as_str(), "-f", script])
+        .args(["-v", &format!("app_role={}", roles.app)])
+        .args(["-v", &format!("owner_role={}", owner_role(roles))])
+        .args(["-v", &format!("maintenance_role={}", roles.maintenance)])
+        .output()
+        .expect("run psql")
+}
+
+fn owner_role(roles: &scratch::Roles) -> String {
+    format!("{}_owner", roles.app.trim_end_matches("_app"))
+}
+
+async fn is_superuser(pool: &PgPool, role: &str) -> bool {
+    sqlx::query_scalar("SELECT rolsuper FROM pg_roles WHERE rolname = $1").bind(role).fetch_one(pool).await.unwrap()
+}
+
+async fn grants_function(pool: &PgPool) -> String {
+    sqlx::query_scalar("SELECT pg_get_functiondef('cmdb.apply_api_role_grants(name)'::regprocedure)")
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
 #[tokio::test]
 async fn a_split_single_role_install_grants_the_api_role_what_a_fresh_one_does() {
     const TEST: &str = "a_split_single_role_install_grants_the_api_role_what_a_fresh_one_does";
-    let Some(mut psql) = psql(TEST) else { return };
+    let Some(psql) = psql(TEST) else { return };
     let Some(roles) = scratch::Roles::create(TEST).await else { return };
     let fresh = roles.database().await;
     // The database rights 00_create_role_and_database.sql sets on a fresh install.
@@ -60,36 +103,90 @@ async fn a_split_single_role_install_grants_the_api_role_what_a_fresh_one_does()
     assert!(expected.iter().any(|p| p == "table cmdb.workflow_instance_events: INSERT"), "{expected:#?}");
     assert!(!expected.iter().any(|p| p.starts_with("table cmdb.workflow_instance_events: UPDATE")), "{expected:#?}");
 
-    // The older bootstrap script: the API role owns the database and migrates it itself.
-    let single = roles.empty().await;
-    sqlx::query(sqlx::AssertSqlSafe(format!("ALTER DATABASE {} OWNER TO {}", single.name(), roles.app)))
-        .execute(&single.pool)
-        .await
-        .unwrap();
-    let as_app = roles.api_pool(&single).await;
-    MIGRATOR.run(&as_app).await.expect("migrations as the API role");
-    as_app.close().await;
-
-    let owner = format!("{}_owner", roles.app.trim_end_matches("_app"));
-    let mut url = url::Url::parse(&std::env::var("SHADOUCMDB_TEST_DATABASE_URL").unwrap()).unwrap();
-    url.set_path(&format!("/{}", single.name()));
-    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../sql/bootstrap/10_split_roles.sql");
-    let out = psql
-        .args(["-X", "-q", "-v", "ON_ERROR_STOP=1", "-d", url.as_str(), "-f", script])
-        .args(["-v", &format!("app_role={}", roles.app)])
-        .args(["-v", &format!("owner_role={owner}")])
-        .args(["-v", &format!("maintenance_role={}", roles.maintenance)])
-        .output()
-        .expect("run psql");
+    // A compromised API role replaced the grants function the script calls as
+    // the administrator, and added an overload for an untyped argument (GH#725).
+    let single = single_role_install(
+        &roles,
+        &format!(
+            "CREATE FUNCTION cmdb.trojan() RETURNS boolean LANGUAGE plpgsql AS $$
+               BEGIN RESET ROLE; EXECUTE 'ALTER ROLE {app} SUPERUSER'; RETURN true; END $$;
+             CREATE OR REPLACE FUNCTION cmdb.apply_api_role_grants(app_role name) RETURNS void
+               LANGUAGE plpgsql AS $$ BEGIN PERFORM cmdb.trojan(); END $$;
+             CREATE FUNCTION cmdb.apply_api_role_grants(app_role text) RETURNS void
+               LANGUAGE plpgsql AS $$ BEGIN PERFORM cmdb.trojan(); END $$;",
+            app = roles.app
+        ),
+    )
+    .await;
+    let out = split(psql, &roles, &single);
     assert!(out.status.success(), "10_split_roles.sql failed: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(!is_superuser(&single.pool, &roles.app).await, "the split ran the API role's function");
+    assert_eq!(
+        grants_function(&single.pool).await,
+        grants_function(&fresh.pool).await,
+        "the script's copy differs from 0065's"
+    );
     // Then `shadoucmdb migrate` as the schema owner, as the script's header says.
     MIGRATOR.run(&single.pool).await.expect("migrate after the split");
 
+    // The split leaves what the API role planted; the check lists it.
+    let planted = api_role_privileges(&single.pool).await;
+    assert!(planted.iter().any(|p| p == "routine trojan(): EXECUTE (PUBLIC)"), "{planted:#?}");
+    sqlx::raw_sql("DROP FUNCTION cmdb.trojan(), cmdb.apply_api_role_grants(text)").execute(&single.pool).await.unwrap();
     assert_same(&api_role_privileges(&single.pool).await, &expected);
 
     single.drop().await;
-    sqlx::query(sqlx::AssertSqlSafe(format!("DROP ROLE {owner}"))).execute(&fresh.pool).await.unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP ROLE {}", owner_role(&roles)))).execute(&fresh.pool).await.unwrap();
     fresh.drop().await;
+    roles.drop().await;
+}
+
+#[tokio::test]
+async fn the_split_reads_no_table_the_api_role_could_have_made_a_view() {
+    const TEST: &str = "the_split_reads_no_table_the_api_role_could_have_made_a_view";
+    let Some(_) = psql(TEST) else { return };
+    let Some(roles) = scratch::Roles::create(TEST).await else { return };
+    let trojan = format!(
+        "CREATE FUNCTION cmdb.trojan() RETURNS boolean LANGUAGE plpgsql AS $$
+           BEGIN RESET ROLE; EXECUTE 'ALTER ROLE {app} SUPERUSER'; RETURN true; END $$;",
+        app = roles.app
+    );
+
+    // The area list, which the script used to read to leave the area schemas alone.
+    let areas = single_role_install(
+        &roles,
+        &format!(
+            "{trojan}
+             ALTER TABLE cmdb.areas RENAME TO areas_data;
+             CREATE VIEW cmdb.areas AS SELECT * FROM cmdb.areas_data WHERE cmdb.trojan();"
+        ),
+    )
+    .await;
+    let out = split(psql(TEST).unwrap(), &roles, &areas);
+    assert!(out.status.success(), "10_split_roles.sql failed: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(!is_superuser(&areas.pool, &roles.app).await, "the split read the API role's view cmdb.areas");
+
+    // The list of the API role's rights: the script refuses it before reading it.
+    let list = single_role_install(
+        &roles,
+        &format!(
+            "{trojan}
+             ALTER TABLE cmdb.api_role_privileges RENAME TO api_role_privileges_data;
+             CREATE VIEW cmdb.api_role_privileges AS SELECT * FROM cmdb.api_role_privileges_data WHERE cmdb.trojan();"
+        ),
+    )
+    .await;
+    let out = split(psql(TEST).unwrap(), &roles, &list);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "10_split_roles.sql read a view as the list");
+    assert!(stderr.contains("is not the table migration 0065 created"), "{stderr}");
+    assert!(!is_superuser(&list.pool, &roles.app).await);
+
+    areas.drop().await;
+    list.drop().await;
+    let admin = roles.empty().await;
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP ROLE {}", owner_role(&roles)))).execute(&admin.pool).await.unwrap();
+    admin.drop().await;
     roles.drop().await;
 }
 
@@ -138,6 +235,28 @@ async fn the_migration_repairs_an_install_split_before_it() {
     assert_eq!(sql_state(&err), "42501", "{err}");
     api.close().await;
     db.drop().await;
+
+    // A single-role install migrated by another role (a superuser
+    // MIGRATION_DATABASE_URL): the API role keeps the rights on the tables it
+    // owns until the split, or deleting a CI would fail in the archive trigger.
+    let single = roles.empty().await;
+    sqlx::query(sqlx::AssertSqlSafe(format!("ALTER DATABASE {} OWNER TO {}", single.name(), roles.app)))
+        .execute(&single.pool)
+        .await
+        .unwrap();
+    let as_app = roles.api_pool(&single).await;
+    MIGRATOR.run_to(64, &as_app).await.expect("migrations up to 0064 as the API role");
+    as_app.close().await;
+    MIGRATOR.run(&single.pool).await.expect("migration 0065 as a superuser");
+    let api = roles.api_pool(&single).await;
+    let insert: bool =
+        sqlx::query_scalar("SELECT has_table_privilege(current_user, 'cmdb.workflow_instance_archive', 'INSERT')")
+            .fetch_one(&api)
+            .await
+            .unwrap();
+    assert!(insert, "migration 0065 narrowed the API role on a single-role install");
+    api.close().await;
+    single.drop().await;
     fresh.drop().await;
     roles.drop().await;
 }

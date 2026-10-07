@@ -58,10 +58,18 @@ INSERT INTO cmdb.api_role_privileges (object, object_type, privileges) VALUES
 -- Not SECURITY DEFINER: the caller must own the objects (or be a superuser),
 -- as the schema owner running a migration and the administrator running
 -- 10_split_roles.sql do. Idempotent.
-CREATE FUNCTION cmdb.apply_api_role_grants(app_role name)
+--
+-- 10_split_roles.sql runs as an administrator on a database whose system
+-- objects the API role owned until then, so it must not run anything the API
+-- role could have written (GH#725). It replaces this function with its own
+-- copy before calling it, and the function reads the list only if it is
+-- still the plain table created above, with row security off. Keep the copy
+-- in the script identical; upgrade_0065 compares them.
+CREATE OR REPLACE FUNCTION cmdb.apply_api_role_grants(app_role name)
 RETURNS void
 LANGUAGE plpgsql
 SET search_path = pg_catalog, pg_temp
+SET row_security = off
 AS $$
 DECLARE
   p record;
@@ -69,16 +77,25 @@ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = app_role) THEN
     RAISE EXCEPTION 'role % does not exist', app_role USING ERRCODE = 'undefined_object';
   END IF;
+  -- Reading a view, a child table or a column of another type would run its code.
+  IF NOT EXISTS (SELECT FROM pg_class c
+                 WHERE c.oid = to_regclass('cmdb.api_role_privileges') AND c.relkind = 'r' AND NOT c.relhassubclass)
+     OR ARRAY(SELECT a.atttypid FROM pg_attribute a
+              WHERE a.attrelid = to_regclass('cmdb.api_role_privileges') AND a.attnum > 0 AND NOT a.attisdropped
+              ORDER BY a.attnum) IS DISTINCT FROM ARRAY['text'::regtype, 'text'::regtype, 'text[]'::regtype]::oid[] THEN
+    RAISE EXCEPTION 'cmdb.api_role_privileges is not the table migration 0065 created'
+      USING ERRCODE = 'object_not_in_prerequisite_state';
+  END IF;
   EXECUTE format('GRANT USAGE ON SCHEMA cmdb TO %I', app_role);
   EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA cmdb TO %I', app_role);
   EXECUTE format('GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA cmdb TO %I', app_role);
   -- An object a later migration dropped is skipped.
   FOR p IN
-    SELECT to_regclass(object)::text AS relation, NULL::text AS routine, privileges
-      FROM cmdb.api_role_privileges WHERE object_type = 'table' AND to_regclass(object) IS NOT NULL
+    SELECT to_regclass(l.object)::text AS relation, NULL::text AS routine, l.privileges
+      FROM ONLY cmdb.api_role_privileges l WHERE l.object_type = 'table' AND to_regclass(l.object) IS NOT NULL
     UNION ALL
-    SELECT NULL, to_regprocedure(object)::text, privileges
-      FROM cmdb.api_role_privileges WHERE object_type = 'routine' AND to_regprocedure(object) IS NOT NULL
+    SELECT NULL, to_regprocedure(l.object)::text, l.privileges
+      FROM ONLY cmdb.api_role_privileges l WHERE l.object_type = 'routine' AND to_regprocedure(l.object) IS NOT NULL
   LOOP
     IF p.relation IS NOT NULL THEN
       EXECUTE format('REVOKE ALL ON %s FROM %I', p.relation, app_role);
@@ -101,7 +118,10 @@ DO $$
 DECLARE
   app_role name := COALESCE(NULLIF(current_setting('shadoucmdb.app_role', true), ''), 'shadoucmdb_app');
 BEGIN
-  IF EXISTS (SELECT FROM pg_roles WHERE rolname = app_role) AND current_user <> app_role THEN
+  -- Not on a single-role install, where the API role owns cmdb and its tables
+  -- (also when another role runs `migrate` there): the split grants the list.
+  IF to_regrole(app_role) IS NOT NULL AND current_user <> app_role
+     AND (SELECT nspowner FROM pg_namespace WHERE nspname = 'cmdb') <> to_regrole(app_role) THEN
     PERFORM cmdb.apply_api_role_grants(app_role);
     EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE SELECT, INSERT, UPDATE, DELETE ON TABLES FROM %I', app_role);
     EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE USAGE, SELECT ON SEQUENCES FROM %I', app_role);

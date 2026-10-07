@@ -66,15 +66,20 @@ Credentials never go into this folder or anywhere else in git; they belong in `.
   DECLARE
     app_role name := COALESCE(NULLIF(current_setting('shadoucmdb.app_role', true), ''), 'shadoucmdb_app');
   BEGIN
-    IF EXISTS (SELECT FROM pg_roles WHERE rolname = app_role) AND current_user <> app_role THEN
+    -- Not on a single-role install, where the API role owns cmdb.
+    IF to_regrole(app_role) IS NOT NULL AND current_user <> app_role
+       AND (SELECT nspowner FROM pg_namespace WHERE nspname = 'cmdb') <> to_regrole(app_role) THEN
       PERFORM cmdb.apply_api_role_grants(app_role);
     END IF;
   END $$;
   ```
 
   Do not `REVOKE` from the API role directly: `sql/bootstrap/10_split_roles.sql` grants a split
-  single-role install the same list, and only what is in it. `upgrade_0065` in `backend/src/db/`
-  fails when a fresh install's grants differ from the list or from a split install's;
+  single-role install the same list, and only what is in it. The script carries its own copy of
+  `cmdb.apply_api_role_grants()`, because it must not run a function the API role could have
+  replaced (GH#725): a migration that changes the function changes that copy too. `upgrade_0065` in `backend/src/db/`
+  fails when a fresh install's grants differ from the list or from a split install's, or the copy
+  differs;
   [`checks/api_role_privileges.sql`](checks/api_role_privileges.sql) prints them for any database. After 0009, migrations do not write to area schemas: those belong to
   `shadoucmdb_app`. The one
   exception is 0016, which moves the fixed CI columns into type tables; it runs as the schema owner,
@@ -90,7 +95,9 @@ Credentials never go into this folder or anywhere else in git; they belong in `.
   DECLARE
     app_role name := COALESCE(NULLIF(current_setting('shadoucmdb.app_role', true), ''), 'shadoucmdb_app');
   BEGIN
-    IF EXISTS (SELECT FROM pg_roles WHERE rolname = app_role) AND current_user <> app_role THEN
+    -- Not on a single-role install, where the API role owns cmdb.
+    IF to_regrole(app_role) IS NOT NULL AND current_user <> app_role
+       AND (SELECT nspowner FROM pg_namespace WHERE nspname = 'cmdb') <> to_regrole(app_role) THEN
       PERFORM set_config('role', app_role, true);  -- SET LOCAL ROLE
     END IF;
   END $$;
