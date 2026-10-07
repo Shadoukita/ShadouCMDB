@@ -86,7 +86,7 @@ function seed(c: CiClass | undefined) {
 /** The form as loaded, to send only changed fields on save. */
 let initial: ClassUpdateBody = {};
 /** The form as seeded (a new class: as opened), for the save bar's count of changed fields. */
-const baseline = ref<{ id: string | undefined; body: ClassUpdateBody }>({ id: undefined, body: {} });
+const baseline = ref<{ id: string | undefined; body: ClassUpdateBody } | null>(null);
 function formBody(): ClassUpdateBody {
   return {
     name: name.value.trim(),
@@ -98,14 +98,15 @@ function formBody(): ClassUpdateBody {
     titleAttributeId: titleAttributeId.value || null,
   };
 }
-const changes = computed(() => Object.keys(changedFields(formBody(), baseline.value.body)).length);
+const changes = computed(() => (baseline.value ? Object.keys(changedFields(formBody(), baseline.value.body)).length : 0));
 const dirty = computed(() => changes.value > 0);
 const guard = useUnsavedGuard(() => dirty.value, () => t("admin.unsaved.leave"));
-// Seed from the record, and again when it is refetched, unless that would overwrite unsaved edits.
+// Seed from the record (a new class: from the query's area and parent), and again when it is
+// refetched, unless that would overwrite unsaved edits.
 watch(
   () => cls.data.value,
   (c) => {
-    if (!dirty.value || baseline.value.id !== c?.id) seed(c);
+    if (!baseline.value || !dirty.value || baseline.value.id !== c?.id) seed(c);
   },
   { immediate: true },
 );
