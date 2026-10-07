@@ -900,6 +900,47 @@ mod tests {
         roles.drop().await;
     }
 
+    /// GH#696 edge (SHAA-2254): the guard is a BEFORE INSERT trigger, so it
+    /// holds only while the API role may not rewrite or remove a listed row.
+    /// Moving a sent entry's number past the head, or deleting it, is refused.
+    #[tokio::test]
+    async fn the_api_role_cannot_move_or_remove_a_listed_restore_entry() {
+        let Some(roles) =
+            crate::db::scratch::Roles::create("the_api_role_cannot_move_or_remove_a_listed_restore_entry").await
+        else {
+            return;
+        };
+        let db = roles.database().await;
+        let api = roles.api_pool(&db).await;
+        let restore: i64 = sqlx::query_scalar(
+            "INSERT INTO cmdb.audit_log (actor_type, actor_name, action, entity_type, entity_id, new_value)
+             VALUES ('system', session_user, 'backup.restore', 'audit_log', gen_random_uuid(), '{}') RETURNING chain_seq",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        mark_restore_sent(&api, restore).await.unwrap();
+        for sql in [
+            "UPDATE cmdb.audit_export_restores SET chain_seq = chain_seq + 250",
+            "UPDATE cmdb.audit_export_restores SET sent_at = '2000-01-01'",
+            "DELETE FROM cmdb.audit_export_restores",
+            "TRUNCATE cmdb.audit_export_restores",
+        ] {
+            let err = sqlx::query(sql).execute(&api).await.unwrap_err();
+            assert_eq!(sql_state(&err), "42501", "{sql}: {err}");
+        }
+        let upsert = "INSERT INTO cmdb.audit_export_restores (chain_seq) VALUES ($1)
+                      ON CONFLICT (chain_seq) DO UPDATE SET chain_seq = excluded.chain_seq + 250";
+        let err = sqlx::query(upsert).bind(restore).execute(&api).await.unwrap_err();
+        assert_eq!(sql_state(&err), "42501", "{err}");
+        let listed: Vec<i64> =
+            sqlx::query_scalar("SELECT chain_seq FROM cmdb.audit_export_restores").fetch_all(&db.pool).await.unwrap();
+        assert_eq!(listed, [restore]);
+        api.close().await;
+        db.drop().await;
+        roles.drop().await;
+    }
+
     /// GH#696: rows listed past the head before the upgrade (no guard then) go
     /// with the backup, but `restore` drops them, so the entry it writes is
     /// sent at the next start.
