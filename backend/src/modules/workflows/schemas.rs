@@ -1244,6 +1244,10 @@ pub struct WorkflowFieldChange {
     /// minted one of the owner's tokens before the change counts. Left out when there is none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub token_created_by: Vec<Uuid>,
+    /// A change an approval applied (its final approval writes as the decider): the users that request excluded,
+    /// its requester and the creator of the token it was made with (GH#715). Left out when there is none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub approval_requested_by: Vec<Uuid>,
 }
 
 /// Why an approver source (a CI field, or a business service's owner or membership) may not decide a request
@@ -1267,13 +1271,16 @@ pub struct WorkflowApprovalDroppedSource {
     #[schema(inline)]
     pub source: WorkflowApproverSource,
     /// e.g. `field server.owner`, `technical owner pal of business service Shop`, `technical owners of business
-    /// service Shop`
+    /// service Shop`. A caller who may not view business services gets `technical owners of the CI's business
+    /// services` instead, without service or owner names (GH#717)
     pub label: String,
     #[schema(inline)]
     pub reason: WorkflowApprovalDropReason,
-    /// The reason, in words
+    /// The reason, in words; generic, as `label`, for a caller who may not view business services
     pub message: String,
-    /// The audited change that named the approvers: the field's, the owner's or the membership's
+    /// The audited change that named the approvers: the field's, the owner's or the membership's. For a caller who
+    /// may not view business services, a service owner's or membership's change has no actor id, name, token
+    /// creators or approval requesters
     pub field_last_changed: WorkflowFieldChange,
 }
 

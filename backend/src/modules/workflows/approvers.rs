@@ -826,7 +826,7 @@ pub async fn audit_value(conn: &mut PgConnection, id: Uuid) -> Result<Value, App
 }
 
 // ---------------------------------------------------------------------------
-// Who named the approvers (GH#664, GH#708, GH#709)
+// Who named the approvers (GH#664, GH#708, GH#709, GH#715)
 // ---------------------------------------------------------------------------
 
 /// The columns of an audit row `a` that made a change: actor type, id, name
@@ -837,6 +837,11 @@ pub async fn audit_value(conn: &mut PgConnection, id: Uuid) -> Result<Value, App
 /// (it is an access event), every user who minted one of the owner's tokens
 /// before the change counts, so pruning never clears an edit made through a
 /// lent token.
+///
+/// Last, for a change an approval applied (its row names the decider as the
+/// actor, and `approvalRequestId` and `requestedBy` in its new value), the
+/// users that request excluded and its requester (GH#715): a requester who
+/// staged the field on an earlier gated transition chose its value.
 const CHANGE_COLUMNS: &str = "a.actor_type, a.actor_id, a.actor_name, a.occurred_at,
     CASE WHEN a.actor_type = 'api_client'
           AND a.actor_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
@@ -855,18 +860,31 @@ const CHANGE_COLUMNS: &str = "a.actor_type, a.actor_id, a.actor_name, a.occurred
                              AND u.request_id = a.request_id
                             WHERE t2.user_id = a.actor_id::uuid))
       ORDER BY 1)
-    ELSE '{}'::uuid[] END";
+    ELSE '{}'::uuid[] END,
+    ARRAY(
+      SELECT DISTINCT x FROM (
+        SELECT unnest(r.excluded_user_ids) FROM cmdb.workflow_approval_requests r
+        WHERE r.id = CASE WHEN a.new_value->>'approvalRequestId' ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                          THEN (a.new_value->>'approvalRequestId')::uuid END
+        UNION ALL
+        SELECT (a.new_value->'requestedBy'->>'id')::uuid
+        WHERE a.new_value->'requestedBy'->>'id' ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+      ) s(x) WHERE x IS NOT NULL ORDER BY 1)";
 
-/// An audit row's actor type, actor id, actor name, time and token creators.
-type ChangeRow = (String, Option<String>, Option<String>, chrono::DateTime<chrono::Utc>, Vec<Uuid>);
+/// An audit row's actor type, actor id, actor name, time, token creators and
+/// the users the approval request that applied it excluded.
+type ChangeRow = (String, Option<String>, Option<String>, chrono::DateTime<chrono::Utc>, Vec<Uuid>, Vec<Uuid>);
 
-fn change_of((actor_type, actor_id, actor_name, changed_at, token_created_by): ChangeRow) -> WorkflowFieldChange {
+fn change_of(
+    (actor_type, actor_id, actor_name, changed_at, token_created_by, approval_requested_by): ChangeRow,
+) -> WorkflowFieldChange {
     WorkflowFieldChange {
         actor_type,
         actor_id: actor_id.and_then(|a| a.parse().ok()),
         actor_name,
         changed_at,
         token_created_by,
+        approval_requested_by,
     }
 }
 
@@ -946,9 +964,10 @@ pub struct Named<'a> {
 
 /// Why the approvers a change named may not decide a request that the users
 /// `excluded` may not decide: one of them made the change, directly or with an
-/// API token one of them minted for its owner (GH#709), or an API token or
-/// import made it with no user recorded. A system change (a first-run setup,
-/// an upgrade) counts as nobody's.
+/// API token one of them minted for its owner (GH#709), or requested it on an
+/// approval request someone else approved (GH#715), or an API token or import
+/// made it with no user recorded. A system change (a first-run setup, an
+/// upgrade) counts as nobody's.
 pub fn drop_reason(change: &WorkflowFieldChange, excluded: &[Uuid], what: &Named) -> Dropped {
     let by = change.actor_name.as_deref().unwrap_or("an unnamed user");
     let Named { did, done, unused } = what;
@@ -956,6 +975,13 @@ pub fn drop_reason(change: &WorkflowFieldChange, excluded: &[Uuid], what: &Named
         Some(user) if excluded.contains(&user) => Some((
             WorkflowApprovalDropReason::FieldSetByRequester,
             format!("Separation of duties: {by} {did} and may not decide this request, so {unused}"),
+        )),
+        _ if change.approval_requested_by.iter().any(|u| excluded.contains(u)) => Some((
+            WorkflowApprovalDropReason::FieldSetByRequester,
+            format!(
+                "Separation of duties: {by} {did} by approving a request made by someone who may not decide this \
+                 request, so {unused}"
+            ),
         )),
         Some(_) if change.token_created_by.iter().any(|c| excluded.contains(c)) => Some((
             WorkflowApprovalDropReason::FieldSetByRequester,
@@ -1087,6 +1113,62 @@ pub async fn service_owners(
     out.groups.sort();
     out.groups.dedup();
     Ok(out)
+}
+
+/// Whether the caller may view business services, whose names and owners a
+/// dropped service owner source names (GH#717).
+pub async fn sees_services(conn: &mut PgConnection, ctx: &RequestContext) -> Result<bool, AppError> {
+    let class = crate::data::service_owners::service_class_id(conn).await?;
+    Ok(ctx.require_class(class, ClassOp::View).is_ok())
+}
+
+/// The dropped service owner sources of `dropped` as a caller who may not view
+/// business services gets them (GH#717): the label and reason in general
+/// words, and the change without who made it, so neither names a service, an
+/// owner or who changed them. Field sources stay as they are.
+pub fn hide_service_names(dropped: &mut [WorkflowApprovalDroppedSource]) {
+    use WorkflowServiceOwnerRole as R;
+    for d in dropped.iter_mut().filter(|d| d.source == WorkflowApproverSource::ServiceOwner) {
+        // Every label `service_owners` writes starts with the role.
+        let role = [R::Technical, R::Business]
+            .into_iter()
+            .map(R::as_str)
+            .find(|r| d.label.split(' ').next() == Some(r))
+            .map_or_else(String::new, |r| format!("{r} "));
+        let how = match d.reason {
+            WorkflowApprovalDropReason::FieldSetByRequester => "by someone who may not decide this request",
+            WorkflowApprovalDropReason::FieldSetByUnattributed => {
+                "through an API token or an import that recorded no user"
+            }
+        };
+        d.label = format!("{role}owners of the CI's business services");
+        d.message = format!(
+            "Separation of duties: a {role}owner of one of the CI's business services, or the CI's membership of \
+             that service, was set {how}, so it is not used"
+        );
+        let c = &mut d.field_last_changed;
+        c.actor_id = None;
+        c.actor_name = None;
+        c.token_created_by.clear();
+        c.approval_requested_by.clear();
+    }
+}
+
+/// [`hide_service_names`] on dropped sources stored as JSON (an audit value).
+/// A service owner source that does not read as one keeps only its source and
+/// reason, so an unexpected shape never shows the names.
+pub fn hide_service_names_in(value: &mut Value) {
+    let Some(items) = value.as_array_mut() else { return };
+    for item in items.iter_mut().filter(|i| i["source"] == WorkflowApproverSource::ServiceOwner.as_str()) {
+        *item = match serde_json::from_value::<WorkflowApprovalDroppedSource>(item.clone()) {
+            Ok(d) => {
+                let mut one = [d];
+                hide_service_names(&mut one);
+                json!(one[0])
+            }
+            Err(_) => json!({ "source": item["source"], "reason": item["reason"] }),
+        };
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1226,7 +1308,10 @@ pub async fn preview(
             }
             Source::ServiceOwner(role) => {
                 let Some(ci) = q.ci_id else { return Err(AppError::internal()) };
-                let owners = service_owners(&mut conn, ci, *role, &excluded).await?;
+                let mut owners = service_owners(&mut conn, ci, *role, &excluded).await?;
+                if !sees_services(&mut conn, ctx).await? {
+                    hide_service_names(&mut owners.dropped);
+                }
                 let members: Vec<Uuid> =
                     sqlx::query_scalar("SELECT user_id FROM cmdb.user_group_members WHERE group_id = ANY($1)")
                         .bind(&owners.groups)

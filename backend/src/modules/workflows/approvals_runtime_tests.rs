@@ -1860,3 +1860,155 @@ async fn a_requester_who_owns_the_service_is_refused_and_a_lent_token_group_owne
     audit_ok(w).await;
     db.drop().await;
 }
+
+// ---------------------------------------------------------------------------
+// GH#715: a field staged on an earlier gated transition is the requester's
+// ---------------------------------------------------------------------------
+
+/// GH#715 as reported: `prepare` is gated (a Tech check) and takes `owner`.
+/// req stages owner = pal on it, tech approves, and the final approval writes
+/// the field as tech. req then requests `approve`, whose approver is the owner:
+/// pal may not decide, as if req had set the field directly.
+#[tokio::test]
+async fn a_field_staged_on_an_earlier_gated_transition_does_not_pick_the_approver() {
+    let Some(db) = scratch::database("workflow_approvals_staged_field").await else { return };
+    let o = owners(&db).await;
+    let w = &o.w;
+    let step = |key: &str| json!({ "key": key, "name": key, "requiredApprovals": 1 });
+    publish(
+        w,
+        json!({
+            "initialState": "planned",
+            "states": [
+                { "key": "planned", "name": "Planned", "category": "open", "stateValue": "planned" },
+                { "key": "ready", "name": "Ready", "category": "active", "stateValue": "ready" },
+                { "key": "approved", "name": "Approved", "category": "active", "stateValue": "approved" },
+                { "key": "done", "name": "Done", "category": "done", "terminal": true, "stateValue": "live" }
+            ],
+            "transitions": [
+                { "key": "prepare", "name": "Prepare", "from": "planned", "to": "ready",
+                  "fields": [ { "attribute": "owner" } ], "approval": { "steps": [ step("check") ] } },
+                { "key": "approve", "name": "Approve", "from": "ready", "to": "approved",
+                  "approval": { "steps": [ step("owner") ] } },
+                { "key": "go_live", "name": "Go live", "from": "ready", "to": "done",
+                  "approval": { "steps": [ step("check"), step("owner") ] } },
+                { "key": "finish", "name": "Finish", "from": "approved", "to": "done" }
+            ]
+        }),
+    )
+    .await;
+    let def = w.ok("GET", &format!("{DEFS}/{}", w.definition), json!(null)).await;
+    w.ok(
+        "PUT",
+        &format!("{DEFS}/{}/approvers", w.definition),
+        json!({ "version": def["version"], "approvers": [
+            { "transitionKey": "prepare", "stepKey": "check", "source": "profile", "profile": "Tech" },
+            { "transitionKey": "approve", "stepKey": "owner", "source": "ci_attribute", "attribute": "owner" }
+        ] }),
+    )
+    .await;
+    let (ci, instance) = started(w).await;
+    o.set_owner(&w.admin, ci, o.owner_person).await;
+    let (status, v) = request(w, &o.req.0, instance, "prepare", json!({ "owner": o.pal_person })).await;
+    assert_eq!(status, 202, "{v}");
+    let (status, v) = decide(w, &o.tech.0, instance, "approve", None).await;
+    assert_eq!((status, v["instance"]["state"]["key"].as_str()), (200, Some("ready")), "{v}");
+    assert_eq!(w.ci_values(ci).await["attributes"]["owner"], json!(o.pal_person));
+
+    assert_eq!(request(w, &o.req.0, instance, "approve", json!({})).await.0, 202);
+    let (status, v) = decide(w, &o.pal.0, instance, "approve", None).await;
+    assert_eq!((status, reason(&v)), (403, refused("FORBIDDEN", "not_eligible")), "{v}");
+    let v = o.view(instance).await;
+    let step = &v["steps"][0];
+    // The change is recorded as tech's, who approved it; the request it applied was req's.
+    assert_eq!(dropped(step), by("field_set_by_requester", "tech"), "{v}");
+    let d = &step["droppedSources"][0];
+    assert_eq!(d["fieldLastChanged"]["approvalRequestedBy"], json!([o.req.1]), "{d}");
+    assert!(d["message"].as_str().unwrap().contains("by approving a request made by someone"), "{d}");
+    assert_eq!((step["eligibleCount"].as_i64(), v["approvers"].clone()), (Some(0), json!([])), "{v}");
+
+    // The preview agrees; for another requester the field still names pal.
+    let preview = format!("{DEFS}/{}/approvers/preview?transition=approve&step=owner&ciId={ci}", w.definition);
+    let (_, v) = w.call(&w.admin, "GET", &format!("{preview}&requestedBy={}", o.req.1), None).await;
+    assert_eq!(
+        (v["sources"][0]["dropped"].as_str(), v["eligibleCount"].as_i64()),
+        (Some("field_set_by_requester"), Some(0)),
+        "{v}"
+    );
+    let (_, v) = w.call(&w.admin, "GET", &format!("{preview}&requestedBy={}", o.req2.1), None).await;
+    assert_eq!((v["sources"][0]["dropped"].clone(), v["eligibleCount"].as_i64()), (Value::Null, Some(1)), "{v}");
+    audit_ok(w).await;
+    db.drop().await;
+}
+
+// ---------------------------------------------------------------------------
+// GH#717: dropped service owners name no service to who may not view one
+// ---------------------------------------------------------------------------
+
+/// GH#717 as reported: `owner` may view servers (and the audit log) but not
+/// business services. The request, its audit entry and the approver preview
+/// show them the dropped service owner without the service's name, the
+/// owner's or who changed it; the administrator still sees them.
+#[tokio::test]
+async fn dropped_service_owners_name_no_service_to_who_may_not_view_services() {
+    let Some(db) = scratch::database("workflow_approvals_owner_redacted").await else { return };
+    let o = owners(&db).await;
+    let w = &o.w;
+    let bs = service_owner_step(&o).await;
+    let viewers = profile_id(w, "Viewers").await;
+    sqlx::query("INSERT INTO permission_profile_global_permissions (profile_id, permission) VALUES ($1, 'audit.view')")
+        .bind(viewers)
+        .execute(&w.pool)
+        .await
+        .unwrap();
+    let (ci, instance) = o.ready().await;
+    let service = o.service(bs).await;
+    let name = w.ci_values(service).await["label"].as_str().unwrap().to_owned();
+    o.add_member(&w.admin, service, ci).await;
+    o.set_owners(&o.req.0, service, &[o.pal.1]).await;
+    assert_eq!(request(w, &o.req.0, instance, "approve", json!({})).await.0, 202);
+    let (request_id, _, _) = pending(w, instance).await;
+    let (status, _) = w.call(&o.owner.0, "GET", &format!("/api/v1/business-services/{service}"), None).await;
+    assert_eq!(status, 403, "owner may not view business services");
+    let leaks = |v: &Value| {
+        let text = v.to_string();
+        [name.as_str(), "pal", "\"req\""].into_iter().filter(|s| text.contains(s)).map(str::to_owned).collect::<Vec<_>>()
+    };
+
+    // The administrator sees the names.
+    let full = o.view(instance).await;
+    assert_eq!(full["steps"][0]["droppedSources"][0]["label"], format!("technical owner pal of business service {name}"));
+
+    // owner gets the generic text.
+    let (status, v) = w.call(&o.owner.0, "GET", &format!("{REQUESTS}/{request_id}"), None).await;
+    assert_eq!(status, 200, "{v}");
+    let dropped_sources = &v["steps"][0]["droppedSources"];
+    let d = &dropped_sources[0];
+    assert_eq!(
+        (d["source"].as_str(), d["reason"].as_str(), d["label"].as_str()),
+        (Some("service_owner"), Some("field_set_by_requester"), Some("technical owners of the CI's business services")),
+        "{v}"
+    );
+    assert!(d["message"].as_str().unwrap().starts_with("Separation of duties: a technical owner"), "{d}");
+    assert_eq!((d["fieldLastChanged"]["actorId"].clone(), d["fieldLastChanged"]["actorName"].clone()), (Value::Null, Value::Null));
+    assert_eq!(leaks(dropped_sources), Vec::<String>::new(), "{dropped_sources}");
+
+    // So does the request's audit entry.
+    let (status, v) = w
+        .call(&o.owner.0, "GET", &format!("/api/v1/audit-log?entityId={ci}&action=workflow.approval_request"), None)
+        .await;
+    assert_eq!((status, v["data"].as_array().map(Vec::len)), (200, Some(1)), "{v}");
+    let steps = &v["data"][0]["newValue"]["steps"];
+    assert_eq!(steps[0]["droppedSources"][0]["label"], "technical owners of the CI's business services", "{v}");
+    assert_eq!(leaks(&steps[0]["droppedSources"]), Vec::<String>::new(), "{steps}");
+    let (_, v) = w
+        .call(&w.admin, "GET", &format!("/api/v1/audit-log?entityId={ci}&action=workflow.approval_request"), None)
+        .await;
+    assert_eq!(
+        v["data"][0]["newValue"]["steps"][0]["droppedSources"][0]["label"],
+        format!("technical owner pal of business service {name}"),
+        "{v}"
+    );
+    audit_ok(w).await;
+    db.drop().await;
+}
