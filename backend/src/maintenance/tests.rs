@@ -811,7 +811,7 @@ async fn restore_needs_allow_unsigned_for_a_seal_it_cannot_check() {
         let args =
             restore::RestoreArgs { file: file.into(), replace: false, dry_run: true, yes: true, allow_unsigned: allow };
         let nowhere = nowhere.clone();
-        async move { restore::run(&nowhere, &encryption, args).await.unwrap_err().to_string() }
+        async move { restore::run(&nowhere, &encryption, None, args).await.unwrap_err().to_string() }
     };
     let refused = |e: &str| e.contains("re-run with --allow-unsigned") && !e.contains("connect");
 

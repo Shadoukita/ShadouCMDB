@@ -17,8 +17,10 @@
 //! every row after it, also the ones CLI commands (`mfa reset-undecryptable`,
 //! `create-admin`) wrote before the server started (GH#677). A sent entry is
 //! listed in `audit_export_restores` (migration 0061; only existing entries
-//! may be listed, 0063, GH#696); one whose send fails is sent again after a
-//! restart.
+//! may be listed, 0063, GH#696; only through a function, 0064); one whose
+//! send fails is sent again after a restart. Since the API role can list an
+//! entry before the server starts, `shadoucmdb restore` also sends its entry
+//! itself (GH#706).
 //!
 //! A row that can never be sent (larger than one UDP datagram) must not hold
 //! the export up: it leaves as a stub without `oldValue` and `newValue`, with
@@ -38,7 +40,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::{Value, json};
-use sqlx::{PgPool, Row};
+use sqlx::{PgConnection, PgExecutor, PgPool, Row};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -340,12 +342,62 @@ async fn start(pool: &PgPool) -> sqlx::Result<(i64, i64)> {
 }
 
 /// Lists a sent `backup.restore` entry, so a restart does not go back to it.
+/// The API role may not insert there itself (migration 0064, GH#706).
 async fn mark_restore_sent(pool: &PgPool, chain_seq: i64) -> sqlx::Result<()> {
-    sqlx::query("INSERT INTO audit_export_restores (chain_seq) VALUES ($1) ON CONFLICT DO NOTHING")
-        .bind(chain_seq)
-        .execute(pool)
+    sqlx::query("SELECT cmdb.audit_export_mark_restore_sent($1)").bind(chain_seq).execute(pool).await.map(|_| ())
+}
+
+/// What [`send_restore_entry`] did.
+#[derive(Debug, PartialEq, Eq)]
+pub enum RestoreDelivery {
+    Sent,
+    /// Left to the server's export, for the reason given.
+    Skipped(&'static str),
+}
+
+/// Sends the `backup.restore` entry `shadoucmdb restore` just committed
+/// straight to the sink (GH#706). Only the API role marks an entry as sent, so
+/// anyone with its credentials could mark this one before the server starts
+/// and its export would start past it; sent from here, the collector has it
+/// anyway. The server's export still sends it, with the rows after it: the
+/// collector receives it twice, with the same `chainSeq` and `rowHash`.
+///
+/// Not to stdout, which is the operator's terminal here, nor to a file that
+/// does not exist yet: it would belong to whoever runs the restore, and the
+/// server could not append to it.
+pub async fn send_restore_entry(
+    conn: &mut PgConnection,
+    cfg: &AuditExportConfig,
+    chain_seq: i64,
+) -> anyhow::Result<RestoreDelivery> {
+    match &cfg.sink {
+        AuditSink::Stdout => return Ok(RestoreDelivery::Skipped("AUDIT_EXPORT is stdout, the server's log")),
+        AuditSink::File(path) if !tokio::fs::try_exists(path).await.unwrap_or(false) => {
+            return Ok(RestoreDelivery::Skipped("the AUDIT_EXPORT file does not exist yet"));
+        }
+        _ => {}
+    }
+    let tls = match cfg.sink {
+        AuditSink::Tls(_) => Some(tls_connector(cfg.tls_ca_file.as_ref())?),
+        _ => None,
+    };
+    let event = fetch_after(&mut *conn, chain_seq - 1, 1)
+        .await?
+        .into_iter()
+        .find(|e| e.chain_seq == chain_seq)
+        .ok_or_else(|| anyhow::anyhow!("chainSeq {chain_seq} is not in audit_log"))?;
+    let mut sink = Sink {
+        target: cfg.sink.clone(),
+        format: cfg.format,
+        facility: cfg.facility,
+        hostname: hostname(),
+        tls,
+        conn: None,
+    };
+    tokio::time::timeout(Duration::from_secs(30), sink.send(&event))
         .await
-        .map(|_| ())
+        .map_err(|_| anyhow::anyhow!("timed out"))??;
+    Ok(RestoreDelivery::Sent)
 }
 
 #[cfg(test)]
@@ -355,7 +407,7 @@ async fn head(pool: &PgPool) -> sqlx::Result<i64> {
 
 /// `attempted_known`: for a refused sign-in, whether the name it was given
 /// matches an account now (case-insensitively, as sign-in matches it).
-async fn fetch_after(pool: &PgPool, after: i64) -> sqlx::Result<Vec<Event>> {
+async fn fetch_after<'e, E: PgExecutor<'e>>(db: E, after: i64, limit: i64) -> sqlx::Result<Vec<Event>> {
     let rows = sqlx::query(
         "SELECT a.chain_seq, a.id, a.occurred_at, a.actor_type, a.actor_id, a.actor_name, a.action, a.entity_type,
                 a.entity_id, a.old_value, a.new_value, a.request_id, encode(a.prev_hash, 'hex') AS prev_hash,
@@ -366,9 +418,9 @@ async fn fetch_after(pool: &PgPool, after: i64) -> sqlx::Result<Vec<Event>> {
          FROM audit_log a WHERE a.chain_seq > $1 ORDER BY a.chain_seq LIMIT $2",
     )
     .bind(after)
-    .bind(BATCH)
+    .bind(limit)
     .bind(&ATTEMPTED_USERNAME_ACTIONS[..])
-    .fetch_all(pool)
+    .fetch_all(db)
     .await?;
     rows.into_iter()
         .map(|r| {
@@ -420,7 +472,7 @@ impl Health {
 /// Sends everything after `cursor`; returns the new cursor.
 async fn drain(pool: &PgPool, sink: &mut Sink, mut cursor: i64, health: &mut Health) -> i64 {
     loop {
-        let events = match fetch_after(pool, cursor).await {
+        let events = match fetch_after(pool, cursor, BATCH).await {
             Ok(events) => events,
             Err(e) => {
                 health.fail("reading audit_log", &e);
@@ -851,8 +903,9 @@ mod tests {
     }
 
     /// GH#696: the API role lists only a `backup.restore` entry that exists,
-    /// never a chainSeq past the head or another row, and `sent_at` is when it
-    /// listed it.
+    /// never a chainSeq past the head or another row. GH#706: it lists one
+    /// only through audit_export_mark_restore_sent(), never by an INSERT of
+    /// its own, and `sent_at` is when it listed it.
     #[tokio::test]
     async fn the_api_role_lists_only_existing_restore_entries() {
         let Some(roles) = crate::db::scratch::Roles::create("the_api_role_lists_only_existing_restore_entries").await
@@ -877,15 +930,30 @@ mod tests {
         }
         let planted = "INSERT INTO cmdb.audit_export_restores (chain_seq) SELECT generate_series($1, $1 + 249)";
         let err = sqlx::query(planted).bind(head + 1).execute(&api).await.unwrap_err();
-        assert_eq!(sql_state(&err), "23503", "{err}");
+        assert_eq!(sql_state(&err), "42501", "{err}");
 
+        // GH#706: the real entry, between `restore` and the first start.
         let restore = insert("backup.restore").await.unwrap();
         assert_eq!(start(&api).await.unwrap(), (restore - 1, 1));
-        sqlx::query("INSERT INTO cmdb.audit_export_restores (chain_seq, sent_at) VALUES ($1, '2000-01-01')")
+        let err = sqlx::query("INSERT INTO cmdb.audit_export_restores (chain_seq, sent_at) VALUES ($1, '2000-01-01')")
             .bind(restore)
             .execute(&api)
             .await
+            .unwrap_err();
+        assert_eq!(sql_state(&err), "42501", "{err}");
+        assert_eq!(start(&api).await.unwrap(), (restore - 1, 1), "still unsent");
+        for sql in ["UPDATE cmdb.audit_export_restores SET sent_at = now()", "DELETE FROM cmdb.audit_export_restores"] {
+            let err = sqlx::query(sql).execute(&api).await.unwrap_err();
+            assert_eq!(sql_state(&err), "42501", "{sql}: {err}");
+        }
+
+        mark_restore_sent(&api, restore).await.unwrap();
+        let marked: bool = sqlx::query_scalar("SELECT cmdb.audit_export_mark_restore_sent($1)")
+            .bind(restore)
+            .fetch_one(&api)
+            .await
             .unwrap();
+        assert!(!marked, "listed once");
         let backdated: bool = sqlx::query_scalar(
             "SELECT sent_at < now() - interval '1 minute' FROM cmdb.audit_export_restores WHERE chain_seq = $1",
         )
@@ -894,6 +962,13 @@ mod tests {
         .await
         .unwrap();
         assert!(!backdated, "sent_at is the time of the insert");
+        let maintenance = {
+            let opts = (*db.pool.connect_options()).clone().options([("role", roles.maintenance.as_str())]);
+            sqlx::postgres::PgPoolOptions::new().max_connections(1).connect_with(opts).await.unwrap()
+        };
+        let err = mark_restore_sent(&maintenance, restore).await.unwrap_err();
+        assert_eq!(sql_state(&err), "42501", "only the API role may mark: {err}");
+        maintenance.close().await;
         assert_eq!(start(&api).await.unwrap(), (restore, 0));
         api.close().await;
         db.drop().await;
@@ -902,7 +977,8 @@ mod tests {
 
     /// GH#696: rows listed past the head before the upgrade (no guard then) go
     /// with the backup, but `restore` drops them, so the entry it writes is
-    /// sent at the next start.
+    /// sent at the next start. GH#706: `restore` sends the entry itself too,
+    /// and the API role cannot list it in between.
     #[tokio::test]
     async fn a_planted_chain_seq_does_not_hide_a_later_restore() {
         use crate::maintenance::{archive, backup, restore};
@@ -949,7 +1025,46 @@ mod tests {
             sqlx::query_scalar("SELECT count(*) FROM cmdb.audit_export_restores").fetch_one(&b.pool).await.unwrap();
         assert_eq!(left, 0, "nothing listed matches a restore entry");
 
+        // GH#706: `restore` sends its entry itself; a stdout sink or a file
+        // the server has not created yet is left to the server.
+        let (restore_sink, restore_path) = file_sink();
+        let cfg = AuditExportConfig {
+            sink: restore_sink.target.clone(),
+            format: AuditFormat::Json,
+            facility: 13,
+            poll_interval: Duration::from_secs(1),
+            tls_ca_file: None,
+        };
+        let mut cb = b.pool.acquire().await.unwrap();
+        assert_eq!(
+            send_restore_entry(&mut cb, &cfg, report.entry.chain_seq).await.unwrap(),
+            RestoreDelivery::Skipped("the AUDIT_EXPORT file does not exist yet")
+        );
+        assert!(!restore_path.exists());
+        std::fs::write(&restore_path, "").unwrap();
+        assert_eq!(send_restore_entry(&mut cb, &cfg, report.entry.chain_seq).await.unwrap(), RestoreDelivery::Sent);
+        let stdout = AuditExportConfig { sink: AuditSink::Stdout, ..cfg };
+        assert!(matches!(
+            send_restore_entry(&mut cb, &stdout, report.entry.chain_seq).await.unwrap(),
+            RestoreDelivery::Skipped(_)
+        ));
+        drop(cb);
+        let out = std::fs::read_to_string(&restore_path).unwrap();
+        std::fs::remove_file(&restore_path).unwrap();
+        let sent: Value = serde_json::from_str(out.trim_end()).unwrap();
+        assert_eq!(
+            (sent["chainSeq"].as_i64(), sent["action"].as_str(), sent["rowHash"].as_str()),
+            (Some(report.entry.chain_seq), Some("backup.restore"), Some(report.entry.row_hash.as_str()))
+        );
+
         let api_b = roles.api_pool(&b).await;
+        // GH#706: the API role cannot list the entry before the server starts.
+        let err = sqlx::query("INSERT INTO cmdb.audit_export_restores (chain_seq) VALUES ($1)")
+            .bind(report.entry.chain_seq)
+            .execute(&api_b)
+            .await
+            .unwrap_err();
+        assert_eq!(sql_state(&err), "42501", "{err}");
         let (cursor, unsent) = start(&api_b).await.unwrap();
         assert_eq!((cursor, unsent), (head_a, 1), "starts before the new entry");
         let (mut sink, path) = file_sink();

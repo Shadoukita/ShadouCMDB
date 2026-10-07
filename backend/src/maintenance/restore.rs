@@ -18,7 +18,8 @@ use sqlx::postgres::PgConnection;
 
 use super::archive::{self, Checked, Header, Reader, Seal, TableEntry};
 use super::{TYPE_TABLES_SINCE, Table, app_tables, ident, stored_columns};
-use crate::config::{DatabaseConfig, EncryptionConfig};
+use crate::audit_export::RestoreDelivery;
+use crate::config::{AuditExportConfig, DatabaseConfig, EncryptionConfig};
 use crate::db::MIGRATOR;
 use crate::secrets::Keyring;
 
@@ -70,7 +71,12 @@ pub struct ChainLink {
     pub row_hash: String,
 }
 
-pub async fn run(cfg: &DatabaseConfig, encryption: &EncryptionConfig, args: RestoreArgs) -> anyhow::Result<()> {
+pub async fn run(
+    cfg: &DatabaseConfig,
+    encryption: &EncryptionConfig,
+    export: Option<&AuditExportConfig>,
+    args: RestoreArgs,
+) -> anyhow::Result<()> {
     println!("Checking {} ...", args.file.display());
     // The key that seals backups (GH#513). A restore needs none to load the
     // rows; without one it cannot tell an edited file from an intact one.
@@ -154,6 +160,13 @@ pub async fn run(cfg: &DatabaseConfig, encryption: &EncryptionConfig, args: Rest
 
     let file = std::fs::File::open(&args.file).with_context(|| format!("cannot open {}", args.file.display()))?;
     let report = restore(&mut conn, file, &checked, populated, !args.dry_run).await;
+    // Committed: tell the collector now rather than when the server starts (GH#706).
+    let delivery = match (&report, export) {
+        (Ok(r), Some(export)) if !args.dry_run => {
+            Some(crate::audit_export::send_restore_entry(&mut conn, export, r.entry.chain_seq).await)
+        }
+        _ => None,
+    };
     conn.close().await.ok();
     let report = report?;
 
@@ -179,6 +192,18 @@ pub async fn run(cfg: &DatabaseConfig, encryption: &EncryptionConfig, args: Rest
          backup was taken.",
         report.entry.chain_seq, report.entry.row_hash
     );
+    match delivery {
+        None => {}
+        Some(Ok(RestoreDelivery::Sent)) => println!("Sent the backup.restore entry to AUDIT_EXPORT"),
+        Some(Ok(RestoreDelivery::Skipped(why))) => {
+            println!("Not sent to AUDIT_EXPORT now ({why}); the server sends it when it starts")
+        }
+        Some(Err(e)) => println!(
+            "  warning: sending the backup.restore entry to AUDIT_EXPORT failed: {e:#}. The server sends it when it \
+             starts; until the collector shows chainSeq {}, tell whoever reviews it about this restore",
+            report.entry.chain_seq
+        ),
+    }
     if report.users == 0 {
         println!("The backup has no users: the web UI will ask for first-run setup");
     } else {
