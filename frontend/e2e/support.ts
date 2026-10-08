@@ -21,6 +21,9 @@ export const test = base.extend<{ failOnPageErrors: void; recentPassword: void }
         if (m.type() === "error" || text.includes("[Vue warn]")) problems.push(`${m.type()}: ${text}`);
       });
       await use();
+      // A route handler still running when the test ends (a refetch after the last step) would fail the test with
+      // "Response has been disposed" once the context closes; drop the handlers and ignore their late errors.
+      await page.unrouteAll({ behavior: "ignoreErrors" });
       expect(problems, "page errors / Vue warnings").toEqual([]);
     },
     { auto: true },

@@ -1726,7 +1726,7 @@ impl Resource for AttributeDefinitions {
     const PLURAL: &'static str = "attributeDefinitions";
     const COLUMNS: &'static str = "id, class_id, key, label, description, data_type, is_required, is_expected, is_identifying, enum_values, reference_class_id, lookup_list_id, validation, group_name, help_text, default_value, sort_order, is_active, system_role, created_at, updated_at, parent_attribute_id";
     const SEARCH_COLUMNS: &'static [&'static str] = &["key", "label", "description", "group_name"];
-    const UPDATE_DESCRIPTION: &'static str = "`dataType` changes the column type: every stored value is converted in a dry run first, and the change is refused (422 SCHEMA_CHANGE_REFUSED, naming values that fail) if any would not convert (`type_change_failed`) or would lose information (`type_change_lossy`: datetime to date keeps the UTC day, so it is refused while any value has a time of day other than midnight UTC). Only between text, number, integer, boolean, enum, date, datetime, ip and cidr; `enumValues` is cleared when leaving enum. `isRequired: true` makes the column NOT NULL and is refused while an asset (deleted ones included) has no value. Removing enum values still stored is refused. `parentAttributeId` (lookup fields on a list with a parent list) names the field bound to the parent list, on this class or an ancestor; CI writes then only accept a value that belongs to the CI's value of that field. Preview any change with `POST /api/v1/schema-changes/preview`.";
+    const UPDATE_DESCRIPTION: &'static str = "`dataType` changes the column type: every stored value is converted in a dry run first, and the change is refused (422 SCHEMA_CHANGE_REFUSED, naming values that fail) if any would not convert (`type_change_failed`) or would lose information (`type_change_lossy`: datetime to date keeps the UTC day, so it is refused while any value has a time of day other than midnight UTC). Only between text, number, integer, boolean, enum, date, datetime, ip and cidr: a reference or lookup field keeps its type (422 SCHEMA_CHANGE_REFUSED, `type_change_unsupported`), and no field can become one. `enumValues` is cleared when leaving enum. `isRequired: true` makes the column NOT NULL and is refused while an asset (deleted ones included) has no value. Removing enum values still stored is refused. `parentAttributeId` (lookup fields on a list with a parent list) names the field bound to the parent list, on this class or an ancestor; CI writes then only accept a value that belongs to the CI's value of that field. Preview any change with `POST /api/v1/schema-changes/preview`.";
     const ARCHIVE_ON_DELETE: bool = true;
     // IN_USE: archiving or retyping a field a workflow depends on (SHAA-1423).
     const WRITE_ERRORS: &'static [ErrorCode] =
@@ -1773,10 +1773,27 @@ impl Resource for AttributeDefinitions {
     }
 
     /// The Person's Name and Email stay active, required and of their type
-    /// (SHAA-1505 decision 1); the database refuses the same, this answers
-    /// first with the documented code.
+    /// (SHAA-1505 decision 1), and no field changes type from or to reference
+    /// or lookup (GH#765). The database refuses both; this answers first with the
+    /// documented code, ahead of the UPDATE and the workflow check.
     fn before_change(row: &AttributeDefinition, columns: Option<&ColumnSet>) -> Result<(), AppError> {
+        let retyped_to = columns.and_then(|c| {
+            c.0.iter().find_map(|(column, value)| match (*column, value) {
+                ("data_type", Val::Text(Some(t))) if t != row.data_type.as_str() => Some(t.as_str()),
+                _ => None,
+            })
+        });
         if row.system_role.is_none() {
+            if let Some(to) = retyped_to {
+                let message = if matches!(row.data_type, AttributeDataType::Reference | AttributeDataType::Lookup) {
+                    format!("A {} field cannot change type; add a new field instead", row.data_type.as_str())
+                } else if matches!(to, "reference" | "lookup") {
+                    format!("A field cannot become a {to} field; add a new field instead")
+                } else {
+                    return Ok(());
+                };
+                return Err(engine::refused("dataType", "type_change_unsupported", message));
+            }
             return Ok(());
         }
         let Some(columns) = columns else { return Err(system_attribute_refused(&row.key, "archived")) };
@@ -1832,16 +1849,6 @@ impl Resource for AttributeDefinitions {
                          would carry both)",
                         row.key
                     ),
-                ));
-            }
-            if let Some(p) = previous
-                && p.data_type != row.data_type
-                && matches!(p.data_type, AttributeDataType::Reference | AttributeDataType::Lookup)
-            {
-                return Err(engine::refused(
-                    "dataType",
-                    "type_change_unsupported",
-                    "Reference and lookup fields cannot change type; add a new field instead".into(),
                 ));
             }
             if previous.is_some() {
@@ -2559,6 +2566,73 @@ mod tests {
         assert_eq!(errors(r"\w{200}x1"), [("validation.pattern".to_owned(), "invalid_format".to_owned())]);
         assert_eq!(errors("(x"), [("validation.pattern".to_owned(), "custom".to_owned())]);
         assert_eq!(errors(r"^[A-Z]{2}-\d{4}-[A-Z0-9]{8}$"), []);
+    }
+
+    /// GH#765: a lookup or reference field keeps its type. The retype is
+    /// refused with `type_change_unsupported` before the UPDATE, not with the
+    /// database's check-constraint text.
+    #[tokio::test]
+    async fn lookup_and_reference_fields_refuse_a_type_change() {
+        let Some(db) = scratch::database("lookup_and_reference_fields_refuse_a_type_change").await else { return };
+        let pool = &db.pool;
+        let ctx = RequestContext::system("retype-test", "retype-test");
+
+        let class: CiClass = simple::create::<CiClasses>(pool, &ctx, &body(json!({"name": "Tiered"}))).await.unwrap();
+        let tiers = simple::create::<crate::modules::lookups::LookupLists>(
+            pool,
+            &ctx,
+            &body(json!({"key": "tier", "name": "Tier"})),
+        )
+        .await
+        .unwrap();
+        let lookup: AttributeDefinition = simple::create::<AttributeDefinitions>(
+            pool,
+            &ctx,
+            &body(json!({"classId": class.id, "key": "tier_lk", "label": "Tier", "dataType": "lookup",
+                         "lookupListId": tiers.id})),
+        )
+        .await
+        .unwrap();
+        let reference: AttributeDefinition = simple::create::<AttributeDefinitions>(
+            pool,
+            &ctx,
+            &body(json!({"classId": class.id, "key": "peer", "label": "Peer", "dataType": "reference",
+                         "referenceClassId": class.id})),
+        )
+        .await
+        .unwrap();
+        let text: AttributeDefinition = simple::create::<AttributeDefinitions>(
+            pool,
+            &ctx,
+            &body(json!({"classId": class.id, "key": "notes", "label": "Notes", "dataType": "text"})),
+        )
+        .await
+        .unwrap();
+
+        for (field, change) in [
+            (&lookup, json!({"dataType": "text"})),
+            (&lookup, json!({"dataType": "enum", "enumValues": ["a"]})),
+            (&reference, json!({"dataType": "text"})),
+            (&text, json!({"dataType": "lookup"})),
+            (&text, json!({"dataType": "reference"})),
+        ] {
+            let err =
+                simple::update::<AttributeDefinitions>(pool, &ctx, field.id, &body(change.clone())).await.unwrap_err();
+            assert_eq!(err.code, ErrorCode::SchemaChangeRefused, "{change}: {err:?}");
+            let detail = &err.details.as_ref().expect("details")[0];
+            assert_eq!((detail.field.as_str(), detail.code.as_str()), ("dataType", "type_change_unsupported"));
+            assert!(!err.message.contains("constraint"), "{}", err.message);
+        }
+        // Restating the type, or changing anything else, still works.
+        simple::update::<AttributeDefinitions>(
+            pool,
+            &ctx,
+            lookup.id,
+            &body(json!({"dataType": "lookup", "label": "Tier level"})),
+        )
+        .await
+        .unwrap();
+        db.drop().await;
     }
 
     /// GH#109: text attributes can be flagged multi-line, and their values keep

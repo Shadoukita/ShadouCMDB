@@ -30,6 +30,8 @@ export type ChangeHistogramQuery = NonNullable<paths["/api/v1/configuration-item
 export type CountHistoryQuery = NonNullable<paths["/api/v1/configuration-items/count-history"]["get"]["parameters"]["query"]>;
 export type CountHistory = Schemas["CountHistory"];
 export type CompletenessQuery = NonNullable<paths["/api/v1/configuration-items/completeness"]["get"]["parameters"]["query"]>;
+export type DataQuality = Schemas["DataQuality"];
+export type DataQualityCheck = DataQuality["checks"][number];
 export type FacetsQuery = NonNullable<paths["/api/v1/configuration-items/facets"]["get"]["parameters"]["query"]>;
 export type ItemFacets = Schemas["ItemFacets"];
 export type Facet = ItemFacets["facets"][number];
@@ -51,6 +53,7 @@ export const keys = {
   relationshipCountHistory: (q: CountHistoryQuery) => ["relationships", "count-history", q] as const,
   completeness: (q: CompletenessQuery) => ["cis", "completeness", q] as const,
   recentActivity: (limit: number) => ["audit", "recent-activity", limit] as const,
+  dataQuality: () => ["cis", "data-quality"] as const,
   facets: (q: FacetsQuery) => ["cis", "facets", q] as const,
   ci: (id: string) => ["cis", "detail", id] as const,
   graph: (id: string, depth: number, direction: string) => ["cis", "graph", id, depth, direction] as const,
@@ -144,6 +147,15 @@ export function useRecentActivity(limit: MaybeRefOrGetter<number>, enabled: Mayb
       queryFn: ({ signal }: { signal: AbortSignal }) =>
         unwrap(api.GET("/api/v1/audit-log", { params: { query: { entityType: "configuration_items", sort: "-occurredAt", limit: n } }, signal })),
     };
+  });
+}
+
+/** The data-quality checks ("Needs attention", G3): per check the CIs it finds and the list filter that shows them. */
+export function useDataQuality() {
+  return useQuery({
+    queryKey: keys.dataQuality(),
+    staleTime: 60_000,
+    queryFn: ({ signal }) => unwrap(api.GET("/api/v1/configuration-items/data-quality", { signal })),
   });
 }
 
