@@ -326,7 +326,9 @@ table.count-table td.share {
 .count-name:hover {
   color: var(--c-link);
 }
-.key {
+/* Scoped to the dashboard: a bare .key would also size the inventory's filter-chip keys to 8px (GH#787). */
+.count-name .key,
+.class-key .key {
   flex: none;
   width: 8px;
   height: 8px;

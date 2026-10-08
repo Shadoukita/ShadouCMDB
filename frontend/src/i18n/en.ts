@@ -1184,6 +1184,7 @@ export const en = {
   "histogram.col.total": "Total",
   "histogram.error": "The change history could not be loaded.",
   "histogram.loading": "Loading changes…",
+  "histogram.unavailable.quality": "The change history cannot be narrowed to a Needs attention check. Remove that filter to see the changes.",
   "inventory.actions": "Actions",
   "inventory.rowMenu": "Actions for {name}",
   "inventory.row.open": "Open",
