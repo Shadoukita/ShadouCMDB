@@ -70,6 +70,35 @@ test("CI detail page (built-in layout), its delete dialog and the edit form", as
   await checkA11y(page, testInfo, "ci-edit");
 });
 
+test("CI Notes tab: the add box, the stream, an open editor and the delete dialog (gap G13)", async ({ page, request }, testInfo) => {
+  // Its own "zz-" CI, so the demo Servers other specs read keep no notes.
+  const appId = await classIdByName(request, "Application");
+  const status = (await apiGet<{ data: { id: string; key: string }[] }>(request, "/lookup-lists?limit=200")).data.find((l) => l.key === "status")!;
+  const inService = (await apiGet<{ data: { id: string; key: string }[] }>(request, `/lookup-list-values?listId=${status.id}&limit=200`)).data.find((v) => v.key === "in_service")!;
+  const ci = await apiSend<{ id: string }>(request, "POST", "/configuration-items", { classId: appId, attributes: { name: `zz-a11y-notes-${stamp}`, status: inService.id } });
+  await page.goto(`/cis/${ci.id}`);
+  await page.getByRole("tab", { name: /^Notes/ }).click();
+  await expect(page.getByRole("heading", { name: "No notes yet" })).toBeVisible();
+  await checkA11y(page, testInfo, "ci-notes-empty");
+
+  await apiSend(request, "POST", `/configuration-items/${ci.id}/notes`, { body: `First line\nSecond line ${stamp}` });
+  await page.reload();
+  await page.getByRole("tab", { name: /^Notes/ }).click();
+  const note = page.getByTestId("note").first();
+  await expect(note).toBeVisible();
+  await checkA11y(page, testInfo, "ci-notes", { include: ".notes-panel", strict: true });
+
+  await note.getByRole("button", { name: "Edit" }).click();
+  await expect(note.getByLabel("Note text")).toBeFocused();
+  await checkA11y(page, testInfo, "ci-notes-edit", { include: ".notes-panel", strict: true });
+  await note.getByRole("button", { name: "Cancel" }).click();
+
+  await note.getByRole("button", { name: "Delete" }).click();
+  await expect(page.getByRole("dialog", { name: "Delete this note?" })).toBeVisible();
+  await checkA11y(page, testInfo, "ci-notes-delete-dialog");
+  await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
+});
+
 test("CI topology panel (design §2.7, audit R6)", async ({ page, request }, testInfo) => {
   const serverId = await classIdByName(request, "Server");
   const ci = (await apiGet<{ data: { id: string; label: string }[] }>(request, `/configuration-items?classId=${serverId}&sort=label&limit=1`)).data[0];

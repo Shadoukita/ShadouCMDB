@@ -145,28 +145,34 @@ async fn profile_id(w: &World, name: &str) -> Uuid {
 }
 
 /// A CI with a running instance of the current version; returns (CI, instance).
-async fn started(w: &World) -> (Uuid, Uuid) {
+pub(super) async fn started(w: &World) -> (Uuid, Uuid) {
     let ci = w.ci(w.server).await;
     let (status, v) = w.start(&w.admin, ci).await;
     assert_eq!(status, 201, "{v}");
     (ci, id(&v["instance"]))
 }
 
-async fn request(w: &World, creds: &Creds, instance: Uuid, key: &str, fields: Value) -> (u16, Value) {
+pub(super) async fn request(w: &World, creds: &Creds, instance: Uuid, key: &str, fields: Value) -> (u16, Value) {
     let (_, v) = w.call(&w.admin, "GET", &format!("{RUN}/{instance}"), None).await;
     let version = v["instance"]["version"].clone();
     w.transition(creds, instance, json!({ "transitionKey": key, "expectedVersion": version, "fields": fields })).await
 }
 
 /// The pending request of an instance, as `(id, version, stepKey)`.
-async fn pending(w: &World, instance: Uuid) -> (Uuid, i64, String) {
+pub(super) async fn pending(w: &World, instance: Uuid) -> (Uuid, i64, String) {
     let (_, v) = w.call(&w.admin, "GET", &format!("{RUN}/{instance}"), None).await;
     let p = &v["instance"]["pendingApproval"];
     assert!(p.is_object(), "no pending approval: {v}");
     (id(&json!({ "id": p["requestId"] })), p["version"].as_i64().unwrap(), p["stepKey"].as_str().unwrap().to_owned())
 }
 
-async fn decide(w: &World, creds: &Creds, instance: Uuid, decision: &str, comment: Option<&str>) -> (u16, Value) {
+pub(super) async fn decide(
+    w: &World,
+    creds: &Creds,
+    instance: Uuid,
+    decision: &str,
+    comment: Option<&str>,
+) -> (u16, Value) {
     let (request, version, step) = pending(w, instance).await;
     let body = json!({ "stepKey": step, "decision": decision, "expectedVersion": version, "comment": comment });
     w.call(creds, "POST", &format!("{REQUESTS}/{request}/decisions"), Some(body)).await

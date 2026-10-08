@@ -835,6 +835,7 @@ pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'sta
     let import_workers = crate::modules::imports::worker::spawn(pool.clone(), state.imports.clone());
     let refusals = crate::auth::token::RefusalFlush::spawn(pool.clone());
     let note_retention = crate::modules::ci_notes::service::spawn_retention(pool.clone());
+    let notifications = crate::modules::notifications::service::Retention::spawn(pool.clone(), cfg.notifications);
 
     let listener = TcpListener::bind((cfg.api_host.as_str(), cfg.api_port))
         .await
@@ -890,6 +891,7 @@ pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'sta
     accept_loop(listener, app, &cfg.http, max_connections, peers, stop).await;
     // Before the exporter's last pass, so the summary rows leave too.
     refusals.stop().await;
+    notifications.stop().await;
     if let Some(exporter) = exporter {
         exporter.stop().await;
     }
@@ -1557,6 +1559,7 @@ mod tests {
             impact: Default::default(),
             imports: Default::default(),
             business_services: Default::default(),
+            notifications: Default::default(),
         };
         configure(&mut cfg);
         router(AppState::new(pool, auth, crate::secrets::Keyring::for_tests()), &cfg)
