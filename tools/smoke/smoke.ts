@@ -981,6 +981,27 @@ async function main() {
   await call('DELETE', `/api/v1/imports/${bad.id}`, undefined, 204);
   await call('PUT', '/api/v1/imports/settings', { enabled: false }, 200);
 
+  // --- Notifications (SHAA-2356) ----------------------------------------------------
+  // The committed import above is the admin's own job, so it notified the admin when it ended.
+  console.log('\n# Notifications');
+  const finished = (await get('/api/v1/notifications?kind=import_finished&limit=50')).json;
+  const importNote = finished.data.find((n: Json) => n.entityId === second.id);
+  check(importNote?.entityType === 'import_jobs' && importNote.data?.status === 'completed', 'the ended import notifies its creator');
+  await get('/api/v1/notifications?limit=0', 400);
+  await call('POST', '/api/v1/notifications/mark-read', { upTo: 'yesterday' }, 400);
+  check((await call('POST', '/api/v1/notifications/mark-read', {})).json.updated >= 0, 'every notification is marked read');
+  check((await get('/api/v1/notifications/unread-count')).json.unread === 0, 'nothing is unread after mark-read');
+  if (importNote) {
+    check((await patch(`/api/v1/notifications/${importNote.id}`, { read: false })).json.readAt === null, 'a notification is marked unread');
+    check((await get('/api/v1/notifications/unread-count')).json.unread === 1, 'the unread count follows');
+    check((await get('/api/v1/notifications?unread=true')).json.data.some((n: Json) => n.id === importNote.id), 'the unread filter lists it');
+    await del(`/api/v1/notifications/${importNote.id}`);
+    await del(`/api/v1/notifications/${importNote.id}`, 404);
+  }
+  await patch('/api/v1/notifications/00000000-0000-4000-8000-000000000000', { read: true }, 404);
+  await patch('/api/v1/notifications/00000000-0000-4000-8000-000000000000', { read: 'yes' }, 400);
+  await del('/api/v1/notifications/00000000-0000-4000-8000-000000000000', 404);
+
   // --- HTTP-level errors ---------------------------------------------------------
   console.log('\n# HTTP errors');
   await call('POST', '/api/v1/lookup-lists', '{"key":', 400);
