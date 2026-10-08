@@ -90,6 +90,33 @@ describe("rowKeyboard", () => {
     assert.deepEqual(edited, ["a"]);
     assert.equal(columns, 1);
   });
+  test("from a row's selection checkbox ↑/↓ move to the next row's checkbox and e edits its row", () => {
+    const [a, b] = table([
+      { id: "a", hrefs: [`${base}/cis/a`] },
+      { id: "b", hrefs: [`${base}/cis/b`] },
+    ]);
+    const box = (row: unknown) => {
+      const el = { tagName: "INPUT", type: "checkbox", focused: false, focus: () => (el.focused = true), closest: (s: string) => (s === "tbody > tr" ? row : null) };
+      return el;
+    };
+    const boxA = box(a);
+    const boxB = box(b);
+    a.querySelector = ((s: string) => (s === "input[type=checkbox]:not(:disabled)" ? boxA : null)) as never;
+    b.querySelector = ((s: string) => (s === "input[type=checkbox]:not(:disabled)" ? boxB : null)) as never;
+    const down = key("ArrowDown", boxA);
+    onRowKeydown(down);
+    assert.ok(boxB.focused);
+    assert.ok(down.prevented);
+    onRowKeydown(key("ArrowUp", boxB));
+    assert.ok(boxA.focused);
+    const edited: string[] = [];
+    onRowKeydown(key("e", boxB), { edit: (id) => edited.push(id) });
+    assert.deepEqual(edited, ["b"]);
+    // Space stays with the checkbox: the row handler leaves it alone.
+    const space = key(" ", boxA);
+    onRowKeydown(space);
+    assert.equal(space.prevented, false);
+  });
   test("nothing fires in a text field, inside a row menu or with a modifier key", () => {
     const [a, b] = table([
       { id: "a", hrefs: [`${base}/cis/a`] },
@@ -98,6 +125,10 @@ describe("rowKeyboard", () => {
     const edited: string[] = [];
     const input: Fake & { closest: () => unknown } = { tagName: "INPUT", closest: () => a };
     onRowKeydown(key("e", input), { edit: (id) => edited.push(id) });
+    const search = { tagName: "INPUT", type: "search", closest: () => a };
+    onRowKeydown(key("ArrowDown", search));
+    const select = { tagName: "SELECT", closest: () => a };
+    onRowKeydown(key("e", select), { edit: (id) => edited.push(id) });
     const menuItem = { tagName: "BUTTON", closest: (s: string) => (s === "[role=menu]" ? {} : a) };
     onRowKeydown(key("ArrowDown", menuItem));
     onRowKeydown(key("ArrowDown", a.links[0], { ctrlKey: true }));
