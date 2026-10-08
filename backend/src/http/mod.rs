@@ -2161,36 +2161,82 @@ mod tests {
     /// more slowly than the send limit. Without `TCP_NOTSENT_LOWAT` the
     /// server sees no progress until a third of that buffer has drained, and
     /// drops this client, so the test runs only where the option is set.
+    ///
+    /// The send limit is wall-clock time, and the client shares the test's
+    /// one thread with the server: on a loaded host that thread can stall
+    /// for the limit, and the drop is then deserved (GH#751). A run in which
+    /// the client went half the limit without reading is retried; one in
+    /// which it read steadily must pass.
     #[cfg(any(target_os = "linux", target_os = "android"))]
     #[tokio::test]
     async fn steady_slow_http1_readers_are_not_dropped() {
+        const ATTEMPTS: usize = 3;
+        for attempt in 1..=ATTEMPTS {
+            match slow_http1_read(Duration::from_secs(1)).await {
+                Ok(()) => return,
+                Err((why, Some(gap))) if attempt < ATTEMPTS => {
+                    eprintln!("attempt {attempt}: {why}, but the client stalled {gap:?}: retrying");
+                }
+                Err((why, gap)) => panic!("{why} (longest gap between reads: {gap:?})"),
+            }
+        }
+    }
+
+    /// One run of `steady_slow_http1_readers_are_not_dropped`. On failure,
+    /// also returns the longest gap between the client's reads if it reached
+    /// half of `send_limit`.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    async fn slow_http1_read(send_limit: Duration) -> Result<(), (String, Option<Duration>)> {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
-        let (addr, server) = one_connection_server(rx, Duration::from_secs(1)).await;
+        let (addr, server) = one_connection_server(rx, send_limit).await;
         let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
         stream.write_all(b"GET /big HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").await.unwrap();
+        let pace = Duration::from_millis(100);
+        let mut last_read = tokio::time::Instant::now();
+        let mut longest_gap = Duration::ZERO;
+        let mut gap = |last_read: &mut tokio::time::Instant, expected: Duration| {
+            let now = tokio::time::Instant::now();
+            longest_gap = longest_gap.max(now.duration_since(*last_read).saturating_sub(expected));
+            *last_read = now;
+        };
         // 16 KiB every 100 ms (about 160 KiB/s) for 4 s, four times the send limit.
         let mut chunk = vec![0u8; 16 * 1024];
         let mut taken = 0;
+        let mut outcome = Ok(());
         for _ in 0..40 {
-            tokio::time::timeout(Duration::from_secs(3), stream.read_exact(&mut chunk))
-                .await
-                .unwrap()
-                .unwrap_or_else(|e| panic!("dropped after the client took {taken} bytes: {e}"));
+            let read = tokio::time::timeout(Duration::from_secs(3), stream.read_exact(&mut chunk)).await.unwrap();
+            gap(&mut last_read, pace);
+            if let Err(e) = read {
+                outcome = Err(format!("dropped after the client took {taken} bytes: {e}"));
+                break;
+            }
             taken += chunk.len();
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::time::sleep(pace).await;
         }
         // The rest at full speed: the whole chunked response arrives, last chunk included.
-        let mut rest = Vec::new();
-        tokio::time::timeout(Duration::from_secs(30), stream.read_to_end(&mut rest)).await.unwrap().unwrap();
-        let response = taken + rest.len();
-        assert!(
-            response > 256 << 20 && rest.ends_with(b"\r\n0\r\n\r\n"),
-            "dropped after the client took {response} bytes"
-        );
+        if outcome.is_ok() {
+            // Only the end is checked; keep its last bytes, not all 256 MiB.
+            let mut tail = Vec::new();
+            let mut buf = vec![0u8; 256 * 1024];
+            loop {
+                let n = tokio::time::timeout(Duration::from_secs(30), stream.read(&mut buf)).await.unwrap().unwrap();
+                gap(&mut last_read, Duration::ZERO);
+                if n == 0 {
+                    break;
+                }
+                taken += n;
+                tail.extend_from_slice(&buf[..n]);
+                tail.drain(..tail.len().saturating_sub(16));
+            }
+            if taken <= 256 << 20 || !tail.ends_with(b"\r\n0\r\n\r\n") {
+                outcome = Err(format!("dropped after the client took {taken} bytes"));
+            }
+        }
         drop(stream);
         let _ = tx.send(());
         server.await.unwrap();
+        outcome.map_err(|why| (why, (longest_gap >= send_limit / 2).then_some(longest_gap)))
     }
 
     /// GH#682 review: an HTTP/2 client that takes a large single-frame
