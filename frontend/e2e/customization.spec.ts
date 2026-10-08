@@ -1,5 +1,5 @@
 import type { APIRequestContext, Page } from "@playwright/test";
-import { apiGet, ciIdByName, classIdByName, createCi, csrf, expect, fieldLabels, resetUiSettings as resetSettings, saveCi, saveLayout, snap, test, chooseTheme } from "./support";
+import { apiGet, ciIdByName, classIdByName, createCi, csrf, expect, fieldLabels, resetUiSettings as resetSettings, saveCi, saveLayout, snap, test, chooseTheme, withInventoryFilters } from "./support";
 
 // Administration › Customization and Export / import, against the demo seed (the Server class
 // and its attributes). The settings apply to every user, so the walk starts from and ends with
@@ -179,7 +179,7 @@ test("list views: a class's columns, default sort, filter and page size apply to
   await expect(page.getByRole("columnheader", { name: /Updated/ })).toHaveAttribute("aria-sort", "descending");
   await expect(page.locator(".pagination select")).toHaveValue("25");
   // Clearing the filter sticks: a reload and Back show the URL as the operator left it.
-  await page.getByRole("button", { name: "Remove the lookup value filter" }).click();
+  await page.getByTestId("filter-lookup").getByRole("button", { name: /^Remove the filter / }).click();
   await expect(page).not.toHaveURL(/lookupValueId=/);
   await page.reload();
   await expect(page.getByRole("columnheader", { name: "CPU cores" })).toBeVisible();
@@ -228,7 +228,7 @@ test("list views: an attribute default sort, and attribute column headers sort t
   // The sort survives a reload; another class drops it (it may not have the attribute).
   await page.reload();
   await expect(page.getByRole("columnheader", { name: /IP address/ })).toHaveAttribute("aria-sort", "descending");
-  await page.getByLabel("Class", { exact: true }).selectOption({ label: "All classes" });
+  await withInventoryFilters(page, () => page.getByLabel("Class", { exact: true }).selectOption({ label: "All classes" }));
   await expect(page).not.toHaveURL(/sort=/);
   await expect(page.getByRole("columnheader", { name: /Label/ })).toHaveAttribute("aria-sort", "ascending");
 });

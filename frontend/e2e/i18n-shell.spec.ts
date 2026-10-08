@@ -71,9 +71,9 @@ test("not found, the pagination bar and the error alert are German with the Germ
   await page.goto("/cis");
   const pagination = page.locator(".pagination");
   await expect(pagination).toContainText(/^1–\d+ von [\d.]+/);
-  await expect(pagination).toContainText(/Seite 1 \/ \d+/);
+  await expect(pagination.getByRole("navigation", { name: "Seiten" }).getByRole("button", { name: "Seite 1" })).toHaveAttribute("aria-current", "page");
   await expect(pagination.getByLabel("Zeilen")).toBeVisible();
-  await expect(pagination.getByRole("button", { name: "Weiter ›" })).toBeVisible();
+  await expect(pagination.getByRole("button", { name: "Nächste Seite" })).toBeVisible();
   await expectNoEnglish(pagination);
 
   await page.route("**/api/v1/**", (route) => route.abort("connectionrefused"));

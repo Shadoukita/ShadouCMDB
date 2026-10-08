@@ -1,4 +1,4 @@
-import { checkA11y, classIdByName, createCi, csrf, expect, test } from "./support";
+import { checkA11y, classIdByName, createCi, csrf, expect, test, withInventoryFilters } from "./support";
 
 // The inventory's facet panel (SHAA-1670 rollout 5f): counts per class, criticality and lookup
 // value from GET /configuration-items/facets, each counted without its own filter. Ticking a value
@@ -45,7 +45,7 @@ test("inventory: the facet panel counts the filtered CIs and ticks filters into 
   await app.check();
   await expect(page).toHaveURL(/classId=[^&]*%2C|classId=[^&]*,/);
   await expect(page.locator("table.data tbody tr")).toHaveCount(3);
-  await expect(page.locator("#f-class option:checked")).toHaveText("Several values");
+  await withInventoryFilters(page, () => expect(page.locator("#f-class option:checked")).toHaveText("Several values"));
   await server.uncheck();
   await expect(page).toHaveURL(new RegExp(`classId=${appId}(&|$)`));
   await expect(page.locator("table.data tbody tr")).toHaveCount(1);

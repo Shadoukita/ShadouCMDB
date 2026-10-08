@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import { useQuery } from "@tanstack/vue-query";
 import { RouterLink, useRouter } from "vue-router";
 import { useAllLookupListValues, useAreas, useLookupLists } from "../api/datamodel";
-import { useCiClasses, useCiList, useClassAttributes, useCriticalityValues, type CiListQuery } from "../api/queries";
+import { ciCountQuery, useCiClasses, useCiList, useClassAttributes, useCriticalityValues, type CiListQuery } from "../api/queries";
 import { dataModelEmpty } from "../lib/dataModel";
 import Breadcrumbs from "../components/Breadcrumbs.vue";
 import CiCell from "../components/CiCell.vue";
@@ -10,7 +11,7 @@ import ColumnsPopover from "../components/ColumnsPopover.vue";
 import DataModelEmpty from "../components/DataModelEmpty.vue";
 import EmptyState from "../components/EmptyState.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
-import InventoryFilters from "../components/InventoryFilters.vue";
+import AddFilterPopover from "../components/AddFilterPopover.vue";
 import QueryBar from "../components/QueryBar.vue";
 import type { BarCatalogue } from "../lib/queryBar";
 import SavedViewMenu from "../components/savedViews/SavedViewMenu.vue";
@@ -106,6 +107,13 @@ const barCatalogue = computed<BarCatalogue>(() => ({
 }));
 
 const total = computed(() => list.data.value?.page.total ?? 0);
+/** All CIs the user may view (the rail's count): the title reads "x of y" while filters narrow the list. */
+const allCount = useQuery(ciCountQuery({}));
+const ofAll = computed(() => {
+  const all = allCount.data.value;
+  return activeFilters.value.length > 0 && all !== undefined && total.value <= all ? all : undefined;
+});
+const criticalityLevels = computed(() => criticality.data.value?.length || 4);
 const rows = computed(() => list.data.value?.data ?? []);
 const classId = computed(() => state.classId.value);
 const newTo = computed(() => (classId.value && !currentClass.value?.isAbstract ? `/cis/new?classId=${classId.value}` : "/cis/new"));
@@ -166,6 +174,32 @@ const rowKeys = {
   columns: () => void columnsPopover.value?.show(),
 };
 
+// Row selection (design document §0, step 12c). It survives paging and is cleared when the filters change,
+// so "n selected" never counts rows the list no longer holds. Bulk edit waits for an endpoint (gap G10, SHAA-2354).
+const selected = ref(new Set<string>());
+watch(
+  () => JSON.stringify(listFilters.value),
+  () => (selected.value = new Set()),
+);
+const pageIds = computed(() => rows.value.map((r) => r.id));
+const pageSelected = computed(() => pageIds.value.filter((id) => selected.value.has(id)).length);
+function toggleRow(id: string, on: boolean) {
+  const next = new Set(selected.value);
+  if (on) next.add(id);
+  else next.delete(id);
+  selected.value = next;
+}
+function togglePage(on: boolean) {
+  const next = new Set(selected.value);
+  for (const id of pageIds.value) {
+    if (on) next.add(id);
+    else next.delete(id);
+  }
+  selected.value = next;
+}
+
+const viewMenu = ref<InstanceType<typeof SavedViewMenu>>();
+
 function clearFilters() {
   selection.skipNextDefault();
   state.clearFilters();
@@ -173,50 +207,59 @@ function clearFilters() {
 </script>
 
 <template>
-  <Breadcrumbs :items="crumbs" />
-  <div class="page-header">
-    <div class="title">
-      <h1>{{ currentClass ? currentClass.name : t("inventory.title") }}</h1>
-      <span v-if="list.data.value" class="muted count">{{ t("common.total", { n: formatNumber(total) }) }}</span>
-      <span v-if="list.isFetching.value && !list.isLoading.value" class="spinner" :aria-label="t('common.refreshing')" />
+  <div class="inventory-head">
+    <Breadcrumbs :items="crumbs" />
+    <div class="page-header">
+      <div class="title">
+        <h1>{{ currentClass ? currentClass.name : t("inventory.title") }}</h1>
+        <span v-if="list.data.value" class="count mono">
+          {{ ofAll !== undefined ? t("inventory.countOf", { n: formatNumber(total), all: formatNumber(ofAll) }) : t("common.total", { n: formatNumber(total) }) }}
+        </span>
+        <span v-if="list.isFetching.value && !list.isLoading.value" class="spinner" :aria-label="t('common.refreshing')" />
+      </div>
+      <div v-if="canCreate || importAccess.available.value" class="actions">
+        <!-- Export slot: a CSV export of the current query waits for its endpoint (gap G9, SHAA-2353). -->
+        <RouterLink v-if="importAccess.available.value" class="btn" :to="importTo"><Icon name="upload" />{{ t("inventory.import") }}</RouterLink>
+        <RouterLink v-if="canCreate" class="btn btn-primary" :to="newTo"><Icon name="plus" />{{ t("inventory.new", { name: newLabel }) }}</RouterLink>
+      </div>
     </div>
-    <div v-if="canCreate || importAccess.available.value" class="actions">
-      <RouterLink v-if="importAccess.available.value" class="btn" :to="importTo"><Icon name="upload" />{{ t("inventory.import") }}</RouterLink>
-      <RouterLink v-if="canCreate" class="btn btn-primary" :to="newTo"><Icon name="plus" />{{ t("inventory.new", { name: newLabel }) }}</RouterLink>
-    </div>
+
+    <form class="toolbar inventory-toolbar" role="search" @submit.prevent>
+      <SavedViewMenu ref="viewMenu" context="inventory" :state="state" :selection="selection" :classes="classes.data.value" :catalogue="catalogue" :total="settledTotal" />
+      <QueryBar :state="state" :catalogue="barCatalogue" />
+      <div class="inventory-filters">
+        <InventoryFilterChips :state="state" all />
+        <AddFilterPopover :state="state" id-prefix="f" />
+        <button v-if="activeFilters.length > 0" type="button" class="btn btn-ghost" @click="clearFilters"><Icon name="x" />{{ t("inventory.clearFilters") }}</button>
+        <button type="button" class="btn btn-ghost save-view" :disabled="viewMenu?.saveAsDisabled" @click="viewMenu?.saveAs()">{{ t("views.saveView") }}</button>
+      </div>
+      <div class="toolbar-end">
+        <button
+          v-if="showFacets"
+          type="button"
+          class="btn btn-ghost facets-toggle"
+          :aria-expanded="facetsOpen"
+          aria-controls="facets"
+          @click="facetPref.open = !facetsOpen"
+        >
+          <Icon :name="facetsOpen ? 'panel-left-close' : 'panel-left-open'" />{{ facetsOpen ? t("facets.hide") : t("facets.show") }}
+        </button>
+        <ColumnsPopover
+          ref="columnsPopover"
+          :columns="columns"
+          :fields="fieldChoices"
+          :attributes="attributeChoices"
+          :class-name="currentClass?.name"
+          :customized="state.columnsCustomized.value"
+          @toggle="state.toggleColumn"
+          @reorder="state.setColumns"
+          @reset="state.resetColumns"
+        />
+      </div>
+    </form>
   </div>
 
-  <section class="panel explorer" :aria-label="t('inventory.region')">
-    <form class="toolbar" role="search" @submit.prevent>
-      <button
-        v-if="showFacets"
-        type="button"
-        class="btn btn-ghost facets-toggle"
-        :aria-expanded="facetsOpen"
-        aria-controls="facets"
-        @click="facetPref.open = !facetsOpen"
-      >
-        <Icon :name="facetsOpen ? 'panel-left-close' : 'panel-left-open'" />{{ facetsOpen ? t("facets.hide") : t("facets.show") }}
-      </button>
-      <SavedViewMenu context="inventory" :state="state" :selection="selection" :classes="classes.data.value" :catalogue="catalogue" :total="settledTotal" />
-      <QueryBar :state="state" :catalogue="barCatalogue" />
-      <InventoryFilters :state="state" id-prefix="f" />
-      <button v-if="activeFilters.length > 0" type="button" class="btn btn-ghost" @click="clearFilters"><Icon name="x" />{{ t("inventory.clearFilters") }}</button>
-      <ColumnsPopover
-        ref="columnsPopover"
-        class="toolbar-end"
-        :columns="columns"
-        :fields="fieldChoices"
-        :attributes="attributeChoices"
-        :class-name="currentClass?.name"
-        :customized="state.columnsCustomized.value"
-        @toggle="state.toggleColumn"
-        @reorder="state.setColumns"
-        @reset="state.resetColumns"
-      />
-    </form>
-    <InventoryFilterChips :state="state" />
-
+  <section class="explorer inventory" :aria-label="t('inventory.region')">
     <div class="explorer-body">
       <FacetPanel
         v-if="showFacets && facetsOpen"
@@ -226,7 +269,7 @@ function clearFilters() {
         :collapsed="facetPref.collapsed"
         @toggle-group="toggleFacetGroup"
       />
-      <div class="explorer-main">
+      <div class="explorer-main panel">
         <div v-if="list.isError.value" class="panel-body">
           <ErrorAlert :error="list.error.value" :on-retry="() => list.refetch()" />
         </div>
@@ -254,9 +297,18 @@ function clearFilters() {
         <template v-if="rows.length > 0">
           <ChangeHistogram v-if="showHistogram" :filters="listFilters" />
           <div class="table-wrap table-scroll">
-            <table :class="['data', { loading: list.isPlaceholderData.value }]" aria-describedby="inventory-keys">
+            <table :class="['data', 'inventory-table', { loading: list.isPlaceholderData.value }]" aria-describedby="inventory-keys">
               <thead>
                 <tr>
+                  <th scope="col" class="select-cell">
+                    <input
+                      type="checkbox"
+                      :checked="pageSelected > 0 && pageSelected === rows.length"
+                      :indeterminate="pageSelected > 0 && pageSelected < rows.length"
+                      :aria-label="t('inventory.select.page')"
+                      @change="togglePage(($event.target as HTMLInputElement).checked)"
+                    />
+                  </th>
                   <th v-for="c in columns" :key="c" scope="col" :aria-sort="columnSort(c) ? state.ariaSort(columnSort(c)!) : undefined">
                     <button v-if="columnSort(c)" type="button" class="sort" @click="state.toggleSort(columnSort(c)!)">
                       {{ columnLabel(c) }} <SortIcon :dir="state.ariaSort(columnSort(c)!)" />
@@ -267,8 +319,18 @@ function clearFilters() {
                 </tr>
               </thead>
               <tbody @keydown="onRowKeydown($event, rowKeys)">
-                <tr v-for="ci in rows" :key="ci.id" :data-id="ci.id" :class="{ deleted: ci.deletedAt }">
-                  <td v-for="c in columns" :key="c"><CiCell :ci="ci" :field="c" :defs="attrDefs" :class-of="classById" /></td>
+                <tr v-for="ci in rows" :key="ci.id" :data-id="ci.id" :class="{ deleted: ci.deletedAt, selected: selected.has(ci.id) }">
+                  <td class="select-cell">
+                    <input
+                      type="checkbox"
+                      :checked="selected.has(ci.id)"
+                      :aria-label="t('inventory.select.row', { name: ci.label })"
+                      @change="toggleRow(ci.id, ($event.target as HTMLInputElement).checked)"
+                    />
+                  </td>
+                  <td v-for="c in columns" :key="c" :class="{ 'name-cell': c === 'label' }">
+                    <CiCell :ci="ci" :field="c" :defs="attrDefs" :class-of="classById" rich :criticality-levels="criticalityLevels" :class-column="columns.includes('class')" />
+                  </td>
                   <td class="row-actions">
                     <RowMenu :label="t('inventory.rowMenu', { name: ci.label })" :items="ciRowMenu(ci)" />
                   </td>
@@ -276,7 +338,20 @@ function clearFilters() {
               </tbody>
             </table>
           </div>
-          <PaginationBar :total="total" :limit="limit" :offset="offset" @change="state.onPage" />
+          <div class="table-footer">
+            <div class="selection-status">
+              <span role="status">{{ selected.size > 0 ? t("inventory.selected", { n: formatNumber(selected.size) }) : "" }}</span>
+              <template v-if="selected.size > 0">
+                <!-- Bulk edit waits for a bulk-update endpoint (gap G10, SHAA-2354): shown, focusable, with the reason. -->
+                <button type="button" class="btn btn-sm btn-ghost" aria-disabled="true" :title="t('inventory.bulkEdit.unavailable')" aria-describedby="bulk-edit-reason">
+                  {{ t("inventory.bulkEdit") }}
+                </button>
+                <span id="bulk-edit-reason" class="sr-only">{{ t("inventory.bulkEdit.unavailable") }}</span>
+                <button type="button" class="btn btn-sm btn-ghost" @click="selected = new Set()">{{ t("inventory.select.clear") }}</button>
+              </template>
+            </div>
+            <PaginationBar numbered :total="total" :limit="limit" :offset="offset" @change="state.onPage" />
+          </div>
           <KeyboardHints id="inventory-keys" :edit="anyEditable" columns />
         </template>
       </div>

@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { classIdByName, createCi, csrf, expect, resetUiSettings, test } from "./support";
+import { classIdByName, createCi, csrf, expect, resetUiSettings, test, withInventoryFilters } from "./support";
 
 // The inventory's Columns popover and the `columns` URL parameter, and the search page's filters:
 // the URL holds the whole list state, so reload, a bookmark and Back/Forward show the same list.
@@ -88,7 +88,7 @@ test("a bookmark restores rows, columns and sort; another class drops the attrib
   await expect(fresh.locator("table.data tbody tr")).toHaveCount(1);
   await expect(fresh.locator("table.data tbody tr").first()).toContainText(`host-${stamp}`);
 
-  await fresh.getByLabel("Class", { exact: true }).selectOption({ label: "Application" });
+  await withInventoryFilters(fresh, () => fresh.getByLabel("Class", { exact: true }).selectOption({ label: "Application" }));
   await expect(fresh).toHaveURL(/columns=label,ident(&|$)/);
   await expect(fresh).not.toHaveURL(/sort=/);
   await expect(headers(fresh)).toHaveText(headerTexts(["Label", "Ident"]));
