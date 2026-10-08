@@ -1,4 +1,4 @@
-import { apiSend, checkA11y, snap, expect, resetUiSettings, test } from "./support";
+import { apiSend, checkA11y, openUserMenu, snap, expect, resetUiSettings, test } from "./support";
 
 test("dashboard shows server-side counts and the class nav has live counts", async ({ page, request }) => {
   await resetUiSettings(request); // the built-in widgets, not a customized dashboard
@@ -56,6 +56,11 @@ test("rail: Workspace, Administration and Saved views sections; a saved view ope
   await expect(link).toHaveAttribute("aria-current", "page");
   // The view's class and the inventory do not light up as well.
   await expect(nav.locator('a[aria-current="page"]')).toHaveCount(1);
+
+  // The menu opens upwards over the dark rail but keeps its light surface: the rail's link styles stay out of it.
+  await openUserMenu(page);
+  await expect(page.locator(".user-menu-panel")).toBeVisible();
+  await checkA11y(page, testInfo, "shell-user-block-menu", { include: ".user-menu-panel" });
 
   const csrf = (await request.storageState()).cookies.find((c) => c.name === "shadoucmdb_csrf")?.value ?? "";
   await request.delete(`/api/v1/saved-views/${view.id}?version=1`, { headers: { "X-CSRF-Token": csrf } });

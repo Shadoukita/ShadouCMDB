@@ -137,7 +137,8 @@
   padding: var(--space-4) var(--space-5) var(--space-1);
   color: var(--c-sidebar-text-muted);
 }
-.shell-nav a,
+/* Rail links live in .nav-body: the user menu's panel in .nav-footer keeps its own light-surface links. */
+.nav-body a,
 .nav-collapse {
   display: flex;
   align-items: center;
@@ -160,28 +161,28 @@
   color: var(--c-sidebar-text-muted);
   cursor: pointer;
 }
-.shell-nav a .icon,
+.nav-body a .icon,
 .nav-collapse .icon {
   flex: none;
 }
-.shell-nav a:hover,
+.nav-body a:hover,
 .nav-collapse:hover {
   background: var(--c-sidebar-hover);
   color: var(--c-sidebar-text-strong);
   text-decoration: none;
 }
-.shell-nav a:focus-visible,
+.nav-body a:focus-visible,
 .nav-collapse:focus-visible {
   outline: 2px solid var(--c-accent);
   outline-offset: -2px;
 }
-.shell-nav a.active {
+.nav-body a.active {
   background: var(--c-sidebar-active);
   color: var(--c-sidebar-text-strong);
   font-weight: var(--fw-medium);
   box-shadow: inset 3px 0 0 var(--c-accent);
 }
-.shell-nav a.active > .icon {
+.nav-body a.active > .icon {
   color: var(--c-accent);
 }
 .nav-label {
@@ -199,7 +200,7 @@
   font-size: var(--fs-sm);
   font-variant-numeric: tabular-nums;
 }
-.shell-nav a > .class-badge {
+.nav-body a > .class-badge {
   min-width: 0;
 }
 /* An area's tab folds its classes; the fold chevron sits where the page icons sit. */
@@ -248,7 +249,7 @@
 }
 
 /* Collapsed rail: 40×36 icon tiles, the label stays for assistive technology and shows as a tooltip. */
-.nav-collapsed .shell-nav a,
+.nav-collapsed .nav-body a,
 .nav-collapsed .nav-collapse {
   justify-content: center;
   width: 40px;
