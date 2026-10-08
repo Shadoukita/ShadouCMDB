@@ -20,7 +20,9 @@
 //! may be listed, 0063, GH#696; only through a function, 0064); one whose
 //! send fails is sent again after a restart. Since the API role can list an
 //! entry before the server starts, `shadoucmdb restore` also sends its entry
-//! itself (GH#706).
+//! itself (GH#706). When it does not (stdout, a file not created yet, a failed
+//! send), the entry stays in `audit_export_restore_pending`, which the API role
+//! cannot write, and the export sends it at every start (0066, GH#716).
 //!
 //! A row that can never be sent (larger than one UDP datagram) must not hold
 //! the export up: it leaves as a stub without `oldValue` and `newValue`, with
@@ -370,7 +372,9 @@ pub enum RestoreDelivery {
 /// anyone with its credentials could mark this one before the server starts
 /// and its export would start past it; sent from here, the collector has it
 /// anyway. The server's export still sends it, with the rows after it: the
-/// collector receives it twice, with the same `chainSeq` and `rowHash`.
+/// collector receives it twice, with the same `chainSeq` and `rowHash`. Once
+/// sent, it is no longer pending: until then the server's export sends it at
+/// every start, whatever is listed as sent (GH#716).
 ///
 /// Not to stdout, which is the operator's terminal here, nor to a file that
 /// does not exist yet: it would belong to whoever runs the restore, and the
@@ -412,7 +416,62 @@ pub async fn send_restore_entry(
     tokio::time::timeout(Duration::from_secs(30), sink.send(&event))
         .await
         .map_err(|_| anyhow::anyhow!("timed out"))??;
+    // Sent: the server need not send it at every start (GH#716). Should this
+    // fail, it stays pending, and the collector only receives it again.
+    sqlx::query("DELETE FROM cmdb.audit_export_restore_pending WHERE chain_seq = $1")
+        .bind(chain_seq)
+        .execute(&mut *conn)
+        .await
+        .ok();
     Ok(RestoreDelivery::Sent)
+}
+
+/// The `backup.restore` entries `shadoucmdb restore` did not send itself, up
+/// to `cursor`; those after it leave with the rows that follow (GH#716).
+async fn pending_restores(pool: &PgPool, cursor: i64) -> sqlx::Result<Vec<i64>> {
+    sqlx::query_scalar(
+        "SELECT p.chain_seq FROM audit_export_restore_pending p
+         JOIN audit_log a ON a.chain_seq = p.chain_seq AND a.action = 'backup.restore'
+         WHERE p.chain_seq <= $1 ORDER BY 1",
+    )
+    .bind(cursor)
+    .fetch_all(pool)
+    .await
+}
+
+/// Sends the pending entries up to `cursor` once; false if one could not be
+/// sent, so the next poll tries again.
+async fn send_pending(pool: &PgPool, sink: &mut Sink, cursor: i64, health: &mut Health) -> bool {
+    let pending = match pending_restores(pool, cursor).await {
+        Ok(p) => p,
+        // Before migration 0066 (`serve` does not migrate): a restore by this
+        // release applies it, so nothing can be pending yet.
+        Err(e) if e.as_database_error().and_then(|d| d.code()).as_deref() == Some("42P01") => return true,
+        Err(e) => {
+            health.fail("reading audit_log", &e);
+            return false;
+        }
+    };
+    for seq in pending {
+        let event = match fetch_after(pool, seq - 1, 1).await {
+            Ok(events) => events.into_iter().find(|e| e.chain_seq == seq),
+            Err(e) => {
+                health.fail("reading audit_log", &e);
+                return false;
+            }
+        };
+        let Some(event) = event else { continue };
+        if let Err(err) = sink.send(&event).await {
+            health.fail("sending", &err);
+            return false;
+        }
+        tracing::warn!(
+            chain_seq = seq,
+            "audit export: sent again a backup.restore entry that shadoucmdb restore did not send itself; it is \
+             sent at every start until a later restore sends its own"
+        );
+    }
+    true
 }
 
 #[cfg(test)]
@@ -520,10 +579,13 @@ async fn run(pool: PgPool, cfg: AuditExportConfig, tls: Option<TlsConnector>, mu
         Sink { target: cfg.sink, format: cfg.format, facility: cfg.facility, hostname: hostname(), tls, conn: None };
     let mut health = Health::default();
     let mut cursor = None;
+    // The first cursor until the pending entries before it are sent (GH#716).
+    let mut pending_upto = None;
     loop {
         cursor = match cursor {
             None => match start(&pool).await {
                 Ok((seq, restores)) => {
+                    pending_upto = Some(seq);
                     if restores > 0 {
                         tracing::warn!(
                             after_chain_seq = seq,
@@ -543,12 +605,20 @@ async fn run(pool: PgPool, cfg: AuditExportConfig, tls: Option<TlsConnector>, mu
             },
             Some(c) => Some(drain(&pool, &mut sink, c, &mut health).await),
         };
+        if let Some(upto) = pending_upto
+            && send_pending(&pool, &mut sink, upto, &mut health).await
+        {
+            pending_upto = None;
+        }
         tokio::select! {
             _ = tokio::time::sleep(cfg.poll_interval) => {}
             _ = stop.changed() => {
                 // Last pass, so changes made by the final requests leave too.
                 if let Some(c) = cursor {
                     drain(&pool, &mut sink, c, &mut health).await;
+                }
+                if let Some(upto) = pending_upto {
+                    send_pending(&pool, &mut sink, upto, &mut health).await;
                 }
                 return;
             }
@@ -1147,6 +1217,118 @@ mod tests {
         );
         assert!(health.failing.is_none());
         assert_eq!(start(&api_b).await.unwrap(), (head_a + 1, 0), "listed once sent");
+
+        api_a.close().await;
+        api_b.close().await;
+        a.drop().await;
+        b.drop().await;
+        roles.drop().await;
+    }
+
+    /// What one start and stop of the server's export sends to a new file.
+    async fn one_start(api: &PgPool) -> Vec<(i64, String)> {
+        let (sink, path) = file_sink();
+        let cfg = AuditExportConfig {
+            sink: sink.target,
+            format: AuditFormat::Json,
+            facility: 13,
+            poll_interval: Duration::from_secs(60),
+            tls_ca_file: None,
+        };
+        spawn(api.clone(), cfg).unwrap().stop().await;
+        let out = std::fs::read_to_string(&path).unwrap_or_default();
+        std::fs::remove_file(&path).ok();
+        out.lines()
+            .map(|l| serde_json::from_str::<Value>(l).unwrap())
+            .map(|v| (v["chainSeq"].as_i64().unwrap(), v["action"].as_str().unwrap().to_owned()))
+            .collect()
+    }
+
+    /// GH#716: when `restore` does not send its entry itself (a stdout sink, an
+    /// export file not created yet, a failed send), the API role can still
+    /// mark it as sent before the server starts, but the server's export sends
+    /// it anyway, at every start, until a restore sends its own.
+    #[tokio::test]
+    async fn a_restore_entry_restore_did_not_send_reaches_the_siem_anyway() {
+        use crate::maintenance::{archive, backup, restore};
+        let Some(roles) =
+            crate::db::scratch::Roles::create("a_restore_entry_restore_did_not_send_reaches_the_siem_anyway").await
+        else {
+            return;
+        };
+        let a = roles.database().await;
+        let b = roles.database().await;
+        let api_a = roles.api_pool(&a).await;
+        let mut buf = Vec::new();
+        backup::write(&mut api_a.acquire().await.unwrap(), &mut buf, None).await.unwrap();
+        let checked = archive::verify(buf.as_slice(), None).unwrap();
+        let report = {
+            let _one = crate::db::scratch::whole_schema_transaction().await;
+            let mut cb = b.pool.acquire().await.unwrap();
+            restore::restore(&mut cb, buf.as_slice(), &checked, true, true).await.unwrap()
+        };
+        let entry = report.entry.chain_seq;
+        let api_b = roles.api_pool(&b).await;
+        let pending = || async {
+            sqlx::query_scalar::<_, i64>("SELECT chain_seq FROM cmdb.audit_export_restore_pending")
+                .fetch_all(&api_b)
+                .await
+                .unwrap()
+        };
+        assert_eq!(pending().await, [entry], "listed in the restore's transaction");
+        for sql in [
+            "DELETE FROM cmdb.audit_export_restore_pending",
+            "UPDATE cmdb.audit_export_restore_pending SET chain_seq = chain_seq + 250",
+            "TRUNCATE cmdb.audit_export_restore_pending",
+        ] {
+            let err = sqlx::query(sql).execute(&api_b).await.unwrap_err();
+            assert_eq!(sql_state(&err), "42501", "{sql}: {err}");
+        }
+
+        // A collector that is not there: the send fails.
+        let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap();
+        let (missing, missing_path) = file_sink();
+        let cfg = |sink| AuditExportConfig {
+            sink,
+            format: AuditFormat::Json,
+            facility: 13,
+            poll_interval: Duration::from_secs(1),
+            tls_ca_file: None,
+        };
+        let paths = [
+            ("stdout", cfg(AuditSink::Stdout)),
+            ("a file not created yet", cfg(missing.target)),
+            ("a failed send", cfg(AuditSink::Tcp(closed.to_string()))),
+        ];
+        for (n, (path, cfg)) in paths.iter().enumerate() {
+            let mut cb = b.pool.acquire().await.unwrap();
+            let delivery = send_restore_entry(&mut cb, cfg, entry).await;
+            assert!(!matches!(delivery, Ok(RestoreDelivery::Sent)), "{path}: {delivery:?}");
+            drop(cb);
+            assert_eq!(pending().await, [entry], "{path}: still pending");
+            if n == 0 {
+                // The GH#706 attack: the entry is marked as sent before the server starts.
+                let marked: bool = sqlx::query_scalar("SELECT cmdb.audit_export_mark_restore_sent($1)")
+                    .bind(entry)
+                    .fetch_one(&api_b)
+                    .await
+                    .unwrap();
+                assert!(marked);
+            }
+            assert_eq!(start(&api_b).await.unwrap(), (entry, 0), "{path}: the export starts past it");
+            assert_eq!(one_start(&api_b).await, [(entry, "backup.restore".into())], "{path}: sent anyway");
+        }
+        assert!(!missing_path.exists(), "restore did not create the file");
+
+        // Once `restore` has sent it, a start sends nothing.
+        let (sent, sent_path) = file_sink();
+        std::fs::write(&sent_path, "").unwrap();
+        let mut cb = b.pool.acquire().await.unwrap();
+        assert_eq!(send_restore_entry(&mut cb, &cfg(sent.target), entry).await.unwrap(), RestoreDelivery::Sent);
+        drop(cb);
+        std::fs::remove_file(&sent_path).unwrap();
+        assert!(pending().await.is_empty());
+        assert_eq!(one_start(&api_b).await, []);
 
         api_a.close().await;
         api_b.close().await;
