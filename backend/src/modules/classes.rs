@@ -2635,6 +2635,71 @@ mod tests {
         db.drop().await;
     }
 
+    /// SHAA-2553 (#772): through the API, retyping a lookup or reference field
+    /// is the documented 422 SCHEMA_CHANGE_REFUSED with `type_change_unsupported`
+    /// on `dataType`, and the schema-change preview answers the same. A field
+    /// cannot become a lookup or reference field either (refused on `dataType`;
+    /// today as a 400 from body validation, GH#782).
+    /// Either way the field keeps its type.
+    #[tokio::test]
+    async fn the_api_refuses_a_lookup_retype_with_its_documented_code() {
+        use crate::modules::api_tokens::tests::{Creds, app, call, code, session_of};
+        let Some(db) = scratch::database("the_api_refuses_a_lookup_retype").await else { return };
+        let app = app(db.pool.clone());
+        let password = format!("test passphrase {}", Uuid::new_v4());
+        let setup = json!({ "username": "admin", "email": "admin@example.test", "displayName": "Admin",
+            "password": password, "setupToken": crate::auth::setup_token::TEST_TOKEN });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
+        assert_eq!(status, 201, "{me}");
+        let admin = session_of(&me, &headers);
+        let post = async |path: &str, body: Value| {
+            let (status, v, _) = call(&app, "POST", path, &admin, Some(body)).await;
+            assert_eq!(status, 201, "{path}: {v}");
+            v["id"].as_str().unwrap().to_owned()
+        };
+        let class = post("/api/v1/ci-classes", json!({ "key": "tiered", "name": "Tiered" })).await;
+        let list = post("/api/v1/lookup-lists", json!({ "key": "tier", "name": "Tier" })).await;
+        let lookup = post(
+            "/api/v1/attribute-definitions",
+            json!({ "classId": class, "key": "tier_lk", "label": "Tier", "dataType": "lookup", "lookupListId": list }),
+        )
+        .await;
+        let text = post(
+            "/api/v1/attribute-definitions",
+            json!({ "classId": class, "key": "notes", "label": "Notes", "dataType": "text" }),
+        )
+        .await;
+        let refused = |v: &Value| {
+            let d = &v["error"]["details"][0];
+            (code(v).to_owned(), d["field"].as_str().map(str::to_owned), d["code"].as_str().map(str::to_owned))
+        };
+        let expected = (
+            "SCHEMA_CHANGE_REFUSED".to_owned(),
+            Some("dataType".to_owned()),
+            Some("type_change_unsupported".to_owned()),
+        );
+
+        for (field, to) in [(&lookup, "text"), (&lookup, "integer")] {
+            let url = format!("/api/v1/attribute-definitions/{field}");
+            let (status, v, _) = call(&app, "PATCH", &url, &admin, Some(json!({ "dataType": to }))).await;
+            assert_eq!((status, refused(&v)), (422, expected.clone()), "PATCH {field} to {to}: {v}");
+            let preview = json!({ "operation": "updateField", "id": field, "body": { "dataType": to } });
+            let (status, v, _) = call(&app, "POST", "/api/v1/schema-changes/preview", &admin, Some(preview)).await;
+            assert_eq!((status, refused(&v)), (422, expected.clone()), "preview {field} to {to}: {v}");
+        }
+        for (field, to) in [(&text, "lookup"), (&text, "reference"), (&lookup, "reference")] {
+            let url = format!("/api/v1/attribute-definitions/{field}");
+            let (status, v, _) = call(&app, "PATCH", &url, &admin, Some(json!({ "dataType": to }))).await;
+            assert!(matches!(status, 400 | 422) && refused(&v).1.as_deref() == Some("dataType"), "PATCH to {to}: {v}");
+        }
+        for (field, ty) in [(&lookup, "lookup"), (&text, "text")] {
+            let (status, v, _) =
+                call(&app, "GET", &format!("/api/v1/attribute-definitions/{field}"), &admin, None).await;
+            assert_eq!((status, v["dataType"].as_str()), (200, Some(ty)), "{v}");
+        }
+        db.drop().await;
+    }
+
     /// GH#109: text attributes can be flagged multi-line, and their values keep
     /// their line breaks exactly as sent.
     #[tokio::test]

@@ -97,5 +97,7 @@ test("an identity provider's account has no password form, only a pointer to the
   await expect(panel.getByTestId("own-provider-credentials")).toContainText("You sign in through Contoso Entra ID");
   await expect(panel.getByRole("button", { name: "Change password" })).toHaveCount(0);
   await expect(page.locator("#own-current-password")).toHaveCount(0);
+  // As in support.ts (GH#774): a refetch still in the route handler fails the test once the context closes.
+  await page.unrouteAll({ behavior: "ignoreErrors" });
   await page.context().close();
 });
