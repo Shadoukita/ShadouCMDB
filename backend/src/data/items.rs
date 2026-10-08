@@ -778,7 +778,7 @@ fn label_text(column: &str, t: AttributeDataType) -> String {
 }
 
 /// A CI's newest create, update, delete or restore audit entry, as the
-/// audit log trigger keeps it (migration 0070).
+/// audit log trigger keeps it (migration 0071).
 #[derive(Debug, sqlx::FromRow)]
 pub struct LastChangeRow {
     pub changed_at: DateTime<Utc>,
