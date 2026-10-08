@@ -2,6 +2,15 @@
 // Syntax: `{name}` inserts a parameter; `{n, plural, one {# item} other {# items}}` picks a branch
 // through Intl.PluralRules (`=0` style exact matches work too) and `#` is the formatted number.
 export const en = {
+  "ciField.label": "Label",
+  "ciField.ident": "Ident",
+  "ciField.class": "Class",
+  "ciField.criticality": "Criticality",
+  "ciField.validFrom": "Valid from",
+  "ciField.validUntil": "Valid until",
+  "ciField.active": "Active",
+  "ciField.createdAt": "Created",
+  "ciField.updatedAt": "Updated",
   "services.nav": "Business services",
   "workflows.nav": "Workflows",
   "workflows.controlledField": "Set by a workflow: change it with a transition on the Workflows tab",

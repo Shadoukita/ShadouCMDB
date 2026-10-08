@@ -3,6 +3,15 @@ import type { MessageKey } from "./en";
 // German message catalog. The annotation makes a missing key and an extra key both a type error,
 // so `de` always has exactly the keys of `en`. Formal "Sie"; "Business-Service" is the ITIL-DE term.
 export const de: { [K in MessageKey]: string } = {
+  "ciField.label": "Bezeichnung",
+  "ciField.ident": "Ident",
+  "ciField.class": "Klasse",
+  "ciField.criticality": "Kritikalität",
+  "ciField.validFrom": "Gültig ab",
+  "ciField.validUntil": "Gültig bis",
+  "ciField.active": "Aktiv",
+  "ciField.createdAt": "Angelegt",
+  "ciField.updatedAt": "Geändert",
   "services.nav": "Business-Services",
   "workflows.nav": "Workflows",
   "workflows.controlledField": "Von einem Workflow gesetzt: über einen Übergang auf dem Reiter Workflows ändern",

@@ -84,3 +84,24 @@ test("not found, the pagination bar and the error alert are German with the Germ
   await expect(alert.getByRole("button", { name: "Erneut versuchen" })).toBeVisible();
   await expectNoEnglish(alert);
 });
+
+test("the inventory's built-in column headers and the Columns popover are German with the German catalog (SHAA-2406)", async ({ page, request }) => {
+  await resetUiSettings(request); // the default columns, not a list view's
+  await forceGerman(page);
+  await page.goto("/cis");
+  const headers = page.locator("table.data thead th:not(.row-actions)");
+  await expect(headers).toHaveText([/^\s*Bezeichnung/, /^\s*Ident/, /^\s*Klasse/, /^\s*Aktiv/, /^\s*Geändert/]);
+  await expect(page.getByRole("columnheader", { name: /^Label|^Class|^Active|^Updated/ })).toHaveCount(0);
+
+  await page.getByRole("button", { name: /^Spalten/ }).click();
+  const popover = page.getByRole("dialog", { name: "Spalten" });
+  await expect(popover.getByRole("list", { name: "Angezeigte Spalten" }).getByRole("listitem")).toHaveText([
+    /^\s*Bezeichnung/,
+    /^\s*Ident/,
+    /^\s*Klasse/,
+    /^\s*Aktiv/,
+    /^\s*Geändert/,
+  ]);
+  const more = popover.getByRole("group", { name: "Weitere Felder" });
+  for (const name of ["Kritikalität", "Gültig ab", "Gültig bis", "Angelegt"]) await expect(more.getByLabel(name, { exact: true })).toBeVisible();
+});
