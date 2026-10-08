@@ -1291,3 +1291,44 @@ async fn view_counts_leave_out_subtypes_and_search_hits_the_caller_may_not_view(
 
     db.drop().await;
 }
+
+/// GH#780: counting waits for one of a few slots within the 2-second allowance; a request that gets none answers its
+/// views `timed_out` instead of holding a pool connection, and a slot is given back after each request.
+#[tokio::test]
+async fn view_counts_wait_for_a_slot_and_time_out_without_one() {
+    use super::service::{SavedViewCountStatus, SavedViewCountsQuery, count_slots, counts_of};
+    use tokio::sync::Semaphore;
+
+    let Some((db, w)) = world("saved_views_count_slots").await else { return };
+    assert_eq!((count_slots(1), count_slots(10), count_slots(40)), (1, 2, 10));
+    ci(&w, "server", "web-1", "production").await;
+    let admin = w.admin.clone();
+    let fleet = w.created(&admin, view("inventory", "Fleet", "shared", json!({ "classKeys": ["server"] }))).await;
+    let ctx = crate::modules::impact::perf::viewer(&[w.class("server").await]);
+    let q = SavedViewCountsQuery { context: None, ids: None };
+    let statuses = |c: &super::service::SavedViewCounts| c.data.iter().map(|c| (c.status, c.count)).collect::<Vec<_>>();
+
+    let slots = Semaphore::new(1);
+    let c = counts_of(&w.pool, &ctx, &slots, &q).await.unwrap();
+    assert_eq!(c.data[0].view_id.to_string(), fleet["id"].as_str().unwrap());
+    assert_eq!(statuses(&c), [(SavedViewCountStatus::Counted, Some(1))]);
+    assert_eq!(slots.available_permits(), 1, "the slot is given back");
+
+    // Every slot taken (another request counting): this one waits out the allowance, then answers `timed_out`.
+    let held = slots.acquire().await.unwrap();
+    let started = std::time::Instant::now();
+    let c = counts_of(&w.pool, &ctx, &slots, &q).await.unwrap();
+    assert_eq!(statuses(&c), [(SavedViewCountStatus::TimedOut, None)]);
+    assert!(started.elapsed() < std::time::Duration::from_secs(4), "{:?}", started.elapsed());
+
+    // A slot freed while it waits: counted.
+    let waiting = counts_of(&w.pool, &ctx, &slots, &q);
+    let release = async {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        drop(held);
+    };
+    let (c, ()) = tokio::join!(waiting, release);
+    assert_eq!(statuses(&c.unwrap()), [(SavedViewCountStatus::Counted, Some(1))]);
+
+    db.drop().await;
+}
