@@ -84,6 +84,12 @@ const TAG_DESCRIPTIONS: &[(&str, &str)] = &[
          default view per list. A view stores a query by key, never data or rights, so it never widens what a user \
          sees. Session only; shared views need views.share to change.",
     ),
+    (
+        "Notifications",
+        "Each user's in-app notifications (approvals waiting, approval outcomes, workflow transitions on instances \
+         they started, imports that ended), with the unread count for the bell. Written by the server in the \
+         transaction of the event; nothing is sent outside the application. Session only.",
+    ),
     ("Audit log", "Read-only change history written in the same transaction as every change."),
     ("Users", "Administration: local user accounts, passwords and the permission profiles they hold."),
     (

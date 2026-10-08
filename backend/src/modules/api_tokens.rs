@@ -695,6 +695,7 @@ pub(crate) mod tests {
             impact: Default::default(),
             imports: imports.clone(),
             business_services,
+            notifications: Default::default(),
         };
         let state = AppState::new(pool, auth, crate::secrets::Keyring::for_tests())
             .importing(&imports)

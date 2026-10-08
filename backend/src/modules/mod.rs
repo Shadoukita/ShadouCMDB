@@ -18,6 +18,7 @@ pub mod imports;
 pub mod items;
 pub mod lookups;
 pub mod mfa;
+pub mod notifications;
 pub mod people;
 pub mod profiles;
 pub mod relationships;
