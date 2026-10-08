@@ -368,6 +368,194 @@
   cursor: pointer;
 }
 
+/* ---------- Notifications bell (SHAA-2649): the unread count and a panel of the newest notifications ---------- */
+.notif-menu {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.notif-bell {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-h);
+  height: var(--control-h);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--c-text-secondary);
+  cursor: pointer;
+}
+.notif-bell:hover,
+.notif-bell[aria-expanded="true"] {
+  background: var(--c-row-hover);
+  border-color: var(--c-border);
+  color: var(--c-text);
+}
+.notif-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  box-sizing: border-box;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border: 2px solid var(--c-surface);
+  border-radius: var(--radius-full);
+  background: var(--c-danger-solid);
+  color: var(--c-on-solid);
+  font-size: 10px;
+  font-weight: var(--fw-semibold);
+  line-height: 12px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.notif-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + var(--space-1));
+  z-index: var(--z-dropdown);
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: min(400px, calc(100vw - 2 * var(--space-3)));
+  max-height: min(560px, calc(100vh - 80px));
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+}
+:root[data-theme="dark"] .notif-panel {
+  border-color: var(--c-border-control);
+}
+.notif-panel > .state,
+.notif-panel > .alert {
+  margin: var(--space-3);
+}
+.notif-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--c-divider);
+}
+.notif-head h2 {
+  margin: 0;
+  font-size: var(--fs-h3);
+  font-weight: var(--fw-semibold);
+}
+.notif-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-5) var(--space-4);
+  color: var(--c-text-secondary);
+  text-align: center;
+}
+.notif-empty strong {
+  color: var(--c-text);
+}
+.notif-empty p {
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+.notif-list {
+  flex: 1 1 auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+}
+.notif-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--c-divider);
+}
+.notif-item:last-child {
+  border-bottom: 0;
+}
+.notif-item:hover {
+  background: var(--c-row-hover);
+}
+.notif-item.is-unread {
+  background: var(--c-primary-subtle);
+}
+.notif-icon {
+  display: inline-flex;
+  flex: none;
+  padding-top: 2px;
+  color: var(--c-text-tertiary);
+}
+.notif-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.notif-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--c-text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+}
+.notif-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  background: var(--c-primary);
+}
+.notif-title {
+  color: var(--c-text);
+  overflow-wrap: anywhere;
+}
+a.notif-title {
+  text-decoration: none;
+}
+a.notif-title:hover {
+  color: var(--c-link);
+  text-decoration: underline;
+}
+.is-unread .notif-title {
+  font-weight: var(--fw-semibold);
+}
+.notif-detail,
+.notif-meta {
+  color: var(--c-text-secondary);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+.notif-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  color: var(--c-text-tertiary);
+}
+.notif-gone {
+  color: var(--c-warning-text);
+}
+.notif-actions {
+  display: flex;
+  flex: none;
+  gap: 2px;
+}
+.notif-more {
+  flex: none;
+  justify-content: center;
+  border-top: 1px solid var(--c-divider);
+  border-radius: 0;
+}
+
 /* ---------- User menu ---------- */
 .user-menu {
   position: relative;
