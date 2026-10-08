@@ -1,6 +1,6 @@
 //! Notifications: reading, marking read, dismissing and retention (SHAA-2356).
 //!
-//! The rows are written by the triggers of migration 0071, in the transaction
+//! The rows are written by the triggers of migration 0072, in the transaction
 //! of the event they report; this module never creates one. A user sees only
 //! their own: anyone else's is the same `404` as one that does not exist,
 //! administrators included (GDPR data minimisation). A notification about a CI
