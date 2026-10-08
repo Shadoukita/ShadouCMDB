@@ -243,13 +243,17 @@ test("relationships: add in both directions; illegal pairs offer no type", async
   await page.getByRole("button", { name: "Add relationship" }).click();
   await expect(page.getByRole("status").filter({ hasText: `Added: ${name} hosts CRM` })).toBeVisible();
 
-  // Grouped by how the edge reads from this CI (design §0 step 12d, gap G15).
+  // Grouped by the type's category (design §0 step 12d, gap G15): the template's located_in is "Location",
+  // runs_on has none ("Other"); each row says how the edge reads from this CI.
   await expect(panel.getByRole("listitem")).toHaveCount(2);
-  const locatedIn = panel.getByRole("list", { name: /^is located in/ }).getByRole("listitem").filter({ hasText: "FRA1 Rack A01" });
+  await expect(panel.locator(".rel-group-head")).toHaveText(["Location 1", "Other 1"]);
+  const locatedIn = panel.getByRole("list", { name: /^Location/ }).getByRole("listitem").filter({ hasText: "FRA1 Rack A01" });
   await expect(locatedIn).toBeVisible();
+  await expect(locatedIn.locator(".rel-type")).toHaveText("is located in");
   // The direction is an icon named for assistive technology (audit R5).
   await expect(locatedIn.getByRole("img", { name: "Outgoing" })).toBeVisible();
-  const hosts = panel.getByRole("list", { name: /^hosts/ }).getByRole("listitem").filter({ hasText: "CRM" });
+  const hosts = panel.getByRole("list", { name: /^Other/ }).getByRole("listitem").filter({ hasText: "CRM" });
+  await expect(hosts.locator(".rel-type")).toHaveText("hosts");
   await expect(hosts.getByRole("img", { name: "Incoming" })).toBeVisible();
   // All / Outgoing / Incoming and the text filter narrow the list.
   const direction = panel.getByRole("radiogroup", { name: "Direction" });

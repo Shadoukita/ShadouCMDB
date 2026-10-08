@@ -5,7 +5,17 @@ import { RouterLink, useRouter } from "vue-router";
 import { useAllLookupListValues, useAreas, useLookupLists } from "../api/datamodel";
 import { ApiError } from "../api/client";
 import { fileStamp } from "../api/download";
-import { ciCountQuery, downloadInventoryCsv, useCiClasses, useCiList, useClassAttributes, useCriticalityValues, type CiListQuery } from "../api/queries";
+import {
+  ciCountQuery,
+  downloadInventoryCsv,
+  useAttributesOfClasses,
+  useCiClasses,
+  useCiList,
+  useClassAttributes,
+  useCriticalityValues,
+  type Ci,
+  type CiListQuery,
+} from "../api/queries";
 import { dataModelEmpty } from "../lib/dataModel";
 import BulkEditDialog from "../components/BulkEditDialog.vue";
 import Breadcrumbs from "../components/Breadcrumbs.vue";
@@ -120,6 +130,13 @@ const ofAll = computed(() => {
 });
 const criticalityLevels = computed(() => criticality.data.value?.length || 4);
 const rows = computed(() => list.data.value?.data ?? []);
+// The subtitle under each name (gap G8): the row's class's subtitle field, from the attributes of the classes on the page that name one.
+const subtitleClassIds = computed(() => rows.value.map((ci) => ci.classId).filter((id) => !!classById(id)?.subtitleAttributeId));
+const subtitleAttrs = useAttributesOfClasses(subtitleClassIds);
+const subtitleOf = (ci: Ci) => {
+  const attrId = classById(ci.classId)?.subtitleAttributeId;
+  return attrId ? subtitleAttrs.value?.get(ci.classId)?.find((d) => d.id === attrId) : undefined;
+};
 const classId = computed(() => state.classId.value);
 const newTo = computed(() => (classId.value && !currentClass.value?.isAbstract ? `/cis/new?classId=${classId.value}` : "/cis/new"));
 const canCreate = computed(() =>
@@ -413,7 +430,7 @@ function clearFilters() {
                     />
                   </td>
                   <td v-for="c in columns" :key="c" :class="{ 'name-cell': c === 'label' }">
-                    <CiCell :ci="ci" :field="c" :defs="attrDefs" :class-of="classById" rich :criticality-levels="criticalityLevels" :class-column="columns.includes('class')" />
+                    <CiCell :ci="ci" :field="c" :defs="attrDefs" :class-of="classById" rich :criticality-levels="criticalityLevels" :class-column="columns.includes('class')" :subtitle="subtitleOf(ci)" />
                   </td>
                   <td class="row-actions">
                     <RowMenu :label="t('inventory.rowMenu', { name: ci.label })" :items="ciRowMenu(ci)" />

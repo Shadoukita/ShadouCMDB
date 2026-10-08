@@ -15,8 +15,8 @@ import CriticalityMeter from "./CriticalityMeter.vue";
  * class's list view (Administration › Customization › List views).
  *
  * `rich` is the inventory's row (design document §0, step 12c): the label in mono with a subtitle under
- * it, and criticality as a meter of `criticalityLevels` bars. The subtitle is the class name until class
- * metadata names a subtitle attribute (gap G8, SHAA-2357); it is left out when the class has a column.
+ * it, and criticality as a meter of `criticalityLevels` bars. The subtitle is the CI's value in its class's
+ * subtitle field (`subtitle`, gap G8), else the class name; the class name is left out when the class has a column.
  */
 const props = defineProps<{
   ci: Ci;
@@ -29,6 +29,8 @@ const props = defineProps<{
   criticalityLevels?: number;
   /** Whether the row also has a class column (rich only): then the label has no subtitle. */
   classColumn?: boolean;
+  /** The class's subtitle field (rich only), when it names one. */
+  subtitle?: EffectiveAttribute;
 }>();
 const cls = computed(() => (props.field === "class" ? props.classOf?.(props.ci.classId) : undefined));
 const attr = computed(() => attributeKey(props.field));
@@ -36,6 +38,10 @@ const def = computed(() => (attr.value ? props.defs.find((d) => d.key === attr.v
 const values = computed(() => props.ci.attributes as Record<string, unknown>);
 const refs = computed(() => props.ci.attributeReferences);
 const self = computed(() => ({ id: props.ci.id, name: props.ci.label }));
+const subtitleValue = computed(() => {
+  const v = props.subtitle ? values.value?.[props.subtitle.key] : undefined;
+  return v === null || v === undefined || v === "" ? undefined : v;
+});
 </script>
 
 <template>
@@ -45,7 +51,10 @@ const self = computed(() => ({ id: props.ci.id, name: props.ci.label }));
   </template>
   <span v-else-if="field === 'label' && rich" class="ci-name-cell">
     <RouterLink :to="`/cis/${ci.id}`" class="ci-name" dir="auto">{{ ci.label }}</RouterLink>
-    <bdi v-if="!classColumn" class="ci-subtitle">{{ ci.class.name }}</bdi>
+    <span v-if="subtitle && subtitleValue !== undefined" class="ci-subtitle" :title="subtitle.label">
+      <AttributeValue :def="subtitle" :value="subtitleValue" :ref-info="refs?.[subtitle.key]" :self="self" :trail="[]" />
+    </span>
+    <bdi v-else-if="!classColumn" class="ci-subtitle">{{ ci.class.name }}</bdi>
   </span>
   <RouterLink v-else-if="field === 'label'" :to="`/cis/${ci.id}`" dir="auto">{{ ci.label }}</RouterLink>
   <span v-else-if="field === 'ident'" class="mono">{{ ci.ident }}</span>

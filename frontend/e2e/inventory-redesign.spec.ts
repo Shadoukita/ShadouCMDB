@@ -44,7 +44,7 @@ test("inventory: filter chips, Add filter, row selection and page numbers", asyn
   await expect(chips.locator(".chip")).toHaveText([/Class:\s*Server/, /Validity:\s*Show inactive/]);
   await expect(rows).toHaveCount(3);
 
-  // Names are mono links; with no class column the class is the subtitle (until gap G8).
+  // Names are mono links; with no class column and no subtitle field (gap G8) the class is the subtitle.
   await page.goto(`/cis?q=${stamp}&classId=${serverId}&columns=label,ident`);
   const first = rows.first();
   await expect(first.locator(".ci-name")).toHaveText(`${stamp}-srv-a`);

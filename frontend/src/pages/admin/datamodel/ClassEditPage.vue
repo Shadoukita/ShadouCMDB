@@ -69,6 +69,8 @@ const titleAttributeId = ref("");
 /** Data quality: the fields holding a CI's owner and end of life; "" takes the parent's setting. */
 const ownerAttributeId = ref("");
 const endOfLifeAttributeId = ref("");
+/** The attribute whose value shows under a CI's name (gap G8); "" shows the class name. */
+const subtitleAttributeId = ref("");
 const error = ref<unknown>(null);
 const local = ref<Record<string, string>>({});
 
@@ -85,6 +87,7 @@ function seed(c: CiClass | undefined) {
   titleAttributeId.value = c?.titleAttributeId ?? "";
   ownerAttributeId.value = c?.ownerAttributeId ?? "";
   endOfLifeAttributeId.value = c?.endOfLifeAttributeId ?? "";
+  subtitleAttributeId.value = c?.subtitleAttributeId ?? "";
   initial = c ? formBody() : {};
   baseline.value = { id: c?.id, body: formBody() };
 }
@@ -103,6 +106,7 @@ function formBody(): ClassUpdateBody {
     titleAttributeId: titleAttributeId.value || null,
     ownerAttributeId: ownerAttributeId.value || null,
     endOfLifeAttributeId: endOfLifeAttributeId.value || null,
+    subtitleAttributeId: subtitleAttributeId.value || null,
   };
 }
 const changes = computed(() => (baseline.value ? Object.keys(changedFields(formBody(), baseline.value.body)).length : 0));
@@ -151,6 +155,8 @@ const titleOptions = computed(() => (attrs.data.value ?? []).filter((a) => TITLE
 
 /** Data quality (the dashboard's "Needs attention" checks): the field types each setting accepts, as the API's. */
 const OWNER_TYPES = new Set(["text", "enum", "lookup", "reference"]);
+/** Any field can be the subtitle (the archived current one stays listed). */
+const subtitleOptions = computed(() => (attrs.data.value ?? []).filter((a) => a.isActive || a.id === subtitleAttributeId.value));
 const END_OF_LIFE_TYPES = new Set(["date", "datetime"]);
 const ownerOptions = computed(() => (attrs.data.value ?? []).filter((a) => OWNER_TYPES.has(a.dataType) && (a.isActive || a.id === ownerAttributeId.value)));
 const endOfLifeOptions = computed(() =>
@@ -183,7 +189,7 @@ function noneLabel(inherited: { from: string; field: string } | undefined) {
 }
 
 const fieldErrors = computed(() => ({ ...(error.value instanceof ApiError ? error.value.fieldErrors() : {}), ...local.value }));
-const FIELDS = ["name", "key", "areaId", "description", "parentId", "isAbstract", "icon", "color", "titleAttributeId", "ownerAttributeId", "endOfLifeAttributeId"];
+const FIELDS = ["name", "key", "areaId", "description", "parentId", "isAbstract", "icon", "color", "titleAttributeId", "ownerAttributeId", "endOfLifeAttributeId", "subtitleAttributeId"];
 const unplaced = computed(() => (error.value instanceof ApiError ? error.value.details.filter((d) => !FIELDS.includes(d.field)) : []));
 
 async function submit() {
@@ -206,6 +212,7 @@ async function submit() {
   delete body.titleAttributeId;
   delete body.ownerAttributeId;
   delete body.endOfLifeAttributeId;
+  delete body.subtitleAttributeId;
   if (isNew.value) {
     // New classes go to the end of the menu.
     const last = Math.max(0, ...(classes.data.value ?? []).map((c) => c.sortOrder));
@@ -446,6 +453,26 @@ const notFound = computed(() => {
               }}
             </option>
             <option v-if="titleAttributeId && attrs.data.value && !titleOptions.some((a) => a.id === titleAttributeId)" :value="titleAttributeId">
+              {{ t("dm.class.field.titleCurrent") }}
+            </option>
+          </select>
+        </FormField>
+        <FormField
+          v-if="!isNew"
+          id="class-subtitle"
+          v-slot="p"
+          :label="t('dm.class.field.subtitle')"
+          :error="fieldErrors.subtitleAttributeId"
+          :hint="t('dm.class.field.subtitleHint')"
+        >
+          <select :id="p.id" v-model="subtitleAttributeId" :disabled="attrs.isLoading.value" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy">
+            <option value="">{{ t("dm.class.field.subtitleNone") }}</option>
+            <option v-for="a in subtitleOptions" :key="a.id" :value="a.id">
+              {{ a.label }} ({{ a.key }}){{ a.inherited ? ` · ${t("dm.class.field.titleFrom", { name: a.definedOn.name })}` : "" }}{{
+                a.isActive ? "" : ` ${t("dm.class.field.titleRetired")}`
+              }}
+            </option>
+            <option v-if="subtitleAttributeId && attrs.data.value && !subtitleOptions.some((a) => a.id === subtitleAttributeId)" :value="subtitleAttributeId">
               {{ t("dm.class.field.titleCurrent") }}
             </option>
           </select>

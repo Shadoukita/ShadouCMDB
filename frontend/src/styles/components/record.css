@@ -74,6 +74,15 @@
 }
 
 /* Class, state and criticality as chips, then "ident · Updated … by …". */
+/* The class's subtitle field under the name (gap G8). */
+.record-subtitle {
+  overflow: hidden;
+  margin: 0 0 var(--space-1_5);
+  font-size: var(--fs-md);
+  color: var(--c-text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .record-meta {
   display: flex;
   align-items: center;
@@ -673,7 +682,7 @@ ol.impact-path a {
   color: var(--badge-neutral-fg);
   white-space: nowrap;
 }
-.rel-type .mono {
+.rel-type-label {
   font-size: var(--fs-xs);
 }
 .rel-dir {
