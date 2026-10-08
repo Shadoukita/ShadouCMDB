@@ -231,7 +231,7 @@ async fn bulk_update_refuses_a_malformed_body() {
         (json!({ "ids": [id, id], "attributes": { "cpu_cores": 1 } }), "ids"),
         (json!({ "ids": [id] }), "(root)"),
         (json!({ "ids": [id], "attributes": {} }), "(root)"),
-        (json!({ "ids": [id], "attributes": { "cpu_cores": 1 }, "classId": w.switch }), "classId"),
+        (json!({ "ids": [id], "attributes": { "cpu_cores": 1 }, "classId": w.switch }), "(root)"),
     ];
     for (body, field) in cases {
         let (status, v, _) = call(&w.app, "POST", BULK, &w.admin, Some(body.clone())).await;

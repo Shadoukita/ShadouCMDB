@@ -575,6 +575,26 @@ export interface paths {
         patch: operations["updateConfigurationItem"];
         trace?: never;
     };
+    "/api/v1/configuration-items/bulk-update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set the same attribute values (or criticality) on up to 500 CIs, with a result per CI
+         * @description For the inventory's bulk edit. Each CI is checked and updated exactly as `updateConfigurationItem` would update it with a body of `attributes` and `criticalityValueId`: edit on its class, the same value validation, workflow-controlled fields and reference rules, and one `update` audit row per CI. A CI the caller may not view is reported as `NOT_FOUND`, like a missing one. All CIs are updated in one transaction, each in a savepoint: a CI that is refused is rolled back alone and reported with the error the single update would have answered (`code`, `message`, `details`). By default the CIs that pass are committed together; with `allOrNothing` a single refusal writes nothing and `committed` is false. Always 200 for a well-formed body: `succeeded` and `failed` count the CIs, `results` has one entry per id in the request's order. CIs are taken in id order, so concurrent bulk updates over the same CIs queue instead of deadlocking. A server fault rolls back every CI (500).
+         */
+        post: operations["updateConfigurationItemsInBulk"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/configuration-items/{id}/graph": {
         parameters: {
             query?: never;
@@ -3900,6 +3920,45 @@ export interface components {
         AuditEntryList: {
             data: components["schemas"]["AuditEntry"][];
             page: components["schemas"]["PageMeta"];
+        };
+        /** @description Why a CI was refused: what `PATCH /configuration-items/{id}` would have answered for it */
+        BulkUpdateError: {
+            /** @enum {string} */
+            code: "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "CSRF_TOKEN_INVALID" | "NOT_FOUND" | "CONFLICT" | "IN_USE" | "VERSION_CONFLICT" | "GONE" | "INVALID_NAME" | "SCHEMA_CHANGE_REFUSED" | "SECRET_REQUIRED" | "IDEMPOTENCY_KEY_REUSED" | "WORKFLOW_CONDITION_FAILED" | "WORKFLOW_CONTROLLED_FIELD" | "WORKFLOW_APPROVAL_SELF" | "WORKFLOW_APPROVAL_PENDING" | "WORKFLOW_APPROVAL_STALE" | "LAST_ADMINISTRATOR" | "RATE_LIMITED" | "MFA_REQUIRED" | "MFA_ENROLMENT_REQUIRED" | "EMAIL_REQUIRED" | "MFA_REQUIRED_FOR_TOKEN" | "REAUTHENTICATION_REQUIRED" | "IDENTITY_PROVIDER_UNAVAILABLE" | "UNSUPPORTED_MEDIA_TYPE" | "PAYLOAD_TOO_LARGE" | "REQUEST_TIMEOUT" | "DATABASE_UNAVAILABLE" | "SERVER_BUSY" | "SCHEMA_NOT_MIGRATED" | "INTERNAL_ERROR";
+            message: string;
+            details: components["schemas"]["BulkUpdateErrorDetail"][];
+        };
+        /** @description One problem of a refused CI, as in the error envelope's `details` */
+        BulkUpdateErrorDetail: {
+            /** @enum {string} */
+            in: "body" | "query" | "params" | "header";
+            /** @description Dotted path in the body, e.g. `attributes.owner` */
+            field: string;
+            message: string;
+            code: string;
+        };
+        BulkUpdateReport: {
+            /** Format: int32 */
+            succeeded: number;
+            /** Format: int32 */
+            failed: number;
+            /** @description The ok results are written. false only with `allOrNothing` when a CI was refused: nothing was written. */
+            committed: boolean;
+            /** @description One result per id, in the request's order */
+            results: components["schemas"]["BulkUpdateResult"][];
+        };
+        BulkUpdateResult: {
+            /**
+             * Format: int32
+             * @description Position of the CI in `ids` (0-based)
+             */
+            index: number;
+            /** Format: uuid */
+            id: string;
+            /** @description The update passed every check for this CI (written when `committed` is true) */
+            ok: boolean;
+            item: components["schemas"]["ConfigurationItemSummary"] | null;
+            error: components["schemas"]["BulkUpdateError"] | null;
         };
         /** @description A business service with its class, the visibility note and the limits. */
         BusinessService: {
@@ -11529,6 +11588,116 @@ export interface operations {
             };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), VERSION_CONFLICT, or WORKFLOW_CONTROLLED_FIELD (a state field an active workflow drives was given another value; details[].field names it as `attributes.<key>`, details[].code workflow_controlled). Nothing was changed */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    updateConfigurationItemsInBulk: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description The CIs to update: 1 to 500, each at most once */
+                    ids: string[];
+                    /** @description Set on every CI: merged into its current values as `PATCH /configuration-items/{id}` merges them; null clears an attribute. Each key must be an attribute of every CI's class. */
+                    attributes?: {
+                        [key: string]: (string | number | boolean) | null;
+                    };
+                    /** @description A value of the criticality lookup list (GET /api/v1/lookup-lists?systemRole=criticality); null: not set. A retired value can be kept but not newly set */
+                    criticalityValueId?: string | null;
+                    /**
+                     * @description true: when any CI is refused, nothing is written (`committed` is false). false (default): the CIs that pass
+                     *     are written and the refused ones are reported.
+                     */
+                    allOrNothing?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkUpdateReport"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
