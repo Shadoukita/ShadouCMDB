@@ -304,7 +304,7 @@ async fn check_state_driver(
 }
 
 /// The classes a workflow on `class_id` covers.
-fn coverage(model: &Model, class_id: Uuid, include_subclasses: bool) -> Vec<Uuid> {
+pub(crate) fn coverage(model: &Model, class_id: Uuid, include_subclasses: bool) -> Vec<Uuid> {
     if include_subclasses { model.subtree(class_id) } else { vec![class_id] }
 }
 

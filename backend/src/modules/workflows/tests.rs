@@ -1237,6 +1237,56 @@ async fn activation_conflicts_do_not_name_workflows_the_manager_cannot_view() {
     db.drop().await;
 }
 
+/// GH#746: a schema change of a field a workflow depends on is refused for
+/// everyone, but the 409 names the workflow only to a caller who may read it:
+/// `workflows.manage` and the view right on every type it covers. A global
+/// right such as `datamodel.manage` never implies that.
+#[tokio::test]
+async fn field_refusals_do_not_name_workflows_the_caller_cannot_view() {
+    let Some(db) = scratch::database("workflow_field_refusal_scope").await else { return };
+    let w = world(&db).await;
+    let body = json!({ "key": "hidden_driver", "name": "Hidden driver", "classId": w.server,
+        "stateAttributeId": w.lifecycle });
+    let flow = id(&post(&w.app, &w.admin, BASE, body).await);
+    let draft = format!("{BASE}/{flow}/draft");
+    let (status, v) = w.call("PUT", &draft, Some(lifecycle_graph())).await;
+    assert_eq!(status, 200, "{v}");
+    let body = json!({ "expectedDraftChecksum": v["checksum"] });
+    let (status, v) = w.call("POST", &format!("{draft}/publish"), Some(body)).await;
+    assert_eq!(status, 201, "{v}");
+    let (status, v) = w.call("PATCH", &format!("{BASE}/{flow}"), Some(json!({ "version": 2, "isActive": true }))).await;
+    assert_eq!(status, 200, "{v}");
+
+    let other = id(&post(&w.app, &w.admin, "/api/v1/ci-classes", json!({ "key": "other", "name": "Other" })).await);
+    let field = format!("/api/v1/attribute-definitions/{}", w.lifecycle);
+    let archive = json!({ "isActive": false });
+    let refused = vec![("id".to_owned(), "workflow_reference".to_owned())];
+    let callers = [
+        // The data-model manager of the repro: no workflow right, no view of Server.
+        w.scoped_user("model_only", &["datamodel.manage"], &[(other, true)]).await,
+        // Both rights, but not the view of Server.
+        w.scoped_user("model_and_flows", &["datamodel.manage", "workflows.manage"], &[(other, true)]).await,
+        // The view of Server, but no workflow right.
+        w.scoped_user("model_viewer", &["datamodel.manage"], &[(w.server, true)]).await,
+    ];
+    for who in &callers {
+        let (status, v, _) = call(&w.app, "GET", &format!("{BASE}/{flow}"), who, None).await;
+        assert!(matches!(status, 403 | 404), "{v}");
+        let (status, v, _) = call(&w.app, "PATCH", &field, who, Some(archive.clone())).await;
+        assert_eq!((status, code(&v), details(&v)), (409, "IN_USE", refused.clone()), "{v}");
+        assert!(!v.to_string().contains("hidden_driver"), "names the workflow: {v}");
+        assert!(v["error"]["message"].as_str().unwrap().contains("ask an administrator"), "{v}");
+    }
+
+    // The administrator, who may read it, is told which versions.
+    let (status, v) = w.call("PATCH", &field, Some(archive)).await;
+    assert_eq!((status, code(&v)), (409, "IN_USE"), "{v}");
+    let message = v["error"]["message"].as_str().unwrap();
+    assert!(message.contains("hidden_driver (state field)") && message.contains("hidden_driver v1 (published)"), "{v}");
+    assert_eq!(details(&v).len(), 2, "{v}");
+    db.drop().await;
+}
+
 /// GH#667 (SHAA-2176): the types a workflow covers include the subtypes when
 /// `includeSubclasses` is on, which is the default. A manager with view and
 /// edit on a type, but not on a subtype below it, can neither create a
