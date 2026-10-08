@@ -596,6 +596,19 @@ async function main() {
   await patch(`/api/v1/configuration-items/${server.id}`, { attributes: { cpu_cores: 1.5 } }, 400);
   await patch(`/api/v1/configuration-items/${server.id}`, { version: 5 }, 400); // nothing to update
 
+  // Bulk update (SHAA-2354): one result per CI in request order, per-CI refusal, allOrNothing.
+  const bulkUrl = '/api/v1/configuration-items/bulk-update';
+  const bulkPeer = (await post('/api/v1/configuration-items', { classId: serverClass, attributes: { name: `smoke-bulk-${RUN}`, status: inService } })).json;
+  const bulk = (await post(bulkUrl, { ids: [old.id, bulkPeer.id, database.id], attributes: { cpu_cores: 4 } }, 200)).json;
+  check(bulk.committed && bulk.succeeded === 2 && bulk.failed === 1 && bulk.results.map((r: Json) => r.index).join() === '0,1,2' &&
+    bulk.results[1].ok && bulk.results[1].item?.version === bulkPeer.version + 1 && !bulk.results[2].ok && bulk.results[2].error?.code,
+    'bulk update writes the CIs that pass and refuses a CI whose class lacks the attribute');
+  const atomic = (await post(bulkUrl, { ids: [bulkPeer.id, database.id], attributes: { cpu_cores: 8 }, allOrNothing: true }, 200)).json;
+  check(!atomic.committed && atomic.failed === 1 && (await get(`/api/v1/configuration-items/${bulkPeer.id}`)).json.attributes.cpu_cores === 4,
+    'allOrNothing writes nothing when one CI is refused');
+  await post(bulkUrl, { ids: [] }, 400);
+  await post(bulkUrl, { ids: [bulkPeer.id] }, 400); // nothing to update
+
   // --- Relationships ------------------------------------------------------------
   console.log('\n# Relationships');
   const r1 = (await post('/api/v1/relationships', { relationshipTypeId: runsOn, sourceCiId: app.id, targetCiId: server.id })).json;

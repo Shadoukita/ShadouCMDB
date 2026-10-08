@@ -9,18 +9,21 @@ pub mod plan;
 pub mod schemas;
 pub mod service;
 
+#[cfg(test)]
+mod bulk_tests;
+
 pub use plan::value_schema;
 
 use axum::http::{Method, StatusCode};
 
 use crate::auth::permissions::GlobalPermission;
 
-use crate::api::route::{CheckedBody, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, Query, Route, route};
+use crate::api::route::{Body, CheckedBody, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, Query, Route, route};
 use crate::http::error::ErrorCode;
 use schemas::{
-    ChangeHistogramQuery, CompletenessQuery, CreateItemBody, DataQualityQuery, ExportItemsQuery, FacetsQuery,
-    GraphQuery, ItemCompletenessQuery, ItemCountHistoryQuery, ListItemsQuery, RelationshipCountHistoryQuery,
-    SearchQuery, UpdateItemBody,
+    BulkUpdateItemsBody, ChangeHistogramQuery, CompletenessQuery, CreateItemBody, DataQualityQuery, ExportItemsQuery,
+    FacetsQuery, GraphQuery, ItemCompletenessQuery, ItemCountHistoryQuery, ListItemsQuery,
+    RelationshipCountHistoryQuery, SearchQuery, UpdateItemBody,
 };
 
 const TAG: &str = "Configuration items";
@@ -143,6 +146,15 @@ pub fn routes() -> Vec<Route> {
                     Ok(b) => Ok(Json(service::update(&api.pool, &api.ctx, id, &b).await?)),
                     Err(invalid) => Err(service::update_errors(&api.pool, &api.ctx, id, invalid).await),
                 }
+            }),
+        route(Method::POST, "/api/v1/configuration-items/bulk-update", "updateConfigurationItemsInBulk")
+            .tag(TAG)
+            .summary("Set the same attribute values (or criticality) on up to 500 CIs, with a result per CI")
+            .description(
+                "For the inventory's bulk edit. Each CI is checked and updated exactly as `updateConfigurationItem` would update it with a body of `attributes` and `criticalityValueId`: edit on its class, the same value validation, workflow-controlled fields and reference rules, and one `update` audit row per CI. A CI the caller may not view is reported as `NOT_FOUND`, like a missing one. All CIs are updated in one transaction, each in a savepoint: a CI that is refused is rolled back alone and reported with the error the single update would have answered (`code`, `message`, `details`). By default the CIs that pass are committed together; with `allOrNothing` a single refusal writes nothing and `committed` is false. Always 200 for a well-formed body: `succeeded` and `failed` count the CIs, `results` has one entry per id in the request's order. CIs are taken in id order, so concurrent bulk updates over the same CIs queue instead of deadlocking. A server fault rolls back every CI (500).",
+            )
+            .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<BulkUpdateItemsBody>>| async move {
+                Ok(Json(service::bulk_update(&api.pool, &api.ctx, &b).await?))
             }),
         route(Method::DELETE, BY_ID, "deleteConfigurationItem")
             .tag(TAG)
