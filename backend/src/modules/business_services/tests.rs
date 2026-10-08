@@ -2127,3 +2127,39 @@ async fn inventory_export_streams_past_one_batch() {
     assert_eq!(labels, expected);
     db.drop().await;
 }
+
+/// A restricted caller's export past several cursor batches, with hidden CIs
+/// interleaved in the sort order: only the classes they may view, every one
+/// once, in order, and the audit row counts what they were sent.
+#[tokio::test]
+async fn inventory_export_streams_only_the_restricted_callers_view() {
+    let Some(db) = scratch::database("inventory_export_restricted_batches").await else { return };
+    let w = World::new(&db, BusinessServiceConfig::default()).await;
+    sqlx::query(
+        "INSERT INTO configuration_items (class_id, label)
+         SELECT CASE WHEN g % 3 = 0 THEN $2 ELSE $1 END, 'bulk-' || lpad(g::text, 5, '0') FROM generate_series(1, 2500) g",
+    )
+    .bind(w.classes["server"])
+    .bind(w.classes["datastore"])
+    .execute(&w.pool)
+    .await
+    .unwrap();
+    let (viewer_id, viewer) = w.user("viewer", &[("server", false)], &[]).await;
+    let (status, _, body) =
+        raw(&w.app, "GET", "/api/v1/configuration-items/export?columns=label,class&sort=label", &viewer, None).await;
+    assert_eq!(status, 200, "{body}");
+    let rows = csv_rows(&body);
+    let labels: Vec<&str> = rows[1..].iter().map(|r| r[0].as_str()).collect();
+    let expected: Vec<String> = (1..=2500).filter(|i| i % 3 != 0).map(|i| format!("bulk-{i:05}")).collect();
+    assert_eq!(labels, expected, "no datastore, none twice, the list's order");
+    let row_count: Value =
+        sqlx::query_scalar("SELECT new_value -> 'rowCount' FROM audit_log WHERE action = 'export' AND actor_id = $1")
+            .bind(viewer_id.to_string())
+            .fetch_one(&w.pool)
+            .await
+            .unwrap();
+    assert_eq!(row_count, json!(expected.len()));
+    let (_, list) = w.get(&viewer, "/api/v1/configuration-items?limit=1").await;
+    assert_eq!(list["page"]["total"], json!(expected.len()), "the list agrees");
+    db.drop().await;
+}
