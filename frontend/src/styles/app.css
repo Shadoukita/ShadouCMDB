@@ -166,8 +166,11 @@ dl.props dd {
   border-bottom: 1px solid var(--c-divider);
   min-height: 26px;
 }
+/* A label as wide as its column wraps instead of running into the value. */
 dl.props dt {
   color: var(--c-text-muted);
+  padding-inline-end: var(--sp-3);
+  overflow-wrap: break-word;
 }
 dl.props dd {
   word-break: break-word;
