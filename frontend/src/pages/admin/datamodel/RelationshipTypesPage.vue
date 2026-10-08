@@ -215,18 +215,20 @@ const ruleMenu = (r: Rule): RowMenuItem[] => [{ label: t("common.delete"), actio
 </script>
 
 <template>
-  <Breadcrumbs :items="adminCrumbs('relationships')" />
-  <div class="page-header">
-    <div class="title">
-      <h1>{{ t("dm.relTypes.title") }}</h1>
-      <span v-if="types.data.value" class="muted count">{{ t("common.total", { n: formatNumber(types.data.value.page.total) }) }}</span>
-      <span v-if="reorder.isPending.value || patchType.isPending.value" class="spinner" :aria-label="t('common.saving')" />
+  <div class="list-head">
+    <Breadcrumbs :items="adminCrumbs('relationships')" />
+    <div class="page-header">
+      <div class="title">
+        <h1>{{ t("dm.relTypes.title") }}</h1>
+        <span v-if="types.data.value" class="count mono">{{ t("common.total", { n: formatNumber(types.data.value.page.total) }) }}</span>
+        <span v-if="reorder.isPending.value || patchType.isPending.value" class="spinner" :aria-label="t('common.saving')" />
+      </div>
+      <div class="actions">
+        <button type="button" class="btn btn-primary" @click="openType(null)"><Icon name="plus" />{{ t("dm.relTypes.create") }}</button>
+      </div>
     </div>
-    <div class="actions">
-      <button type="button" class="btn btn-primary" @click="openType(null)"><Icon name="plus" />{{ t("dm.relTypes.create") }}</button>
-    </div>
+    <p class="page-intro">{{ t("dm.relTypes.intro") }}</p>
   </div>
-  <p class="page-intro">{{ t("dm.relTypes.intro") }}</p>
   <ErrorAlert v-if="reorder.isError.value" :error="reorder.error.value" :title="t('dm.lookup.reorderFailed')" />
   <ErrorAlert v-if="patchType.isError.value" :error="patchType.error.value" :title="t('formError.notSaved')" />
 
@@ -243,7 +245,7 @@ const ruleMenu = (r: Rule): RowMenuItem[] => [{ label: t("common.delete"), actio
       </template>
     </EmptyState>
     <div v-if="rows.length > 0" class="table-wrap">
-      <table class="data reorderable relationship-types">
+      <table class="data list-table reorderable relationship-types">
         <thead>
           <tr>
             <th scope="col" class="drag-col"><span class="sr-only">{{ t("dm.lookup.col.drag") }}</span></th>
@@ -268,7 +270,7 @@ const ruleMenu = (r: Rule): RowMenuItem[] => [{ label: t("common.delete"), actio
           >
             <td class="drag-handle" aria-hidden="true" :title="t('dm.lookup.col.drag')"><Icon name="grip-vertical" /></td>
             <td>
-              <RouterLink :to="{ query: { type: rt.id } }">{{ rt.name }}</RouterLink>
+              <RouterLink class="list-name" :to="{ query: { type: rt.id } }" dir="auto">{{ rt.name }}</RouterLink>
               <span v-if="!rt.isDirectional" class="badge" :title="t('dm.relTypes.symmetricTitle')">{{ t("dm.relTypes.symmetric") }}</span>
             </td>
             <td class="mono">{{ rt.key }}</td>
@@ -280,8 +282,8 @@ const ruleMenu = (r: Rule): RowMenuItem[] => [{ label: t("common.delete"), actio
             </td>
             <td>{{ rules.data.value ? formatNumber(rulesOf(rt.id).length) : "" }}</td>
             <td>
-              <span v-if="rt.isActive" class="badge ok">{{ t("common.active") }}</span>
-              <span v-else class="badge off">{{ t("dm.lookup.archivedBadge") }}</span>
+              <span v-if="rt.isActive" class="badge ok"><span class="status-dot" aria-hidden="true" />{{ t("common.active") }}</span>
+              <span v-else class="badge off"><span class="status-dot" aria-hidden="true" />{{ t("dm.lookup.archivedBadge") }}</span>
             </td>
             <td class="order-buttons">
               <button type="button" class="btn btn-sm btn-icon" :disabled="reorder.isPending.value || rows.indexOf(rt) === 0" :aria-label="t('dm.lookup.moveUp', { name: rt.name })" @click="step(rt, -1)"><Icon name="arrow-up" /></button>
@@ -313,7 +315,7 @@ const ruleMenu = (r: Rule): RowMenuItem[] => [{ label: t("common.delete"), actio
         </template>
       </EmptyState>
       <div v-else class="table-wrap">
-        <table class="data">
+        <table class="data list-table relationship-rules">
           <thead>
             <tr>
               <th scope="col">{{ t("dm.relTypes.rules.col.source") }}</th>
@@ -324,12 +326,12 @@ const ruleMenu = (r: Rule): RowMenuItem[] => [{ label: t("common.delete"), actio
           </thead>
           <tbody>
             <tr v-for="r in selectedRules" :key="r.id">
-              <td><RouterLink :to="`/admin/classes/${r.sourceClassId}`">{{ className(r.sourceClassId) }}</RouterLink></td>
+              <td><RouterLink class="list-name" :to="`/admin/classes/${r.sourceClassId}`" dir="auto">{{ className(r.sourceClassId) }}</RouterLink></td>
               <td class="muted">
                 {{ className(r.sourceClassId) }} <strong>{{ selected.forwardLabel }}</strong> {{ className(r.targetClassId) }} ·
                 {{ className(r.targetClassId) }} <strong>{{ selected.reverseLabel }}</strong> {{ className(r.sourceClassId) }}
               </td>
-              <td><RouterLink :to="`/admin/classes/${r.targetClassId}`">{{ className(r.targetClassId) }}</RouterLink></td>
+              <td><RouterLink class="list-name" :to="`/admin/classes/${r.targetClassId}`" dir="auto">{{ className(r.targetClassId) }}</RouterLink></td>
               <td class="row-actions">
                 <RowMenu :label="t('inventory.rowMenu', { name: ruleText(r) })" :items="ruleMenu(r)" />
               </td>
