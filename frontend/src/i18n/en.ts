@@ -1702,6 +1702,7 @@ export const en = {
   "audit.entity.user_groups": "User group",
   "audit.entity.saved_views": "Shared view",
   "audit.entity.config": "Configuration file",
+  "audit.entity.inventory": "Inventory export",
   "audit.entity.ci_layout_overrides": "CI layout",
   "audit.entity.workflow_definitions": "Workflow",
   "audit.entity.workflow_approval_delegations": "Approval delegation",

@@ -427,6 +427,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/configuration-items/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Inventory list as CSV: the current query's filters, sort and columns, streamed
+         * @description The CIs `listConfigurationItems` returns for the same filters and sort, all of them (no page), as a CSV file (`Content-Disposition: attachment`) with the columns in `columns`. Only CIs of classes the caller may view; a reference to a CI the caller may not view is left empty. The file starts with a UTF-8 byte order mark and a header row: the built-in fields in snake case (id, label, ident, class, criticality, valid_from, valid_until, active, created_at, updated_at) and attributes by key, so a bulk import maps them by itself. Lookups show the value name, references the referenced CI's label, booleans true/false, dates and times ISO 8601 (UTC). Every field is quoted; a value starting with a tab or a line break, or with =, +, -, @ or their full-width forms after any leading spaces, is prefixed with ' so spreadsheets do not run it as a formula (a value already starting with ' gets a second one). The rows are read from one consistent snapshot and streamed, so the file may be large; a download cut short (the database failed, the client stopped reading for 30 s, or it took more than 30 minutes) ends with a broken connection, never with a file that looks complete. Each export is recorded in the audit log before the first byte (action `export`, entity type `inventory`, nil entity id, with the columns, sort, filters and row count, never the rows), so a signed-in session must send X-CSRF-Token as on a write. 400 on `columns` for an unknown column (`unknown_column`), a column listed twice (`duplicate`), more than 50 (`too_big`), an attribute column without classId (`class_required`) or an attribute that is not an active attribute of every class in classId (`unknown_attribute`); `sort` and the filters are checked as on the list. 429 RATE_LIMITED when the caller already runs 2 exports, 503 SERVER_BUSY when the server runs 4.
+         */
+        get: operations["exportConfigurationItems"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/configuration-items/facets": {
         parameters: {
             query?: never;
@@ -2548,7 +2568,7 @@ export interface paths {
         };
         /**
          * Change history (read-only, paginated, newest first by default)
-         * @description Requires `audit.view`. Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. API tokens (`entityType` api_tokens) record `create` and `update` (revocation), and a `token.use` row for every request made with a known token, accepted or refused: `newValue` holds the token's name and prefix, owner, `outcome` (accepted, revoked, expired, owner_disabled, provider_disabled, mfa_required, account_incomplete, email_required, no_scope, session_only, forbidden), method, path (first 512 characters, then `…`, with `pathLength`), `operationId`, `ipAddress` and `userAgent`; a token that can no longer authenticate (revoked, expired, owner_disabled, provider_disabled, mfa_required, account_incomplete, email_required, no_scope) is recorded at most once a minute per outcome, the next row counting the uses left out in `unrecordedRefusals`; when no later request comes, a summary row (`actorType` system, no method or path) carries `unrecordedRefusals`, `windowStart` and `windowEnd` after the window ends or at graceful shutdown. Changes made with a token have `actorType` api_client and the owner as actor; the `token.use` row shares their `requestId`. Two-factor authentication events have `entityType` users and the user's id: `mfa.enrol`, `mfa.disable` (`reason` self_service or admin_reset), `mfa.failure` (a wrong or replayed code; `stage` login, disable or recovery_codes), `mfa.recovery_code_used` (with `recoveryCodesRemaining`) and `mfa.recovery_codes` (new codes replaced the old); sign-ins record `method` password, totp, recovery_code, setup, oidc or ldap in `login.success`. Identity providers (`entityType` identity_providers) record `create`, `update` and `delete` without their secrets; an account an identity provider creates or updates at sign-in is a `create` or `update` row on `users` with `actorType` system and `actorName` `identity provider "<name>"` (a new account whose provider address another account or person has is created without one, the address in `providerEmailConflict` of its `create` row), and a sign-in the provider vouched for but ShadouCMDB refused is a `login.failure`. A data model preview refused for a missing right (e.g. a field type change by a user who may not view every type storing the field) is a `schema_change.refused` row on the area, type or field previewed, `newValue` holding the operation, the body sent, `code`, `field` and `message`. A data export is an `export` row on what was exported (`entityType` configuration_items), `newValue` holding `kind`, `format`, `rowCount` and `visibility`, never the rows: the impact analysis CSV (`kind` impact, on the analysed CI, with the `parameters`, `truncated` and `truncatedReason`), a business service's member CSV (`kind` business_service_members, on the service), and the configuration file (`kind` config, `entityType` config with the nil id, `newValue` holding `format`, `formatVersion`, `sections`, `profilesIncluded` and `mappingCount`, never the content). Adding or removing business service members records one relationship `create` or `delete` per member plus one `update` on the service whose `oldValue` and `newValue` are both `{"members": {"added": [ids], "removed": [ids]}}`; replacing its owners records one `update` on the service whose `oldValue` and `newValue` are `{"owners": {"technical": [...], "business": [...]}}`, each owner as `kind`, `id` and `name`. An operator's `shadoucmdb prune-audit` leaves an `audit.purge` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the scope, window, cutoff, the number of rows deleted per action and the `chainSeq` ranges deleted (`deletedRanges`); those rows are never pruned. A `shadoucmdb restore` leaves a `backup.restore` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the `backup` (`database`, `createdAt`, `appVersion`, `migration`, `rows`, `sha256`, `seal` verified, unsigned or unknown_key, and `keyId`), the `restoredHead` (`chainSeq` and `rowHash` of the audit chain as the backup brought it back), `replacedExisting` and `appVersion`; it is never pruned either. A caller whose profile limits the classes they may view does not get entries about a CI of another class, or of a CI that no longer exists, nor relationship entries with an endpoint in one, judged by the CIs' current classes and, for a CI, every class it had in either value: those entries are left out of the page and of `page.total` whatever the filters, so neither tells that they exist. For the same reason such a caller does not get the stored sequence number as `id`, which would show a gap where an entry was left out, but a keyed permutation of it: stable and distinct per entry, unrelated in order or distance to any other (a rotation of the encryption key changes it). In the CI entries they may see, a reference attribute into a CI they may not view keeps only its id (`attributeReferences` shows it hidden, as the item endpoints do), and a business service's membership change lists only the members they may view: one naming none of those is left out like the entries above. Counts an entry took with its writer's view are null to them unless they wrote it: `rowCount`, `truncated` and `truncatedReason` of a CI export (impact, business service members), and `created`, `updated`, `unchanged`, `skipped`, `failed` and `relationshipsAdded` of an `import.commit`, which may span classes they may not view. In `token.use` rows, the id in a `path` that names a CI (`/configuration-items/{id}`, `/configuration-items/{id}/graph`, `/configuration-items/{id}/impact`, `/configuration-items/{id}/impact/export`, `/configuration-items/{id}/business-services`, `/business-services/{id}` and every path below it, whose member in `/business-services/{id}/members/{ciId}` is judged on its own) or relationship (`/relationships/{id}`) they may not view (a relationship: both endpoints) is replaced with `{hidden}`, e.g. `/api/v1/configuration-items/{hidden}/graph`; the rest of the row stays. Schema change entries (`entityType` schema_changes) show `summary` and `impact` as getSchemaChange shows them to the caller: counts of stored data only with the view right on every type they describe. A field entry that lists values stored in CIs (`notMappedValues`, from the upgrade that archived the Application field criticality) keeps its counts but lists the values only to a caller who may view the field's type and every type below it. Shared saved views (`entityType` saved_views) record `create`, `update` and `delete` with the view's `name`, `description`, `context`, `visibility` and `definition` (a shared copy's `create` names its source view in `copiedFrom`; views a configuration import writes have `actorType` import); personal views and default views are not recorded. In those entries a caller whose profile limits the classes they may view does not get the keys of other classes in `definition.classKeys`: they are left out and counted in `hiddenClassKeyCount`, and an entry in which either value names classes but none they may view (a view the saved-view API answers 404 to them) is left out of the page and of `page.total`. Workflow definitions (`entityType` workflow_definitions) record `create`, `update` and `delete`, and `workflow.publish` for each published version; a caller whose profile limits the classes they may view gets only the entries of definitions on a class they may view that still exist. A workflow run is recorded on its CI (`entityType` configuration_items): `workflow.start` and `workflow.cancel` (details in `newValue`), and `workflow.transition`, `workflow.migrate` and `workflow.force` (before and after), and `workflow.approval_refresh` (an approval step's approvers before and after), so it follows the visibility rules of CI entries. Passwords (local or directory), session tokens, CSRF tokens, API token secrets, TOTP secrets, authenticator or recovery codes, OIDC client secrets, authorization codes and ID tokens, and LDAP bind passwords are never recorded.
+         * @description Requires `audit.view`. Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. API tokens (`entityType` api_tokens) record `create` and `update` (revocation), and a `token.use` row for every request made with a known token, accepted or refused: `newValue` holds the token's name and prefix, owner, `outcome` (accepted, revoked, expired, owner_disabled, provider_disabled, mfa_required, account_incomplete, email_required, no_scope, session_only, forbidden), method, path (first 512 characters, then `…`, with `pathLength`), `operationId`, `ipAddress` and `userAgent`; a token that can no longer authenticate (revoked, expired, owner_disabled, provider_disabled, mfa_required, account_incomplete, email_required, no_scope) is recorded at most once a minute per outcome, the next row counting the uses left out in `unrecordedRefusals`; when no later request comes, a summary row (`actorType` system, no method or path) carries `unrecordedRefusals`, `windowStart` and `windowEnd` after the window ends or at graceful shutdown. Changes made with a token have `actorType` api_client and the owner as actor; the `token.use` row shares their `requestId`. Two-factor authentication events have `entityType` users and the user's id: `mfa.enrol`, `mfa.disable` (`reason` self_service or admin_reset), `mfa.failure` (a wrong or replayed code; `stage` login, disable or recovery_codes), `mfa.recovery_code_used` (with `recoveryCodesRemaining`) and `mfa.recovery_codes` (new codes replaced the old); sign-ins record `method` password, totp, recovery_code, setup, oidc or ldap in `login.success`. Identity providers (`entityType` identity_providers) record `create`, `update` and `delete` without their secrets; an account an identity provider creates or updates at sign-in is a `create` or `update` row on `users` with `actorType` system and `actorName` `identity provider "<name>"` (a new account whose provider address another account or person has is created without one, the address in `providerEmailConflict` of its `create` row), and a sign-in the provider vouched for but ShadouCMDB refused is a `login.failure`. A data model preview refused for a missing right (e.g. a field type change by a user who may not view every type storing the field) is a `schema_change.refused` row on the area, type or field previewed, `newValue` holding the operation, the body sent, `code`, `field` and `message`. A data export is an `export` row on what was exported (`entityType` configuration_items), `newValue` holding `kind`, `format`, `rowCount` and `visibility`, never the rows: the impact analysis CSV (`kind` impact, on the analysed CI, with the `parameters`, `truncated` and `truncatedReason`), a business service's member CSV (`kind` business_service_members, on the service), the inventory list CSV (`kind` inventory, `entityType` inventory with the nil id, `newValue` adding the `columns`, `sort` and `filters` of the query), and the configuration file (`kind` config, `entityType` config with the nil id, `newValue` holding `format`, `formatVersion`, `sections`, `profilesIncluded` and `mappingCount`, never the content). Adding or removing business service members records one relationship `create` or `delete` per member plus one `update` on the service whose `oldValue` and `newValue` are both `{"members": {"added": [ids], "removed": [ids]}}`; replacing its owners records one `update` on the service whose `oldValue` and `newValue` are `{"owners": {"technical": [...], "business": [...]}}`, each owner as `kind`, `id` and `name`. An operator's `shadoucmdb prune-audit` leaves an `audit.purge` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the scope, window, cutoff, the number of rows deleted per action and the `chainSeq` ranges deleted (`deletedRanges`); those rows are never pruned. A `shadoucmdb restore` leaves a `backup.restore` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the `backup` (`database`, `createdAt`, `appVersion`, `migration`, `rows`, `sha256`, `seal` verified, unsigned or unknown_key, and `keyId`), the `restoredHead` (`chainSeq` and `rowHash` of the audit chain as the backup brought it back), `replacedExisting` and `appVersion`; it is never pruned either. A caller whose profile limits the classes they may view does not get entries about a CI of another class, or of a CI that no longer exists, nor relationship entries with an endpoint in one, judged by the CIs' current classes and, for a CI, every class it had in either value: those entries are left out of the page and of `page.total` whatever the filters, so neither tells that they exist. For the same reason such a caller does not get the stored sequence number as `id`, which would show a gap where an entry was left out, but a keyed permutation of it: stable and distinct per entry, unrelated in order or distance to any other (a rotation of the encryption key changes it). In the CI entries they may see, a reference attribute into a CI they may not view keeps only its id (`attributeReferences` shows it hidden, as the item endpoints do), and a business service's membership change lists only the members they may view: one naming none of those is left out like the entries above. Counts an entry took with its writer's view are null to them unless they wrote it: `rowCount`, `truncated` and `truncatedReason` of a CI export (impact, business service members, inventory), and `created`, `updated`, `unchanged`, `skipped`, `failed` and `relationshipsAdded` of an `import.commit`, which may span classes they may not view. In `token.use` rows, the id in a `path` that names a CI (`/configuration-items/{id}`, `/configuration-items/{id}/graph`, `/configuration-items/{id}/impact`, `/configuration-items/{id}/impact/export`, `/configuration-items/{id}/business-services`, `/business-services/{id}` and every path below it, whose member in `/business-services/{id}/members/{ciId}` is judged on its own) or relationship (`/relationships/{id}`) they may not view (a relationship: both endpoints) is replaced with `{hidden}`, e.g. `/api/v1/configuration-items/{hidden}/graph`; the rest of the row stays. An inventory export whose `filters.classId` names a class they may not view keeps only its action, actor and time, like a CI entry of such a class. Schema change entries (`entityType` schema_changes) show `summary` and `impact` as getSchemaChange shows them to the caller: counts of stored data only with the view right on every type they describe. A field entry that lists values stored in CIs (`notMappedValues`, from the upgrade that archived the Application field criticality) keeps its counts but lists the values only to a caller who may view the field's type and every type below it. Shared saved views (`entityType` saved_views) record `create`, `update` and `delete` with the view's `name`, `description`, `context`, `visibility` and `definition` (a shared copy's `create` names its source view in `copiedFrom`; views a configuration import writes have `actorType` import); personal views and default views are not recorded. In those entries a caller whose profile limits the classes they may view does not get the keys of other classes in `definition.classKeys`: they are left out and counted in `hiddenClassKeyCount`, and an entry in which either value names classes but none they may view (a view the saved-view API answers 404 to them) is left out of the page and of `page.total`. Workflow definitions (`entityType` workflow_definitions) record `create`, `update` and `delete`, and `workflow.publish` for each published version; a caller whose profile limits the classes they may view gets only the entries of definitions on a class they may view that still exist. A workflow run is recorded on its CI (`entityType` configuration_items): `workflow.start` and `workflow.cancel` (details in `newValue`), and `workflow.transition`, `workflow.migrate` and `workflow.force` (before and after), and `workflow.approval_refresh` (an approval step's approvers before and after), so it follows the visibility rules of CI entries. Passwords (local or directory), session tokens, CSRF tokens, API token secrets, TOTP secrets, authenticator or recovery codes, OIDC client secrets, authorization codes and ID tokens, and LDAP bind passwords are never recorded.
          */
         get: operations["listAuditLog"];
         put?: never;
@@ -10517,6 +10537,119 @@ export interface operations {
             };
             /** @description Request not completed in time (code REQUEST_TIMEOUT) */
             408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    exportConfigurationItems: {
+        parameters: {
+            query?: {
+                /** @description Comma-separated columns in file order, at most 50, each once: id, label, ident, class, criticality, validFrom, validUntil, active, createdAt, updatedAt, or attributes.<key> (needs classId; the attribute must be an active attribute of every class in classId, its own or inherited). Default: label,ident,class,active,updatedAt, the inventory list's default columns. */
+                columns?: string;
+                /** @description Field separator: comma (default) or semicolon (what Excel expects where the decimal separator is a comma) */
+                delimiter?: "comma" | "semicolon";
+                /** @description Search label, ident and attribute values */
+                q?: string;
+                /** @description Sort field; prefix with "-" for descending. One of: label, ident, className, criticality, validFrom, validUntil, createdAt, updatedAt, or attributes.<key> (needs classId; the attribute must be the same one on every class in classId, and not a reference). Attributes sort case-insensitively for text, by address for IP/CIDR and by list order for lookups; CIs without a value come last. */
+                sort?: string;
+                /** @description Filter by class (includes subclasses unless includeSubclasses=false) */
+                classId?: string;
+                includeSubclasses?: "true" | "false";
+                /** @description true: only CIs inside their validity period (validFrom <= now < validUntil); false: only those outside it; all: both */
+                active?: "true" | "false" | "all";
+                /** @description Lookup list value ids, comma-separated: CIs holding one of them in a lookup attribute. Values of different lists must all match (status A or B, and environment C). */
+                lookupValueId?: string;
+                /** @description Only CIs with a value of an IP attribute inside this CIDR, e.g. 10.20.0.0/16 */
+                ipWithin?: string;
+                /** @description Criticality value ids, comma-separated: CIs holding one of them */
+                criticalityValueId?: string;
+                /** @description Soft-deleted CIs: exclude (default), include, or only */
+                deleted?: "exclude" | "include" | "only";
+                /** @description true: only CIs with a layout of their own (another template or a custom layout, see /configuration-items/{id}/layout); false: only CIs that show their class's default template */
+                ownLayout?: "true" | "false";
+                /** @description Only CIs that show this layout template (`layoutTemplates[].key`) as their own layout, not as their class's default */
+                layoutTemplate?: string;
+                /** @description CIs by the kind of their type: asset, process (records such as change requests) or any. Without it, process records are left out unless their type is named in classId. */
+                kind?: "asset" | "process" | "any";
+                /** @description Business service ids (CI ids), comma-separated: CIs that are a direct member of one of them. A service the caller may not view, or a deleted one, has no members here. */
+                businessServiceId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Too many requests (code RATE_LIMITED): failed password attempts, or the limit named in details[0].code; see the Retry-After header */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -24665,7 +24798,7 @@ export interface operations {
                 offset?: number;
                 /** @description Sort field; prefix with "-" for descending. One of: occurredAt */
                 sort?: "occurredAt" | "-occurredAt";
-                entityType?: "configuration_items" | "ci_relationships" | "ci_classes" | "ci_attribute_definitions" | "relationship_types" | "relationship_type_rules" | "statuses" | "environments" | "locations" | "owners" | "users" | "permission_profiles" | "ui_settings" | "ui_assets" | "sessions" | "audit_log" | "areas" | "schema_changes" | "api_tokens" | "identity_providers" | "lookup_lists" | "lookup_list_values" | "import_jobs" | "import_settings" | "import_mappings" | "user_groups" | "saved_views" | "config" | "ci_layout_overrides" | "workflow_definitions" | "workflow_approval_delegations";
+                entityType?: "configuration_items" | "ci_relationships" | "ci_classes" | "ci_attribute_definitions" | "relationship_types" | "relationship_type_rules" | "statuses" | "environments" | "locations" | "owners" | "users" | "permission_profiles" | "ui_settings" | "ui_assets" | "sessions" | "audit_log" | "areas" | "schema_changes" | "api_tokens" | "identity_providers" | "lookup_lists" | "lookup_list_values" | "import_jobs" | "import_settings" | "import_mappings" | "user_groups" | "saved_views" | "config" | "inventory" | "ci_layout_overrides" | "workflow_definitions" | "workflow_approval_delegations";
                 /** @description History of these entities */
                 entityId?: string;
                 action?: "create" | "update" | "delete" | "restore" | "login.success" | "login.failure" | "login.locked" | "logout" | "session.revoke" | "audit.purge" | "token.use" | "mfa.enrol" | "mfa.disable" | "mfa.failure" | "mfa.recovery_code_used" | "mfa.recovery_codes" | "schema_change.refused" | "export" | "import.commit" | "import.report_read" | "session.reauthenticate" | "session.reauthentication_required" | "workflow.publish" | "workflow.start" | "workflow.cancel" | "workflow.transition" | "workflow.migrate" | "workflow.force" | "workflow.approval_request" | "workflow.approval_decide" | "workflow.approval_close" | "workflow.approval_overdue" | "backup.restore" | "workflow.approval_refresh";

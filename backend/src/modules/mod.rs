@@ -8,6 +8,7 @@ pub mod business_services;
 pub mod classes;
 pub mod config_transfer;
 pub mod csv_safe;
+pub mod download_slots;
 pub mod groups;
 pub mod health;
 pub mod identity_providers;

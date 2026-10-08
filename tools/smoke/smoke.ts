@@ -123,7 +123,7 @@ function checkResponse(op: Op, status: number, json: unknown): void {
 }
 
 /** The audited exports and import job reads are GETs that still need the CSRF token: `.csrf_on_read()` in the backend, `CSRF_READS` in `frontend/src/api/client.ts`. */
-const CSRF_READS = /\/api\/v1\/((configuration-items\/[^/]+\/impact|business-services\/[^/]+\/members|admin\/config)\/export|imports\/[0-9a-f-]{36}(\/issues|\/error-report)?)$/;
+const CSRF_READS = /\/api\/v1\/((configuration-items(\/[^/]+\/impact)?|business-services\/[^/]+\/members|admin\/config)\/export|imports\/[0-9a-f-]{36}(\/issues|\/error-report)?)$/;
 
 async function call(
   method: string,
@@ -519,6 +519,28 @@ async function main() {
   check(listedApp?.attributes?.url === 'https://smoke.example.com' && listedApp?.attributes?.primary_database === database.id
     && listedApp?.attributeReferences?.primary_database?.name === database.label && !('memory_gb' in listedApp.attributes),
     'list items carry attribute values and reference names');
+  // The same query as a CSV file: audited before the first byte, so a session GET needs the CSRF token.
+  const inventoryQuery = `classId=${appClass}&q=smoke-app-${RUN}&columns=id,label,class,attributes.url,attributes.primary_database`;
+  await call('GET', `/api/v1/configuration-items/export?${inventoryQuery}`, undefined, 403, { 'x-csrf-token': '' }).then((r) =>
+    check(r.json.error?.code === 'CSRF_TOKEN_INVALID', 'an inventory export GET without the CSRF token is rejected'));
+  const inventory = await get(`/api/v1/configuration-items/export?${inventoryQuery}`);
+  const inventoryLines = new TextDecoder('utf-8', { ignoreBOM: true }).decode(inventory.bytes).split('\r\n');
+  check(
+    inventory.headers.get('content-type') === 'text/csv; charset=utf-8' && inventory.headers.get('cache-control') === 'no-store' &&
+      /^attachment; filename="inventory-\d{8}-\d{6}\.csv";/.test(inventory.headers.get('content-disposition') ?? ''),
+    'inventory CSV export headers',
+  );
+  check(
+    inventoryLines[0] === '\ufeff"id","label","class","url","primary_database"' &&
+      inventoryLines.some((l) => l.startsWith(`"${app.id}",`) && l.includes('"https://smoke.example.com"') && l.endsWith(`"${database.label}"`)),
+    `inventory CSV export rows: ${JSON.stringify(inventoryLines.slice(0, 3))}`,
+  );
+  await get(`/api/v1/configuration-items/export?columns=attributes.url`, 400); // an attribute column needs classId
+  const inventoryAudit = (await get('/api/v1/audit-log?action=export&entityType=inventory&limit=20')).json;
+  check(
+    inventoryAudit.data.some((r: Json) => r.newValue?.kind === 'inventory' && r.newValue.filters?.q === `smoke-app-${RUN}` && r.newValue.rowCount === 1),
+    'the inventory export is audited',
+  );
   await post('/api/v1/configuration-items', { classId: hardware, attributes: { name: 'abstract', status: inService } }, 400);
   await post('/api/v1/configuration-items', { classId: serverClass, attributes: { name: 'bad', status: inService, hostname: '-bad-', ip_address: '10.1.1.300' } }, 400);
   await post('/api/v1/configuration-items', { classId: serverClass, attributes: { status: inService } }, 400); // name is required

@@ -754,6 +754,98 @@ pub struct ListItemsQuery {
 paged!(ListItemsQuery);
 item_filters!(ListItemsQuery, quality);
 
+/// Built-in columns of the inventory export (and `id`); attributes are `attributes.<key>`.
+pub const EXPORT_BUILTIN_COLUMNS: &[&str] =
+    &["id", "label", "ident", "class", "criticality", "validFrom", "validUntil", "active", "createdAt", "updatedAt"];
+/// The export's columns without `columns`: the inventory list's default columns.
+pub const EXPORT_DEFAULT_COLUMNS: &[&str] = &["label", "ident", "class", "active", "updatedAt"];
+/// Most columns in one export (the saved-view and list limit).
+pub const EXPORT_MAX_COLUMNS: usize = 50;
+
+/// The field separator of an exported file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CsvDelimiter {
+    Comma,
+    Semicolon,
+}
+
+impl CsvDelimiter {
+    pub fn char(self) -> char {
+        match self {
+            CsvDelimiter::Comma => ',',
+            CsvDelimiter::Semicolon => ';',
+        }
+    }
+}
+
+fn delimiter_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .enum_values(Some(["comma", "semicolon"]))
+        .default(Some("comma".into()))
+        .description(Some(
+            "Field separator: comma (default) or semicolon (what Excel expects where the decimal separator is a \
+             comma)",
+        ))
+        .into()
+}
+
+fn export_columns_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .min_length(Some(1))
+        .max_length(Some(4000))
+        .description(Some(format!(
+            "Comma-separated columns in file order, at most {EXPORT_MAX_COLUMNS}, each once: {}, or \
+             attributes.<key> (needs classId; the attribute must be an active attribute of every class in classId, \
+             its own or inherited). Default: {}, the inventory list's default columns.",
+            EXPORT_BUILTIN_COLUMNS.join(", "),
+            EXPORT_DEFAULT_COLUMNS.join(",")
+        )))
+        .into()
+}
+
+/// The filters and sort of `listConfigurationItems` (without the page), the
+/// columns and the field separator.
+#[derive(Debug, Deserialize, IntoParams)]
+#[serde(rename_all = "camelCase")]
+#[into_params(parameter_in = Query)]
+pub struct ExportItemsQuery {
+    #[param(schema_with = export_columns_schema)]
+    pub columns: Option<String>,
+    #[param(required = false, schema_with = delimiter_schema)]
+    pub delimiter: CsvDelimiter,
+    #[param(schema_with = list_q_schema)]
+    #[serde(default, deserialize_with = "schemas::trimmed_opt")]
+    pub q: Option<String>,
+    #[param(required = false, schema_with = item_sort)]
+    pub sort: Sort,
+    #[param(schema_with = class_filter_schema)]
+    pub class_id: Option<UuidList>,
+    #[param(required = false, schema_with = include_subclasses_schema)]
+    pub include_subclasses: QueryBool,
+    #[param(required = false, schema_with = active_schema)]
+    pub active: ActiveQuery,
+    #[param(schema_with = lookup_value_filter_schema)]
+    pub lookup_value_id: Option<UuidList>,
+    #[param(schema_with = ip_within_schema)]
+    pub ip_within: Option<String>,
+    #[param(schema_with = criticality_filter_schema)]
+    pub criticality_value_id: Option<UuidList>,
+    #[param(required = false, schema_with = deleted_items_schema)]
+    pub deleted: Deleted,
+    #[param(schema_with = own_layout_schema)]
+    pub own_layout: Option<QueryBool>,
+    #[param(schema_with = layout_template_schema)]
+    pub layout_template: Option<String>,
+    #[param(schema_with = kind_schema)]
+    pub kind: Option<KindQuery>,
+    #[param(schema_with = business_service_filter_schema)]
+    pub business_service_id: Option<UuidList>,
+}
+item_filters!(ExportItemsQuery);
+
 #[derive(Debug, Deserialize, IntoParams)]
 #[serde(rename_all = "camelCase")]
 #[into_params(parameter_in = Query)]

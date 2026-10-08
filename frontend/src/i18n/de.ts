@@ -1716,6 +1716,7 @@ export const de: { [K in MessageKey]: string } = {
   "audit.entity.user_groups": "Benutzergruppe",
   "audit.entity.saved_views": "Geteilte Ansicht",
   "audit.entity.config": "Konfigurationsdatei",
+  "audit.entity.inventory": "Inventarexport",
   "audit.entity.ci_layout_overrides": "CI-Layout",
   "audit.entity.workflow_definitions": "Workflow",
   "audit.entity.workflow_approval_delegations": "Genehmigungsvertretung",
