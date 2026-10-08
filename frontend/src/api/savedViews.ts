@@ -3,6 +3,7 @@
 // invalidate exactly what they change (the view lists of both contexts).
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/vue-query";
 import { computed, toValue, type MaybeRefOrGetter } from "vue";
+import { concurrencyLimit } from "../lib/concurrency";
 import { api, unwrap, type Schemas } from "./client";
 
 export type SavedView = Schemas["SavedView"];
@@ -35,12 +36,17 @@ export function useSavedViews(context: MaybeRefOrGetter<SavedViewContext | "all"
 
 /** The API counts at most this many views per request. */
 const COUNT_BATCH = 50;
+/**
+ * At most this many count requests in flight from this tab (GH#780): the server counts for only a few requests at
+ * once (a quarter of its database pool), and a request that waits too long for its turn answers `timed_out`.
+ */
+const countLimit = concurrencyLimit(2);
 
 /**
  * How many CIs each of the given views shows the caller (GET /saved-views/counts, session only), in requests of
- * at most 50 ids, merged into one map by view id with the cap of `at_least` counts. Read-only and cheap to
- * repeat, but it runs on every page: cached for 30 s, and `refetchStale` refreshes it on navigation rather than
- * on a timer. Changing a view invalidates `savedViewKeys.all`, so the counts follow.
+ * at most 50 ids sent two at a time, merged into one map by view id with the cap of `at_least` counts. Read-only
+ * and cheap to repeat, but it runs on every page: cached for 30 s, and `refetchStale` refreshes it on navigation
+ * rather than on a timer. Changing a view invalidates `savedViewKeys.all`, so the counts follow.
  */
 export function useSavedViewCounts(ids: MaybeRefOrGetter<readonly string[]>) {
   const results = useQueries({
@@ -51,7 +57,12 @@ export function useSavedViewCounts(ids: MaybeRefOrGetter<readonly string[]>) {
       return batches.map((batch) => ({
         queryKey: savedViewKeys.counts(batch),
         staleTime: 30_000,
-        queryFn: ({ signal }: { signal: AbortSignal }) => unwrap(api.GET("/api/v1/saved-views/counts", { params: { query: { ids: batch } }, signal })),
+        queryFn: ({ signal }: { signal: AbortSignal }) =>
+          countLimit(() => {
+            // Cancelled while it waited for its turn (the rail closed or its views changed): never sent.
+            signal.throwIfAborted();
+            return unwrap(api.GET("/api/v1/saved-views/counts", { params: { query: { ids: batch } }, signal }));
+          }),
       }));
     }),
   });
