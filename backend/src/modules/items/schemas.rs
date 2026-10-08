@@ -15,7 +15,7 @@ use uuid::Uuid;
 use crate::api::route::Check;
 use crate::api::schemas::{self, Deleted, LookupRef, PageMeta, QueryBool, Sort, UuidList, trimmed, ts, ts_opt};
 use crate::data::items::{SORT_FIELDS, SORT_PATTERN};
-use crate::http::error::{FieldError, FieldLocation};
+use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
 use crate::paged;
 
 // ---------------------------------------------------------------------------
@@ -437,6 +437,147 @@ impl Check for UpdateItemBody {
         }
         validity_errors(self.valid_from, self.valid_until.flatten())
     }
+}
+
+// ---------------------------------------------------------------------------
+// Bulk update
+// ---------------------------------------------------------------------------
+
+/// Most CIs one bulk update may change.
+pub const BULK_UPDATE_MAX: usize = 500;
+
+fn bulk_ids_schema() -> Schema {
+    utoipa::openapi::schema::ArrayBuilder::new()
+        .items(schemas::uuid_builder())
+        .min_items(Some(1))
+        .max_items(Some(BULK_UPDATE_MAX))
+        .unique_items(true)
+        .description(Some("The CIs to update: 1 to 500, each at most once"))
+        .into()
+}
+
+fn bulk_attributes_schema() -> Schema {
+    attributes_schema(
+        "Set on every CI: merged into its current values as `PATCH /configuration-items/{id}` merges them; null \
+         clears an attribute. Each key must be an attribute of every CI's class.",
+    )
+}
+
+/// The same change for many CIs: the fields of `PATCH /configuration-items/{id}` that make sense across classes.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BulkUpdateItemsBody {
+    #[schema(schema_with = bulk_ids_schema)]
+    pub ids: Vec<Uuid>,
+    #[schema(schema_with = bulk_attributes_schema)]
+    #[serde(default)]
+    pub attributes: Option<Map<String, Value>>,
+    #[schema(schema_with = criticality_schema)]
+    #[serde(default, deserialize_with = "schemas::patch")]
+    pub criticality_value_id: Option<Option<Uuid>>,
+    /// true: when any CI is refused, nothing is written (`committed` is false). false (default): the CIs that pass
+    /// are written and the refused ones are reported.
+    #[serde(default)]
+    pub all_or_nothing: bool,
+}
+
+impl Check for BulkUpdateItemsBody {
+    fn check(&self) -> Vec<FieldError> {
+        let error = |field: &str, message: &str, code: &str| FieldError {
+            location: FieldLocation::Body,
+            field: field.into(),
+            message: message.into(),
+            code: code.into(),
+        };
+        let mut errors = Vec::new();
+        if self.ids.is_empty() {
+            errors.push(error("ids", "Select at least one configuration item", "too_small"));
+        } else if self.ids.len() > BULK_UPDATE_MAX {
+            errors.push(error("ids", &format!("At most {BULK_UPDATE_MAX} configuration items per request"), "too_big"));
+        }
+        // Duplicates are refused by the schema (`uniqueItems`).
+        if self.attributes.as_ref().is_none_or(Map::is_empty) && self.criticality_value_id.is_none() {
+            errors.push(error("(root)", "Provide at least one field to update", "custom"));
+        }
+        errors
+    }
+}
+
+impl BulkUpdateItemsBody {
+    /// The PATCH body each CI gets.
+    pub fn patch(&self) -> UpdateItemBody {
+        UpdateItemBody {
+            class_id: None,
+            ident: None,
+            valid_from: None,
+            valid_until: None,
+            attributes: self.attributes.clone(),
+            criticality_value_id: self.criticality_value_id,
+            version: None,
+        }
+    }
+}
+
+/// One problem of a refused CI, as in the error envelope's `details`
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BulkUpdateErrorDetail {
+    #[serde(rename = "in")]
+    #[schema(inline)]
+    pub location: FieldLocation,
+    /// Dotted path in the body, e.g. `attributes.owner`
+    pub field: String,
+    pub message: String,
+    pub code: String,
+}
+
+/// Why a CI was refused: what `PATCH /configuration-items/{id}` would have answered for it
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BulkUpdateError {
+    #[schema(inline)]
+    pub code: ErrorCode,
+    pub message: String,
+    pub details: Vec<BulkUpdateErrorDetail>,
+}
+
+impl From<AppError> for BulkUpdateError {
+    fn from(e: AppError) -> Self {
+        let details = e
+            .details
+            .unwrap_or_default()
+            .into_iter()
+            .map(|d| BulkUpdateErrorDetail { location: d.location, field: d.field, message: d.message, code: d.code })
+            .collect();
+        BulkUpdateError { code: e.code, message: e.message, details }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BulkUpdateResult {
+    /// Position of the CI in `ids` (0-based)
+    pub index: i32,
+    pub id: Uuid,
+    /// The update passed every check for this CI (written when `committed` is true)
+    pub ok: bool,
+    /// The CI as written (ok results when `committed` is true)
+    #[schema(required = true)]
+    pub item: Option<ConfigurationItemSummary>,
+    /// Why the CI was refused (failed results); nothing of it was written
+    #[schema(required = true)]
+    pub error: Option<BulkUpdateError>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BulkUpdateReport {
+    pub succeeded: i32,
+    pub failed: i32,
+    /// The ok results are written. false only with `allOrNothing` when a CI was refused: nothing was written.
+    pub committed: bool,
+    /// One result per id, in the request's order
+    pub results: Vec<BulkUpdateResult>,
 }
 
 // ---------------------------------------------------------------------------
