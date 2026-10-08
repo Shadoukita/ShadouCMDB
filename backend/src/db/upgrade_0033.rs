@@ -92,10 +92,11 @@ async fn fingerprint(pool: &PgPool) -> Vec<(String, Option<String>)> {
         ("relationships", "SELECT md5(string_agg(t::text, '|' ORDER BY t.id)) FROM ci_relationships t"),
         ("rules", "SELECT md5(string_agg(t::text, '|' ORDER BY t.id)) FROM relationship_type_rules t"),
         ("grants", "SELECT md5(string_agg(t::text, '|' ORDER BY t.id)) FROM permission_profile_class_permissions t"),
-        // Without the kind column 0046 adds and the data-quality fields 0068 adds.
+        // Without the kind column 0046 adds, the data-quality fields 0068 adds and
+        // the subtitle field 0070 adds.
         (
             "classes",
-            "SELECT md5(string_agg((to_jsonb(t) - 'system_role' - 'kind' - 'owner_attribute_id' - 'end_of_life_attribute_id')::text, '|' ORDER BY t.id)) FROM ci_classes t
+            "SELECT md5(string_agg((to_jsonb(t) - 'system_role' - 'kind' - 'owner_attribute_id' - 'end_of_life_attribute_id' - 'subtitle_attribute_id')::text, '|' ORDER BY t.id)) FROM ci_classes t
              WHERE (to_jsonb(t) ->> 'system_role') IS DISTINCT FROM 'person'",
         ),
     ] {

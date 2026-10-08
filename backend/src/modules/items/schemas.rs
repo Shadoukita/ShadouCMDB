@@ -12,6 +12,7 @@ use utoipa::openapi::schema::{
 use utoipa::{IntoParams, PartialSchema, ToSchema};
 use uuid::Uuid;
 
+use crate::api::context::ActorType;
 use crate::api::route::Check;
 use crate::api::schemas::{self, Deleted, LookupRef, PageMeta, QueryBool, Sort, UuidList, trimmed, ts, ts_opt};
 use crate::data::items::{SORT_FIELDS, SORT_PATTERN};
@@ -114,6 +115,52 @@ pub struct ConfigurationItem {
     pub summary: ConfigurationItemSummary,
     pub attributes: Map<String, Value>,
     pub attribute_references: Map<String, Value>,
+    /// Only on `getConfigurationItem` (`Some`): the CI's last change, null
+    /// when the audit log holds none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_change: Option<Option<LastChange>>,
+}
+
+/// The kinds of audit entry that count as a change to a CI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema, sqlx::Type)]
+#[serde(rename_all = "lowercase")]
+#[sqlx(type_name = "text", rename_all = "lowercase")]
+pub enum LastChangeAction {
+    Create,
+    Update,
+    Delete,
+    Restore,
+}
+
+/// Who made a change, as its audit entry records it.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LastChangeActor {
+    #[schema(inline)]
+    #[serde(rename = "type")]
+    pub actor_type: ActorType,
+    /// The user's id for `user` and `api_client` (the token's owner)
+    #[schema(required = true)]
+    pub id: Option<String>,
+    /// The username at the time of the change (or the system actor's name)
+    #[schema(required = true)]
+    pub name: Option<String>,
+}
+
+/// The CI's newest create, update, delete or restore entry in the audit log:
+/// when, what, and who. Kept per CI by the database from the audit log itself,
+/// so it never disagrees with it; read events (exports) and workflow events
+/// do not count.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LastChange {
+    #[serde(serialize_with = "ts::serialize")]
+    pub at: DateTime<Utc>,
+    #[schema(inline)]
+    pub action: LastChangeAction,
+    /// Null when the caller lacks `audit.view`: who changed what is audit data
+    #[schema(required = true)]
+    pub actor: Option<LastChangeActor>,
 }
 
 fn attribute_value_schema() -> ObjectBuilder {
@@ -164,6 +211,28 @@ impl PartialSchema for ConfigurationItem {
                 Some("For reference attributes: the referenced CI, so the UI can show a name without another request"),
             ),
         ])
+        .with_last_change()
+    }
+}
+
+trait WithLastChange {
+    fn with_last_change(self) -> Self;
+}
+
+/// `lastChange`: returned by `getConfigurationItem` only, so not required.
+impl WithLastChange for RefOr<Schema> {
+    fn with_last_change(self) -> Self {
+        let RefOr::T(Schema::Object(mut obj)) = self else { return self };
+        let schema = AnyOfBuilder::new()
+            .item(RefOr::Ref(utoipa::openapi::Ref::from_schema_name(LastChange::name())))
+            .item(ObjectBuilder::new().schema_type(Type::Null))
+            .description(Some(
+                "Only on getConfigurationItem: the CI's last change (its newest create, update, delete or restore \
+                 audit entry), without reading the audit log; null when the log holds none for it (entries removed \
+                 by audit retention before this field existed).",
+            ));
+        obj.properties.insert("lastChange".to_owned(), schema.into());
+        RefOr::T(Schema::Object(obj))
     }
 }
 
@@ -173,6 +242,8 @@ impl ToSchema for ConfigurationItem {
     }
     fn schemas(schemas: &mut Vec<(String, RefOr<Schema>)>) {
         summary_nested(schemas);
+        schemas.push((LastChange::name().into_owned(), LastChange::schema()));
+        <LastChange as ToSchema>::schemas(schemas);
     }
 }
 
@@ -209,6 +280,9 @@ pub struct GraphEdgeType {
     pub forward_label: String,
     pub reverse_label: String,
     pub is_directional: bool,
+    /// The relationship type's category (group heading); null: none
+    #[schema(required = true)]
+    pub category: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]

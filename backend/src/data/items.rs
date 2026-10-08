@@ -10,9 +10,11 @@ use sqlx::{AssertSqlSafe, PgConnection, Postgres, QueryBuilder};
 use uuid::Uuid;
 
 use super::crud::{self, Where};
+use crate::api::context::ActorType;
 use crate::api::schemas::{Deleted, escape_like, like_pattern};
 use crate::api::validate;
 use crate::modules::classes::AttributeDataType;
+use crate::modules::items::schemas::LastChangeAction;
 use crate::schema::ACTIVE_SQL;
 use crate::schema::model::{Field, Model, TableName, pg_type};
 use crate::schema::naming::Ident;
@@ -775,6 +777,26 @@ fn label_text(column: &str, t: AttributeDataType) -> String {
     }
 }
 
+/// A CI's newest create, update, delete or restore audit entry, as the
+/// audit log trigger keeps it (migration 0070).
+#[derive(Debug, sqlx::FromRow)]
+pub struct LastChangeRow {
+    pub changed_at: DateTime<Utc>,
+    pub action: LastChangeAction,
+    pub actor_type: ActorType,
+    pub actor_id: Option<String>,
+    pub actor_name: Option<String>,
+}
+
+pub async fn last_change(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<Option<LastChangeRow>> {
+    sqlx::query_as(
+        "SELECT changed_at, action, actor_type, actor_id, actor_name FROM cmdb.ci_last_changes WHERE ci_id = $1",
+    )
+    .bind(id)
+    .fetch_optional(conn)
+    .await
+}
+
 /// The locked CI row, when it exists.
 #[derive(sqlx::FromRow)]
 pub struct Locked {
@@ -1195,6 +1217,7 @@ pub struct EdgeRow {
     pub forward_label: String,
     pub reverse_label: String,
     pub is_directional: bool,
+    pub type_category: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1222,7 +1245,8 @@ pub async fn edges_touching(
     }
     let mut qb = QueryBuilder::<Postgres>::new(
         "SELECT r.id, r.relationship_type_id, r.source_ci_id, r.target_ci_id, r.notes,
-                t.key AS type_key, t.name AS type_name, t.forward_label, t.reverse_label, t.is_directional
+                t.key AS type_key, t.name AS type_name, t.forward_label, t.reverse_label, t.is_directional,
+                t.category AS type_category
          FROM ci_relationships r JOIN relationship_types t ON t.id = r.relationship_type_id
          WHERE r.deleted_at IS NULL AND ",
     );

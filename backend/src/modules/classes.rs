@@ -86,6 +86,10 @@ pub struct CiClass {
     /// parent's setting applies; no setting in the lineage leaves the class out of the check
     #[schema(required = true)]
     pub end_of_life_attribute_id: Option<Uuid>,
+    /// The attribute (of this class or an ancestor) whose value the UI shows under a CI's name, e.g. the model of a
+    /// server; null shows the class name instead
+    #[schema(required = true)]
+    pub subtitle_attribute_id: Option<Uuid>,
     /// Set on the built-in type the application itself uses: `business_service` (the business services). It can be
     /// renamed and given fields, but not deleted, archived, purged, made abstract, given a parent or subtypes
     #[schema(required = true, inline)]
@@ -140,6 +144,18 @@ fn end_of_life_attribute_schema() -> Schema {
         a.description = Some(
             "Data quality: attribute of this class or an ancestor that holds a CI's end of life (date or datetime), \
              for the `end_of_life` check. Null: the parent's setting applies."
+                .into(),
+        );
+    }
+    s
+}
+
+fn subtitle_attribute_schema() -> Schema {
+    let mut s = nullable_uuid_schema();
+    if let Schema::AnyOf(a) = &mut s {
+        a.description = Some(
+            "Attribute of this class or an ancestor (any data type) whose value the UI shows under a CI's name; null \
+             shows the class name. A new class takes its parent's."
                 .into(),
         );
     }
@@ -211,6 +227,9 @@ pub struct CiClassCreate {
     #[schema(schema_with = end_of_life_attribute_schema)]
     #[serde(default)]
     end_of_life_attribute_id: Option<Uuid>,
+    #[schema(schema_with = subtitle_attribute_schema)]
+    #[serde(default)]
+    subtitle_attribute_id: Option<Uuid>,
     #[schema(schema_with = create_kind_schema)]
     #[serde(default)]
     kind: Option<ClassKind>,
@@ -256,6 +275,9 @@ pub struct CiClassUpdate {
     #[schema(schema_with = end_of_life_attribute_schema)]
     #[serde(default, deserialize_with = "schemas::patch")]
     end_of_life_attribute_id: Option<Option<Uuid>>,
+    #[schema(schema_with = subtitle_attribute_schema)]
+    #[serde(default, deserialize_with = "schemas::patch")]
+    subtitle_attribute_id: Option<Option<Uuid>>,
     #[schema(schema_with = update_kind_schema)]
     kind: Option<ClassKind>,
 }
@@ -276,6 +298,7 @@ impl Writable for CiClassCreate {
             .opt("title_attribute_id", self.title_attribute_id.map(Some))
             .opt("owner_attribute_id", self.owner_attribute_id.map(Some))
             .opt("end_of_life_attribute_id", self.end_of_life_attribute_id.map(Some))
+            .opt("subtitle_attribute_id", self.subtitle_attribute_id.map(Some))
             .opt("kind", self.kind.map(|k| k.as_str().to_owned()));
         c
     }
@@ -296,6 +319,7 @@ impl Writable for CiClassUpdate {
             .opt("title_attribute_id", self.title_attribute_id)
             .opt("owner_attribute_id", self.owner_attribute_id)
             .opt("end_of_life_attribute_id", self.end_of_life_attribute_id)
+            .opt("subtitle_attribute_id", self.subtitle_attribute_id)
             .opt("kind", self.kind.map(|k| k.as_str().to_owned()));
         c
     }
@@ -391,11 +415,11 @@ impl Resource for CiClasses {
         (SELECT a.key FROM cmdb.areas a WHERE a.id = ci_classes.area_id) || '.' || key AS table_name,
         (SELECT a.key FROM cmdb.areas a WHERE a.id = ci_classes.area_id) || '.v_' || key AS view_name,
         description, parent_id, is_abstract, icon, color, sort_order, is_active, title_attribute_id, owner_attribute_id,
-        end_of_life_attribute_id, system_role, kind, created_at, updated_at";
+        end_of_life_attribute_id, subtitle_attribute_id, system_role, kind, created_at, updated_at";
     const SEARCH_COLUMNS: &'static [&'static str] = &["key", "name", "description"];
     const ARCHIVE_ON_DELETE: bool = true;
     const WRITE_ERRORS: &'static [ErrorCode] = &[ErrorCode::InvalidName, ErrorCode::SchemaChangeRefused];
-    const UPDATE_DESCRIPTION: &'static str = "Changing `titleAttributeId` relabels the class's CIs. Moving the type to another parent (`parentId`) keeps its title attribute only if the new lineage provides it; otherwise it takes the new parent's (so do its subtypes), and the CIs are relabelled. The same move clears an `ownerAttributeId` or `endOfLifeAttributeId` of the type or its subtypes that the new lineage does not provide (the parent's setting then applies).";
+    const UPDATE_DESCRIPTION: &'static str = "Changing `titleAttributeId` relabels the class's CIs. Moving the type to another parent (`parentId`) keeps its title attribute only if the new lineage provides it; otherwise it takes the new parent's (so do its subtypes), and the CIs are relabelled. The same move clears an `ownerAttributeId` or `endOfLifeAttributeId` of the type or its subtypes that the new lineage does not provide (the parent's setting then applies). A `subtitleAttributeId` the new lineage does not provide is replaced by the new parent's, which changes no stored CI data.";
     const DELETE_DESCRIPTION: &'static str = "Archives the type (`isActive=false`): its table, CIs and values stay and stay readable, no new CIs can be created, and the UI hides it. `PATCH {\"isActive\": true}` restores it. To drop the table and delete its CIs, purge the type (`POST /api/v1/ci-classes/{id}/purge`).";
     // DELETE archives, which nothing blocks; `blocking` marks what refuses the
     // purge (the checks in `purge_class_in`). Everything else goes with the purge.
@@ -538,6 +562,18 @@ impl Resource for CiClasses {
                         .flatten();
                 columns.opt("title_attribute_id", title.map(Some));
             }
+            // And subtitled like it.
+            if let Some(parent) = parent
+                && !columns.0.iter().any(|(c, _)| *c == "subtitle_attribute_id")
+            {
+                let subtitle: Option<Uuid> =
+                    sqlx::query_scalar("SELECT subtitle_attribute_id FROM cmdb.ci_classes WHERE id = $1")
+                        .bind(parent)
+                        .fetch_optional(&mut *conn)
+                        .await?
+                        .flatten();
+                columns.opt("subtitle_attribute_id", subtitle.map(Some));
+            }
             if columns.0.iter().any(|(c, _)| *c == "area_id") {
                 return Ok(());
             }
@@ -594,6 +630,7 @@ impl Resource for CiClasses {
                     check_parent_fields_in_lineage(conn, row.id).await?;
                     repair_titles(conn, row, previous).await?;
                     clear_stale_quality_fields(conn, row).await?;
+                    repair_subtitles(conn, row, previous).await?;
                 }
                 if row.parent_id != previous.parent_id || row.title_attribute_id != previous.title_attribute_id {
                     let model = Model::load(conn).await?;
@@ -834,6 +871,40 @@ async fn check_quality_field_type(conn: &mut PgConnection, row: &AttributeDefini
                 ),
             ));
         }
+    }
+    Ok(())
+}
+
+/// After a move, the same for the subtitle attribute: a type whose subtitle
+/// field is no longer in its lineage takes its parent's, top down.
+async fn repair_subtitles(conn: &mut PgConnection, row: &CiClass, previous: &CiClass) -> Result<(), AppError> {
+    let model = Model::load(conn).await?;
+    let mut subtitles: std::collections::HashMap<Uuid, Option<Uuid>> =
+        sqlx::query_as("SELECT id, subtitle_attribute_id FROM cmdb.ci_classes")
+            .fetch_all(&mut *conn)
+            .await?
+            .into_iter()
+            .collect();
+    for class_id in model.subtree(row.id) {
+        let lineage: Vec<Uuid> = model.lineage(class_id).iter().map(|c| c.id).collect();
+        let current = subtitles.get(&class_id).copied().flatten();
+        let fits = current.and_then(|t| model.field(t)).is_some_and(|f| lineage.contains(&f.class_id));
+        let lost = if class_id == row.id {
+            previous.subtitle_attribute_id.is_some() && current.is_none()
+        } else {
+            current.is_some()
+        };
+        if fits || !lost {
+            continue;
+        }
+        let parent_subtitle =
+            model.class(class_id).and_then(|c| c.parent_id).and_then(|p| subtitles.get(&p).copied().flatten());
+        sqlx::query("UPDATE cmdb.ci_classes SET subtitle_attribute_id = $2 WHERE id = $1")
+            .bind(class_id)
+            .bind(parent_subtitle)
+            .execute(&mut *conn)
+            .await?;
+        subtitles.insert(class_id, parent_subtitle);
     }
     Ok(())
 }
@@ -2019,6 +2090,10 @@ pub struct RelationshipType {
     pub is_directional: bool,
     #[schema(inline)]
     pub impact_direction: ImpactDirection,
+    /// Group heading the UI lists the type's relationships under, e.g. "Location"; types with the same category form
+    /// one group, null: no group
+    #[schema(required = true)]
+    pub category: Option<String>,
     pub sort_order: i32,
     pub is_active: bool,
     /// Set on the built-in type the application itself uses: `business_service_member` (a business service includes
@@ -2053,6 +2128,9 @@ pub struct RelationshipTypeCreate {
     #[schema(schema_with = name_schema)]
     #[serde(deserialize_with = "trimmed")]
     reverse_label: String,
+    #[schema(schema_with = category_schema)]
+    #[serde(default)]
+    category: Option<String>,
     #[schema(schema_with = sort_order_schema)]
     sort_order: Option<i32>,
     #[schema(nullable = false)]
@@ -2075,6 +2153,9 @@ pub struct RelationshipTypeUpdate {
     #[schema(schema_with = name_schema)]
     #[serde(default, deserialize_with = "schemas::trimmed_opt")]
     reverse_label: Option<String>,
+    #[schema(schema_with = category_schema)]
+    #[serde(default, deserialize_with = "schemas::patch")]
+    category: Option<Option<String>>,
     #[schema(schema_with = sort_order_schema)]
     sort_order: Option<i32>,
     #[schema(nullable = false)]
@@ -2093,6 +2174,7 @@ impl Writable for RelationshipTypeCreate {
             .opt("description", self.description.clone().map(Some))
             .opt("forward_label", Some(self.forward_label.clone()))
             .opt("reverse_label", Some(self.reverse_label.clone()))
+            .opt("category", self.category.as_deref().map(category_value))
             .opt("sort_order", self.sort_order)
             .opt("is_active", self.is_active);
         c
@@ -2100,7 +2182,8 @@ impl Writable for RelationshipTypeCreate {
 }
 impl Check for RelationshipTypeCreate {
     fn check(&self) -> Vec<FieldError> {
-        match (self.is_directional, self.impact_direction) {
+        let mut errors = check_category(self.category.as_deref());
+        errors.extend(match (self.is_directional, self.impact_direction) {
             (Some(false), Some(d)) if !d.allowed_without_direction() => vec![FieldError {
                 location: FieldLocation::Body,
                 field: "impactDirection".into(),
@@ -2110,7 +2193,8 @@ impl Check for RelationshipTypeCreate {
                 code: "invalid".into(),
             }],
             _ => Vec::new(),
-        }
+        });
+        errors
     }
 }
 
@@ -2121,6 +2205,7 @@ impl Writable for RelationshipTypeUpdate {
             .opt("description", self.description.clone())
             .opt("forward_label", self.forward_label.clone())
             .opt("reverse_label", self.reverse_label.clone())
+            .opt("category", self.category.as_ref().map(|c| c.as_deref().and_then(category_value)))
             .opt("sort_order", self.sort_order)
             .opt("is_active", self.is_active)
             .opt("impact_direction", self.impact_direction.map(|d| d.as_str().to_owned()));
@@ -2129,7 +2214,38 @@ impl Writable for RelationshipTypeUpdate {
 }
 impl Check for RelationshipTypeUpdate {
     fn check(&self) -> Vec<FieldError> {
-        non_empty(&self.columns())
+        let mut errors = non_empty(&self.columns());
+        errors.extend(check_category(self.category.clone().flatten().as_deref()));
+        errors
+    }
+}
+
+fn category_schema() -> Schema {
+    let mut s = schemas::nullable_string_schema(CATEGORY_MAX);
+    if let Schema::AnyOf(a) = &mut s {
+        a.description = Some(
+            "Group heading for the type's relationships on the CI page, e.g. \"Location\" or \"Network & power\"; \
+             types with the same text form one group. Trimmed; null or an empty text: no group."
+                .into(),
+        );
+    }
+    s
+}
+
+pub(crate) const CATEGORY_MAX: usize = 100;
+
+/// A category as stored: trimmed, and none when nothing is left.
+pub(crate) fn category_value(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
+fn check_category(raw: Option<&str>) -> Vec<FieldError> {
+    match raw {
+        Some(c) if c.trim().chars().count() > CATEGORY_MAX => {
+            vec![custom("category", format!("At most {CATEGORY_MAX} characters"))]
+        }
+        _ => Vec::new(),
     }
 }
 
@@ -2212,8 +2328,8 @@ impl Resource for RelationshipTypes {
     const TAG: &'static str = "Relationship types";
     const SINGULAR: &'static str = "relationshipType";
     const PLURAL: &'static str = "relationshipTypes";
-    const COLUMNS: &'static str = "id, key, name, description, forward_label, reverse_label, is_directional, impact_direction, sort_order, is_active, system_role, created_at, updated_at";
-    const SEARCH_COLUMNS: &'static [&'static str] = &["key", "name", "forward_label", "reverse_label"];
+    const COLUMNS: &'static str = "id, key, name, description, forward_label, reverse_label, is_directional, impact_direction, category, sort_order, is_active, system_role, created_at, updated_at";
+    const SEARCH_COLUMNS: &'static [&'static str] = &["key", "name", "forward_label", "reverse_label", "category"];
     const USAGE: &'static [Usage] = &[
         Usage {
             kind: "relationships",
@@ -2547,6 +2663,230 @@ mod tests {
 
     fn body<T: serde::de::DeserializeOwned>(value: Value) -> T {
         serde_json::from_value(value).unwrap()
+    }
+
+    /// SHAA-2357 (G8): the subtitle attribute is a field of the class or an
+    /// ancestor; a new subtype takes its parent's, and a move to a parent that
+    /// does not provide it gives the moved type the new parent's.
+    #[tokio::test]
+    async fn subtitle_attribute_follows_the_lineage() {
+        let Some(db) = scratch::database("subtitle_attribute_follows_the_lineage").await else { return };
+        let pool = &db.pool;
+        fn ctx_for() -> RequestContext {
+            RequestContext::system("subtitle-test", "subtitle-test")
+        }
+        let ctx = ctx_for();
+        let class = |b: Value| async move { simple::create::<CiClasses>(pool, &ctx_for(), &body(b)).await.unwrap() };
+        let field = |class_id: Uuid, key: &'static str| async move {
+            simple::create::<AttributeDefinitions>(
+                pool,
+                &ctx_for(),
+                &body(json!({"classId": class_id, "key": key, "label": key, "dataType": "text"})),
+            )
+            .await
+            .unwrap()
+        };
+
+        let hardware: CiClass = class(json!({"name": "Subtitled Hardware"})).await;
+        let model: AttributeDefinition = field(hardware.id, "model").await;
+        let other: CiClass = class(json!({"name": "Subtitled Other"})).await;
+        let kind: AttributeDefinition = field(other.id, "kind").await;
+
+        let hardware: CiClass =
+            simple::update::<CiClasses>(pool, &ctx, hardware.id, &body(json!({"subtitleAttributeId": model.id})))
+                .await
+                .unwrap();
+        assert_eq!(hardware.subtitle_attribute_id, Some(model.id));
+        // A new subtype takes its parent's.
+        let server: CiClass = class(json!({"name": "Subtitled Server", "parentId": hardware.id})).await;
+        assert_eq!(server.subtitle_attribute_id, Some(model.id));
+
+        // A field outside the lineage is refused on subtitleAttributeId.
+        let err = simple::update::<CiClasses>(pool, &ctx, server.id, &body(json!({"subtitleAttributeId": kind.id})))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::ValidationError, "{err:?}");
+        assert!(format!("{err:?}").contains("subtitleAttributeId"), "{err:?}");
+        let err =
+            simple::update::<CiClasses>(pool, &ctx, server.id, &body(json!({"subtitleAttributeId": Uuid::new_v4()})))
+                .await
+                .unwrap_err();
+        assert!(format!("{err:?}").contains("subtitleAttributeId"), "{err:?}");
+
+        // Moved under a parent without the field: the new parent's, and it is audited.
+        simple::update::<CiClasses>(pool, &ctx, other.id, &body(json!({"subtitleAttributeId": kind.id})))
+            .await
+            .unwrap();
+        let moved: CiClass =
+            simple::update::<CiClasses>(pool, &ctx, server.id, &body(json!({"parentId": other.id}))).await.unwrap();
+        assert_eq!(moved.subtitle_attribute_id, Some(kind.id));
+        let stored: Option<Uuid> = sqlx::query_scalar("SELECT subtitle_attribute_id FROM ci_classes WHERE id = $1")
+            .bind(server.id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        assert_eq!(stored, Some(kind.id));
+        let audited: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM audit_log WHERE entity_type = 'ci_classes' AND entity_id = $1
+               AND new_value ? 'subtitleAttributeId'",
+        )
+        .bind(hardware.id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert!(audited > 0);
+
+        // Cleared with null; deleting the field clears it too.
+        let cleared: CiClass =
+            simple::update::<CiClasses>(pool, &ctx, moved.id, &body(json!({"subtitleAttributeId": null})))
+                .await
+                .unwrap();
+        assert_eq!(cleared.subtitle_attribute_id, None);
+    }
+
+    /// SHAA-2357 (G15): a relationship type's category is optional, trimmed,
+    /// at most 100 characters, and travels with every relationship.
+    #[tokio::test]
+    async fn relationship_type_category_is_optional_and_trimmed() {
+        use crate::api::route::Check;
+        let Some(db) = scratch::database("relationship_type_category_is_optional_and_trimmed").await else { return };
+        let pool = &db.pool;
+        let ctx = RequestContext::system("category-test", "category-test");
+
+        let create = |category: Value| {
+            body::<RelationshipTypeCreate>(
+                json!({"key": "powered_by", "name": "Powered by", "forwardLabel": "is powered by",
+                "reverseLabel": "powers", "category": category}),
+            )
+        };
+        let long = "x".repeat(CATEGORY_MAX + 1);
+        assert_eq!(create(json!(long)).check().len(), 1);
+        assert!(create(json!("  Network & power ")).check().is_empty());
+        let powered: RelationshipType =
+            simple::create::<RelationshipTypes>(pool, &ctx, &create(json!("  Network & power "))).await.unwrap();
+        assert_eq!(powered.category.as_deref(), Some("Network & power"));
+
+        let update = |v: Value| body::<RelationshipTypeUpdate>(json!({ "category": v }));
+        assert_eq!(update(json!(long)).check().len(), 1);
+        let blank: RelationshipType =
+            simple::update::<RelationshipTypes>(pool, &ctx, powered.id, &update(json!("   "))).await.unwrap();
+        assert_eq!(blank.category, None);
+        let named: RelationshipType =
+            simple::update::<RelationshipTypes>(pool, &ctx, powered.id, &update(json!("Power"))).await.unwrap();
+        assert_eq!(named.category.as_deref(), Some("Power"));
+        // Left out: unchanged.
+        let renamed: RelationshipType =
+            simple::update::<RelationshipTypes>(pool, &ctx, powered.id, &body(json!({"name": "Fed by"})))
+                .await
+                .unwrap();
+        assert_eq!(renamed.category.as_deref(), Some("Power"));
+        // The database refuses what the API would not store.
+        let err = sqlx::query("UPDATE relationship_types SET category = ' Power' WHERE id = $1")
+            .bind(powered.id)
+            .execute(pool)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("relationship_types_category_valid"), "{err}");
+
+        // Relationships and the graph carry it.
+        let box_class: CiClass =
+            simple::create::<CiClasses>(pool, &ctx, &body(json!({"name": "Category Box"}))).await.unwrap();
+        sqlx::query("INSERT INTO relationship_type_rules (relationship_type_id, source_class_id, target_class_id) VALUES ($1, $2, $2)")
+            .bind(powered.id)
+            .bind(box_class.id)
+            .execute(pool)
+            .await
+            .unwrap();
+        let item = || body::<CreateItemBody>(json!({"classId": box_class.id}));
+        let a = items_service::create(pool, &ctx, &item()).await.unwrap().summary.id;
+        let b = items_service::create(pool, &ctx, &item()).await.unwrap().summary.id;
+        let rel = relationships::create(
+            pool,
+            &ctx,
+            &body::<RelationshipCreate>(json!({"relationshipTypeId": powered.id, "sourceCiId": a, "targetCiId": b})),
+        )
+        .await
+        .unwrap();
+        assert_eq!(serde_json::to_value(&rel).unwrap()["type"]["category"], json!("Power"));
+        let graph =
+            items_service::graph(pool, &ctx, a, &body(json!({"depth": 1, "direction": "both", "maxNodes": 10})))
+                .await
+                .unwrap();
+        let graph = serde_json::to_value(&graph).unwrap();
+        assert_eq!(graph["edges"][0]["type"]["category"], json!("Power"), "{graph}");
+    }
+
+    /// SHAA-2357 (G16): a CI's last change is its newest create, update,
+    /// delete or restore audit entry; the actor is shown only to callers with
+    /// `audit.view`, and a list does not carry it.
+    #[tokio::test]
+    async fn last_change_is_the_newest_audited_change() {
+        let Some(db) = scratch::database("last_change_is_the_newest_audited_change").await else { return };
+        let pool = &db.pool;
+        let ctx = RequestContext::system("last-change-test", "last-change-test");
+        let class: CiClass =
+            simple::create::<CiClasses>(pool, &ctx, &body(json!({"name": "Changed Box"}))).await.unwrap();
+        simple::create::<AttributeDefinitions>(
+            pool,
+            &ctx,
+            &body(json!({"classId": class.id, "key": "rack", "label": "Rack", "dataType": "text"})),
+        )
+        .await
+        .unwrap();
+        let created = items_service::create(pool, &ctx, &body(json!({"classId": class.id}))).await.unwrap();
+        let id = created.summary.id;
+        assert!(serde_json::to_value(&created).unwrap().get("lastChange").is_none());
+        let newest = || async move {
+            sqlx::query_as::<_, (DateTime<Utc>, String, String, Option<String>, Option<String>)>(
+                "SELECT occurred_at, action, actor_type, actor_id, actor_name FROM audit_log
+                 WHERE entity_type = 'configuration_items' AND entity_id = $1 ORDER BY id DESC LIMIT 1",
+            )
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+        };
+        let last = |item: &crate::modules::items::schemas::ConfigurationItem| {
+            serde_json::to_value(item).unwrap()["lastChange"].clone()
+        };
+
+        let item = items_service::get(pool, &ctx, id).await.unwrap();
+        let (at, action, actor_type, _, actor_name) = newest().await;
+        assert_eq!(action, "create");
+        let lc = last(&item);
+        assert_eq!(lc["action"], json!("create"));
+        assert_eq!(lc["actor"]["type"], json!(actor_type));
+        assert_eq!(lc["actor"]["name"], json!(actor_name));
+        assert_eq!(lc["at"], json!(crate::api::schemas::iso(&at)));
+
+        // Another user's update replaces it.
+        let alice = Uuid::new_v4();
+        let as_alice = ctx.acting_as_user(alice, "alice");
+        items_service::update(pool, &as_alice, id, &body(json!({"attributes": {"rack": "R1"}}))).await.unwrap();
+        let lc = last(&items_service::get(pool, &ctx, id).await.unwrap());
+        assert_eq!(lc["action"], json!("update"));
+        assert_eq!(lc["actor"], json!({"type": "user", "id": alice.to_string(), "name": "alice"}));
+        let (at, action, ..) = newest().await;
+        assert_eq!(action, "update");
+        assert_eq!(lc["at"], json!(crate::api::schemas::iso(&at)));
+
+        // An entry that is not a change (an export) does not count.
+        sqlx::query(
+            "INSERT INTO audit_log (actor_type, actor_name, action, entity_type, entity_id, new_value)
+             VALUES ('system', 'exporter', 'export', 'configuration_items', $1, '{}')",
+        )
+        .bind(id)
+        .execute(pool)
+        .await
+        .unwrap();
+        let lc = last(&items_service::get(pool, &ctx, id).await.unwrap());
+        assert_eq!(lc["actor"]["name"], json!("alice"));
+
+        // Who changed it is audit data: without audit.view the actor is null.
+        let viewer = crate::api::context::datamodel_manager(&[class.id]);
+        let lc = last(&items_service::get(pool, &viewer, id).await.unwrap());
+        assert_eq!(lc["action"], json!("update"));
+        assert_eq!(lc["actor"], Value::Null);
     }
 
     /// GH#412: a pattern that compiles past the size limit is refused as
