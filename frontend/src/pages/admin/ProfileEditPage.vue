@@ -231,7 +231,7 @@ const notFound = computed(() => {
 </script>
 
 <template>
-  <Breadcrumbs :items="crumbs" />
+  <Breadcrumbs v-if="!isNew && (profile.isLoading.value || profile.isError.value)" :items="crumbs" />
   <LoadingState v-if="!isNew && profile.isLoading.value" :label="t('admin.profile.loading')" />
   <template v-else-if="!isNew && profile.isError.value">
     <EmptyState v-if="notFound" :title="t('admin.profile.notFound.title')">
@@ -241,33 +241,39 @@ const notFound = computed(() => {
     <ErrorAlert v-else :error="profile.error.value" :on-retry="() => profile.refetch()" />
   </template>
   <template v-else>
-    <div class="page-header record-header">
-      <div class="record-heading">
-        <div class="title">
-          <Icon name="shield" class="class-icon" />
-          <h1 dir="auto">{{ isNew ? t("admin.profile.newTitle") : profile.data.value?.name }}</h1>
+    <div class="record-head record-head-plain">
+      <Breadcrumbs :items="crumbs" />
+      <div class="page-header record-header">
+        <div class="record-heading">
+          <span class="class-tile class-tile-lg" aria-hidden="true"><Icon name="shield" class="class-icon" /></span>
+          <div class="record-title">
+            <div class="title">
+              <h1 dir="auto">{{ isNew ? t("admin.profile.newTitle") : profile.data.value?.name }}</h1>
+            </div>
+            <p v-if="profile.data.value && !isNew" class="record-meta" data-testid="record-meta">
+              <span v-if="builtin" class="badge">{{ t("admin.profiles.builtin") }}</span>
+              <span v-if="profile.data.value.requireMfa" class="badge warn" :title="t('admin.profiles.mfaRequiredTitle')">{{ t("admin.profiles.mfaRequired") }}</span>
+              <RouterLink v-if="session.can('users.manage')" class="badge record-class-chip" :to="{ path: '/admin/users', query: { profileId: profile.data.value.id } }">
+                {{ t("admin.profile.users", { n: profile.data.value.userCount }) }}
+              </RouterLink>
+              <span v-else class="badge">{{ t("admin.profile.users", { n: profile.data.value.userCount }) }}</span>
+              <span class="record-meta-line">
+                <time :datetime="profile.data.value.createdAt" :title="formatDateTime(profile.data.value.createdAt)">
+                  {{ t("record.meta.created", { when: formatDate(profile.data.value.createdAt) }) }}
+                </time>
+                <span class="sep" aria-hidden="true">·</span>
+                <time :datetime="profile.data.value.updatedAt" :title="formatDateTime(profile.data.value.updatedAt)">
+                  {{ t("record.meta.updated", { when: formatRelative(profile.data.value.updatedAt) }) }}
+                </time>
+              </span>
+            </p>
+          </div>
         </div>
-        <p v-if="profile.data.value && !isNew" class="record-meta" data-testid="record-meta">
-          <span v-if="builtin" class="badge">{{ t("admin.profiles.builtin") }}</span>
-          <span v-if="profile.data.value.requireMfa" class="badge" :title="t('admin.profiles.mfaRequiredTitle')">{{ t("admin.profiles.mfaRequired") }}</span>
-          <RouterLink v-if="session.can('users.manage')" :to="{ path: '/admin/users', query: { profileId: profile.data.value.id } }">
-            {{ t("admin.profile.users", { n: profile.data.value.userCount }) }}
-          </RouterLink>
-          <span v-else>{{ t("admin.profile.users", { n: profile.data.value.userCount }) }}</span>
-          <span class="sep" aria-hidden="true">·</span>
-          <time :datetime="profile.data.value.createdAt" :title="formatDateTime(profile.data.value.createdAt)">
-            {{ t("record.meta.created", { when: formatDate(profile.data.value.createdAt) }) }}
-          </time>
-          <span class="sep" aria-hidden="true">·</span>
-          <time :datetime="profile.data.value.updatedAt" :title="formatDateTime(profile.data.value.updatedAt)">
-            {{ t("record.meta.updated", { when: formatRelative(profile.data.value.updatedAt) }) }}
-          </time>
-        </p>
-      </div>
-      <div v-if="profile.data.value && !isNew && canManage" class="actions">
-        <button type="button" class="btn" @click="cloning = profile.data.value">{{ t("admin.profiles.row.clone") }}</button>
-        <RowMenu v-if="moreActions.length > 0" :label="t('record.actions.more')" :items="moreActions" large />
-        <DeleteProfileDialog v-if="moreActions.length > 0" v-model:open="deleting" :profile="profile.data.value" @deleted="onDeleted" />
+        <div v-if="profile.data.value && !isNew && canManage" class="actions">
+          <button type="button" class="btn" @click="cloning = profile.data.value">{{ t("admin.profiles.row.clone") }}</button>
+          <RowMenu v-if="moreActions.length > 0" :label="t('record.actions.more')" :items="moreActions" large />
+          <DeleteProfileDialog v-if="moreActions.length > 0" v-model:open="deleting" :profile="profile.data.value" @deleted="onDeleted" />
+        </div>
       </div>
     </div>
     <div v-if="builtin" class="alert" role="note">{{ t("admin.profile.builtinNote") }}</div>
@@ -334,7 +340,7 @@ const notFound = computed(() => {
         </div>
         <template v-else>
           <div class="table-wrap matrix-wrap">
-            <table class="data matrix">
+            <table class="data list-table matrix">
               <caption class="sr-only">{{ t("admin.profile.section.classes") }}</caption>
               <colgroup><col class="matrix-name" /></colgroup>
               <colgroup v-for="g in RIGHT_GROUPS" :key="g.key" :span="g.rights.length" class="matrix-group" />
