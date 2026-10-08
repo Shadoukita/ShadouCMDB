@@ -62,6 +62,8 @@ const referenceClassId = ref("");
 const lookupListId = ref("");
 const parentAttributeId = ref("");
 const isRequired = ref(false);
+const isExpected = ref(false);
+const isIdentifying = ref(false);
 const groupName = ref("");
 const helpText = ref("");
 const description = ref("");
@@ -98,6 +100,8 @@ function seed() {
   lookupListId.value = d?.lookupListId ?? "";
   parentAttributeId.value = d?.parentAttributeId ?? "";
   isRequired.value = d?.isRequired ?? false;
+  isExpected.value = d?.isExpected ?? false;
+  isIdentifying.value = d?.isIdentifying ?? false;
   groupName.value = d ? (d.groupName ?? "") : (props.defaultSection ?? "");
   helpText.value = d?.helpText ?? "";
   description.value = d?.description ?? "";
@@ -188,7 +192,7 @@ function errorFor(field: string): string | undefined {
 }
 /** An error on validation as a whole (not one of its rules) is shown next to the Multiline option. */
 const validationError = computed(() => apiErrors.value.validation);
-const PLACED = ["label", "key", "dataType", "referenceClassId", "lookupListId", "parentAttributeId", "enumValues", "validation", "groupName", "helpText", "description", "defaultValue", "isRequired"];
+const PLACED = ["label", "key", "dataType", "referenceClassId", "lookupListId", "parentAttributeId", "enumValues", "validation", "groupName", "helpText", "description", "defaultValue", "isRequired", "isExpected", "isIdentifying"];
 const unplaced = computed(() =>
   error.value instanceof ApiError ? error.value.details.filter((d) => !PLACED.some((f) => d.field === f || d.field.startsWith(`${f}.`))) : [],
 );
@@ -236,6 +240,8 @@ function commonBody() {
   return {
     label: label.value.trim(),
     isRequired: isRequired.value,
+    isExpected: isExpected.value,
+    isIdentifying: isIdentifying.value,
     groupName: groupName.value.trim() || null,
     helpText: helpText.value.trim() || null,
     description: description.value.trim() || null,
@@ -424,6 +430,22 @@ async function submit() {
         <span v-if="systemField" class="hint">{{ t("people.datamodel.systemTitle") }}</span>
         <span v-if="!isNew && isRequired && !def?.isRequired" class="hint">{{ t("dm.attr.f.requiredRefused") }}</span>
         <span v-if="errorFor('isRequired')" class="error">{{ errorFor("isRequired") }}</span>
+      </div>
+      <div class="field">
+        <span class="label">{{ t("dm.attr.f.expected") }}</span>
+        <label class="checkbox-row">
+          <input id="ad-expected" v-model="isExpected" type="checkbox" />
+          {{ t("dm.attr.f.expectedText") }}
+        </label>
+        <span v-if="errorFor('isExpected')" class="error">{{ errorFor("isExpected") }}</span>
+      </div>
+      <div class="field">
+        <span class="label">{{ t("dm.attr.f.identifying") }}</span>
+        <label class="checkbox-row">
+          <input id="ad-identifying" v-model="isIdentifying" type="checkbox" />
+          {{ t("dm.attr.f.identifyingText") }}
+        </label>
+        <span v-if="errorFor('isIdentifying')" class="error">{{ errorFor("isIdentifying") }}</span>
       </div>
       <FormField
         v-if="dataType === 'enum'"

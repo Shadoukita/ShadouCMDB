@@ -15,7 +15,7 @@ import { useSessionStore } from "../../stores/session";
  * row per check with its count, each a link to the inventory filtered to the CIs it finds. The server counts
  * only the CIs the caller may view. A check that cannot find anything for this caller (no class they may view
  * names an owner or end-of-life field) is left out rather than shown as a reassuring 0; a data-model
- * administrator gets a line saying how many are off.
+ * administrator gets a line saying how many are off, with a link to the classes where the fields are set.
  */
 const session = useSessionStore();
 const branding = useBrandingStore();
@@ -62,7 +62,10 @@ const off = computed(() => checks.value.filter((c) => !c.configured).length);
           </RouterLink>
         </li>
       </ul>
-      <p v-if="off > 0 && session.can('datamodel.manage')" class="attention-off">{{ t("dashboard.attention.off", { n: off }) }}</p>
+      <p v-if="off > 0 && session.can('datamodel.manage')" class="attention-off">
+        {{ t("dashboard.attention.off", { n: off }) }}
+        <RouterLink to="/admin/classes">{{ t("dashboard.attention.offLink") }}</RouterLink>
+      </p>
     </template>
   </section>
 </template>
