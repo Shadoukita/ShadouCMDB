@@ -1077,7 +1077,8 @@ async fn shared_views_travel_with_the_configuration_file() {
     )
     .await
     .unwrap_err();
-    assert!(err.message.contains("versions 1 to 10") || format!("{err:?}").contains("versions 1 to 10"), "{err:?}");
+    let wanted = format!("versions 1 to {FORMAT_VERSION}");
+    assert!(err.message.contains(&wanted) || format!("{err:?}").contains(&wanted), "{err:?}");
     let v5 = ConfigFile { format_version: 5, saved_views: None, ..only_views };
     import(&dst.pool, &system, &v5, ImportMode::DryRun).await.unwrap();
 

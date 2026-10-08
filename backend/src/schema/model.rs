@@ -24,6 +24,17 @@ pub struct Class {
     pub parent_id: Option<Uuid>,
     /// The field whose value labels the class's CIs (in its lineage)
     pub title_attribute_id: Option<Uuid>,
+    /// The field holding a CI's owner (data quality); `None` takes the parent's
+    pub owner_attribute_id: Option<Uuid>,
+    /// The date or datetime field holding a CI's end of life; `None` takes the parent's
+    pub end_of_life_attribute_id: Option<Uuid>,
+}
+
+/// A per-type setting that names a field for the data-quality checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QualityField {
+    Owner,
+    EndOfLife,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -135,7 +146,9 @@ impl Model {
     pub async fn load_classes(conn: &mut PgConnection) -> sqlx::Result<Vec<Class>> {
         // Through to_jsonb: a restore builds type tables at older migration levels (before 0016).
         sqlx::query_as::<_, Class>(
-            "SELECT id, key, area_id, parent_id, (to_jsonb(c) ->> 'title_attribute_id')::uuid AS title_attribute_id
+            "SELECT id, key, area_id, parent_id, (to_jsonb(c) ->> 'title_attribute_id')::uuid AS title_attribute_id,
+                    (to_jsonb(c) ->> 'owner_attribute_id')::uuid AS owner_attribute_id,
+                    (to_jsonb(c) ->> 'end_of_life_attribute_id')::uuid AS end_of_life_attribute_id
              FROM cmdb.ci_classes c ORDER BY key",
         )
         .fetch_all(&mut *conn)
@@ -183,6 +196,20 @@ impl Model {
     /// The field that labels CIs of this type (None: they are labelled by their ident).
     pub fn title_field(&self, class_id: Uuid) -> Option<&Field> {
         self.class(class_id)?.title_attribute_id.and_then(|id| self.field(id))
+    }
+
+    /// The owner or end-of-life field of a type: its own setting, else the
+    /// nearest ancestor's. A setting naming a field outside the lineage (left
+    /// behind by a move) is skipped.
+    pub fn quality_field(&self, class_id: Uuid, which: QualityField) -> Option<&Field> {
+        let lineage = self.lineage(class_id);
+        lineage.iter().rev().find_map(|c| {
+            let id = match which {
+                QualityField::Owner => c.owner_attribute_id,
+                QualityField::EndOfLife => c.end_of_life_attribute_id,
+            }?;
+            self.field(id).filter(|f| lineage.iter().any(|l| l.id == f.class_id))
+        })
     }
 
     /// Where values of this lookup list are stored: (table, column) of every lookup field using it.

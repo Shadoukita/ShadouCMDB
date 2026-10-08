@@ -484,6 +484,15 @@ async function main() {
   const facets = (await get(`/api/v1/configuration-items/facets?classId=${hardware}&lookupValueId=${inService}`)).json;
   check(facets.facets.some((f: Json) => f.key === 'class'), 'facets: the class facet is returned');
   await get('/api/v1/configuration-items/facets?valueLimit=0', 400);
+  // Data-quality checks for the dashboard's "Needs attention" list (SHAA-2351).
+  const quality = (await get('/api/v1/configuration-items/data-quality?endOfLifeWithinDays=30')).json;
+  check(quality.checks.map((c: Json) => c.key).join() === 'no_owner,end_of_life,no_relationships,pending_approval', 'data quality: all four checks, in order');
+  const eol = quality.checks.find((c: Json) => c.key === 'end_of_life');
+  check(eol.filter.quality === 'end_of_life' && eol.filter.endOfLifeWithinDays === 30, 'data quality: the drill-down filter carries the window');
+  const orphans = quality.checks.find((c: Json) => c.key === 'no_relationships');
+  const drilled = (await get(`/api/v1/configuration-items?quality=no_relationships&limit=1`)).json;
+  check(drilled.page.total === orphans.count, 'data quality: the drill-down lists as many CIs as the check counts');
+  await get('/api/v1/configuration-items/data-quality?endOfLifeWithinDays=-1', 400);
   const server =(await post('/api/v1/configuration-items', {
     classId: serverClass,
     attributes: {
@@ -2014,7 +2023,7 @@ async function customization(x: Json) {
   const file = exported.json;
   const raw = JSON.stringify(file);
   check(/^attachment; filename="shadoucmdb-config-/.test(exported.headers.get('content-disposition') ?? ''), 'the export downloads as a file');
-  check(file.format === 'shadoucmdb.config' && file.formatVersion === 10 && Array.isArray(file.workflows) && Array.isArray(file.importMappings) && Array.isArray(file.savedViews) && file.dataModel.areas.some((a: Json) => a.key === 'infrastruktur') && !('users' in file) && !raw.includes('argon2') && !raw.includes('"username"') && !raw.includes('password'), 'the export has no users or password hashes');
+  check(file.format === 'shadoucmdb.config' && file.formatVersion === 11 && Array.isArray(file.workflows) && Array.isArray(file.importMappings) && Array.isArray(file.savedViews) && file.dataModel.areas.some((a: Json) => a.key === 'infrastruktur') && !('users' in file) && !raw.includes('argon2') && !raw.includes('"username"') && !raw.includes('password'), 'the export has no users or password hashes');
   check(file.permissionProfiles.every((p: Json) => p.name !== 'Administrator') && file.uiSettings.logo?.data === PNG_1X1, 'the export has editable profiles and the images');
   check(file.dataModel.attributes.every((a: Json) => typeof a.class === 'string' && !('classId' in a)), 'the export refers to classes by key');
   const noop = (await post('/api/v1/admin/config/import?mode=dry_run', file, 200)).json;
@@ -2063,7 +2072,7 @@ async function customization(x: Json) {
   attr.dataType = 'text';
   const immutable = await post('/api/v1/admin/config/import?mode=dry_run', retyped, 400);
   check(immutable.json.error?.details?.some((d: Json) => d.code === 'immutable'), 'the data type of an existing attribute cannot change');
-  await post('/api/v1/admin/config/import?mode=apply', { format: 'shadoucmdb.config', formatVersion: 11 }, 400);
+  await post('/api/v1/admin/config/import?mode=apply', { format: 'shadoucmdb.config', formatVersion: 12 }, 400);
   // Format 4: saved import mappings, merged by class key and name (SHAA-714 §6.2).
   const cfgMapping = { name: `Smoke config ${RUN}`, classKey: 'server', definition: { mode: 'create_only', columns: [{ header: 'Hostname', target: { kind: 'attribute', key: 'hostname' } }, { header: 'Notes', target: { kind: 'ignore' } }] } };
   const mappingFile = { format: 'shadoucmdb.config', formatVersion: 4, importMappings: [cfgMapping] };

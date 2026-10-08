@@ -644,6 +644,15 @@ pub async fn install(
         if titled.rows_affected() > 0 {
             state.titled.push(class_id);
         }
+        // The type's own "owner" field is its owner field for the data-quality checks (subtypes inherit it).
+        sqlx::query(
+            "UPDATE cmdb.ci_classes c SET owner_attribute_id = d.id FROM cmdb.ci_attribute_definitions d
+             WHERE c.id = $1 AND c.owner_attribute_id IS NULL AND d.class_id = c.id AND d.key = 'owner'
+               AND cmdb.owner_data_type(d.data_type)",
+        )
+        .bind(class_id)
+        .execute(&mut *ins.conn)
+        .await?;
     }
 
     let Installer { conn, audit } = ins;

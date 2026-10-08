@@ -40,6 +40,7 @@ erDiagram
     ci_classes ||--o{ ci_attribute_definitions : "class_id"
     ci_classes |o--o{ ci_attribute_definitions : "reference_class_id"
     ci_attribute_definitions |o--o{ ci_classes : "title_attribute_id (labels the CIs)"
+    ci_attribute_definitions |o--o{ ci_classes : "owner_attribute_id, end_of_life_attribute_id (data-quality checks)"
     ci_classes ||--o{ configuration_items : "class_id"
     ci_classes ||--o{ relationship_type_rules : "source_class_id"
     ci_classes ||--o{ relationship_type_rules : "target_class_id"
@@ -147,6 +148,8 @@ erDiagram
         integer sort_order
         boolean is_active
         uuid title_attribute_id FK "labels the CIs; SET NULL on purge"
+        uuid owner_attribute_id FK "owner field (data quality); NULL inherits the parent's"
+        uuid end_of_life_attribute_id FK "end-of-life date field (data quality); NULL inherits"
         text kind "asset | process (kept out of the inventory)"
     }
     ci_attribute_definitions {
