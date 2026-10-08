@@ -4,7 +4,7 @@ test("dashboard shows server-side counts and the class nav has live counts", asy
   await resetUiSettings(request); // the built-in widgets, not a customized dashboard
   await page.goto("/");
   await expect(page).toHaveTitle(/^Dashboard · /);
-  await expect(page.getByRole("heading", { level: 1, name: /^Good (morning|afternoon|evening)$/ })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: /^Dashboard: Good (morning|afternoon|evening)$/ })).toBeVisible();
   const stats = page.getByRole("region", { name: "Dashboard figures" });
   await expect(stats.locator('[data-stat="total"] .value')).toHaveText(/^\d[\d,.]*$/);
   await expect(stats.locator('[data-stat="relationships"] .value')).toHaveText(/^\d[\d,.]*$/);

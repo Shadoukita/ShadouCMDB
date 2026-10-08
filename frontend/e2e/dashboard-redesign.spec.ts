@@ -8,7 +8,7 @@ import { apiGet, checkA11y, chooseTheme, expect, resetUiSettings, test } from ".
 test("dashboard: greeting, period switch, KPI cards, changes chart, class bars and recent activity", async ({ page, request }, testInfo) => {
   await resetUiSettings(request); // the built-in widgets
   await page.goto("/");
-  await expect(page.getByRole("heading", { level: 1, name: /^Good (morning|afternoon|evening)$/ })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: /^Dashboard: Good (morning|afternoon|evening)$/ })).toBeVisible();
 
   // KPI cards: the figures the API counts, with the move over the period in the chip's text.
   const stats = page.getByRole("region", { name: "Dashboard figures" });

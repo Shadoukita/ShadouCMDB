@@ -76,7 +76,8 @@ const widgets = computed<UiWidget[] | null>(() => {
   <div class="page-header dash-head">
     <div class="title">
       <p class="overline">{{ today }}</p>
-      <h1 class="display">{{ greeting }}</h1>
+      <!-- The page's name first, for screen readers and the heading list; the greeting is what shows. -->
+      <h1 class="display"><span class="sr-only">{{ t("dashboard.title") }}: </span>{{ greeting }}</h1>
     </div>
     <div v-if="hasCis" class="segmented period-switch" role="radiogroup" :aria-label="t('dashboard.period')">
       <label v-for="p in PERIODS" :key="p">

@@ -31,7 +31,7 @@ test("the shell and the dashboard are German with the German catalog", async ({ 
   await forceGerman(page);
   await page.goto("/");
   await expect(page).toHaveTitle(/^Dashboard · /);
-  await expect(page.getByRole("heading", { level: 1, name: /^Guten (Morgen|Tag|Abend)$/ })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: /^Dashboard: Guten (Morgen|Tag|Abend)$/ })).toBeVisible();
   await expect(page.getByRole("radiogroup", { name: "Zeitraum" }).getByRole("radio", { name: "14 Tage" })).toBeChecked();
   await expect(page.getByRole("heading", { name: "CIs nach Klasse", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Letzte Aktivität", exact: true })).toBeVisible();
