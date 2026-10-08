@@ -89,7 +89,7 @@ test("the inventory's built-in column headers and the Columns popover are German
   await resetUiSettings(request); // the default columns, not a list view's
   await forceGerman(page);
   await page.goto("/cis");
-  const headers = page.locator("table.data thead th:not(.row-actions)");
+  const headers = page.locator("table.data thead th:not(.row-actions):not(.select-cell)");
   await expect(headers).toHaveText([/^\s*Bezeichnung/, /^\s*Ident/, /^\s*Klasse/, /^\s*Aktiv/, /^\s*Geändert/]);
   await expect(page.getByRole("columnheader", { name: /^Label|^Class|^Active|^Updated/ })).toHaveCount(0);
 

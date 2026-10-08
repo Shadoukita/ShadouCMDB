@@ -366,5 +366,5 @@ test("criticality: set on the CI form, shown as a column and filtered in the inv
   await expect(page).toHaveURL(/criticalityValueId=/);
   await expect(page.locator("table.data tbody tr")).toHaveCount(1);
   await expect(page.locator("table.data tbody tr").first()).toContainText(N("app-a"));
-  await expect(page.locator("table.data tbody tr .badge.criticality")).toHaveText("Critical");
+  await expect(page.locator("table.data tbody tr .crit-meter")).toHaveText("Critical");
 });

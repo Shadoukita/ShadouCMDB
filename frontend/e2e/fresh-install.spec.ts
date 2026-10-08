@@ -185,7 +185,7 @@ test.describe("a bare install", () => {
     await nav.getByRole("link", { name: new RegExp(`^${CLASS}`) }).click();
     await expect(page).toHaveURL(new RegExp(`classId=${classId}`));
     // The view leaves out Label, so the inventory shows it first: it is the link that opens the CI.
-    await expect(page.locator("table.data thead th:not(.row-actions)")).toHaveText([/Label/, /Name/, /Status/, /Tier/, /Outlets/]);
+    await expect(page.locator("table.data thead th:not(.row-actions):not(.select-cell)")).toHaveText([/Label/, /Name/, /Status/, /Tier/, /Outlets/]);
     const rows = page.locator("table.data tbody tr");
     // Default sort: label (the name), descending.
     await expect(rows).toHaveCount(2);
@@ -289,7 +289,7 @@ test.describe("imported into a fresh install", () => {
     await expect(page.locator(".layout-container .layout-panel > .panel-header h2").first()).toHaveText(/Power feed/);
 
     await page.goto(`/cis?classId=${classId}`);
-    await expect(page.locator("table.data thead th:not(.row-actions)")).toHaveText([/Label/, /Name/, /Status/, /Tier/, /Outlets/]);
+    await expect(page.locator("table.data thead th:not(.row-actions):not(.select-cell)")).toHaveText([/Label/, /Name/, /Status/, /Tier/, /Outlets/]);
     await expect(page.locator("table.data tbody tr").first().getByRole("cell").nth(3)).toHaveText("Gold");
     await snap(page, "54-imported-class-inventory");
 

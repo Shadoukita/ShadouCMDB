@@ -49,7 +49,7 @@ async function createView(request: APIRequestContext, name: string, definition: 
 }
 
 /** The rows' labels, to compare what two loads of a view show. */
-const labels = (page: Page) => page.locator("table.data tbody tr td:first-child").allInnerTexts();
+const labels = (page: Page) => page.locator("table.data tbody tr td.select-cell + td").allInnerTexts();
 
 async function signInUi(browser: Browser, username: string, password: string): Promise<Page> {
   const context = await browser.newContext({ storageState: { cookies: [], origins: [] } });
