@@ -768,10 +768,25 @@ pub mod scratch {
             &self.name
         }
 
+        /// `WITH (FORCE)` signals the database's other sessions and waits
+        /// five seconds for them to exit; on a loaded host a session can take
+        /// longer and the drop fails with `55006 object_in_use` (GH#721). New
+        /// connections are refused first, then the drop is retried.
         pub async fn drop(self) {
             self.pool.close().await;
             let mut c = self.admin.connect().await.unwrap();
-            c.execute(sqlx::AssertSqlSafe(format!("DROP DATABASE {} WITH (FORCE)", self.name))).await.unwrap();
+            let refuse = format!("ALTER DATABASE {} WITH ALLOW_CONNECTIONS false", self.name);
+            c.execute(sqlx::AssertSqlSafe(refuse)).await.ok();
+            let drop = format!("DROP DATABASE {} WITH (FORCE)", self.name);
+            for attempt in 1.. {
+                match c.execute(sqlx::AssertSqlSafe(drop.clone())).await {
+                    Ok(_) => return,
+                    Err(sqlx::Error::Database(e)) if e.code().as_deref() == Some("55006") && attempt < 12 => {
+                        tokio::time::sleep(std::time::Duration::from_millis(250 * attempt)).await;
+                    }
+                    Err(e) => panic!("DROP DATABASE {}: {e}", self.name),
+                }
+            }
         }
     }
 }
