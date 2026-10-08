@@ -11,13 +11,15 @@ use crate::db::{MIGRATOR, scratch};
 /// Every stored value of a table, independent of row and column order. The
 /// `backup.restore` entries a restore adds, and the chain head that moves with
 /// them, are left out: [`the_api_role_backs_up_the_audit_chain_head_but_cannot_move_it`] checks those.
+/// So is the entry a restore lists as not sent yet, which the audit export's
+/// tests check (GH#716).
 async fn fingerprint(c: &mut PgConnection, table: &Table) -> String {
     let mut cols = stored_columns(c, table).await.unwrap();
     cols.sort();
     let cols = cols.iter().map(|c| ident(c)).collect::<Vec<_>>().join(", ");
     let only = match (table.schema.as_str(), table.name.as_str()) {
         ("cmdb", "audit_log") => " WHERE action <> 'backup.restore'",
-        ("cmdb", "audit_log_chain_head") => " WHERE false",
+        ("cmdb", "audit_log_chain_head" | "audit_export_restore_pending") => " WHERE false",
         _ => "",
     };
     sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
@@ -274,8 +276,12 @@ async fn a_backup_restores_into_another_database_value_for_value() {
     // A backup of the restored database is the same data.
     let (_, again) = take_backup(&mut cb).await;
     let mut expected = normalized(header);
-    // Plus the backup.restore entry.
-    expected.iter_mut().filter(|t| t.schema == "cmdb" && t.name == "audit_log").for_each(|t| t.rows += 1);
+    // Plus the backup.restore entry, which restore did not send (no
+    // AUDIT_EXPORT here) and so lists as not sent yet (GH#716).
+    expected
+        .iter_mut()
+        .filter(|t| t.schema == "cmdb" && matches!(t.name.as_str(), "audit_log" | "audit_export_restore_pending"))
+        .for_each(|t| t.rows += 1);
     assert_eq!(normalized(&again.header), expected);
 
     drop((ca, cb));
