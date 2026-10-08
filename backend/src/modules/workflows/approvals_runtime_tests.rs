@@ -1972,12 +1972,19 @@ async fn dropped_service_owners_name_no_service_to_who_may_not_view_services() {
     assert_eq!(status, 403, "owner may not view business services");
     let leaks = |v: &Value| {
         let text = v.to_string();
-        [name.as_str(), "pal", "\"req\""].into_iter().filter(|s| text.contains(s)).map(str::to_owned).collect::<Vec<_>>()
+        [name.as_str(), "pal", "\"req\""]
+            .into_iter()
+            .filter(|s| text.contains(s))
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
     };
 
     // The administrator sees the names.
     let full = o.view(instance).await;
-    assert_eq!(full["steps"][0]["droppedSources"][0]["label"], format!("technical owner pal of business service {name}"));
+    assert_eq!(
+        full["steps"][0]["droppedSources"][0]["label"],
+        format!("technical owner pal of business service {name}")
+    );
 
     // owner gets the generic text.
     let (status, v) = w.call(&o.owner.0, "GET", &format!("{REQUESTS}/{request_id}"), None).await;
@@ -1990,7 +1997,10 @@ async fn dropped_service_owners_name_no_service_to_who_may_not_view_services() {
         "{v}"
     );
     assert!(d["message"].as_str().unwrap().starts_with("Separation of duties: a technical owner"), "{d}");
-    assert_eq!((d["fieldLastChanged"]["actorId"].clone(), d["fieldLastChanged"]["actorName"].clone()), (Value::Null, Value::Null));
+    assert_eq!(
+        (d["fieldLastChanged"]["actorId"].clone(), d["fieldLastChanged"]["actorName"].clone()),
+        (Value::Null, Value::Null)
+    );
     assert_eq!(leaks(dropped_sources), Vec::<String>::new(), "{dropped_sources}");
 
     // So does the request's audit entry.
