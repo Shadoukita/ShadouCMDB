@@ -25,7 +25,7 @@ test("CI detail: page head, tab counts, grouped relationships and the history ti
   const meta = page.getByTestId("record-meta");
   await expect(meta.getByRole("link", { name: "Server", exact: true })).toHaveAttribute("href", `/cis?classId=${serverId}`);
   await expect(meta).toContainText(ci.ident);
-  // Who made the newest change comes from the history (gap G16).
+  // Who made the newest change comes from the CI's last change (gap G16).
   await expect(meta.locator("time")).toHaveText(/^Updated .+ by .+$/);
 
   // Tabs with counts: the count is in the accessible name, not in the tab's text.
@@ -39,12 +39,13 @@ test("CI detail: page head, tab counts, grouped relationships and the history ti
   await expect(card.locator(".layout-panel > .panel-header h2").first()).toHaveText("General");
   await expect(card.locator(".layout-panel > .panel-header h2").last()).toHaveText("Record");
 
-  // Relationships: grouped by how the edge reads, each row a link with a type pill and its direction.
+  // Relationships: grouped by the type's category (the template's located_in is "Location", gap G15), each row
+  // a link with a pill saying how the edge reads and its direction.
   const rel = page.getByRole("region", { name: /^Relationships/ });
   await expect(rel.getByRole("listitem")).toHaveCount(relTotal);
-  const located = rel.getByRole("list", { name: /^is located in/ }).getByRole("listitem");
+  const located = rel.getByRole("list", { name: /^Location/ }).getByRole("listitem").filter({ has: page.locator(".rel-type[data-type-key='located_in']") });
   await expect(located.getByRole("link")).toHaveText("FRA1 Rack A01");
-  await expect(located.locator(".rel-type")).toContainText("located_in");
+  await expect(located.locator(".rel-type")).toHaveText("is located in");
   await expect(located.getByRole("img", { name: "Outgoing" })).toBeVisible();
   await expect(located.getByRole("button", { name: "Actions for FRA1 Rack A01" })).toBeVisible();
   await rel.getByRole("searchbox", { name: "Filter relationships" }).fill("no such relationship");
