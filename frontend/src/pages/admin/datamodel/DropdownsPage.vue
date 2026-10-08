@@ -163,18 +163,20 @@ const valuesEmptyHint = computed(() => {
 </script>
 
 <template>
-  <Breadcrumbs :items="adminCrumbs('dropdowns')" />
-  <div class="page-header">
-    <div class="title">
-      <h1>{{ t("dm.dropdowns.title") }}</h1>
-      <span v-if="lists.data.value" class="muted count">{{ t("common.total", { n: formatNumber(lists.data.value.length) }) }}</span>
-      <span v-if="patch.isPending.value" class="spinner" :aria-label="t('common.saving')" />
+  <div class="list-head">
+    <Breadcrumbs :items="adminCrumbs('dropdowns')" />
+    <div class="page-header">
+      <div class="title">
+        <h1>{{ t("dm.dropdowns.title") }}</h1>
+        <span v-if="lists.data.value" class="count mono">{{ t("common.total", { n: formatNumber(lists.data.value.length) }) }}</span>
+        <span v-if="patch.isPending.value" class="spinner" :aria-label="t('common.saving')" />
+      </div>
+      <div class="actions">
+        <button type="button" class="btn btn-primary" @click="open(null)"><Icon name="plus" />{{ t("dm.dropdowns.create") }}</button>
+      </div>
     </div>
-    <div class="actions">
-      <button type="button" class="btn btn-primary" @click="open(null)"><Icon name="plus" />{{ t("dm.dropdowns.create") }}</button>
-    </div>
+    <p class="page-intro">{{ t("dm.dropdowns.intro") }}</p>
   </div>
-  <p class="page-intro">{{ t("dm.dropdowns.intro") }}</p>
   <ErrorAlert v-if="patch.isError.value" :error="patch.error.value" :title="t('formError.notSaved')" />
 
   <section class="panel explorer" :aria-label="t('dm.dropdowns.lists')">
@@ -187,7 +189,7 @@ const valuesEmptyHint = computed(() => {
       </template>
     </EmptyState>
     <div v-else class="table-wrap">
-      <table class="data">
+      <table class="data list-table lookup-lists">
         <thead>
           <tr>
             <th scope="col">{{ t("dm.lookup.col.name") }}</th>
@@ -200,15 +202,15 @@ const valuesEmptyHint = computed(() => {
         </thead>
         <tbody>
           <tr v-for="l in lists.data.value" :key="l.id" :class="{ disabled: !l.isActive, selected: l.id === selectedId }" :aria-selected="l.id === selectedId">
-            <td><RouterLink :to="{ query: { list: l.id } }">{{ l.name }}</RouterLink></td>
+            <td><RouterLink class="list-name" :to="{ query: { list: l.id } }" dir="auto">{{ l.name }}</RouterLink></td>
             <td class="mono">{{ l.key }}</td>
             <td>
-              <RouterLink v-if="l.parentListId" :to="{ query: { list: l.parentListId } }">{{ listName(l.parentListId) }}</RouterLink>
+              <RouterLink v-if="l.parentListId" class="list-name" :to="{ query: { list: l.parentListId } }" dir="auto">{{ listName(l.parentListId) }}</RouterLink>
             </td>
             <td class="muted fill" :title="l.description ?? undefined">{{ l.description ?? "" }}</td>
             <td>
-              <span v-if="l.isActive" class="badge ok">{{ t("common.active") }}</span>
-              <span v-else class="badge off">{{ t("dm.lookup.archivedBadge") }}</span>
+              <span v-if="l.isActive" class="badge ok"><span class="status-dot" aria-hidden="true" />{{ t("common.active") }}</span>
+              <span v-else class="badge off"><span class="status-dot" aria-hidden="true" />{{ t("dm.lookup.archivedBadge") }}</span>
             </td>
             <td class="row-actions">
               <RowMenu :label="t('inventory.rowMenu', { name: l.name })" :items="rowMenu(l)" />
