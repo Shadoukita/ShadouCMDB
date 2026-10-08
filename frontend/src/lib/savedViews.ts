@@ -1,7 +1,7 @@
 import type { LocationQuery, LocationQueryRaw } from "vue-router";
-import type { SavedView, SavedViewDefinition } from "../api/savedViews";
+import type { SavedView, SavedViewCount, SavedViewDefinition } from "../api/savedViews";
 import { DEFAULT_LIMIT, DEFAULT_SORT, FILTER_KEYS, param, parseColumns, type QueryContext } from "./inventoryQuery";
-import { t } from "../i18n/index";
+import { formatNumber, t } from "../i18n/index";
 
 /**
  * Saved views and the URL (saved-views spec §1.3, D6). A view is stored by key
@@ -171,4 +171,23 @@ export function groupViews(views: readonly SavedView[], filter = ""): { personal
   const f = filter.trim().toLocaleLowerCase();
   const shown = f ? views.filter((v) => v.name.toLocaleLowerCase().includes(f)) : views;
   return { personal: shown.filter((v) => v.visibility === "personal"), shared: shown.filter((v) => v.visibility === "shared") };
+}
+
+/**
+ * A view's count in the rail (gap G4): the exact number, the cap with "+" when the API stopped counting
+ * (`at_least`), or a neutral dash when it has no number (`timed_out`, `unavailable`), never a guess. `title`
+ * says what the figure means; null while there is no answer for the view (loading, or the request failed).
+ */
+export function viewCountLabel(c: (SavedViewCount & { cap: number }) | undefined): { text: string; title: string } | null {
+  if (!c) return null;
+  switch (c.status) {
+    case "counted":
+      return c.count == null ? null : { text: formatNumber(c.count), title: t("nav.viewCount", { n: formatNumber(c.count) }) };
+    case "at_least":
+      return { text: `${formatNumber(c.cap)}+`, title: t("nav.viewCountAtLeast", { n: formatNumber(c.cap) }) };
+    case "timed_out":
+      return { text: "–", title: t("nav.viewCountTimedOut") };
+    default:
+      return { text: "–", title: t("nav.viewCountUnavailable") };
+  }
 }

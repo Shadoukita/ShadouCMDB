@@ -200,6 +200,18 @@
   font-size: var(--fs-sm);
   font-variant-numeric: tabular-nums;
 }
+/* Work waiting on the user (approvals to decide): a pill after the count; a corner badge on the collapsed rail. */
+.nav-pending {
+  margin-left: var(--space-1_5);
+  padding: 0 var(--space-1_5);
+  border-radius: var(--radius-sm);
+  background: var(--c-sidebar-badge-bg);
+  color: var(--c-sidebar-badge-fg);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
+}
 .nav-body a > .class-badge {
   min-width: 0;
 }
@@ -257,6 +269,18 @@
   min-height: 0;
   margin: 2px auto;
   padding: 0;
+}
+.nav-collapsed .nav-body a {
+  position: relative;
+}
+.nav-collapsed .nav-pending {
+  position: absolute;
+  top: 0;
+  right: 0;
+  margin: 0;
+  padding: 0 3px;
+  line-height: 14px;
+  font-size: 10px;
 }
 .nav-collapsed .nav-label {
   position: absolute;

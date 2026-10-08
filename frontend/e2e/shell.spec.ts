@@ -50,6 +50,10 @@ test("rail: Workspace, Administration and Saved views sections; a saved view ope
   await expect(inventory.locator(".nav-count")).toHaveText(/^\d[\d.,]*\s?[KkMT]?$/);
   await expect(inventory.locator(".nav-count")).toHaveAttribute("title", /^\d[\d,.]* configuration items$/);
   await expect(nav.getByRole("button", { name: /^Signed in as \S/ })).toBeVisible();
+  // Each saved view shows the CIs it lists (GET /saved-views/counts, gap G4), outside the link's name like the Inventory count.
+  const viewCount = nav.getByRole("link", { name, exact: true }).locator(".nav-count");
+  await expect(viewCount).toHaveText(/^\d[\d,]*$/);
+  await expect(viewCount).toHaveAttribute("title", /^\d[\d,]* configuration items$/);
   await checkA11y(page, testInfo, "shell-rail", { include: "#shell-nav" });
   await snap(page, "12b-shell-rail");
 

@@ -5,7 +5,7 @@ import { ApiError } from "../api/client";
 import { useAreas } from "../api/datamodel";
 import { useAuditLog, useCi, useCiClasses, useClassAttributes, useRelationships } from "../api/queries";
 import { useServiceSettings } from "../api/services";
-import { useCiWorkflows } from "../api/workflowRuntime";
+import { useCiWorkflows, useWorkflowCounts } from "../api/workflowRuntime";
 import { useCiLayout } from "../api/uiSettings";
 import Breadcrumbs, { type Crumb } from "../components/Breadcrumbs.vue";
 import EmptyState from "../components/EmptyState.vue";
@@ -152,7 +152,9 @@ const recordFields = computed(() =>
 // The Workflows tab, once the CI has run a workflow or the user may start one on it.
 const ciWorkflows = useCiWorkflows(() => (c.value ? id.value : undefined));
 const hasWorkflows = computed(() => !!ciWorkflows.data.value && (ciWorkflows.data.value.data.length > 0 || ciWorkflows.data.value.startable.length > 0));
-// The tabs' counts: the direct relationships on the map, the workflow instances, the history's entries (the
+// Its count is the CI's running instances (gap G14); none when the API refuses the CI (404), so no false 0.
+const ciWorkflowCounts = useWorkflowCounts(() => id.value, () => hasWorkflows.value);
+// The tabs' counts: the direct relationships on the map, the running workflow instances, the history's entries (the
 // newest of them also show on the built-in Overview and give "Updated … by …").
 const rels = useRelationships(() => id.value, () => !!c.value);
 const canAudit = computed(() => session.can("audit.view"));
@@ -168,8 +170,8 @@ const TABS = computed<[Tab, string, number?][]>(() => [
   ["graph", t("record.actions.map"), rels.data.value?.page.total],
   // A deleted CI has no live relationships to analyse.
   ...(c.value?.deletedAt ? [] : [["impact", t("record.tab.impact")] as [Tab, string]]),
-  // Its running and recent workflow instances (a deleted CI keeps their history).
-  ...(hasWorkflows.value ? [["workflows", t("record.tab.workflows"), ciWorkflows.data.value?.data.length] as [Tab, string, number?]] : []),
+  // Its running and recent workflow instances (a deleted CI keeps their history), counted by the running ones.
+  ...(hasWorkflows.value ? [["workflows", t("record.tab.workflows"), ciWorkflowCounts.data.value?.active] as [Tab, string, number?]] : []),
   // The history is the audit log, which needs audit.view.
   ...(canAudit.value && !placed.value.has("history") ? [["history", t("record.actions.history"), historyTotal.value] as [Tab, string, number?]] : []),
 ]);
