@@ -65,6 +65,8 @@ async function signInUi(browser: Browser, username: string): Promise<Page> {
 
 const workflowsTab = (page: Page) => page.getByRole("tab", { name: "Workflows" });
 const panel = (page: Page) => page.getByTestId("ci-workflows");
+/** The tab's count of running instances (GET /workflow-instances/counts?ciId=, gap G14): generated content. */
+const tabCount = (page: Page) => workflowsTab(page).locator(".tab-count");
 
 test.beforeAll(async ({ request }) => {
   const cls = async (name: string, key: string) => {
@@ -98,6 +100,7 @@ test("an operator starts a workflow, sees why a transition is blocked and runs i
   await page.goto(`/cis/${ciId}`);
   await workflowsTab(page).click();
   await expect(panel(page)).toContainText("No workflow has run on this CI");
+  await expect(tabCount(page)).toHaveAttribute("data-count", "0");
 
   await panel(page).getByRole("button", { name: "Start workflow" }).first().click();
   const start = page.getByRole("dialog", { name: "Start a workflow" });
@@ -106,6 +109,7 @@ test("an operator starts a workflow, sees why a transition is blocked and runs i
   await expect(start.getByLabel("Workflow")).not.toContainText(HIDDEN_WF);
   await start.getByRole("button", { name: "Start", exact: true }).click();
   await expect(page.getByRole("status").filter({ hasText: `Started ${WF} on ${CI}.` })).toBeVisible();
+  await expect(tabCount(page)).toHaveAttribute("data-count", "1");
 
   const row = panel(page).getByRole("row").filter({ hasText: WF });
   await expect(row).toContainText("Draft");
@@ -139,7 +143,12 @@ test("an operator starts a workflow, sees why a transition is blocked and runs i
 
 test("the operator's instance list and summary leave out the CI type they may not view", async ({ browser }, testInfo) => {
   const page = await signInUi(browser, OPERATOR);
-  await page.getByRole("link", { name: "Workflows" }).first().click();
+  // The rail counts their one running instance, not the one on the type they may not view (gap G6); no approvals wait on them.
+  const navLink = page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Workflows", exact: true });
+  await expect(navLink.locator(".nav-count")).toHaveText("1");
+  await expect(navLink.locator(".nav-count")).toHaveAttribute("title", "1 running workflow");
+  await expect(navLink.locator(".nav-pending")).toHaveCount(0);
+  await navLink.click();
   await expect(page).toHaveURL(/\/workflows$/);
   await expect(page.getByTestId("wf-summary")).toContainText(WF);
   await expect(page.getByTestId("wf-summary")).not.toContainText(`e2e_hidden_${stamp}`);
@@ -194,6 +203,7 @@ test("a version conflict asks to reload; the administrator then approves and the
   await page.getByRole("dialog", { name: `Approve: ${WF}` }).getByRole("button", { name: "Approve", exact: true }).click();
   await expect(row).toContainText("Done");
   await expect(row).toContainText("Completed");
+  await expect(tabCount(page)).toHaveAttribute("data-count", "0");
 
   await page.getByRole("tab", { name: "History" }).click();
   const steps = page.getByTestId("history-workflow");

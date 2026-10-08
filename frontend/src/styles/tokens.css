@@ -203,6 +203,8 @@
   --c-sidebar-text-muted: #8a94a3; /* 6.0:1, 4.9:1 on the active row: section labels, counts */
   --c-sidebar-text-strong: #ffffff;
   --c-sidebar-link: var(--cyan-300);
+  --c-sidebar-badge-bg: #16253f; /* pending work on the rail (workflow approvals) */
+  --c-sidebar-badge-fg: #a9c6f5; /* 9.0:1 on its background */
 
   /* ---------- Badges ---------- */
   --badge-neutral-bg: var(--gray-100);

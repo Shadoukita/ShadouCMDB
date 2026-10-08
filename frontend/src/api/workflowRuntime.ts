@@ -24,6 +24,7 @@ export type WorkflowTransitionBody = Body<"/api/v1/workflow-instances/{id}/trans
 export const runtimeKeys = {
   all: ["workflow-runtime"] as const,
   ci: (ciId: string) => ["workflow-runtime", "ci", ciId] as const,
+  counts: (ciId?: string) => ["workflow-runtime", "counts", ciId ?? ""] as const,
   list: (q: WorkflowInstanceListQuery) => ["workflow-runtime", "list", q] as const,
   summary: (definitionKey?: string) => ["workflow-runtime", "summary", definitionKey ?? ""] as const,
   instance: (id: string) => ["workflow-runtime", "instance", id] as const,
@@ -40,6 +41,25 @@ export function useCiWorkflows(ciId: MaybeRefOrGetter<string | undefined>) {
       queryKey: runtimeKeys.ci(id),
       enabled: !!id,
       queryFn: ({ signal }: { signal: AbortSignal }) => unwrap(api.GET("/api/v1/configuration-items/{id}/workflows", { ...path(id), signal })),
+    };
+  });
+}
+
+/**
+ * Open workflow work for the navigation badges (GET /workflow-instances/counts): running instances, those
+ * awaiting an approval, and the caller's approval inbox; with `ciId` on that CI only (404 when the caller may
+ * not view it: the query fails and the badge stays hidden). Cached for 30 s and refreshed on navigation, not
+ * by a timer; a workflow step invalidates `runtimeKeys.all`, so the counts follow.
+ */
+export function useWorkflowCounts(ciId?: MaybeRefOrGetter<string | undefined>, enabled: MaybeRefOrGetter<boolean> = true) {
+  return useQuery(() => {
+    const id = toValue(ciId) || undefined;
+    return {
+      queryKey: runtimeKeys.counts(id),
+      enabled: toValue(enabled),
+      staleTime: 30_000,
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        unwrap(api.GET("/api/v1/workflow-instances/counts", { params: { query: { ciId: id } }, signal })),
     };
   });
 }

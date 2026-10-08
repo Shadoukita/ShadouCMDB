@@ -4,7 +4,7 @@ import { effectScope, nextTick, reactive, ref, watch } from "vue";
 import type { LocationQueryRaw } from "vue-router";
 import type { SavedView } from "../src/api/savedViews";
 import type { UiListView } from "../src/api/uiSettings";
-import { definitionFromUrl, droppedSummary, groupViews, sameState, urlState, viewState, viewUrlQuery } from "../src/lib/savedViews";
+import { definitionFromUrl, droppedSummary, groupViews, sameState, urlState, viewCountLabel, viewState, viewUrlQuery } from "../src/lib/savedViews";
 import { useInventoryQueryState } from "../src/lib/useInventoryQueryState";
 import { useSavedViewSelection } from "../src/lib/useSavedViewSelection";
 
@@ -341,5 +341,24 @@ describe("the saved view and the query state together: one list request (GH#167)
     assert.equal(t.s.current.value?.id, "v1");
     assert.equal(t.requests.length, 2, t.requests.join("\n"));
     t.stop();
+  });
+});
+
+describe("viewCountLabel (rail counts, G4)", () => {
+  const c = (status: "counted" | "at_least" | "unavailable" | "timed_out", count: number | null) => ({ viewId: "v1", status, count, cap: 10000 });
+  test("an exact count shows as a number", () => {
+    assert.deepEqual(viewCountLabel(c("counted", 1234)), { text: "1,234", title: "1,234 configuration items" });
+    assert.equal(viewCountLabel(c("counted", 0))?.text, "0");
+  });
+  test("a capped count shows the cap with a plus, never the capped figure alone", () => {
+    assert.deepEqual(viewCountLabel(c("at_least", 10000)), { text: "10,000+", title: "At least 10,000 configuration items" });
+  });
+  test("no number is a neutral dash with the reason", () => {
+    assert.equal(viewCountLabel(c("timed_out", null))?.text, "–");
+    assert.match(viewCountLabel(c("timed_out", null))!.title, /not counted in time/i);
+    assert.equal(viewCountLabel(c("unavailable", null))?.text, "–");
+  });
+  test("nothing while there is no answer", () => {
+    assert.equal(viewCountLabel(undefined), null);
   });
 });

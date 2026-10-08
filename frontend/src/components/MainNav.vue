@@ -4,11 +4,12 @@ import { computed, onBeforeUnmount, ref, watch, watchEffect } from "vue";
 import { RouterLink, useRoute, type RouteLocationNormalizedLoaded } from "vue-router";
 import { useAreas } from "../api/datamodel";
 import { ciCountQuery, useCiClasses } from "../api/queries";
-import { useSavedViews } from "../api/savedViews";
+import { useSavedViewCounts, useSavedViews } from "../api/savedViews";
 import { useServiceSettings } from "../api/services";
+import { useWorkflowCounts } from "../api/workflowRuntime";
 import { currentLocale, formatNumber, t } from "../i18n";
 import { dataModelEmpty } from "../lib/dataModel";
-import { viewUrlQuery } from "../lib/savedViews";
+import { viewCountLabel, viewUrlQuery } from "../lib/savedViews";
 import type { UiPage } from "../api/uiSettings";
 import { useAppSettings, useNavPreviewStore } from "../lib/appSettings";
 import { viewableClasses } from "../lib/permissions";
@@ -112,7 +113,8 @@ const totalShort = computed(() =>
 
 /**
  * The user's inventory views (their own, then the shared ones), each a link that applies the view the way the
- * inventory's view menu does. Views that can no longer be applied stay out. Per-view counts wait for gap G4.
+ * inventory's view menu does. Views that can no longer be applied stay out. Each shows how many CIs it lists for
+ * the user (gap G4): exact, "10,000+" past the API's cap, or a dash when it was not counted in time.
  */
 const views = useSavedViews("inventory");
 const viewLinks = computed(() =>
@@ -122,6 +124,32 @@ const viewLinks = computed(() =>
     const params = new URLSearchParams(Object.entries(q).map(([k, val]) => [k, String(val)]));
     return [{ id: v.id, name: v.name, shared: v.visibility === "shared", to: `/cis?${params}` }];
   }),
+);
+const viewCounts = useSavedViewCounts(() => (props.collapsed ? [] : viewLinks.value.map((v) => v.id)));
+const viewCount = computed(() => {
+  const m = new Map<string, { text: string; title: string }>();
+  for (const v of viewLinks.value) {
+    const label = viewCountLabel(viewCounts.byView.value.get(v.id));
+    if (label) m.set(v.id, label);
+  }
+  return m;
+});
+
+/**
+ * Workflows (gap G6): the running instances, and a highlighted badge for the approvals waiting on this user's
+ * decision, which also shows on the collapsed rail.
+ */
+const workflowCounts = useWorkflowCounts();
+const wf = computed(() => workflowCounts.data.value);
+
+// The counts are on every page: they refresh when the user moves to another page and they are older than their
+// 30 s, never on a timer.
+watch(
+  () => route.path,
+  () => {
+    viewCounts.refetchStale();
+    if (workflowCounts.isStale.value && !workflowCounts.isFetching.value) void workflowCounts.refetch();
+  },
 );
 
 function active(item: NavLinkItem): (r: RouteLocationNormalizedLoaded) => boolean {
@@ -206,6 +234,13 @@ function active(item: NavLinkItem): (r: RouteLocationNormalizedLoaded) => boolea
         >
           <Icon name="circle-check" :size="collapsed ? 20 : 16" />
           <span class="nav-label">{{ t("workflows.nav") }}</span>
+          <span v-if="wf && !collapsed" class="nav-count" aria-hidden="true" :title="t('nav.workflowsActive', { n: wf.active })">{{
+            formatNumber(wf.active)
+          }}</span>
+          <span v-if="wf && wf.awaitingMyDecision > 0" class="nav-pending mono" :title="t('nav.workflowsMine', { n: wf.awaitingMyDecision })"
+            ><span aria-hidden="true">{{ formatNumber(wf.awaitingMyDecision) }}</span
+            ><span class="sr-only">{{ t("nav.workflowsMine", { n: wf.awaitingMyDecision }) }}</span></span
+          >
         </NavLink>
       </template>
       <NavLink v-else-if="item.cls && !collapsed" :to="item.to" :active="active(item)">
@@ -216,6 +251,7 @@ function active(item: NavLinkItem): (r: RouteLocationNormalizedLoaded) => boolea
   </template>
   <template v-if="!collapsed && viewLinks.length > 0">
     <h2>{{ t("nav.heading.savedViews") }}</h2>
+    <!-- Counts stay out of the links' names, as the Inventory count does: the figure and its meaning are the tooltip. -->
     <NavLink
       v-for="v in viewLinks"
       :key="v.id"
@@ -225,6 +261,7 @@ function active(item: NavLinkItem): (r: RouteLocationNormalizedLoaded) => boolea
     >
       <Icon :name="v.shared ? 'users' : 'user'" :size="16" />
       <span class="nav-label" dir="auto">{{ v.name }}</span>
+      <span v-if="viewCount.get(v.id)" class="nav-count" aria-hidden="true" :title="viewCount.get(v.id)!.title">{{ viewCount.get(v.id)!.text }}</span>
     </NavLink>
   </template>
   <template v-if="!collapsed">
