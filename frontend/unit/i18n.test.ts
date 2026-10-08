@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { afterEach, describe, test } from "node:test";
 import { currentLocale, formatNumber, hasMessage, parseMessage, setLocaleForTests, t, tAround } from "../src/i18n/index";
 import { formatRelative } from "../src/lib/format";
-import { pageLabel, widgetLabel } from "../src/lib/uiSettings";
+import { BUILTIN, fieldLabel, pageLabel, SORT_FIELDS, widgetLabel } from "../src/lib/uiSettings";
 import { de } from "../src/i18n/de";
 import { en } from "../src/i18n/en";
 
@@ -159,6 +159,16 @@ describe("app shell and dashboard", () => {
     setLocaleForTests("de");
     assert.equal(pageLabel("inventory"), "Alle Configuration Items");
     assert.equal(widgetLabel("saved_search"), "Gespeicherte Suche");
+  });
+  test("built-in field names come from the catalog, for columns, forms and sort choices (SHAA-2406)", () => {
+    assert.equal(fieldLabel("updatedAt", []), "Updated");
+    assert.equal(BUILTIN.get("validFrom")?.label, "Valid from");
+    setLocaleForTests("de");
+    assert.equal(fieldLabel("label", []), "Bezeichnung");
+    assert.equal(fieldLabel("updatedAt", []), "Geändert");
+    assert.equal(BUILTIN.get("criticality")?.label, "Kritikalität");
+    assert.equal(SORT_FIELDS.find((s) => s.field === "createdAt")?.label, "Angelegt");
+    assert.equal(fieldLabel("attributes.nope", []), "nope"); // not a built-in field: unchanged
   });
   test("numbers and relative times follow the locale", () => {
     const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString();

@@ -10,7 +10,7 @@ import type {
   UiWidgetType,
 } from "../api/uiSettings";
 import type { components } from "../api/schema";
-import { hasMessage, t } from "../i18n/index";
+import { hasMessage, type MessageKey, t } from "../i18n/index";
 import { GENERAL_SECTION, groupAttributes } from "./attributes";
 import { freeCopy, makeFree, readingOrder } from "./freeLayout";
 
@@ -66,7 +66,8 @@ export function normalizeDocument(doc: Partial<UiSettingsDocument> | undefined):
 
 export interface BuiltinField {
   key: string;
-  label: string;
+  /** In the active locale: the message catalog's `ciField.<key>`. */
+  readonly label: string;
   /** API sort field for list columns. */
   sort?: UiListSort["field"];
   /** The CI form's field for it; absent for fields the form does not edit (label, class, timestamps). */
@@ -75,27 +76,40 @@ export interface BuiltinField {
   hideable?: true;
 }
 
+/** A built-in field whose label is read from the catalog on each use, so it follows the active locale. */
+function builtin(key: string, rest: Omit<BuiltinField, "key" | "label"> = {}): BuiltinField {
+  return {
+    key,
+    ...rest,
+    get label() {
+      return t(`ciField.${key}` as MessageKey);
+    },
+  };
+}
+
 /**
  * CI fields every class has, in their built-in order. Attributes are `attributes.<key>`;
  * name, status, hostname and the like are attributes of the classes that define them.
  */
 export const BUILTIN_FIELDS: BuiltinField[] = [
-  { key: "label", label: "Label", sort: "label" },
-  { key: "ident", label: "Ident", sort: "ident", form: "ident" },
-  { key: "class", label: "Class", sort: "className" },
-  { key: "criticality", label: "Criticality", sort: "criticality", form: "criticalityValueId", hideable: true },
-  { key: "validFrom", label: "Valid from", sort: "validFrom", form: "validFrom" },
-  { key: "validUntil", label: "Valid until", sort: "validUntil", form: "validUntil" },
-  { key: "active", label: "Active" },
-  { key: "createdAt", label: "Created", sort: "createdAt" },
-  { key: "updatedAt", label: "Updated", sort: "updatedAt" },
+  builtin("label", { sort: "label" }),
+  builtin("ident", { sort: "ident", form: "ident" }),
+  builtin("class", { sort: "className" }),
+  builtin("criticality", { sort: "criticality", form: "criticalityValueId", hideable: true }),
+  builtin("validFrom", { sort: "validFrom", form: "validFrom" }),
+  builtin("validUntil", { sort: "validUntil", form: "validUntil" }),
+  builtin("active"),
+  builtin("createdAt", { sort: "createdAt" }),
+  builtin("updatedAt", { sort: "updatedAt" }),
 ];
 export const BUILTIN = new Map(BUILTIN_FIELDS.map((f) => [f.key, f]));
 
 /** Built-in sort fields the list API accepts, with labels (attributes.<key> needs a class). */
 export const SORT_FIELDS: { field: UiListSort["field"]; label: string }[] = BUILTIN_FIELDS.filter((f) => f.sort).map((f) => ({
   field: f.sort!,
-  label: f.label,
+  get label() {
+    return f.label;
+  },
 }));
 
 /** The inventory's columns when no list view says otherwise. */
