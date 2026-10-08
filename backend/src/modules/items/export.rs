@@ -11,20 +11,26 @@
 //!   parameters and the row count, never the rows, written before the first
 //!   byte: a refused or failed start leaves no row, a started download does.
 //! - Each download holds a database connection while the client reads, so
-//!   they are capped per process and per user, a client that stops reading
-//!   is cut off, and a download cut short ends with an error instead of
-//!   looking complete.
+//!   they are capped per process (`EXPORT_MAX_CONCURRENT`, counted against
+//!   `DATABASE_POOL_MAX`) and per user, a client that stops reading or reads
+//!   too slowly is cut off, the whole download is bounded in time, and a
+//!   download cut short ends with an error instead of looking complete
+//!   (GH#801).
+//! - A start needs a second connection for the audit row while the snapshot
+//!   is open; one export starts at a time, so the exports in progress hold at
+//!   most `EXPORT_MAX_CONCURRENT` + 1 connections and never wait on each
+//!   other for a second one.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock};
 use std::task::Poll;
 use std::time::Duration;
 
 use axum::body::Bytes;
 use chrono::Utc;
 use serde_json::{Value, json};
-use sqlx::{PgConnection, PgPool};
+use sqlx::{Connection, PgConnection, PgPool};
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 use uuid::Uuid;
@@ -39,6 +45,7 @@ use crate::api::context::RequestContext;
 use crate::api::route::CsvDownload;
 use crate::api::schemas::{Deleted, iso};
 use crate::auth::permissions::ClassOp;
+use crate::config::ExportConfig;
 use crate::data::crud::{self, AuditAction, AuditEntry};
 use crate::data::items::{self as data, ItemValue, SummaryRow};
 use crate::http::error::{AppError, FieldError, FieldLocation};
@@ -51,16 +58,34 @@ use crate::schema::model::Model;
 const BATCH: u32 = 500;
 /// Bytes collected before a piece of the file is sent.
 const FLUSH_BYTES: usize = 64 * 1024;
-/// Exports running at once in this process; more are answered 503 SERVER_BUSY.
-pub const MAX_STREAMS: usize = 4;
 /// Exports one user runs at once; more are answered 429 RATE_LIMITED.
 pub const MAX_STREAMS_PER_USER: usize = 2;
 /// How long a piece may wait for the client to read before the download is cut off.
-const SEND_TIMEOUT: Duration = Duration::from_secs(30);
+const SEND_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long one download may take in all.
-const STREAM_DEADLINE: Duration = Duration::from_secs(30 * 60);
+const STREAM_DEADLINE: Duration = Duration::from_secs(10 * 60);
+/// Slowest reading accepted, in bytes per second the client spends reading:
+/// a client that keeps the writer waiting longer than [`RATE_GRACE`] in all
+/// and reads slower than this is cut off (GH#801).
+const MIN_READ_RATE: u64 = 32 * 1024;
+/// Waiting on the client allowed before [`MIN_READ_RATE`] applies.
+const RATE_GRACE: Duration = Duration::from_secs(30);
 
-static STREAMS: LazyLock<Slots> = LazyLock::new(|| Slots::new(MAX_STREAMS, MAX_STREAMS_PER_USER, "inventory exports"));
+/// The exports of this process.
+pub struct Exports {
+    slots: Slots,
+    /// Held while an export starts (it needs two connections then).
+    starting: tokio::sync::Mutex<()>,
+}
+
+impl Exports {
+    pub fn new(config: ExportConfig) -> Self {
+        Exports {
+            slots: Slots::new(config.max_concurrent, MAX_STREAMS_PER_USER, "inventory exports"),
+            starting: tokio::sync::Mutex::new(()),
+        }
+    }
+}
 
 const ATTRIBUTE_PREFIX: &str = "attributes.";
 
@@ -303,30 +328,61 @@ impl Layout {
     }
 }
 
-/// Where the writer sends the pieces: each send waits at most `SEND_TIMEOUT`
-/// and all of them together at most until the deadline.
+/// Where the writer sends the pieces: each send waits at most `SEND_TIMEOUT`,
+/// all of them together at most until the deadline, and once the writer has
+/// waited `RATE_GRACE` on the client, the client must read `MIN_READ_RATE`.
 struct Sink {
     tx: mpsc::Sender<Result<Bytes, std::io::Error>>,
     deadline: Instant,
     timeout: Duration,
+    /// Bytes handed to the client so far.
+    sent: u64,
+    /// Time the writer spent waiting for the client to take a piece.
+    waited: Duration,
     /// Set when the file was not written to the end; the body then ends with
     /// an error instead of looking complete.
     failed: Arc<AtomicBool>,
 }
 
 impl Sink {
+    fn new(tx: mpsc::Sender<Result<Bytes, std::io::Error>>) -> Self {
+        Sink {
+            tx,
+            deadline: Instant::now() + STREAM_DEADLINE,
+            timeout: SEND_TIMEOUT,
+            sent: 0,
+            waited: Duration::ZERO,
+            failed: Arc::default(),
+        }
+    }
+
     /// `false` once the client is gone or too slow; the writer stops then.
-    async fn send(&self, piece: Bytes) -> bool {
+    async fn send(&mut self, piece: Bytes) -> bool {
+        let len = piece.len() as u64;
         let wait = self.deadline.saturating_duration_since(Instant::now()).min(self.timeout);
-        match tokio::time::timeout(wait, self.tx.send(Ok(piece))).await {
-            Ok(Ok(())) => true,
-            Ok(Err(_)) => false,
+        let start = Instant::now();
+        let sent = tokio::time::timeout(wait, self.tx.send(Ok(piece))).await;
+        self.waited += start.elapsed();
+        match sent {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) => return false,
             Err(_) => {
                 tracing::warn!("inventory export: the client did not read the download in time; stopped");
                 self.fail();
-                false
+                return false;
             }
         }
+        self.sent += len;
+        if self.waited > RATE_GRACE && self.sent < MIN_READ_RATE.saturating_mul(self.waited.as_secs()) {
+            tracing::warn!(
+                sent = self.sent,
+                waited_secs = self.waited.as_secs(),
+                "inventory export: the client read the download too slowly; stopped"
+            );
+            self.fail();
+            return false;
+        }
+        true
     }
 
     fn fail(&self) {
@@ -335,7 +391,7 @@ impl Sink {
 }
 
 /// Reads the cursor batch by batch into `sink`. `Ok` also when the client went away.
-async fn write(conn: &mut PgConnection, model: &Model, layout: &Layout, sink: &Sink) -> sqlx::Result<()> {
+async fn write(conn: &mut PgConnection, model: &Model, layout: &Layout, sink: &mut Sink) -> sqlx::Result<()> {
     let mut out = String::from(csv_safe::BOM);
     layout.header_record(&mut out);
     loop {
@@ -409,10 +465,20 @@ fn file_name() -> String {
 }
 
 /// The export: checks the parameters, records the audit row, then streams.
-pub async fn export(pool: &PgPool, ctx: &RequestContext, q: &ExportItemsQuery) -> Result<CsvDownload, AppError> {
+pub async fn export(
+    pool: &PgPool,
+    ctx: &RequestContext,
+    exports: &Exports,
+    q: &ExportItemsQuery,
+) -> Result<CsvDownload, AppError> {
     // Before anything is read: a refused download costs nothing.
-    let slot = STREAMS.acquire(ctx.principal().map(|p| p.user_id))?;
+    let slot = exports.slots.acquire(ctx.principal().map(|p| p.user_id))?;
 
+    // GH#801: one start at a time, and the audit row's connection before the
+    // snapshot's, so two starts never each hold one connection and wait for
+    // a second. The wait is bounded by the start's statements.
+    let starting = exports.starting.lock().await;
+    let mut audit_conn = pool.acquire().await?;
     let mut tx = pool.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY").execute(&mut *tx).await?;
     let model = Model::load(&mut tx).await?;
@@ -448,22 +514,20 @@ pub async fn export(pool: &PgPool, ctx: &RequestContext, q: &ExportItemsQuery) -
             "visibility": if visible.is_some() { "restricted" } else { "all_classes" },
         })),
     };
-    let mut audit = pool.begin().await?;
+    let mut audit = audit_conn.begin().await?;
     crud::write_audit(&mut audit, ctx, vec![entry]).await?;
     audit.commit().await?;
+    // Back to the pool before the first byte: the download holds one connection.
+    drop(audit_conn);
+    drop(starting);
 
     let layout = Layout { columns, delimiter: q.delimiter.char(), lookups, visible };
     let (tx_pieces, mut rx) = mpsc::channel(4);
-    let sink = Sink {
-        tx: tx_pieces,
-        deadline: Instant::now() + STREAM_DEADLINE,
-        timeout: SEND_TIMEOUT,
-        failed: Arc::default(),
-    };
+    let mut sink = Sink::new(tx_pieces);
     let failed = sink.failed.clone();
     tokio::spawn(async move {
         let _slot = slot;
-        if let Err(e) = write(&mut tx, &model, &layout, &sink).await {
+        if let Err(e) = write(&mut tx, &model, &layout, &mut sink).await {
             tracing::warn!(error = %e, "inventory export: reading the inventory failed; the download was cut short");
             sink.fail();
         }
@@ -504,6 +568,52 @@ mod tests {
             ]
         );
         assert_eq!(Column::Attribute("os_family".into()).header(), "os_family");
+    }
+
+    /// GH#801: a client that reads one piece every 10 s never trips the
+    /// per-piece timeout, but is cut off by the read rate after the grace.
+    #[tokio::test(start_paused = true)]
+    async fn a_slow_reader_is_cut_off() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let mut sink = Sink::new(tx);
+        let reader = tokio::spawn(async move {
+            while rx.recv().await.is_some() {
+                tokio::time::sleep(Duration::from_secs(10)).await;
+            }
+        });
+        let started = Instant::now();
+        let mut pieces = 0;
+        while sink.send(Bytes::from(vec![b'x'; FLUSH_BYTES])).await {
+            pieces += 1;
+        }
+        assert!(sink.failed.load(Ordering::SeqCst), "the download ends with an error");
+        assert!(started.elapsed() <= RATE_GRACE + Duration::from_secs(20), "{:?}", started.elapsed());
+        assert!(pieces >= 3, "{pieces}");
+        drop(sink);
+        reader.await.unwrap();
+
+        // Reading as fast as it is written: never cut off.
+        let (tx, mut rx) = mpsc::channel(1);
+        let mut sink = Sink::new(tx);
+        let reader = tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        for _ in 0..1000 {
+            assert!(sink.send(Bytes::from(vec![b'x'; FLUSH_BYTES])).await);
+        }
+        assert!(!sink.failed.load(Ordering::SeqCst));
+        drop(sink);
+        reader.await.unwrap();
+    }
+
+    /// A client that stops reading is cut off after the per-piece timeout.
+    #[tokio::test(start_paused = true)]
+    async fn a_stalled_reader_is_cut_off() {
+        let (tx, _rx) = mpsc::channel(1);
+        let mut sink = Sink::new(tx);
+        let started = Instant::now();
+        assert!(sink.send(Bytes::from_static(b"x")).await, "buffered");
+        assert!(!sink.send(Bytes::from_static(b"x")).await);
+        assert_eq!(started.elapsed(), SEND_TIMEOUT);
+        assert!(sink.failed.load(Ordering::SeqCst));
     }
 
     #[test]

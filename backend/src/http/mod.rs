@@ -67,6 +67,8 @@ pub struct AppState {
     pub business_services: crate::config::BusinessServiceConfig,
     /// Saved-view count requests running at once (GH#780).
     pub view_counts: Arc<tokio::sync::Semaphore>,
+    /// Inventory exports in progress (`EXPORT_MAX_CONCURRENT`, GH#801).
+    pub exports: Arc<crate::modules::items::export::Exports>,
 }
 
 /// The start-up step for encrypted secrets ([`crate::secrets::sealed::prepare`]):
@@ -94,6 +96,9 @@ impl AppState {
             imports: Arc::default(),
             business_services: Default::default(),
             view_counts: Arc::new(tokio::sync::Semaphore::new(crate::modules::saved_views::service::count_slots(
+                pool.options().get_max_connections(),
+            ))),
+            exports: Arc::new(crate::modules::items::export::Exports::new(crate::config::ExportConfig::for_pool(
                 pool.options().get_max_connections(),
             ))),
             pool,
@@ -129,6 +134,11 @@ impl AppState {
 
     pub fn with_business_services(mut self, limits: crate::config::BusinessServiceConfig) -> Self {
         self.business_services = limits;
+        self
+    }
+
+    pub fn with_exports(mut self, exports: crate::config::ExportConfig) -> Self {
+        self.exports = Arc::new(crate::modules::items::export::Exports::new(exports));
         self
     }
 
@@ -814,6 +824,7 @@ pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'sta
         .limited(&cfg.http)
         .with_impact(cfg.impact)
         .with_business_services(cfg.business_services)
+        .with_exports(cfg.exports)
         .importing(&cfg.imports);
     // Before listening: rows under a key that is not configured stop the server
     // here, and rows not encrypted yet are encrypted. An unreachable or
@@ -1559,6 +1570,7 @@ mod tests {
             impact: Default::default(),
             imports: Default::default(),
             business_services: Default::default(),
+            exports: Default::default(),
             notifications: Default::default(),
         };
         configure(&mut cfg);

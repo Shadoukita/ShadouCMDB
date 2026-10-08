@@ -292,6 +292,32 @@ impl Default for BusinessServiceConfig {
     }
 }
 
+/// Inventory CSV exports (`EXPORT_*`, GH#801); see
+/// [`crate::modules::items::export`]. Each export holds a pool connection
+/// while the client reads, so the cap is counted against `DATABASE_POOL_MAX`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExportConfig {
+    /// Exports running at once in this process; more are answered 503 SERVER_BUSY.
+    pub max_concurrent: usize,
+}
+
+impl ExportConfig {
+    /// The default for a pool of `pool_max` connections: an eighth of it, at least one.
+    pub fn for_pool(pool_max: u32) -> Self {
+        ExportConfig { max_concurrent: (pool_max as usize / 8).max(1) }
+    }
+}
+
+impl Default for ExportConfig {
+    fn default() -> Self {
+        ExportConfig::for_pool(10)
+    }
+}
+
+/// Pool connections left to the rest of the API (sign-in, `/readyz`, edits)
+/// when impact analyses, saved-view counts and exports all use their caps.
+pub const POOL_RESERVE: usize = 2;
+
 /// In-app notifications (`NOTIFICATION_*`, SHAA-2356); see
 /// [`crate::modules::notifications`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -347,6 +373,7 @@ pub struct Config {
     pub impact: ImpactConfig,
     pub imports: ImportConfig,
     pub business_services: BusinessServiceConfig,
+    pub exports: ExportConfig,
     pub notifications: NotificationConfig,
 }
 
@@ -415,6 +442,7 @@ impl std::fmt::Debug for Config {
             impact,
             imports,
             business_services,
+            exports,
             notifications,
         } = self;
         f.debug_struct("Config")
@@ -433,6 +461,7 @@ impl std::fmt::Debug for Config {
             .field("impact", impact)
             .field("imports", imports)
             .field("business_services", business_services)
+            .field("exports", exports)
             .field("notifications", notifications)
             .finish()
     }
@@ -839,6 +868,27 @@ impl Config {
                 .unwrap_or(service_defaults.max_nesting),
         };
 
+        // Each running export holds a pool connection for as long as the client
+        // reads (GH#801). A value set here must leave POOL_RESERVE connections
+        // when impact analyses and saved-view counts use their caps too.
+        let exports = match r.int::<usize>("EXPORT_MAX_CONCURRENT", 1, 1_000) {
+            Some(max_concurrent) => {
+                let counts = crate::modules::saved_views::service::count_slots(pool_max);
+                let used = impact_max_concurrent + counts + max_concurrent;
+                if used + POOL_RESERVE > pool_max as usize {
+                    r.errors.push(format!(
+                        "EXPORT_MAX_CONCURRENT: {max_concurrent} exports, {impact_max_concurrent} impact analyses \
+                         (IMPACT_MAX_CONCURRENT) and {counts} saved-view counts take {used} of the \
+                         {pool_max} connections of DATABASE_POOL_MAX, leaving fewer than {POOL_RESERVE} for \
+                         sign-in, /readyz and edits; lower EXPORT_MAX_CONCURRENT or IMPACT_MAX_CONCURRENT, or \
+                         raise DATABASE_POOL_MAX"
+                    ));
+                }
+                ExportConfig { max_concurrent }
+            }
+            None => ExportConfig::for_pool(pool_max),
+        };
+
         let notifications = NotificationConfig {
             retention_days: r
                 .int::<i32>("NOTIFICATION_RETENTION_DAYS", 1, 3650)
@@ -917,6 +967,7 @@ impl Config {
             impact,
             imports,
             business_services,
+            exports,
             notifications,
         })
     }
@@ -1103,6 +1154,29 @@ mod tests {
         assert!(err.to_string().contains("IMPACT_TIMEOUT_MS"), "{err}");
         let ok = load_with(&[("IMPACT_TIMEOUT_MS", "1999"), ("HTTP_REQUEST_TIMEOUT_SECS", "4")]).unwrap();
         assert_eq!(ok.impact.timeout, Duration::from_millis(1999));
+    }
+
+    /// GH#801: exports hold a connection while the client reads; with impact
+    /// analyses and saved-view counts at their caps, two connections stay free.
+    #[test]
+    fn export_limit_leaves_connections_for_the_rest_of_the_api() {
+        assert_eq!(load_with(&[]).unwrap().exports.max_concurrent, 1, "default: DATABASE_POOL_MAX 10 / 8");
+        assert_eq!(load_with(&[("DATABASE_POOL_MAX", "40")]).unwrap().exports.max_concurrent, 5);
+        assert_eq!(load_with(&[("DATABASE_POOL_MAX", "2")]).unwrap().exports.max_concurrent, 1);
+        // 40: impact 8 + counts 10 + exports 20 = 38, two left.
+        let ok = load_with(&[("DATABASE_POOL_MAX", "40"), ("EXPORT_MAX_CONCURRENT", "20")]).unwrap();
+        assert_eq!(ok.exports.max_concurrent, 20);
+        for vars in [
+            // 10: impact 5 + counts 2 + exports 2 = 9, one left.
+            &[("EXPORT_MAX_CONCURRENT", "2")][..],
+            &[("DATABASE_POOL_MAX", "4"), ("EXPORT_MAX_CONCURRENT", "1")][..],
+            &[("DATABASE_POOL_MAX", "40"), ("EXPORT_MAX_CONCURRENT", "21")][..],
+        ] {
+            let err = load_with(vars).unwrap_err().to_string();
+            assert!(err.contains("EXPORT_MAX_CONCURRENT") && err.contains("DATABASE_POOL_MAX"), "{vars:?}: {err}");
+        }
+        let err = load_with(&[("EXPORT_MAX_CONCURRENT", "0")]).unwrap_err();
+        assert!(err.to_string().contains("EXPORT_MAX_CONCURRENT"), "{err}");
     }
 
     #[test]

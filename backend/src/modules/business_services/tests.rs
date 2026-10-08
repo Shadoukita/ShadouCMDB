@@ -26,7 +26,7 @@ use crate::api::context::RequestContext;
 use crate::config::{BusinessServiceConfig, ImpactConfig};
 use crate::db::scratch;
 use crate::http::error::ErrorCode;
-use crate::modules::api_tokens::tests::{Creds, app_with_business_services, call, session_of};
+use crate::modules::api_tokens::tests::{Creds, app_with_business_services, app_with_exports, call, session_of};
 use crate::modules::impact::ImpactState;
 use crate::modules::impact::engine::assert_bounded_by_the_allowance;
 
@@ -2161,5 +2161,83 @@ async fn inventory_export_streams_only_the_restricted_callers_view() {
     assert_eq!(row_count, json!(expected.len()));
     let (_, list) = w.get(&viewer, "/api/v1/configuration-items?limit=1").await;
     assert_eq!(list["page"]["total"], json!(expected.len()), "the list agrees");
+    db.drop().await;
+}
+
+/// GH#801: on a small pool, as many slow-reading exports as the cap allow,
+/// started at once, leave a connection free: the next export is refused
+/// 503 SERVER_BUSY (not DATABASE_UNAVAILABLE), `/readyz` and sign-in still
+/// answer, and the connections come back when the clients go away.
+#[tokio::test]
+async fn slow_inventory_exports_leave_a_connection_for_the_rest_of_the_api() {
+    let Some(db) = scratch::database("inventory_export_small_pool").await else { return };
+    let w = World::new(&db, BusinessServiceConfig::default()).await;
+    let server = w.classes["server"];
+    sqlx::query(
+        "INSERT INTO configuration_items (class_id, label) SELECT $1, 'bulk-' || lpad(g::text, 5, '0') FROM generate_series(1, 20000) g",
+    )
+    .bind(server)
+    .execute(&w.pool)
+    .await
+    .unwrap();
+    // 4 connections, 2 exports: 2 held by the downloads, 1 more while one starts.
+    let small = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(4)
+        .acquire_timeout(Duration::from_secs(3))
+        .connect_with((*w.pool.connect_options()).clone())
+        .await
+        .unwrap();
+    let app = app_with_exports(small.clone(), crate::config::ExportConfig { max_concurrent: 2 });
+    let (_, reader) = w.user("reader", &[("server", false)], &[]).await;
+    let start = |creds: Creds| {
+        let app = app.clone();
+        let path = format!("/api/v1/configuration-items/export?classId={server}&columns=label");
+        async move {
+            let mut req = Request::builder().method("GET").uri(path).header(header::USER_AGENT, "services-test");
+            for (name, value) in [(header::COOKIE.as_str(), &creds.cookie), ("x-csrf-token", &creds.csrf)] {
+                if let Some(v) = value {
+                    req = req.header(name, v);
+                }
+            }
+            // Only the head: the client then reads nothing.
+            app.oneshot(req.body(HttpBody::empty()).unwrap()).await.unwrap()
+        }
+    };
+    let (_, other) = w.user("other", &[("server", false)], &[]).await;
+    let (a, b, c) = tokio::join!(start(w.admin.clone()), start(reader), start(other));
+    let mut statuses: Vec<u16> = [&a, &b, &c].iter().map(|r| r.status().as_u16()).collect();
+    statuses.sort();
+    assert_eq!(statuses, [200, 200, 503], "the third is over the server's cap");
+    let (mut running, mut busy): (Vec<_>, Vec<_>) = [a, b, c].into_iter().partition(|r| r.status() == 200);
+    let body = axum::body::to_bytes(busy.remove(0).into_body(), 1 << 20).await.unwrap();
+    assert!(String::from_utf8_lossy(&body).contains("SERVER_BUSY"), "{body:?}");
+    // Each client reads the first piece only, then nothing.
+    for r in &mut running {
+        let piece = http_body_util::BodyExt::frame(r.body_mut()).await.unwrap().unwrap();
+        assert!(piece.data_ref().is_some_and(|d| d.starts_with("\u{feff}".as_bytes())));
+    }
+
+    // The downloads hold two connections; the rest of the API still answers.
+    let held = small.size() as usize - small.num_idle();
+    assert!(held <= 2, "{held} connections held by two downloads");
+    let (status, v, _) = call(&app, "GET", "/readyz", &Creds::default(), None).await;
+    assert_eq!(status, 200, "{v}");
+    let login = json!({ "username": "admin", "password": "correct horse battery" });
+    let (status, v, _) = call(&app, "POST", "/api/v1/auth/login", &Creds::default(), Some(login)).await;
+    assert_eq!(status, 200, "{v}");
+
+    // The clients go away: the writers stop and give their connections back.
+    drop(running);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while small.size() as usize - small.num_idle() > 0 && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(small.size() as usize - small.num_idle(), 0, "every connection is back");
+    let (status, _, body) =
+        raw(&app, "GET", &format!("/api/v1/configuration-items/export?classId={server}&columns=label"), &w.admin, None)
+            .await;
+    assert_eq!(status, 200);
+    assert_eq!(csv_rows(&body).len(), 20_001);
+    small.close().await;
     db.drop().await;
 }
