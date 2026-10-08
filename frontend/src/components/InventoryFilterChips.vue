@@ -145,7 +145,7 @@ const chips = computed<Chip[]>(() => {
   <div v-if="chips.length > 0" class="filter-chips" role="group" :aria-label="t('filters.applied')">
     <span v-for="c in chips" :key="c.key" class="chip" :data-chip="c.key" :data-testid="c.testid">
       <span class="key">{{ c.label }}:</span>
-      <bdi :class="{ value: c.mono }">{{ c.value }}</bdi>
+      <bdi :class="{ value: c.mono }" :title="c.value">{{ c.value }}</bdi>
       <button type="button" class="chip-clear" :aria-label="c.remove" :title="c.remove" @click="c.clear()"><Icon name="x" :size="14" /></button>
     </span>
   </div>

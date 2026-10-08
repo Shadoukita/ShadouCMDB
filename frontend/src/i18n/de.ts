@@ -1178,6 +1178,7 @@ export const de: { [K in MessageKey]: string } = {
   "histogram.col.total": "Gesamt",
   "histogram.error": "Der Änderungsverlauf konnte nicht geladen werden.",
   "histogram.loading": "Änderungen werden geladen…",
+  "histogram.unavailable.quality": "Der Änderungsverlauf lässt sich nicht auf eine Prüfung unter „Handlungsbedarf“ eingrenzen. Entfernen Sie diesen Filter, um die Änderungen zu sehen.",
   "inventory.actions": "Aktionen",
   "inventory.rowMenu": "Aktionen für {name}",
   "inventory.row.open": "Öffnen",

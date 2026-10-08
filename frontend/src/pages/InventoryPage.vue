@@ -150,6 +150,13 @@ const listFilters = computed(() => {
   const { sort: _sort, limit: _limit, offset: _offset, ...filters } = state.listQuery.value as CiListQuery;
   return filters;
 });
+// The histogram endpoint takes no data-quality check: under one ("Needs attention") the strip says
+// so instead of counting a wider set than the list shows (GH#788).
+const histogramFilters = computed(() => {
+  const { quality: _quality, endOfLifeWithinDays: _days, ...filters } = listFilters.value;
+  return filters;
+});
+const histogramUnavailable = computed(() => (listFilters.value.quality ? t("histogram.unavailable.quality") : undefined));
 // The histogram counts the audit log (audit.view); wide screens only.
 const showHistogram = computed(() => wide.value && session.can("audit.view") && !classDenied.value && rows.value.length > 0);
 
@@ -339,7 +346,7 @@ function clearFilters() {
         </EmptyState>
 
         <template v-if="rows.length > 0">
-          <ChangeHistogram v-if="showHistogram" :filters="listFilters" />
+          <ChangeHistogram v-if="showHistogram" :filters="histogramFilters" :unavailable="histogramUnavailable" />
           <div class="table-wrap table-scroll">
             <table :class="['data', 'inventory-table', { loading: list.isPlaceholderData.value }]" aria-describedby="inventory-keys">
               <thead>
