@@ -3,7 +3,9 @@
  * Bound to the table body's keydown: ↑/↓ move focus to the previous or next row's link to
  * its CI, so Enter opens it natively; `e` edits the focused row's CI and `c` opens the Columns
  * popover. The tab order is unchanged: Tab still walks every link and button. Nothing fires while
- * focus is in a text field or inside a row's open menu, or with a modifier key held.
+ * focus is in a text field or inside a row's open menu, or with a modifier key held. A row's selection
+ * checkbox is not a text field: from it ↑/↓ move to the next row's checkbox, so Space ticks a run of
+ * rows, and `e` edits its row.
  */
 export interface RowKeyboardActions {
   /** `e`: edit the CI of the row (its `tr` carries `data-id`). The caller decides whether that CI may be edited. */
@@ -12,9 +14,14 @@ export interface RowKeyboardActions {
   columns?: () => void;
 }
 
+/** A checkbox: Space toggles it and it ignores letters and arrows, so row keys still apply. */
+function isCheckbox(el: Element): boolean {
+  return el.tagName === "INPUT" && (el as HTMLInputElement).type === "checkbox";
+}
+
 /** A text field, select or editable region: a typed letter belongs to it. */
 export function isTextEntry(el: Element | null): boolean {
-  if (!el) return false;
+  if (!el || isCheckbox(el)) return false;
   return ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) || !!(el as HTMLElement).isContentEditable;
 }
 
@@ -44,7 +51,8 @@ export function onRowKeydown(e: KeyboardEvent, actions: RowKeyboardActions = {})
   if (e.key === "ArrowDown" || e.key === "ArrowUp") {
     let next = e.key === "ArrowDown" ? row.nextElementSibling : row.previousElementSibling;
     while (next && !rowFocusTarget(next)) next = e.key === "ArrowDown" ? next.nextElementSibling : next.previousElementSibling;
-    const to = rowFocusTarget(next);
+    const box = isCheckbox(target) ? next?.querySelector<HTMLElement>("input[type=checkbox]:not(:disabled)") : null;
+    const to = box ?? rowFocusTarget(next);
     if (!to) return;
     e.preventDefault(); // no page scroll; focusing the row scrolls it into view
     to.focus();
