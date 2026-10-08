@@ -117,6 +117,82 @@ describe("rowKeyboard", () => {
     onRowKeydown(space);
     assert.equal(space.prevented, false);
   });
+  // SHAA-2530: the edges of the checkbox shortcuts (#760).
+  function boxes(rows: ReturnType<typeof table>, enabled: boolean[] = rows.map(() => true)) {
+    return rows.map((row, i) => {
+      const el = { tagName: "INPUT", type: "checkbox", focused: false, focus: () => (el.focused = true), closest: (s: string) => (s === "tbody > tr" ? row : null) };
+      row.querySelector = ((s: string) => (s === "input[type=checkbox]:not(:disabled)" && enabled[i] ? el : null)) as never;
+      return el;
+    });
+  }
+  test("from a row's checkbox c opens Columns", () => {
+    const rows = table([{ id: "a", hrefs: [`${base}/cis/a`] }]);
+    const [box] = boxes(rows);
+    let columns = 0;
+    const e = key("c", box);
+    onRowKeydown(e, { columns: () => columns++ });
+    assert.equal(columns, 1);
+    assert.ok(e.prevented);
+  });
+  test("↓ from the last row's checkbox does nothing and lets the page scroll", () => {
+    const rows = table([
+      { id: "a", hrefs: [`${base}/cis/a`] },
+      { id: "b", hrefs: [`${base}/cis/b`] },
+    ]);
+    const [boxA, boxB] = boxes(rows);
+    const e = key("ArrowDown", boxB);
+    onRowKeydown(e);
+    assert.equal(e.prevented, false);
+    assert.equal(boxA.focused, false);
+    assert.equal(rows[0].links[0].focused, false);
+  });
+  test("when the next row's checkbox is disabled, ↓ falls back to that row's CI link", () => {
+    const rows = table([
+      { id: "a", hrefs: [`${base}/cis/a`] },
+      { id: "b", hrefs: [`${base}/cis/b`] },
+    ]);
+    const [boxA, boxB] = boxes(rows, [true, false]);
+    onRowKeydown(key("ArrowDown", boxA));
+    assert.equal(boxB.focused, false);
+    assert.ok(rows[1].links[0].focused);
+  });
+  test("the select-all checkbox in the header is not a row: ↓ and e do nothing", () => {
+    const rows = table([{ id: "a", hrefs: [`${base}/cis/a`] }]);
+    boxes(rows);
+    const all = { tagName: "INPUT", type: "checkbox", closest: () => null };
+    const edited: string[] = [];
+    const down = key("ArrowDown", all);
+    onRowKeydown(down);
+    onRowKeydown(key("e", all), { edit: (id) => edited.push(id) });
+    assert.equal(down.prevented, false);
+    assert.deepEqual(edited, []);
+    assert.equal(rows[0].links[0].focused, false);
+  });
+  test("from a row's checkbox a modifier key, or a key already handled, leaves the row keys alone", () => {
+    const rows = table([
+      { id: "a", hrefs: [`${base}/cis/a`] },
+      { id: "b", hrefs: [`${base}/cis/b`] },
+    ]);
+    const [boxA, boxB] = boxes(rows);
+    const edited: string[] = [];
+    onRowKeydown(key("ArrowDown", boxA, { altKey: true }));
+    onRowKeydown(key("ArrowDown", boxA, { defaultPrevented: true }));
+    onRowKeydown(key("e", boxA, { ctrlKey: true }), { edit: (id) => edited.push(id) });
+    assert.equal(boxB.focused, false);
+    assert.deepEqual(edited, []);
+  });
+  test("a radio button still counts as a field: row keys do not fire from it", () => {
+    const rows = table([
+      { id: "a", hrefs: [`${base}/cis/a`] },
+      { id: "b", hrefs: [`${base}/cis/b`] },
+    ]);
+    const radio = { tagName: "INPUT", type: "radio", closest: (s: string) => (s === "tbody > tr" ? rows[0] : null) };
+    const edited: string[] = [];
+    onRowKeydown(key("ArrowDown", radio));
+    onRowKeydown(key("e", radio), { edit: (id) => edited.push(id) });
+    assert.equal(rows[1].links[0].focused, false);
+    assert.deepEqual(edited, []);
+  });
   test("nothing fires in a text field, inside a row menu or with a modifier key", () => {
     const [a, b] = table([
       { id: "a", hrefs: [`${base}/cis/a`] },
