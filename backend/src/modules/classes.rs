@@ -1707,14 +1707,12 @@ impl Writable for AttributeDefinitionUpdate {
         c
     }
 }
+/// A retype to or from reference or lookup is refused against the stored type
+/// in `before_change` (422 `type_change_unsupported`, GH#782), so restating
+/// the current type is accepted.
 impl Check for AttributeDefinitionUpdate {
     fn check(&self) -> Vec<FieldError> {
-        let mut errors = non_empty(&self.columns());
-        if matches!(self.data_type, Some(AttributeDataType::Reference | AttributeDataType::Lookup)) {
-            errors
-                .push(custom("dataType", "A field cannot become a reference or lookup field; add a new field instead"));
-        }
-        errors
+        non_empty(&self.columns())
     }
 }
 
@@ -2978,8 +2976,8 @@ mod tests {
     /// SHAA-2553 (#772): through the API, retyping a lookup or reference field
     /// is the documented 422 SCHEMA_CHANGE_REFUSED with `type_change_unsupported`
     /// on `dataType`, and the schema-change preview answers the same. A field
-    /// cannot become a lookup or reference field either (refused on `dataType`;
-    /// today as a 400 from body validation, GH#782).
+    /// cannot become a lookup or reference field either, with the same answer
+    /// (GH#782), and restating the current type is not a change.
     /// Either way the field keeps its type.
     #[tokio::test]
     async fn the_api_refuses_a_lookup_retype_with_its_documented_code() {
@@ -3019,7 +3017,9 @@ mod tests {
             Some("type_change_unsupported".to_owned()),
         );
 
-        for (field, to) in [(&lookup, "text"), (&lookup, "integer")] {
+        for (field, to) in
+            [(&lookup, "text"), (&lookup, "integer"), (&lookup, "reference"), (&text, "lookup"), (&text, "reference")]
+        {
             let url = format!("/api/v1/attribute-definitions/{field}");
             let (status, v, _) = call(&app, "PATCH", &url, &admin, Some(json!({ "dataType": to }))).await;
             assert_eq!((status, refused(&v)), (422, expected.clone()), "PATCH {field} to {to}: {v}");
@@ -3027,11 +3027,11 @@ mod tests {
             let (status, v, _) = call(&app, "POST", "/api/v1/schema-changes/preview", &admin, Some(preview)).await;
             assert_eq!((status, refused(&v)), (422, expected.clone()), "preview {field} to {to}: {v}");
         }
-        for (field, to) in [(&text, "lookup"), (&text, "reference"), (&lookup, "reference")] {
-            let url = format!("/api/v1/attribute-definitions/{field}");
-            let (status, v, _) = call(&app, "PATCH", &url, &admin, Some(json!({ "dataType": to }))).await;
-            assert!(matches!(status, 400 | 422) && refused(&v).1.as_deref() == Some("dataType"), "PATCH to {to}: {v}");
-        }
+        // Restating the current type alongside another change is accepted.
+        let url = format!("/api/v1/attribute-definitions/{lookup}");
+        let restate = json!({ "dataType": "lookup", "label": "Tier level" });
+        let (status, v, _) = call(&app, "PATCH", &url, &admin, Some(restate)).await;
+        assert_eq!((status, v["label"].as_str()), (200, Some("Tier level")), "{v}");
         for (field, ty) in [(&lookup, "lookup"), (&text, "text")] {
             let (status, v, _) =
                 call(&app, "GET", &format!("/api/v1/attribute-definitions/{field}"), &admin, None).await;
