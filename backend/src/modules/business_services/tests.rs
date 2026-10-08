@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use axum::Router;
 use axum::body::Body as HttpBody;
@@ -28,7 +28,7 @@ use crate::db::scratch;
 use crate::http::error::ErrorCode;
 use crate::modules::api_tokens::tests::{Creds, app_with_business_services, call, session_of};
 use crate::modules::impact::ImpactState;
-use crate::modules::impact::engine::ASSEMBLY_ALLOWANCE;
+use crate::modules::impact::engine::assert_bounded_by_the_allowance;
 
 // ---------------------------------------------------------------------------
 // Fixture
@@ -1347,6 +1347,8 @@ async fn impact_follows_membership_and_part_of_lists_nesting() {
 /// allowance. Another session's lock makes reading the owners wait, as on a
 /// very slow database: the view ends at the end of the allowance with 503
 /// SERVER_BUSY instead of holding the connection until the request times out.
+/// The bounds are checked on the view's own clock, not by timing the request,
+/// which a loaded host stretches (GH#791).
 #[tokio::test]
 async fn a_slow_part_of_ends_within_the_allowance() {
     let Some(db) = scratch::database("business_services_part_of_allowance").await else { return };
@@ -1359,30 +1361,26 @@ async fn a_slow_part_of_ends_within_the_allowance() {
     let timeout = Duration::from_millis(100);
     let impact = Arc::new(ImpactState::new(ImpactConfig { timeout, ..ImpactConfig::default() }));
     let cfg = BusinessServiceConfig::default();
-    let slack = Duration::from_millis(500);
+    crate::modules::impact::engine::CANCEL_AT.take();
 
     let mut blocker = w.pool.begin().await.unwrap();
     sqlx::query("LOCK TABLE cmdb.business_service_owners IN ACCESS EXCLUSIVE MODE")
         .execute(&mut *blocker)
         .await
         .unwrap();
-    let started = Instant::now();
     let err = service::part_of(&w.pool, &ctx, &impact, cfg, db01).await.err().unwrap();
-    let elapsed = started.elapsed();
     blocker.rollback().await.unwrap();
     assert_eq!((err.code, err.retry_after), (ErrorCode::ServerBusy, Some(1)), "{err:?}");
-    assert!(elapsed < timeout + ASSEMBLY_ALLOWANCE + slack, "{elapsed:?}");
+    assert_bounded_by_the_allowance();
 
     // The relationship types, read before the walk and by the walk itself
     // (`data::types` in `engine::traverse`), are bounded by the same allowance.
     let mut blocker = w.pool.begin().await.unwrap();
     sqlx::query("LOCK TABLE cmdb.relationship_types IN ACCESS EXCLUSIVE MODE").execute(&mut *blocker).await.unwrap();
-    let started = Instant::now();
     let err = service::part_of(&w.pool, &ctx, &impact, cfg, db01).await.err().unwrap();
-    let elapsed = started.elapsed();
     blocker.rollback().await.unwrap();
     assert_eq!((err.code, err.retry_after), (ErrorCode::ServerBusy, Some(1)), "{err:?}");
-    assert!(elapsed < timeout + ASSEMBLY_ALLOWANCE + slack, "{elapsed:?}");
+    assert_bounded_by_the_allowance();
 
     // Without the lock the view is answered, and the analysis place was given back.
     let r = service::part_of(&w.pool, &ctx, &impact, cfg, db01).await.unwrap();
