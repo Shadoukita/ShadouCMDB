@@ -23,6 +23,7 @@ pub struct RelationshipRow {
     pub forward_label: String,
     pub reverse_label: String,
     pub is_directional: bool,
+    pub type_category: Option<String>,
     pub source_name: String,
     pub source_class_id: Uuid,
     pub source_class_key: String,
@@ -38,6 +39,7 @@ pub struct RelationshipRow {
 const COLUMNS: &str = "r.id, r.relationship_type_id, r.source_ci_id, r.target_ci_id, r.notes,
     r.created_at, r.updated_at, r.deleted_at,
     t.key AS type_key, t.name AS type_name, t.forward_label, t.reverse_label, t.is_directional,
+    t.category AS type_category,
     s.label AS source_name, s.class_id AS source_class_id, sc.key AS source_class_key, sc.name AS source_class_name, s.deleted_at AS source_deleted_at,
     g.label AS target_name, g.class_id AS target_class_id, gc.key AS target_class_key, gc.name AS target_class_name, g.deleted_at AS target_deleted_at";
 

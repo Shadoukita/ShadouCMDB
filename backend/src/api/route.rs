@@ -56,6 +56,8 @@ pub struct Api {
     pub imports: Arc<crate::config::ImportConfig>,
     /// Business service limits (`BUSINESS_SERVICE_*`).
     pub business_services: crate::config::BusinessServiceConfig,
+    /// Saved-view count requests running at once.
+    pub view_counts: Arc<tokio::sync::Semaphore>,
 }
 
 /// Who may call a route.
@@ -966,6 +968,7 @@ impl RouteBuilder {
                         impact: state.impact,
                         imports: state.imports,
                         business_services: state.business_services,
+                        view_counts: state.view_counts,
                     };
                     let csrf_free_read = (!csrf).then(|| operation_id.clone());
                     let res = match crate::data::crud::run_handler(csrf_free_read, f(api, input)).await {

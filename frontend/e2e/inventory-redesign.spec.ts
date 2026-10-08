@@ -1,8 +1,8 @@
 import { checkA11y, chooseTheme, classIdByName, createCi, csrf, expect, test, withInventoryFilters } from "./support";
 
 // The inventory in the reference-mockup look (design document §0, step 12c): "x of y" in the title,
-// removable chips for every filter, Add filter, Save view, the checkbox column with "n selected" and a
-// Bulk edit that says why it is not available yet (gap G10), and numbered pages.
+// removable chips for every filter, Add filter, Save view, the checkbox column with "n selected" and
+// Bulk edit (gap G10, bulk-edit.spec.ts), and numbered pages.
 
 // Deleted afterwards: "e2e-inv-…" sorts before the demo servers, which later specs open by label.
 const created: string[] = [];
@@ -50,7 +50,7 @@ test("inventory: filter chips, Add filter, row selection and page numbers", asyn
   await expect(first.locator(".ci-name")).toHaveText(`${stamp}-srv-a`);
   await expect(first.locator(".ci-subtitle")).toHaveText("Server");
 
-  // Selection: per row and per page, counted in the footer; Bulk edit says why it is not available.
+  // Selection: per row and per page, counted in the footer, with Bulk edit available.
   const footer = page.locator(".table-footer");
   // From a row's checkbox ↓/↑ move to the neighbouring row's checkbox and Space ticks it (GH#750).
   const boxA = rows.nth(0).getByRole("checkbox", { name: `Select ${stamp}-srv-a` });
@@ -68,8 +68,7 @@ test("inventory: filter chips, Add filter, row selection and page numbers", asyn
   const all = page.getByRole("checkbox", { name: "Select all rows on this page" });
   expect(await all.evaluate((el) => (el as HTMLInputElement).indeterminate)).toBe(true);
   const bulk = footer.getByRole("button", { name: "Bulk edit" });
-  await expect(bulk).toHaveAttribute("aria-disabled", "true");
-  await expect(bulk).toHaveAccessibleDescription("Editing several CIs at once is not available yet.");
+  await expect(bulk).not.toHaveAttribute("aria-disabled");
   await all.check();
   await expect(footer.getByRole("status")).toHaveText("3 selected");
   await expect(rows.locator("input[type=checkbox]:checked")).toHaveCount(3);

@@ -259,6 +259,7 @@ const RELATIONSHIP_TYPES: &[RelationshipType] = &[
         reverse: "hosts",
         directional: true,
         impact: ImpactDirection::TargetToSource,
+        category: None,
     },
     RelationshipType {
         key: "depends_on",
@@ -267,6 +268,7 @@ const RELATIONSHIP_TYPES: &[RelationshipType] = &[
         reverse: "is required by",
         directional: true,
         impact: ImpactDirection::TargetToSource,
+        category: None,
     },
     RelationshipType {
         key: "located_in",
@@ -275,6 +277,7 @@ const RELATIONSHIP_TYPES: &[RelationshipType] = &[
         reverse: "contains",
         directional: true,
         impact: ImpactDirection::TargetToSource,
+        category: Some("Location"),
     },
     RelationshipType {
         key: "connected_to",
@@ -283,6 +286,7 @@ const RELATIONSHIP_TYPES: &[RelationshipType] = &[
         reverse: "is connected to",
         directional: false,
         impact: ImpactDirection::None,
+        category: Some("Network & power"),
     },
 ];
 

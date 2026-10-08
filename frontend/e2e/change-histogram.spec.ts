@@ -77,3 +77,32 @@ test("inventory: no change histogram on a narrow screen", async ({ page }) => {
   await expect(page.locator("table.data tbody tr").first()).toBeVisible();
   await expect(page.getByRole("region", { name: "Changes", exact: true })).toHaveCount(0);
 });
+
+test("inventory: a data-quality drill-down shows why there is no histogram, without a failed request (GH#788)", async ({ page, request }) => {
+  const stamp = `e2e-hist-q-${Date.now().toString(36)}`;
+  created.push((await createCi(request, await classIdByName(request, "Server"), `${stamp}-a`)).id);
+  const failed: string[] = [];
+  const histogramRequests: string[] = [];
+  page.on("response", (res) => {
+    if (res.url().includes("/api/") && res.status() >= 400) failed.push(`${res.status()} ${res.url()}`);
+  });
+  page.on("request", (req) => {
+    if (req.url().includes("/configuration-items/change-histogram")) histogramRequests.push(req.url());
+  });
+
+  // A new CI has no relationships, so the "Needs attention" check finds it.
+  await page.goto(`/cis?q=${stamp}&quality=no_relationships`);
+  await expect(page.locator("table.data tbody tr")).toHaveCount(1);
+  const strip = page.getByRole("region", { name: "Changes", exact: true });
+  await expect(strip.getByTestId("histogram-unavailable")).toHaveText(
+    "The change history cannot be narrowed to a Needs attention check. Remove that filter to see the changes.",
+  );
+  await expect(strip.getByRole("slider")).toHaveCount(0);
+  expect(histogramRequests).toEqual([]);
+
+  // Without the check the strip counts the list again.
+  await page.locator("[data-chip='quality'] .chip-clear").click();
+  await expect(strip.locator("#histogram-summary")).toHaveText(/^1 change in the last 7 days/);
+  expect(histogramRequests.length).toBeGreaterThan(0);
+  expect(failed).toEqual([]);
+});

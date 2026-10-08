@@ -6,6 +6,7 @@ import { computed, toValue, type MaybeRefOrGetter } from "vue";
 import { ApiError, api, unwrap, type Schemas } from "./client";
 import { saveDownload } from "./download";
 import type { paths } from "./schema";
+import type { BulkUpdateBody } from "../lib/bulkEdit";
 import type { InventoryExportQuery } from "../lib/inventoryExport";
 import { bySortOrder, flattenTree } from "../lib/tree";
 
@@ -251,6 +252,19 @@ export function useDeleteCi() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: keys.cis });
       qc.invalidateQueries({ queryKey: ["relationships"] });
+    },
+  });
+}
+
+/** The inventory's bulk edit: always 200 with one result per CI for a well-formed body (lib/bulkEdit). */
+export function useBulkUpdateCis() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: BulkUpdateBody) => unwrap(api.POST("/api/v1/configuration-items/bulk-update", { body })),
+    onSuccess: (report) => {
+      if (!report.committed || report.succeeded === 0) return;
+      qc.invalidateQueries({ queryKey: keys.cis });
+      for (const r of report.results) if (r.ok) qc.invalidateQueries({ queryKey: keys.audit(r.id) });
     },
   });
 }

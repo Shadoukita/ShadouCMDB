@@ -60,13 +60,15 @@ pub fn routes() -> Vec<Route> {
                  never includes a CI the caller could not list. Counts stop at `cap` (10,000): a larger result is \
                  `at_least` with `count` = `cap`. An `unavailable` view has no count. All counts of one request \
                  share a 2-second allowance; views not counted within it are `timed_out` (retry later, or ask for \
-                 fewer `ids`). At most 50 views per request; without `ids`, the first 50 of `listSavedViews` \
-                 (`truncated` says whether there were more). Read-only; not audited.",
+                 fewer `ids`). The server counts for only a few requests at once (a quarter of \
+                 `DATABASE_POOL_MAX`); a request that waits for its turn spends its allowance waiting, so send \
+                 batches one after another rather than all at once. At most 50 views per request; without `ids`, \
+                 the first 50 of `listSavedViews` (`truncated` says whether there were more). Read-only; not audited.",
             )
             .session_only()
             .handle(
                 |api, In(NoPath, Query(q), NoBody): In<NoPath, Query<SavedViewCountsQuery>, NoBody>| async move {
-                    Ok(Json(service::counts_of(&api.pool, &api.ctx, &q).await?))
+                    Ok(Json(service::counts_of(&api.pool, &api.ctx, &api.view_counts, &q).await?))
                 },
             ),
         route(Method::POST, VIEWS, "createSavedView")

@@ -4684,6 +4684,182 @@
         ]
       }
     },
+    "/api/v1/configuration-items/bulk-update": {
+      "post": {
+        "tags": [
+          "Configuration items"
+        ],
+        "summary": "Set the same attribute values (or criticality) on up to 500 CIs, with a result per CI",
+        "description": "For the inventory's bulk edit. Each CI is checked and updated exactly as `updateConfigurationItem` would update it with a body of `attributes` and `criticalityValueId`: edit on its class, the same value validation, workflow-controlled fields and reference rules, and one `update` audit row per CI. A CI the caller may not view is reported as `NOT_FOUND`, like a missing one. All CIs are updated in one transaction, each in a savepoint: a CI that is refused is rolled back alone and reported with the error the single update would have answered (`code`, `message`, `details`). By default the CIs that pass are committed together; with `allOrNothing` a single refusal writes nothing and `committed` is false. Always 200 for a well-formed body: `succeeded` and `failed` count the CIs, `results` has one entry per id in the request's order. CIs are taken in id order, so concurrent bulk updates over the same CIs queue instead of deadlocking. A server fault rolls back every CI (500).",
+        "operationId": "updateConfigurationItemsInBulk",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "The same change for many CIs: the fields of `PATCH /configuration-items/{id}` that make sense across classes.",
+                "required": [
+                  "ids"
+                ],
+                "properties": {
+                  "ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "description": "The CIs to update: 1 to 500, each at most once",
+                    "maxItems": 500,
+                    "minItems": 1,
+                    "uniqueItems": true
+                  },
+                  "attributes": {
+                    "type": "object",
+                    "description": "Set on every CI: merged into its current values as `PATCH /configuration-items/{id}` merges them; null clears an attribute. Each key must be an attribute of every CI's class.",
+                    "additionalProperties": {
+                      "anyOf": [
+                        {
+                          "type": [
+                            "string",
+                            "number",
+                            "boolean"
+                          ],
+                          "description": "text/enum/date (YYYY-MM-DD)/datetime (ISO 8601)/ip/cidr/reference (CI id)/lookup (lookup list value id) are strings; number/integer are numbers; boolean is a boolean"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "x-multiline": true
+                    }
+                  },
+                  "criticalityValueId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "A value of the criticality lookup list (GET /api/v1/lookup-lists?systemRole=criticality); null: not set. A retired value can be kept but not newly set"
+                  },
+                  "allOrNothing": {
+                    "type": "boolean",
+                    "description": "true: when any CI is refused, nothing is written (`committed` is false). false (default): the CIs that pass\nare written and the refused ones are reported."
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkUpdateReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large (code PAYLOAD_TOO_LARGE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
     "/api/v1/configuration-items/{id}/graph": {
       "get": {
         "tags": [
@@ -12982,6 +13158,18 @@
                     ],
                     "description": "Data quality: attribute of this class or an ancestor that holds a CI's end of life (date or datetime), for the `end_of_life` check. Null: the parent's setting applies."
                   },
+                  "subtitleAttributeId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Attribute of this class or an ancestor (any data type) whose value the UI shows under a CI's name; null shows the class name. A new class takes its parent's."
+                  },
                   "kind": {
                     "type": "string",
                     "description": "asset (inventory CIs) or process (records such as change requests, kept out of the inventory). Leave out to take the parent's kind (asset for a root type); a type has its parent's kind.",
@@ -13347,7 +13535,7 @@
           "CI classes"
         ],
         "summary": "Update a ci class (partial)",
-        "description": "Requires `datamodel.manage`. Changing `titleAttributeId` relabels the class's CIs. Moving the type to another parent (`parentId`) keeps its title attribute only if the new lineage provides it; otherwise it takes the new parent's (so do its subtypes), and the CIs are relabelled. The same move clears an `ownerAttributeId` or `endOfLifeAttributeId` of the type or its subtypes that the new lineage does not provide (the parent's setting then applies).",
+        "description": "Requires `datamodel.manage`. Changing `titleAttributeId` relabels the class's CIs. Moving the type to another parent (`parentId`) keeps its title attribute only if the new lineage provides it; otherwise it takes the new parent's (so do its subtypes), and the CIs are relabelled. The same move clears an `ownerAttributeId` or `endOfLifeAttributeId` of the type or its subtypes that the new lineage does not provide (the parent's setting then applies). A `subtitleAttributeId` the new lineage does not provide is replaced by the new parent's, which changes no stored CI data.",
         "operationId": "updateCiClass",
         "parameters": [
           {
@@ -13464,6 +13652,18 @@
                       }
                     ],
                     "description": "Data quality: attribute of this class or an ancestor that holds a CI's end of life (date or datetime), for the `end_of_life` check. Null: the parent's setting applies."
+                  },
+                  "subtitleAttributeId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Attribute of this class or an ancestor (any data type) whose value the UI shows under a CI's name; null shows the class name. A new class takes its parent's."
                   },
                   "kind": {
                     "type": "string",
@@ -15444,7 +15644,7 @@
           "Relationship types"
         ],
         "summary": "List relationship type records (paginated, searchable, sortable)",
-        "description": "`q` matches key, name, forward_label, reverse_label (case-insensitive substring).",
+        "description": "`q` matches key, name, forward_label, reverse_label, category (case-insensitive substring).",
         "operationId": "listRelationshipTypes",
         "parameters": [
           {
@@ -15687,6 +15887,18 @@
                     "maxLength": 200,
                     "minLength": 1,
                     "pattern": "\\S"
+                  },
+                  "category": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 100
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Group heading for the type's relationships on the CI page, e.g. \"Location\" or \"Network & power\"; types with the same text form one group. Trimmed; null or an empty text: no group."
                   },
                   "sortOrder": {
                     "type": "integer",
@@ -16091,6 +16303,18 @@
                     "maxLength": 200,
                     "minLength": 1,
                     "pattern": "\\S"
+                  },
+                  "category": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 100
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Group heading for the type's relationships on the CI page, e.g. \"Location\" or \"Network & power\"; types with the same text form one group. Trimmed; null or an empty text: no group."
                   },
                   "sortOrder": {
                     "type": "integer",
@@ -24598,7 +24822,7 @@
           "Saved views"
         ],
         "summary": "How many CIs each of the caller's views shows (for the navigation rail)",
-        "description": "Session only. Each view is resolved as `listSavedViews` resolves it and counted as the list (a search view: global search) would count it for the caller, within their class rights, so a count never includes a CI the caller could not list. Counts stop at `cap` (10,000): a larger result is `at_least` with `count` = `cap`. An `unavailable` view has no count. All counts of one request share a 2-second allowance; views not counted within it are `timed_out` (retry later, or ask for fewer `ids`). At most 50 views per request; without `ids`, the first 50 of `listSavedViews` (`truncated` says whether there were more). Read-only; not audited. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "description": "Session only. Each view is resolved as `listSavedViews` resolves it and counted as the list (a search view: global search) would count it for the caller, within their class rights, so a count never includes a CI the caller could not list. Counts stop at `cap` (10,000): a larger result is `at_least` with `count` = `cap`. An `unavailable` view has no count. All counts of one request share a 2-second allowance; views not counted within it are `timed_out` (retry later, or ask for fewer `ids`). The server counts for only a few requests at once (a quarter of `DATABASE_POOL_MAX`); a request that waits for its turn spends its allowance waiting, so send batches one after another rather than all at once. At most 50 views per request; without `ids`, the first 50 of `listSavedViews` (`truncated` says whether there were more). Read-only; not audited. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
         "operationId": "countSavedViews",
         "parameters": [
           {
@@ -30614,8 +30838,8 @@
                   "formatVersion": {
                     "type": "integer",
                     "format": "int32",
-                    "description": "File format version; this server writes version 12 and reads 1 to 12",
-                    "maximum": 12,
+                    "description": "File format version; this server writes version 13 and reads 1 to 13",
+                    "maximum": 13,
                     "minimum": 1
                   },
                   "exportedAt": {
@@ -37716,6 +37940,176 @@
         },
         "additionalProperties": false
       },
+      "BulkUpdateError": {
+        "type": "object",
+        "description": "Why a CI was refused: what `PATCH /configuration-items/{id}` would have answered for it",
+        "required": [
+          "code",
+          "message",
+          "details"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "VALIDATION_ERROR",
+              "UNAUTHENTICATED",
+              "FORBIDDEN",
+              "CSRF_TOKEN_INVALID",
+              "NOT_FOUND",
+              "CONFLICT",
+              "IN_USE",
+              "VERSION_CONFLICT",
+              "GONE",
+              "INVALID_NAME",
+              "SCHEMA_CHANGE_REFUSED",
+              "SECRET_REQUIRED",
+              "IDEMPOTENCY_KEY_REUSED",
+              "WORKFLOW_CONDITION_FAILED",
+              "WORKFLOW_CONTROLLED_FIELD",
+              "WORKFLOW_APPROVAL_SELF",
+              "WORKFLOW_APPROVAL_PENDING",
+              "WORKFLOW_APPROVAL_STALE",
+              "LAST_ADMINISTRATOR",
+              "RATE_LIMITED",
+              "MFA_REQUIRED",
+              "MFA_ENROLMENT_REQUIRED",
+              "EMAIL_REQUIRED",
+              "MFA_REQUIRED_FOR_TOKEN",
+              "REAUTHENTICATION_REQUIRED",
+              "IDENTITY_PROVIDER_UNAVAILABLE",
+              "UNSUPPORTED_MEDIA_TYPE",
+              "PAYLOAD_TOO_LARGE",
+              "REQUEST_TIMEOUT",
+              "DATABASE_UNAVAILABLE",
+              "SERVER_BUSY",
+              "SCHEMA_NOT_MIGRATED",
+              "INTERNAL_ERROR"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "details": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BulkUpdateErrorDetail"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "BulkUpdateErrorDetail": {
+        "type": "object",
+        "description": "One problem of a refused CI, as in the error envelope's `details`",
+        "required": [
+          "in",
+          "field",
+          "message",
+          "code"
+        ],
+        "properties": {
+          "in": {
+            "type": "string",
+            "enum": [
+              "body",
+              "query",
+              "params",
+              "header"
+            ]
+          },
+          "field": {
+            "type": "string",
+            "description": "Dotted path in the body, e.g. `attributes.owner`"
+          },
+          "message": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BulkUpdateReport": {
+        "type": "object",
+        "required": [
+          "succeeded",
+          "failed",
+          "committed",
+          "results"
+        ],
+        "properties": {
+          "succeeded": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "committed": {
+            "type": "boolean",
+            "description": "The ok results are written. false only with `allOrNothing` when a CI was refused: nothing was written."
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BulkUpdateResult"
+            },
+            "description": "One result per id, in the request's order"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BulkUpdateResult": {
+        "type": "object",
+        "required": [
+          "index",
+          "id",
+          "ok",
+          "item",
+          "error"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Position of the CI in `ids` (0-based)"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "ok": {
+            "type": "boolean",
+            "description": "The update passed every check for this CI (written when `committed` is true)"
+          },
+          "item": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ConfigurationItemSummary",
+                "description": "The CI as written (ok results when `committed` is true)"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BulkUpdateError",
+                "description": "Why the CI was refused (failed results); nothing of it was written"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "BusinessService": {
         "type": "object",
         "description": "A business service with its class, the visibility note and the limits.",
@@ -38104,6 +38498,7 @@
           "titleAttributeId",
           "ownerAttributeId",
           "endOfLifeAttributeId",
+          "subtitleAttributeId",
           "systemRole",
           "kind",
           "createdAt",
@@ -38197,6 +38592,14 @@
             ],
             "format": "uuid",
             "description": "Data quality: the date or datetime field (of this class or an ancestor) holding a CI's end of life. Null: the\nparent's setting applies; no setting in the lineage leaves the class out of the check"
+          },
+          "subtitleAttributeId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The attribute (of this class or an ancestor) whose value the UI shows under a CI's name, e.g. the model of a\nserver; null shows the class name instead"
           },
           "systemRole": {
             "oneOf": [
@@ -38787,8 +39190,8 @@
           "formatVersion": {
             "type": "integer",
             "format": "int32",
-            "description": "File format version; this server writes version 12 and reads 1 to 12",
-            "maximum": 12,
+            "description": "File format version; this server writes version 13 and reads 1 to 13",
+            "maximum": 13,
             "minimum": 1
           },
           "exportedAt": {
@@ -39378,6 +39781,17 @@
               },
               "additionalProperties": false
             }
+          },
+          "lastChange": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LastChange"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only on getConfigurationItem: the CI's last change (its newest create, update, delete or restore audit entry), without reading the audit log; null when the log holds none for it (entries removed by audit retention before this field existed)."
           }
         },
         "additionalProperties": false
@@ -39905,6 +40319,18 @@
                     }
                   ]
                 },
+                "subtitleAttribute": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "description": "Stable machine key, lower_snake_case",
+                      "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "systemRole": {
                   "oneOf": [
                     {
@@ -40216,6 +40642,17 @@
                     }
                   ],
                   "description": "How impact flows across the type's edges. Left out (files before version 4): an existing type keeps its\nvalue, a new one gets none"
+                },
+                "category": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 100
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 "sortOrder": {
                   "type": "integer",
@@ -40870,7 +41307,8 @@
               "name",
               "forwardLabel",
               "reverseLabel",
-              "isDirectional"
+              "isDirectional",
+              "category"
             ],
             "properties": {
               "key": {
@@ -40887,6 +41325,13 @@
               },
               "isDirectional": {
                 "type": "boolean"
+              },
+              "category": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The relationship type's category (group heading); null: none"
               }
             },
             "additionalProperties": false
@@ -43293,6 +43738,78 @@
         },
         "additionalProperties": false
       },
+      "LastChange": {
+        "type": "object",
+        "description": "The CI's newest create, update, delete or restore entry in the audit log:\nwhen, what, and who. Kept per CI by the database from the audit log itself,\nso it never disagrees with it; read events (exports) and workflow events\ndo not count.",
+        "required": [
+          "at",
+          "action",
+          "actor"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "action": {
+            "type": "string",
+            "description": "The kinds of audit entry that count as a change to a CI.",
+            "enum": [
+              "create",
+              "update",
+              "delete",
+              "restore"
+            ]
+          },
+          "actor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LastChangeActor",
+                "description": "Null when the caller lacks `audit.view`: who changed what is audit data"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "LastChangeActor": {
+        "type": "object",
+        "description": "Who made a change, as its audit entry records it.",
+        "required": [
+          "type",
+          "id",
+          "name"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "system",
+              "user",
+              "api_client",
+              "import"
+            ]
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The user's id for `user` and `api_client` (the token's owner)"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The username at the time of the change (or the system actor's name)"
+          }
+        },
+        "additionalProperties": false
+      },
       "LayoutTemplateUsage": {
         "type": "object",
         "description": "Who uses a template",
@@ -44796,7 +45313,8 @@
               "name",
               "forwardLabel",
               "reverseLabel",
-              "isDirectional"
+              "isDirectional",
+              "category"
             ],
             "properties": {
               "id": {
@@ -44817,6 +45335,13 @@
               },
               "isDirectional": {
                 "type": "boolean"
+              },
+              "category": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The type's category (group heading on the CI page); null: none"
               }
             },
             "additionalProperties": false
@@ -45140,6 +45665,7 @@
           "reverseLabel",
           "isDirectional",
           "impactDirection",
+          "category",
           "sortOrder",
           "isActive",
           "systemRole",
@@ -45184,6 +45710,13 @@
               "source_to_target",
               "both"
             ]
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Group heading the UI lists the type's relationships under, e.g. \"Location\"; types with the same category form\none group, null: no group"
           },
           "sortOrder": {
             "type": "integer",

@@ -596,6 +596,19 @@ async function main() {
   await patch(`/api/v1/configuration-items/${server.id}`, { attributes: { cpu_cores: 1.5 } }, 400);
   await patch(`/api/v1/configuration-items/${server.id}`, { version: 5 }, 400); // nothing to update
 
+  // Bulk update (SHAA-2354): one result per CI in request order, per-CI refusal, allOrNothing.
+  const bulkUrl = '/api/v1/configuration-items/bulk-update';
+  const bulkPeer = (await post('/api/v1/configuration-items', { classId: serverClass, attributes: { name: `smoke-bulk-${RUN}`, status: inService } })).json;
+  const bulk = (await post(bulkUrl, { ids: [old.id, bulkPeer.id, database.id], attributes: { cpu_cores: 4 } }, 200)).json;
+  check(bulk.committed && bulk.succeeded === 2 && bulk.failed === 1 && bulk.results.map((r: Json) => r.index).join() === '0,1,2' &&
+    bulk.results[1].ok && bulk.results[1].item?.version === bulkPeer.version + 1 && !bulk.results[2].ok && bulk.results[2].error?.code,
+    'bulk update writes the CIs that pass and refuses a CI whose class lacks the attribute');
+  const atomic = (await post(bulkUrl, { ids: [bulkPeer.id, database.id], attributes: { cpu_cores: 8 }, allOrNothing: true }, 200)).json;
+  check(!atomic.committed && atomic.failed === 1 && (await get(`/api/v1/configuration-items/${bulkPeer.id}`)).json.attributes.cpu_cores === 4,
+    'allOrNothing writes nothing when one CI is refused');
+  await post(bulkUrl, { ids: [] }, 400);
+  await post(bulkUrl, { ids: [bulkPeer.id] }, 400); // nothing to update
+
   // --- Relationships ------------------------------------------------------------
   console.log('\n# Relationships');
   const r1 = (await post('/api/v1/relationships', { relationshipTypeId: runsOn, sourceCiId: app.id, targetCiId: server.id })).json;
@@ -2072,7 +2085,7 @@ async function customization(x: Json) {
   const file = exported.json;
   const raw = JSON.stringify(file);
   check(/^attachment; filename="shadoucmdb-config-/.test(exported.headers.get('content-disposition') ?? ''), 'the export downloads as a file');
-  check(file.format === 'shadoucmdb.config' && file.formatVersion === 12 && Array.isArray(file.workflows) && Array.isArray(file.importMappings) && Array.isArray(file.savedViews) && file.dataModel.areas.some((a: Json) => a.key === 'infrastruktur') && !('users' in file) && !raw.includes('argon2') && !raw.includes('"username"') && !raw.includes('password'), 'the export has no users or password hashes');
+  check(file.format === 'shadoucmdb.config' && file.formatVersion === 13 && Array.isArray(file.workflows) && Array.isArray(file.importMappings) && Array.isArray(file.savedViews) && file.dataModel.areas.some((a: Json) => a.key === 'infrastruktur') && !('users' in file) && !raw.includes('argon2') && !raw.includes('"username"') && !raw.includes('password'), 'the export has no users or password hashes');
   check(file.permissionProfiles.every((p: Json) => p.name !== 'Administrator') && file.uiSettings.logo?.data === PNG_1X1, 'the export has editable profiles and the images');
   check(file.dataModel.attributes.every((a: Json) => typeof a.class === 'string' && !('classId' in a)), 'the export refers to classes by key');
   const noop = (await post('/api/v1/admin/config/import?mode=dry_run', file, 200)).json;
@@ -2121,7 +2134,7 @@ async function customization(x: Json) {
   attr.dataType = 'text';
   const immutable = await post('/api/v1/admin/config/import?mode=dry_run', retyped, 400);
   check(immutable.json.error?.details?.some((d: Json) => d.code === 'immutable'), 'the data type of an existing attribute cannot change');
-  await post('/api/v1/admin/config/import?mode=apply', { format: 'shadoucmdb.config', formatVersion: 13 }, 400);
+  await post('/api/v1/admin/config/import?mode=apply', { format: 'shadoucmdb.config', formatVersion: 14 }, 400);
   // Format 4: saved import mappings, merged by class key and name (SHAA-714 §6.2).
   const cfgMapping = { name: `Smoke config ${RUN}`, classKey: 'server', definition: { mode: 'create_only', columns: [{ header: 'Hostname', target: { kind: 'attribute', key: 'hostname' } }, { header: 'Notes', target: { kind: 'ignore' } }] } };
   const mappingFile = { format: 'shadoucmdb.config', formatVersion: 4, importMappings: [cfgMapping] };

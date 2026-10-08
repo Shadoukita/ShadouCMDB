@@ -575,6 +575,26 @@ export interface paths {
         patch: operations["updateConfigurationItem"];
         trace?: never;
     };
+    "/api/v1/configuration-items/bulk-update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set the same attribute values (or criticality) on up to 500 CIs, with a result per CI
+         * @description For the inventory's bulk edit. Each CI is checked and updated exactly as `updateConfigurationItem` would update it with a body of `attributes` and `criticalityValueId`: edit on its class, the same value validation, workflow-controlled fields and reference rules, and one `update` audit row per CI. A CI the caller may not view is reported as `NOT_FOUND`, like a missing one. All CIs are updated in one transaction, each in a savepoint: a CI that is refused is rolled back alone and reported with the error the single update would have answered (`code`, `message`, `details`). By default the CIs that pass are committed together; with `allOrNothing` a single refusal writes nothing and `committed` is false. Always 200 for a well-formed body: `succeeded` and `failed` count the CIs, `results` has one entry per id in the request's order. CIs are taken in id order, so concurrent bulk updates over the same CIs queue instead of deadlocking. A server fault rolls back every CI (500).
+         */
+        post: operations["updateConfigurationItemsInBulk"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/configuration-items/{id}/graph": {
         parameters: {
             query?: never;
@@ -1440,7 +1460,7 @@ export interface paths {
         head?: never;
         /**
          * Update a ci class (partial)
-         * @description Requires `datamodel.manage`. Changing `titleAttributeId` relabels the class's CIs. Moving the type to another parent (`parentId`) keeps its title attribute only if the new lineage provides it; otherwise it takes the new parent's (so do its subtypes), and the CIs are relabelled. The same move clears an `ownerAttributeId` or `endOfLifeAttributeId` of the type or its subtypes that the new lineage does not provide (the parent's setting then applies).
+         * @description Requires `datamodel.manage`. Changing `titleAttributeId` relabels the class's CIs. Moving the type to another parent (`parentId`) keeps its title attribute only if the new lineage provides it; otherwise it takes the new parent's (so do its subtypes), and the CIs are relabelled. The same move clears an `ownerAttributeId` or `endOfLifeAttributeId` of the type or its subtypes that the new lineage does not provide (the parent's setting then applies). A `subtitleAttributeId` the new lineage does not provide is replaced by the new parent's, which changes no stored CI data.
          */
         patch: operations["updateCiClass"];
         trace?: never;
@@ -1603,7 +1623,7 @@ export interface paths {
         };
         /**
          * List relationship type records (paginated, searchable, sortable)
-         * @description `q` matches key, name, forward_label, reverse_label (case-insensitive substring).
+         * @description `q` matches key, name, forward_label, reverse_label, category (case-insensitive substring).
          */
         get: operations["listRelationshipTypes"];
         put?: never;
@@ -2552,7 +2572,7 @@ export interface paths {
         };
         /**
          * How many CIs each of the caller's views shows (for the navigation rail)
-         * @description Session only. Each view is resolved as `listSavedViews` resolves it and counted as the list (a search view: global search) would count it for the caller, within their class rights, so a count never includes a CI the caller could not list. Counts stop at `cap` (10,000): a larger result is `at_least` with `count` = `cap`. An `unavailable` view has no count. All counts of one request share a 2-second allowance; views not counted within it are `timed_out` (retry later, or ask for fewer `ids`). At most 50 views per request; without `ids`, the first 50 of `listSavedViews` (`truncated` says whether there were more). Read-only; not audited. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Session only. Each view is resolved as `listSavedViews` resolves it and counted as the list (a search view: global search) would count it for the caller, within their class rights, so a count never includes a CI the caller could not list. Counts stop at `cap` (10,000): a larger result is `at_least` with `count` = `cap`. An `unavailable` view has no count. All counts of one request share a 2-second allowance; views not counted within it are `timed_out` (retry later, or ask for fewer `ids`). The server counts for only a few requests at once (a quarter of `DATABASE_POOL_MAX`); a request that waits for its turn spends its allowance waiting, so send batches one after another rather than all at once. At most 50 views per request; without `ids`, the first 50 of `listSavedViews` (`truncated` says whether there were more). Read-only; not audited. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         get: operations["countSavedViews"];
         put?: never;
@@ -3901,6 +3921,45 @@ export interface components {
             data: components["schemas"]["AuditEntry"][];
             page: components["schemas"]["PageMeta"];
         };
+        /** @description Why a CI was refused: what `PATCH /configuration-items/{id}` would have answered for it */
+        BulkUpdateError: {
+            /** @enum {string} */
+            code: "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "CSRF_TOKEN_INVALID" | "NOT_FOUND" | "CONFLICT" | "IN_USE" | "VERSION_CONFLICT" | "GONE" | "INVALID_NAME" | "SCHEMA_CHANGE_REFUSED" | "SECRET_REQUIRED" | "IDEMPOTENCY_KEY_REUSED" | "WORKFLOW_CONDITION_FAILED" | "WORKFLOW_CONTROLLED_FIELD" | "WORKFLOW_APPROVAL_SELF" | "WORKFLOW_APPROVAL_PENDING" | "WORKFLOW_APPROVAL_STALE" | "LAST_ADMINISTRATOR" | "RATE_LIMITED" | "MFA_REQUIRED" | "MFA_ENROLMENT_REQUIRED" | "EMAIL_REQUIRED" | "MFA_REQUIRED_FOR_TOKEN" | "REAUTHENTICATION_REQUIRED" | "IDENTITY_PROVIDER_UNAVAILABLE" | "UNSUPPORTED_MEDIA_TYPE" | "PAYLOAD_TOO_LARGE" | "REQUEST_TIMEOUT" | "DATABASE_UNAVAILABLE" | "SERVER_BUSY" | "SCHEMA_NOT_MIGRATED" | "INTERNAL_ERROR";
+            message: string;
+            details: components["schemas"]["BulkUpdateErrorDetail"][];
+        };
+        /** @description One problem of a refused CI, as in the error envelope's `details` */
+        BulkUpdateErrorDetail: {
+            /** @enum {string} */
+            in: "body" | "query" | "params" | "header";
+            /** @description Dotted path in the body, e.g. `attributes.owner` */
+            field: string;
+            message: string;
+            code: string;
+        };
+        BulkUpdateReport: {
+            /** Format: int32 */
+            succeeded: number;
+            /** Format: int32 */
+            failed: number;
+            /** @description The ok results are written. false only with `allOrNothing` when a CI was refused: nothing was written. */
+            committed: boolean;
+            /** @description One result per id, in the request's order */
+            results: components["schemas"]["BulkUpdateResult"][];
+        };
+        BulkUpdateResult: {
+            /**
+             * Format: int32
+             * @description Position of the CI in `ids` (0-based)
+             */
+            index: number;
+            /** Format: uuid */
+            id: string;
+            /** @description The update passed every check for this CI (written when `committed` is true) */
+            ok: boolean;
+            item: components["schemas"]["ConfigurationItemSummary"] | null;
+            error: components["schemas"]["BulkUpdateError"] | null;
+        };
         /** @description A business service with its class, the visibility note and the limits. */
         BusinessService: {
             /** Format: uuid */
@@ -4123,6 +4182,12 @@ export interface components {
              *     parent's setting applies; no setting in the lineage leaves the class out of the check
              */
             endOfLifeAttributeId: string | null;
+            /**
+             * Format: uuid
+             * @description The attribute (of this class or an ancestor) whose value the UI shows under a CI's name, e.g. the model of a
+             *     server; null shows the class name instead
+             */
+            subtitleAttributeId: string | null;
             /**
              * @description Set on the built-in type the application itself uses: `business_service` (the business services). It can be
              *     renamed and given fields, but not deleted, archived, purged, made abstract, given a parent or subtypes
@@ -4373,7 +4438,7 @@ export interface components {
             format: "shadoucmdb.config";
             /**
              * Format: int32
-             * @description File format version; this server writes version 12 and reads 1 to 12
+             * @description File format version; this server writes version 13 and reads 1 to 13
              */
             formatVersion: number;
             exportedAt?: string | null;
@@ -4517,6 +4582,8 @@ export interface components {
                     hidden: boolean;
                 };
             };
+            /** @description Only on getConfigurationItem: the CI's last change (its newest create, update, delete or restore audit entry), without reading the audit log; null when the log holds none for it (entries removed by audit retention before this field existed). */
+            lastChange?: components["schemas"]["LastChange"] | null;
         };
         ConfigurationItemList: {
             data: components["schemas"]["ConfigurationItem"][];
@@ -4687,6 +4754,7 @@ export interface components {
                 titleAttribute?: string | null;
                 ownerAttribute?: string | null;
                 endOfLifeAttribute?: string | null;
+                subtitleAttribute?: string | null;
                 /**
                  * @description Set on the built-in business service class (version 5). An import matches such a class to this install's
                  *     class of the same role, whatever its key, and keeps that class's key and area; it never gives a class a
@@ -4758,6 +4826,7 @@ export interface components {
                  *     value, a new one gets none
                  */
                 impactDirection?: ("none" | "target_to_source" | "source_to_target" | "both") | null;
+                category?: string | null;
                 sortOrder?: number;
                 isActive?: boolean;
                 /**
@@ -4954,6 +5023,8 @@ export interface components {
                 forwardLabel: string;
                 reverseLabel: string;
                 isDirectional: boolean;
+                /** @description The relationship type's category (group heading); null: none */
+                category: string | null;
             };
             /** Format: uuid */
             sourceCiId: string;
@@ -5755,6 +5826,31 @@ export interface components {
                 truncated: boolean;
             }[];
         };
+        /**
+         * @description The CI's newest create, update, delete or restore entry in the audit log:
+         *     when, what, and who. Kept per CI by the database from the audit log itself,
+         *     so it never disagrees with it; read events (exports) and workflow events
+         *     do not count.
+         */
+        LastChange: {
+            /** Format: date-time */
+            at: string;
+            /**
+             * @description The kinds of audit entry that count as a change to a CI.
+             * @enum {string}
+             */
+            action: "create" | "update" | "delete" | "restore";
+            actor: components["schemas"]["LastChangeActor"] | null;
+        };
+        /** @description Who made a change, as its audit entry records it. */
+        LastChangeActor: {
+            /** @enum {string} */
+            type: "system" | "user" | "api_client" | "import";
+            /** @description The user's id for `user` and `api_client` (the token's owner) */
+            id: string | null;
+            /** @description The username at the time of the change (or the system actor's name) */
+            name: string | null;
+        };
         /** @description Who uses a template */
         LayoutTemplateUsage: {
             key: string;
@@ -6199,6 +6295,8 @@ export interface components {
                 forwardLabel: string;
                 reverseLabel: string;
                 isDirectional: boolean;
+                /** @description The type's category (group heading on the CI page); null: none */
+                category: string | null;
             };
             /** Format: uuid */
             sourceCiId: string;
@@ -6330,6 +6428,11 @@ export interface components {
              * @enum {string}
              */
             impactDirection: "none" | "target_to_source" | "source_to_target" | "both";
+            /**
+             * @description Group heading the UI lists the type's relationships under, e.g. "Location"; types with the same category form
+             *     one group, null: no group
+             */
+            category: string | null;
             /** Format: int32 */
             sortOrder: number;
             isActive: boolean;
@@ -11529,6 +11632,116 @@ export interface operations {
             };
             /** @description Conflict: CONFLICT (duplicate or not allowed in this state), VERSION_CONFLICT, or WORKFLOW_CONTROLLED_FIELD (a state field an active workflow drives was given another value; details[].field names it as `attributes.<key>`, details[].code workflow_controlled). Nothing was changed */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    updateConfigurationItemsInBulk: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description The CIs to update: 1 to 500, each at most once */
+                    ids: string[];
+                    /** @description Set on every CI: merged into its current values as `PATCH /configuration-items/{id}` merges them; null clears an attribute. Each key must be an attribute of every CI's class. */
+                    attributes?: {
+                        [key: string]: (string | number | boolean) | null;
+                    };
+                    /** @description A value of the criticality lookup list (GET /api/v1/lookup-lists?systemRole=criticality); null: not set. A retired value can be kept but not newly set */
+                    criticalityValueId?: string | null;
+                    /**
+                     * @description true: when any CI is refused, nothing is written (`committed` is false). false (default): the CIs that pass
+                     *     are written and the refused ones are reported.
+                     */
+                    allOrNothing?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkUpdateReport"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -17058,6 +17271,8 @@ export interface operations {
                     ownerAttributeId?: string | null;
                     /** @description Data quality: attribute of this class or an ancestor that holds a CI's end of life (date or datetime), for the `end_of_life` check. Null: the parent's setting applies. */
                     endOfLifeAttributeId?: string | null;
+                    /** @description Attribute of this class or an ancestor (any data type) whose value the UI shows under a CI's name; null shows the class name. A new class takes its parent's. */
+                    subtitleAttributeId?: string | null;
                     /**
                      * @description asset (inventory CIs) or process (records such as change requests, kept out of the inventory). Leave out to take the parent's kind (asset for a root type); a type has its parent's kind.
                      * @enum {string}
@@ -17371,6 +17586,8 @@ export interface operations {
                     ownerAttributeId?: string | null;
                     /** @description Data quality: attribute of this class or an ancestor that holds a CI's end of life (date or datetime), for the `end_of_life` check. Null: the parent's setting applies. */
                     endOfLifeAttributeId?: string | null;
+                    /** @description Attribute of this class or an ancestor (any data type) whose value the UI shows under a CI's name; null shows the class name. A new class takes its parent's. */
+                    subtitleAttributeId?: string | null;
                     /**
                      * @description Only for a type that has never held a CI (deleted ones included) and has no subtypes
                      * @enum {string}
@@ -18696,6 +18913,8 @@ export interface operations {
                     description?: string | null;
                     forwardLabel: string;
                     reverseLabel: string;
+                    /** @description Group heading for the type's relationships on the CI page, e.g. "Location" or "Network & power"; types with the same text form one group. Trimmed; null or an empty text: no group. */
+                    category?: string | null;
                     sortOrder?: number;
                     isActive?: boolean;
                 };
@@ -18987,6 +19206,8 @@ export interface operations {
                     description?: string | null;
                     forwardLabel?: string;
                     reverseLabel?: string;
+                    /** @description Group heading for the type's relationships on the CI page, e.g. "Location" or "Network & power"; types with the same text form one group. Trimmed; null or an empty text: no group. */
+                    category?: string | null;
                     sortOrder?: number;
                     isActive?: boolean;
                     /**
@@ -28815,7 +29036,7 @@ export interface operations {
                     format: "shadoucmdb.config";
                     /**
                      * Format: int32
-                     * @description File format version; this server writes version 12 and reads 1 to 12
+                     * @description File format version; this server writes version 13 and reads 1 to 13
                      */
                     formatVersion: number;
                     exportedAt?: string | null;

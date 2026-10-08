@@ -12,17 +12,18 @@ use ipnetwork::IpNetwork;
 
 use super::plan::{self, DbResolver, Needs, is_visible};
 use super::schemas::{
-    ActiveQuery, AttributeReference, ChangeHistogram, ChangeHistogramBucket, ChangeHistogramQuery, ConfigurationItem,
-    ConfigurationItemSummary, CreateItemBody, CriticalityRef, DataQuality, DataQualityCheck, DataQualityFilter,
-    DataQualityQuery, Graph, GraphDirection, GraphEdge, GraphEdgeType, GraphNode, GraphQuery, HistogramBucket,
-    ItemFilterQuery, KindQuery, ListItemsQuery, QualityCheck, SearchHit, SearchMatch, SearchQuery, SearchResults,
+    ActiveQuery, AttributeReference, BulkUpdateError, BulkUpdateItemsBody, BulkUpdateReport, BulkUpdateResult,
+    ChangeHistogram, ChangeHistogramBucket, ChangeHistogramQuery, ConfigurationItem, ConfigurationItemSummary,
+    CreateItemBody, CriticalityRef, DataQuality, DataQualityCheck, DataQualityFilter, DataQualityQuery, Graph,
+    GraphDirection, GraphEdge, GraphEdgeType, GraphNode, GraphQuery, HistogramBucket, ItemFilterQuery, KindQuery,
+    LastChange, LastChangeActor, ListItemsQuery, QualityCheck, SearchHit, SearchMatch, SearchQuery, SearchResults,
     UpdateItemBody, end_of_life_days,
 };
 use crate::api::context::{Caller, RequestContext};
 use crate::api::route::InvalidBody;
 use crate::api::schemas::{KEY_PATTERN, LookupRef, Page, Paged, Sort, UuidList};
 use crate::api::validate;
-use crate::auth::permissions::ClassOp;
+use crate::auth::permissions::{ClassOp, GlobalPermission};
 use crate::data::classes as class_data;
 use crate::data::crud::{self, AuditAction, AuditEntry};
 use crate::data::items::{
@@ -581,6 +582,7 @@ async fn with_attributes(
             summary: summary_dto(row),
             attributes: Map::new(),
             attribute_references: Map::new(),
+            last_change: None,
         })
         .collect();
     let index: HashMap<Uuid, usize> = items.iter().enumerate().map(|(i, item)| (item.summary.id, i)).collect();
@@ -649,8 +651,17 @@ pub async fn get(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<Config
     ctx.require_class_visible(row.class_id, "Configuration item", id)?;
     let model = Model::load(&mut conn).await?;
     let visible = ctx.class_scope(ClassOp::View);
-    let dto = with_attributes(&mut conn, &model, vec![row], visible.as_deref()).await?.pop();
-    dto.ok_or_else(|| AppError::missing("Configuration item", id))
+    let mut dto = with_attributes(&mut conn, &model, vec![row], visible.as_deref())
+        .await?
+        .pop()
+        .ok_or_else(|| AppError::missing("Configuration item", id))?;
+    let show_actor = ctx.require(GlobalPermission::AuditView).is_ok();
+    dto.last_change = Some(data::last_change(&mut conn, id).await?.map(|c| LastChange {
+        at: c.changed_at,
+        action: c.action,
+        actor: show_actor.then_some(LastChangeActor { actor_type: c.actor_type, id: c.actor_id, name: c.actor_name }),
+    }));
+    Ok(dto)
 }
 
 // ---------------------------------------------------------------------------
@@ -713,24 +724,55 @@ pub async fn update(
     input: &UpdateItemBody,
 ) -> Result<ConfigurationItem, AppError> {
     let mut tx = pool.begin().await?;
-    let locked = data::lock(&mut tx, id).await?.ok_or_else(|| AppError::missing("Configuration item", id))?;
+    let shared = UpdateShared::load(&mut tx).await?;
+    let dto = update_in(&mut tx, ctx, &shared, id, input).await?;
+    let dto = response_detail(&mut tx, ctx, &shared.model, dto).await?;
+    tx.commit().await?;
+    Ok(dto)
+}
+
+/// What every update in one transaction reads the same way.
+struct UpdateShared {
+    model: Model,
+    service_class: Option<Uuid>,
+    state: StateFields,
+}
+
+impl UpdateShared {
+    async fn load(conn: &mut PgConnection) -> Result<Self, AppError> {
+        Ok(UpdateShared {
+            model: Model::load(conn).await?,
+            service_class: crate::data::business_services::roles(conn).await?.map(|r| r.service_class),
+            state: StateFields::load(conn).await?,
+        })
+    }
+}
+
+/// The checks, write and audit row of `PATCH /configuration-items/{id}`, in
+/// the caller's transaction. Returns the CI as written, unredacted.
+async fn update_in(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    shared: &UpdateShared,
+    id: Uuid,
+    input: &UpdateItemBody,
+) -> Result<ConfigurationItem, AppError> {
+    let model = &shared.model;
+    let locked = data::lock(conn, id).await?.ok_or_else(|| AppError::missing("Configuration item", id))?;
     // A CI the caller may not view is missing, before anything else is looked at.
     ctx.require_class_visible(locked.class_id, "Configuration item", id)?;
-    let model = Model::load(&mut tx).await?;
-    let before = must_detail(&mut tx, &model, id, None).await?;
+    let before = must_detail(conn, model, id, None).await?;
     let class_id = input.class_id.unwrap_or(locked.class_id);
-    let defs = class_data::effective_attributes(&mut tx, class_id).await?;
+    let defs = class_data::effective_attributes(conn, class_id).await?;
     let visible = ctx.class_scope(ClassOp::View);
     let needs = Needs::for_update(&defs, input.attributes.as_ref(), &before.attributes);
-    let resolver = DbResolver::load(&mut tx, visible.as_deref(), &needs).await?;
+    let resolver = DbResolver::load(conn, visible.as_deref(), &needs).await?;
     let current_criticality = before.summary.criticality.as_ref().map(|c| c.id);
-    let service_class = crate::data::business_services::roles(&mut tx).await?.map(|r| r.service_class);
-    let state = StateFields::load(&mut tx).await?;
-    let plan = plan::plan_update(ctx, &model, &defs, before, input, &resolver, service_class, &state)?;
-    check_criticality(&mut tx, input.criticality_value_id.flatten(), current_criticality).await?;
-    plan::apply(&mut tx, &model, &plan).await?;
+    let plan = plan::plan_update(ctx, model, &defs, before, input, &resolver, shared.service_class, &shared.state)?;
+    check_criticality(conn, input.criticality_value_id.flatten(), current_criticality).await?;
+    plan::apply(conn, model, &plan).await?;
 
-    let dto = must_detail(&mut tx, &model, id, None).await?;
+    let dto = must_detail(conn, model, id, None).await?;
     let entry = AuditEntry {
         action: AuditAction::Update,
         entity_type: "configuration_items",
@@ -738,10 +780,55 @@ pub async fn update(
         old_value: plan.before.as_ref().map(crud::json),
         new_value: Some(crud::json(&dto)),
     };
-    crud::write_audit(&mut tx, ctx, vec![entry]).await?;
-    let dto = response_detail(&mut tx, ctx, &model, dto).await?;
-    tx.commit().await?;
+    crud::write_audit(conn, ctx, vec![entry]).await?;
     Ok(dto)
+}
+
+/// The same change on up to [`BULK_UPDATE_MAX`] CIs in one transaction. Each
+/// CI is updated exactly as `PATCH /configuration-items/{id}` would update it
+/// (same rights, validation and audit row), inside a savepoint: a CI that is
+/// refused is rolled back alone and reported. CIs are taken in id order, so
+/// two bulk updates over the same CIs lock them in the same order and queue
+/// instead of deadlocking; the report keeps the request's order.
+pub async fn bulk_update(
+    pool: &PgPool,
+    ctx: &RequestContext,
+    b: &BulkUpdateItemsBody,
+) -> Result<BulkUpdateReport, AppError> {
+    let input = b.patch();
+    let mut tx = pool.begin().await?;
+    let shared = UpdateShared::load(&mut tx).await?;
+    let mut order: Vec<usize> = (0..b.ids.len()).collect();
+    order.sort_by_key(|&i| b.ids[i]);
+    let mut results: Vec<Option<BulkUpdateResult>> = (0..b.ids.len()).map(|_| None).collect();
+    for i in order {
+        let id = b.ids[i];
+        let mut sp = sqlx::Connection::begin(&mut *tx).await?;
+        let result = match update_in(&mut sp, ctx, &shared, id, &input).await {
+            Ok(dto) => {
+                sp.commit().await?;
+                BulkUpdateResult { index: i as i32, id, ok: true, item: Some(dto.summary), error: None }
+            }
+            // A fault of the server, not of the CI: nothing commits.
+            Err(e) if e.code.status().is_server_error() => return Err(e),
+            Err(e) => {
+                sp.rollback().await?;
+                BulkUpdateResult { index: i as i32, id, ok: false, item: None, error: Some(BulkUpdateError::from(e)) }
+            }
+        };
+        results[i] = Some(result);
+    }
+    let mut results: Vec<BulkUpdateResult> = results.into_iter().flatten().collect();
+    let succeeded = results.iter().filter(|r| r.ok).count() as i32;
+    let failed = results.len() as i32 - succeeded;
+    let committed = failed == 0 || !b.all_or_nothing;
+    if committed {
+        tx.commit().await?;
+    } else {
+        tx.rollback().await?;
+        results.iter_mut().for_each(|r| r.item = None);
+    }
+    Ok(BulkUpdateReport { succeeded, failed, committed, results })
 }
 
 /// Soft delete: the CI and its live relationships get deleted_at; history keeps resolving.
@@ -1099,6 +1186,7 @@ pub async fn graph(pool: &PgPool, ctx: &RequestContext, root_id: Uuid, q: &Graph
                     forward_label: e.forward_label,
                     reverse_label: e.reverse_label,
                     is_directional: e.is_directional,
+                    category: e.type_category,
                 },
                 source_ci_id: e.source_ci_id,
                 target_ci_id: e.target_ci_id,
@@ -1699,6 +1787,7 @@ mod tests {
             forward_label: String::new(),
             reverse_label: String::new(),
             is_directional: false,
+            type_category: None,
         };
         let (mut budget, mut truncated) = (3, false);
         assert_eq!(spend_edge_budget((0..3).map(row).collect(), &mut budget, &mut truncated).len(), 3);

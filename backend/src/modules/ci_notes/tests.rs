@@ -363,3 +363,69 @@ async fn the_policy_and_the_retention_sweep() {
     drop(w);
     db.drop().await;
 }
+
+/// Who reaches the notes at all: nobody signed out; an API token by its
+/// scope's class rights, writing as its owner; a caller who may not view the
+/// class learns nothing, also on delete; the policy is for sessions only.
+#[tokio::test]
+async fn notes_without_a_session_and_through_an_api_token() {
+    let Some((db, w)) = world("ci_notes_access").await else { return };
+    let server = w.ci("server", "srv-01").await;
+    let vm = w.ci("virtual_machine", "vm-01").await;
+    let (_, note) = w.post(&w.admin, server, "Warranty until 2028").await;
+    let (_, vm_note) = w.post(&w.admin, vm, "Snapshot policy: weekly").await;
+    let outsider = w.user("outsider", &[], &[("virtual_machine", true)]).await;
+
+    // Signed out: 401 on every route, nothing written.
+    let none = Creds::default();
+    for (method, path, body) in [
+        ("GET", format!("/api/v1/configuration-items/{server}/notes"), None),
+        ("POST", format!("/api/v1/configuration-items/{server}/notes"), Some(json!({ "body": "anon" }))),
+        ("PATCH", note_path(server, &note), Some(json!({ "version": 1, "body": "anon" }))),
+        ("DELETE", format!("{}?version=1", note_path(server, &note)), None),
+        ("GET", "/api/v1/ci-note-settings".to_owned(), None),
+    ] {
+        let (status, v) = w.call(&none, method, &path, body).await;
+        assert_eq!(status, 401, "{method} {path}: {v}");
+    }
+
+    // A caller who may not view servers cannot delete a server note or learn it exists.
+    let (status, v) = w.call(&outsider, "DELETE", &format!("{}?version=1", note_path(server, &note)), None).await;
+    assert_eq!((status, code(&v)), (404, "NOT_FOUND"), "{v}");
+    let (status, v) = w.call(&outsider, "DELETE", &format!("{}?version=1", note_path(server, &vm_note)), None).await;
+    assert_eq!(status, 404, "a note is reached only through its own CI: {v}");
+
+    // A token of the administrator scoped to view and edit servers.
+    let perms =
+        json!([{ "classId": w.class("server").await, "view": true, "create": true, "edit": true, "delete": false }]);
+    let body = json!({ "name": "Server notes", "globalPermissions": [], "classPermissions": perms });
+    let (status, profile) = w.call(&w.admin, "POST", "/api/v1/admin/profiles", Some(body)).await;
+    assert_eq!(status, 201, "{profile}");
+    let expires = (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339();
+    let body = json!({ "name": "notes script", "profileId": profile["id"], "expiresAt": expires });
+    let (status, created) = w.call(&w.admin, "POST", "/api/v1/admin/api-tokens", Some(body)).await;
+    assert_eq!(status, 201, "{created}");
+    let token = Creds { bearer: created["secret"].as_str().map(str::to_owned), ..Creds::default() };
+
+    let (status, page) = w.list(&token, server).await;
+    assert_eq!((status, page["page"]["total"].as_i64()), (200, Some(1)), "{page}");
+    let (status, v) = w.list(&token, vm).await;
+    assert_eq!((status, code(&v)), (404, "NOT_FOUND"), "the scope, not the owner's rights: {v}");
+    let (status, mine) = w.post(&token, server, "Written by the script").await;
+    assert_eq!(status, 201, "{mine}");
+    assert_eq!(mine["author"]["name"], "admin", "{mine}");
+    let (status, v) = w.post(&token, vm, "Not in scope").await;
+    assert_eq!(status, 404, "{v}");
+    let (status, v) = w
+        .call(&token, "PATCH", &note_path(server, &mine), Some(json!({ "version": 1, "body": "Edited by the script" })))
+        .await;
+    assert_eq!((status, v["version"].as_i64()), (200, Some(2)), "{v}");
+    let (status, v) = w
+        .call(&token, "PUT", "/api/v1/ci-note-settings", Some(json!({ "editWindowMinutes": 5, "retentionDays": null })))
+        .await;
+    assert_eq!((status, code(&v)), (403, "FORBIDDEN"), "the policy is for sessions only: {v}");
+    let (_, policy) = w.call(&w.admin, "GET", "/api/v1/ci-note-settings", None).await;
+    assert_eq!(policy["editWindowMinutes"], 1440, "{policy}");
+    drop(w);
+    db.drop().await;
+}

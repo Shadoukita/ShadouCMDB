@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import type { APIRequestContext, APIResponse, Browser, Page } from "@playwright/test";
 import { apiGet, apiSend, expect, expectDialogLaidOut, snap, test } from "./support";
 
@@ -224,4 +225,23 @@ test("lookups: refusing to retire a value names the dependent value without a co
   await admin.close();
   const acme = (await apiGet<{ data: { name: string; isActive: boolean }[] }>(request, `/lookup-list-values?listId=${makerId}`)).data;
   expect(acme).toEqual([expect.objectContaining({ name: "Acme", isActive: true })]);
+});
+
+test("inventory export: a class-limited user's file holds only the CIs they may view (SHAA-2353)", async ({ browser }) => {
+  const page = await signInUi(browser, AUDITOR);
+  await page.goto("/cis");
+  const exportButton = page.locator(".page-header .actions .row-menu > button");
+  await expect(exportButton).toHaveText("Export");
+  await exportButton.click();
+  const download = page.waitForEvent("download");
+  await page.getByRole("menuitem", { name: "CSV, comma-separated" }).click();
+  const file = await download;
+  expect(file.suggestedFilename()).toMatch(/^inventory-.*\.csv$/);
+  const csv = await readFile(await file.path(), "utf8");
+  for (const name of PUB_CIS) expect(csv).toContain(`"${name}"`);
+  expect(csv).not.toContain(SEC_CI);
+  expect(csv).not.toContain(secretCiId);
+  // Every data row is one of the two Public CIs: nothing of any other class.
+  expect(csv.replace(/^\uFEFF/, "").split("\r\n").filter(Boolean)).toHaveLength(1 + PUB_CIS.length);
+  await page.context().close();
 });
