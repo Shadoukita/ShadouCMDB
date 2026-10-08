@@ -326,7 +326,7 @@ export const en = {
   "record.qr.print": "Print",
   "record.qr.close": "Close",
   "clone.title": "Clone {name}",
-  "clone.notice": "A new {class} with the values of {name}. Not copied: the ident, relationships, notes, history and workflow state. Nothing is saved until you create it.",
+  "clone.notice": "A new {class} with the values of {name}. Not copied: the ident, relationships, history and workflow state. Check values that identify one device, such as a serial number. Nothing is saved until you create it.",
   "clone.noticeFields": "Left empty for you to fill in: {fields}.",
   "clone.source": "Cloned from",
   "clone.loadFailed": "Could not load the CI to clone",

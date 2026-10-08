@@ -334,7 +334,7 @@ export const de: { [K in MessageKey]: string } = {
   "record.qr.print": "Drucken",
   "record.qr.close": "Schließen",
   "clone.title": "{name} klonen",
-  "clone.notice": "Ein neues {class} mit den Werten von {name}. Nicht übernommen: der Ident, Beziehungen, Notizen, Verlauf und Workflow-Status. Gespeichert wird erst beim Anlegen.",
+  "clone.notice": "Ein neues {class} mit den Werten von {name}. Nicht übernommen: der Ident, Beziehungen, Verlauf und Workflow-Status. Prüfen Sie Werte, die nur ein Gerät haben darf, etwa die Seriennummer. Gespeichert wird erst beim Anlegen.",
   "clone.noticeFields": "Leer gelassen zum Ausfüllen: {fields}.",
   "clone.source": "Geklont von",
   "clone.loadFailed": "Das zu klonende CI konnte nicht geladen werden",

@@ -4,11 +4,12 @@
  * validation and the audit trail are those of any new CI.
  *
  * Copied: the class attributes and the criticality. Not copied: the ident (generated, or chosen by an
- * administrator), the validity period (the new CI is valid from now), relationships, notes, history and workflow
- * state. Left empty for the operator to fill in, because two CIs should not share them: the class's title
- * attribute (the CI's name), the Person's Name and Email (`systemRole`; the Email is unique), IP addresses
- * (one device's address) and references to CIs the user may not view. Fields an active workflow drives on the
- * source start at their default, since a new CI takes the workflow's initial value (the API refuses another one).
+ * administrator), the validity period (the new CI is valid from now), relationships, history and workflow state.
+ * Left empty for the operator to fill in, because two CIs should not share them: the class's title attribute (the
+ * CI's name), the Person's Name and Email (`systemRole`; the Email is unique), IP addresses (one device's address)
+ * and references to CIs the user may not view. Fields an active workflow drives on the source start at their
+ * default, since a new CI takes the workflow's initial value (the API refuses another one). Attribute definitions
+ * carry no "unique" flag yet, so other identifying text fields (a serial number) are copied and shown for review.
  */
 
 interface CloneAttr {

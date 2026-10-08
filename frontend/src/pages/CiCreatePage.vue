@@ -132,9 +132,7 @@ function pickClass(e: Event) {
     <div v-else-if="sourceOtherClass" class="alert alert-warn" role="alert">{{ t("clone.otherClass", { class: source.data.value?.class.name ?? "" }) }}</div>
     <div v-else-if="clone" class="alert clone-notice" role="status" data-testid="clone-notice">
       <p>
-        <strong>{{ t("clone.source") }}</strong>
-        <RouterLink :to="`/cis/${clone.ci.id}`" dir="auto">{{ clone.ci.label }}</RouterLink>
-        <span class="mono">({{ clone.ci.ident }})</span>
+        <strong>{{ t("clone.source") }}</strong>&#32;<RouterLink :to="`/cis/${clone.ci.id}`" dir="auto">{{ clone.ci.label }}</RouterLink>&#32;<span class="mono">({{ clone.ci.ident }})</span>
       </p>
       <p>
         {{ t("clone.notice", { class: cls?.name ?? "", name: clone.ci.label }) }}
