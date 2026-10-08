@@ -21,6 +21,7 @@ pub struct EffectiveAttributeRow {
     pub data_type: AttributeDataType,
     pub is_required: bool,
     pub is_expected: bool,
+    pub is_identifying: bool,
     pub enum_values: Option<Json<Vec<String>>>,
     pub reference_class_id: Option<Uuid>,
     pub lookup_list_id: Option<Uuid>,
@@ -53,7 +54,7 @@ pub async fn effective_attributes(conn: &mut PgConnection, class_id: Uuid) -> sq
     sqlx::query_as!(
         EffectiveAttributeRow,
         r#"SELECT d.id, d.class_id, d.key, d.label, d.description,
-                  d.data_type AS "data_type: AttributeDataType", d.is_required, d.is_expected,
+                  d.data_type AS "data_type: AttributeDataType", d.is_required, d.is_expected, d.is_identifying,
                   d.enum_values AS "enum_values: Json<Vec<String>>", d.reference_class_id, d.lookup_list_id,
                   d.parent_attribute_id, d.validation AS "validation: Json<Map<String, Value>>", d.group_name, d.help_text,
                   d.default_value AS "default_value: Json<Value>", d.sort_order,

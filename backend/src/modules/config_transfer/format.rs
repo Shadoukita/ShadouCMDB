@@ -48,8 +48,9 @@ pub const FORMAT: &str = "shadoucmdb.config";
 /// (the current published version of each), version 9 approval policies on workflow transitions and each
 /// workflow's approvers, version 10 expected fields (`isExpected`, counted by the completeness metric), version 11
 /// the owner and end-of-life fields of a class (`ownerAttribute`, `endOfLifeAttribute`, for the data-quality
-/// checks); versions 1 to 11 are read.
-pub const FORMAT_VERSION: i32 = 11;
+/// checks), version 12 identifying fields (`isIdentifying`, not copied when a CI is cloned); versions 1 to 12 are
+/// read.
+pub const FORMAT_VERSION: i32 = 12;
 
 fn yes() -> bool {
     true
@@ -184,6 +185,10 @@ pub struct AttributeSpec {
     /// new one is not expected
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_expected: Option<bool>,
+    /// Identifies one CI: not copied when a CI is cloned. Left out (files before version 12): an existing field
+    /// keeps its value, a new one is not identifying
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_identifying: Option<bool>,
     #[schema(schema_with = crate::modules::classes::enum_values_schema)]
     #[serde(default)]
     pub enum_values: Option<Vec<String>>,
@@ -765,8 +770,8 @@ fn exported_at_schema() -> Schema {
 pub struct ConfigFile {
     #[schema(schema_with = format_schema)]
     pub format: String,
-    /// File format version; this server writes version 11 and reads 1 to 11
-    #[schema(minimum = 1, maximum = 11)]
+    /// File format version; this server writes version 12 and reads 1 to 12
+    #[schema(minimum = 1, maximum = 12)]
     pub format_version: i32,
     /// When and by which server version the file was written (informational)
     #[schema(schema_with = exported_at_schema)]

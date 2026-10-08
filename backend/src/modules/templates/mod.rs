@@ -53,6 +53,8 @@ pub struct Attr {
     /// Key of a lookup list in the same template.
     pub lookup_list: Option<&'static str>,
     pub is_required: bool,
+    /// Identifies one CI: not copied when a CI is cloned.
+    pub is_identifying: bool,
     pub group_name: Option<&'static str>,
     pub help_text: Option<&'static str>,
     /// JSON object, e.g. `{"min":1}`.
@@ -78,6 +80,10 @@ impl Attr {
     }
     pub fn required(mut self) -> Self {
         self.is_required = true;
+        self
+    }
+    pub fn identifying(mut self) -> Self {
+        self.is_identifying = true;
         self
     }
     pub fn refers(mut self, class: &'static str) -> Self {
@@ -583,6 +589,7 @@ pub async fn install(
                 .opt("label", Some(text(a.label)))
                 .opt("data_type", Some(text(a.data_type)))
                 .opt("is_required", Some(a.is_required))
+                .opt("is_identifying", Some(a.is_identifying))
                 .opt("enum_values", a.enum_values.map(|v| Some(json!(v))))
                 .opt("reference_class_id", reference_class_id.map(Some))
                 .opt("lookup_list_id", lookup_list_id.map(Some))
