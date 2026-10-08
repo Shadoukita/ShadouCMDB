@@ -1048,6 +1048,8 @@ pub struct AttributeDefinition {
     #[schema(inline)]
     pub data_type: AttributeDataType,
     pub is_required: bool,
+    /// Counts towards completeness: a live CI without a value is incomplete. Not enforced on writes.
+    pub is_expected: bool,
     /// Allowed values when dataType is "enum"
     #[schema(value_type = Option<Vec<String>>, required = true)]
     pub enum_values: Option<SqlJson<Vec<String>>>,
@@ -1108,6 +1110,8 @@ pub struct EffectiveAttribute {
     #[schema(inline)]
     pub data_type: AttributeDataType,
     pub is_required: bool,
+    /// Counts towards completeness: a live CI without a value is incomplete. Not enforced on writes.
+    pub is_expected: bool,
     /// Allowed values when dataType is "enum"
     #[schema(value_type = Option<Vec<String>>, required = true)]
     pub enum_values: Option<SqlJson<Vec<String>>>,
@@ -1166,6 +1170,7 @@ impl From<data::EffectiveAttributeRow> for EffectiveAttribute {
             description: r.description,
             data_type: r.data_type,
             is_required: r.is_required,
+            is_expected: r.is_expected,
             enum_values: r.enum_values,
             reference_class_id: r.reference_class_id,
             lookup_list_id: r.lookup_list_id,
@@ -1345,6 +1350,9 @@ pub struct AttributeDefinitionCreate {
     description: Option<String>,
     #[schema(nullable = false)]
     is_required: Option<bool>,
+    /// Counts towards completeness: a live CI without a value is incomplete. Not enforced on writes.
+    #[schema(nullable = false)]
+    is_expected: Option<bool>,
     #[schema(schema_with = enum_values_schema)]
     #[serde(default, deserialize_with = "trimmed_list")]
     enum_values: Option<Option<Vec<String>>>,
@@ -1392,6 +1400,9 @@ pub struct AttributeDefinitionUpdate {
     description: Option<Option<String>>,
     #[schema(nullable = false)]
     is_required: Option<bool>,
+    /// Counts towards completeness: a live CI without a value is incomplete. Not enforced on writes.
+    #[schema(nullable = false)]
+    is_expected: Option<bool>,
     #[schema(schema_with = enum_values_schema)]
     #[serde(default, deserialize_with = "trimmed_list")]
     enum_values: Option<Option<Vec<String>>>,
@@ -1437,6 +1448,7 @@ impl Writable for AttributeDefinitionCreate {
             .opt("label", Some(self.label.clone()))
             .opt("description", self.description.clone().map(Some))
             .opt("is_required", self.is_required)
+            .opt("is_expected", self.is_expected)
             .opt("enum_values", self.enum_values.clone().map(|v| v.map(|l| json_list(&l))))
             .opt("validation", self.validation.as_ref().map(|v| Some(json_rules(v))))
             .opt("group_name", self.group_name.clone().map(Some))
@@ -1499,6 +1511,7 @@ impl Writable for AttributeDefinitionUpdate {
             .opt("label", self.label.clone())
             .opt("description", self.description.clone())
             .opt("is_required", self.is_required)
+            .opt("is_expected", self.is_expected)
             .opt("validation", self.validation.as_ref().map(|v| v.as_ref().map(json_rules)))
             .opt("group_name", self.group_name.clone())
             .opt("help_text", self.help_text.clone())
@@ -1552,6 +1565,8 @@ pub struct AttributeDefinitionList {
     is_active: Option<QueryBool>,
     #[param(inline)]
     is_required: Option<QueryBool>,
+    #[param(inline)]
+    is_expected: Option<QueryBool>,
 }
 paged!(AttributeDefinitionList);
 
@@ -1575,6 +1590,7 @@ impl ListQuery for AttributeDefinitionList {
         }
         bool_filter(w, "is_active", self.is_active);
         bool_filter(w, "is_required", self.is_required);
+        bool_filter(w, "is_expected", self.is_expected);
     }
 }
 
@@ -1591,7 +1607,7 @@ impl Resource for AttributeDefinitions {
     const TAG: &'static str = "Attribute definitions";
     const SINGULAR: &'static str = "attributeDefinition";
     const PLURAL: &'static str = "attributeDefinitions";
-    const COLUMNS: &'static str = "id, class_id, key, label, description, data_type, is_required, enum_values, reference_class_id, lookup_list_id, validation, group_name, help_text, default_value, sort_order, is_active, system_role, created_at, updated_at, parent_attribute_id";
+    const COLUMNS: &'static str = "id, class_id, key, label, description, data_type, is_required, is_expected, enum_values, reference_class_id, lookup_list_id, validation, group_name, help_text, default_value, sort_order, is_active, system_role, created_at, updated_at, parent_attribute_id";
     const SEARCH_COLUMNS: &'static [&'static str] = &["key", "label", "description", "group_name"];
     const UPDATE_DESCRIPTION: &'static str = "`dataType` changes the column type: every stored value is converted in a dry run first, and the change is refused (422 SCHEMA_CHANGE_REFUSED, naming values that fail) if any would not convert (`type_change_failed`) or would lose information (`type_change_lossy`: datetime to date keeps the UTC day, so it is refused while any value has a time of day other than midnight UTC). Only between text, number, integer, boolean, enum, date, datetime, ip and cidr; `enumValues` is cleared when leaving enum. `isRequired: true` makes the column NOT NULL and is refused while an asset (deleted ones included) has no value. Removing enum values still stored is refused. `parentAttributeId` (lookup fields on a list with a parent list) names the field bound to the parent list, on this class or an ancestor; CI writes then only accept a value that belongs to the CI's value of that field. Preview any change with `POST /api/v1/schema-changes/preview`.";
     const ARCHIVE_ON_DELETE: bool = true;

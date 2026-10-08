@@ -706,7 +706,7 @@ async fn approvals_round_trip_through_the_configuration_file() {
     assert_eq!(status, 200, "{v}");
 
     let file = export(&w.app, &w.admin).await;
-    assert_eq!(file["formatVersion"], 9);
+    assert_eq!(file["formatVersion"], 10);
     let flow = &file["workflows"][0];
     assert_eq!(flow["graph"]["transitions"][0]["approval"]["steps"][0]["dueAfter"], "P2D");
     assert_eq!(

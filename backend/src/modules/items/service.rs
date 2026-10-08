@@ -331,7 +331,7 @@ fn check_layout_template(key: Option<&str>) -> Result<(), AppError> {
     }
 }
 
-fn query_error(field: &str, message: &str, code: &str) -> AppError {
+pub(super) fn query_error(field: &str, message: &str, code: &str) -> AppError {
     AppError::validation(vec![FieldError {
         location: FieldLocation::Query,
         field: field.into(),

@@ -447,6 +447,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/configuration-items/completeness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Completeness of the CIs of an inventory query: overall and per class
+         * @description Takes the filters of `listConfigurationItems` and counts how complete the matching CIs are. A field is counted when it is active and, with `basis=expected` (the default), required or marked `isExpected` on its attribute definition; with `basis=all`, every active field counts. A CI is complete when it holds a value in every counted field of its class (inherited ones included); a CI of a class with no counted field is complete. Records complete is `overall.completeItems / overall.items`, values filled `overall.filledValues / overall.expectedValues`. Counts cover only CIs in classes the caller may view, like the list, and are read from one snapshot so the classes add up to `overall`.
+         */
+        get: operations["getConfigurationItemCompleteness"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/configuration-items/count-history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * How many CIs there were per day or week
+         * @description Returns the CI count at `from` and, per bucket, the count at its end with how many CIs started (`added`) and stopped (`removed`) counting in it, every bucket of the range included. A CI counts from its creation until it is deleted and, with `active=true` (the default), only inside its validity period. The history is derived from the CIs' own timestamps (`createdAt`, `deletedAt`, `validFrom`, `validUntil`): a restored CI counts as if it had never been deleted, and a purged one is gone from the past too. Buckets are UTC days or ISO weeks (Monday 00:00 UTC); `from` is rounded down to the start of its bucket. 400 `invalid_range` when `from` is not before `to`, `range_too_large` beyond 366 days or 260 weeks. Only CIs in classes the caller may view; process records only when `classId` names their type.
+         */
+        get: operations["getConfigurationItemCountHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/relationships/count-history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * How many relationships there were per day or week
+         * @description Like `getConfigurationItemCountHistory` for relationships: a relationship counts from its creation until it is deleted (deleting a CI deletes its relationships). Derived from `createdAt` and `deletedAt`. Only relationships whose both CIs are in classes the caller may view, as `listRelationships` shows them; `relationshipTypeId` limits the count to those types.
+         */
+        get: operations["getRelationshipCountHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/configuration-items/{id}": {
         parameters: {
             query?: never;
@@ -487,6 +547,26 @@ export interface paths {
          * @description Breadth-first traversal of live relationships up to `depth` hops. For a Server -> Application -> Database view, ask from the application with `direction=outgoing`, or from the server with `direction=both&depth=2`. Needs view on the root's class; CIs of classes the caller may not view are left out (and not traversed).
          */
         get: operations["getConfigurationItemGraph"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/configuration-items/{id}/completeness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Which counted fields of a CI hold a value
+         * @description The fields `getConfigurationItemCompleteness` counts for this CI (same `basis`), in form order, each with whether it holds a value. Needs view on the CI's class.
+         */
+        get: operations["getConfigurationItemCompletenessDetail"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3575,6 +3655,8 @@ export interface components {
             /** @enum {string} */
             dataType: "text" | "number" | "integer" | "boolean" | "enum" | "date" | "datetime" | "ip" | "cidr" | "reference" | "lookup";
             isRequired: boolean;
+            /** @description Counts towards completeness: a live CI without a value is incomplete. Not enforced on writes. */
+            isExpected: boolean;
             /** @description Allowed values when dataType is "enum" */
             enumValues: string[] | null;
             /**
@@ -3959,6 +4041,15 @@ export interface components {
              */
             controlledFields: string[];
         };
+        ClassCompleteness: {
+            class: components["schemas"]["LookupRef"];
+            /**
+             * Format: int64
+             * @description Fields counted for CIs of this class (its own and inherited)
+             */
+            countedFields: number;
+            counts: components["schemas"]["CompletenessCounts"];
+        };
         /** @description Rights on one CI class, or on every class when `classId` is null. */
         ClassPermission: {
             /**
@@ -3994,6 +4085,51 @@ export interface components {
              */
             ownLayoutCount: number | null;
         };
+        Completeness: {
+            /**
+             * @description Which fields a complete CI holds a value for.
+             * @enum {string}
+             */
+            basis: "expected" | "all";
+            /**
+             * @description Every CI matching the filters. Records complete is `completeItems / items`; the share of values filled is
+             *     `filledValues / expectedValues` (treat both as complete when the divisor is 0).
+             */
+            overall: components["schemas"]["CompletenessCounts"];
+            /** @description Per exact class (subclasses separately), only classes with a matching CI, most CIs first */
+            classes: components["schemas"]["ClassCompleteness"][];
+        };
+        /** @description Completeness of a set of CIs. */
+        CompletenessCounts: {
+            /**
+             * Format: int64
+             * @description CIs counted
+             */
+            items: number;
+            /**
+             * Format: int64
+             * @description CIs holding a value in every counted field. A CI of a class with no counted field is complete.
+             */
+            completeItems: number;
+            /**
+             * Format: int64
+             * @description Values a complete set would hold: per CI, the number of counted fields of its class
+             */
+            expectedValues: number;
+            /**
+             * Format: int64
+             * @description Of those, the values held
+             */
+            filledValues: number;
+        };
+        /** @description A counted field of a CI. */
+        CompletenessField: {
+            key: string;
+            label: string;
+            isRequired: boolean;
+            isExpected: boolean;
+            filled: boolean;
+        };
         /** @description A whole configuration: data model, lookups, permission profiles, UI settings, saved import mappings, shared saved views and workflows (no users, passwords, CIs, personal views or workflow instances) */
         ConfigFile: {
             /**
@@ -4003,7 +4139,7 @@ export interface components {
             format: "shadoucmdb.config";
             /**
              * Format: int32
-             * @description File format version; this server writes version 9 and reads 1 to 9
+             * @description File format version; this server writes version 10 and reads 1 to 10
              */
             formatVersion: number;
             exportedAt?: string | null;
@@ -4222,6 +4358,53 @@ export interface components {
             details: string[];
             user: components["schemas"]["DirectoryUserPreview"] | null;
         };
+        CountHistory: {
+            /**
+             * Format: date-time
+             * @description Start of the first bucket (`from` rounded down)
+             */
+            from: string;
+            /**
+             * Format: date-time
+             * @description End of the range (exclusive), as sent or defaulted
+             */
+            to: string;
+            /**
+             * @description Width of a count history bucket: UTC days, or ISO weeks starting Monday 00:00 UTC.
+             * @enum {string}
+             */
+            bucket: "day" | "week";
+            /**
+             * Format: int64
+             * @description How many there were at `from`; each bucket's `count` is this plus the `added` minus the `removed` so far
+             */
+            countAtFrom: number;
+            /** @description Every bucket of the range in order, empty ones included */
+            buckets: components["schemas"]["CountHistoryBucket"][];
+        };
+        /** @description One bucket of a count history. */
+        CountHistoryBucket: {
+            /**
+             * Format: date-time
+             * @description Start of the bucket (UTC)
+             */
+            start: string;
+            /**
+             * Format: int64
+             * @description How many there were at the end of the bucket (at `to` for the last one)
+             */
+            count: number;
+            /**
+             * Format: int64
+             * @description How many started counting in the bucket (created, or entered their validity period)
+             */
+            added: number;
+            /**
+             * Format: int64
+             * @description How many stopped counting in the bucket (deleted, or left their validity period)
+             */
+            removed: number;
+        };
         /** @description A new token and its secret. The secret is shown here only: store it now. */
         CreatedApiToken: {
             token: components["schemas"]["ApiToken"];
@@ -4285,6 +4468,11 @@ export interface components {
                 /** @enum {string} */
                 dataType: "text" | "number" | "integer" | "boolean" | "enum" | "date" | "datetime" | "ip" | "cidr" | "reference" | "lookup";
                 isRequired?: boolean;
+                /**
+                 * @description Counts towards completeness. Left out (files before version 10): an existing field keeps its value, a
+                 *     new one is not expected
+                 */
+                isExpected?: boolean | null;
                 enumValues?: string[] | null;
                 referenceClass?: string | null;
                 lookupList?: string | null;
@@ -4368,6 +4556,8 @@ export interface components {
             /** @enum {string} */
             dataType: "text" | "number" | "integer" | "boolean" | "enum" | "date" | "datetime" | "ip" | "cidr" | "reference" | "lookup";
             isRequired: boolean;
+            /** @description Counts towards completeness: a live CI without a value is incomplete. Not enforced on writes. */
+            isExpected: boolean;
             /** @description Allowed values when dataType is "enum" */
             enumValues: string[] | null;
             /**
@@ -5233,6 +5423,23 @@ export interface components {
             /** @enum {string} */
             code: "unknown_class" | "unknown_attribute" | "unknown_lookup_list" | "unknown_lookup_value" | "required_field_not_editable" | "core_field_hidden" | "unknown_template";
             message: string;
+        };
+        ItemCompleteness: {
+            /** Format: uuid */
+            id: string;
+            /**
+             * @description Which fields a complete CI holds a value for.
+             * @enum {string}
+             */
+            basis: "expected" | "all";
+            /** @description True when every counted field holds a value (also when none is counted) */
+            complete: boolean;
+            /** Format: int64 */
+            countedFields: number;
+            /** Format: int64 */
+            filledFields: number;
+            /** @description The counted fields in form order, filled or not */
+            fields: components["schemas"]["CompletenessField"][];
         };
         ItemFacets: {
             /**
@@ -10268,6 +10475,275 @@ export interface operations {
             };
         };
     };
+    getConfigurationItemCompleteness: {
+        parameters: {
+            query?: {
+                /** @description Fields counted: expected (active fields that are required or marked `isExpected`) or all (every active field of the CI's class and its ancestors) */
+                basis?: "expected" | "all";
+                /** @description Search label, ident and attribute values */
+                q?: string;
+                /** @description Filter by class (includes subclasses unless includeSubclasses=false) */
+                classId?: string;
+                includeSubclasses?: "true" | "false";
+                /** @description true: only CIs inside their validity period (validFrom <= now < validUntil); false: only those outside it; all: both */
+                active?: "true" | "false" | "all";
+                /** @description Lookup list value ids, comma-separated: CIs holding one of them in a lookup attribute. Values of different lists must all match (status A or B, and environment C). */
+                lookupValueId?: string;
+                /** @description Only CIs with a value of an IP attribute inside this CIDR, e.g. 10.20.0.0/16 */
+                ipWithin?: string;
+                /** @description Criticality value ids, comma-separated: CIs holding one of them */
+                criticalityValueId?: string;
+                /** @description Soft-deleted CIs: exclude (default), include, or only */
+                deleted?: "exclude" | "include" | "only";
+                /** @description true: only CIs with a layout of their own (another template or a custom layout, see /configuration-items/{id}/layout); false: only CIs that show their class's default template */
+                ownLayout?: "true" | "false";
+                /** @description Only CIs that show this layout template (`layoutTemplates[].key`) as their own layout, not as their class's default */
+                layoutTemplate?: string;
+                /** @description CIs by the kind of their type: asset, process (records such as change requests) or any. Without it, process records are left out unless their type is named in classId. */
+                kind?: "asset" | "process" | "any";
+                /** @description Business service ids (CI ids), comma-separated: CIs that are a direct member of one of them. A service the caller may not view, or a deleted one, has no members here. */
+                businessServiceId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Completeness"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getConfigurationItemCountHistory: {
+        parameters: {
+            query?: {
+                /** @description Start of the range (ISO 8601), rounded down to the start of its bucket. Default: 30 days before `to` for day buckets, 12 weeks before for week buckets. */
+                from?: string;
+                /** @description End of the range (ISO 8601, exclusive). Default: now. */
+                to?: string;
+                /** @description Bucket width: UTC days (at most 366 per request) or ISO weeks from Monday 00:00 UTC (at most 260) */
+                bucket?: "day" | "week";
+                /** @description Only CIs of these classes (comma-separated ids), subclasses included unless includeSubclasses=false. Process records are left out unless their type is named here. */
+                classId?: string;
+                includeSubclasses?: "true" | "false";
+                /** @description true: a CI counts while it is registered (created, not deleted) and inside its validity period, as the inventory list counts by default; all: while it is registered, whatever its validity */
+                active?: "true" | "all";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CountHistory"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getRelationshipCountHistory: {
+        parameters: {
+            query?: {
+                /** @description Start of the range (ISO 8601), rounded down to the start of its bucket. Default: 30 days before `to` for day buckets, 12 weeks before for week buckets. */
+                from?: string;
+                /** @description End of the range (ISO 8601, exclusive). Default: now. */
+                to?: string;
+                /** @description Bucket width: UTC days (at most 366 per request) or ISO weeks from Monday 00:00 UTC (at most 260) */
+                bucket?: "day" | "week";
+                /** @description Only relationships of these types (comma-separated ids) */
+                relationshipTypeId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CountHistory"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     getConfigurationItem: {
         parameters: {
             query?: never;
@@ -10602,6 +11078,94 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RelationshipGraph"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getConfigurationItemCompletenessDetail: {
+        parameters: {
+            query?: {
+                /** @description Fields counted: expected (active fields that are required or marked `isExpected`) or all (every active field of the CI's class and its ancestors) */
+                basis?: "expected" | "all";
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ItemCompleteness"];
                 };
             };
             /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
@@ -16112,6 +16676,7 @@ export interface operations {
                 dataType?: "text" | "number" | "integer" | "boolean" | "enum" | "date" | "datetime" | "ip" | "cidr" | "reference" | "lookup";
                 isActive?: "true" | "false";
                 isRequired?: "true" | "false";
+                isExpected?: "true" | "false";
             };
             header?: never;
             path?: never;
@@ -16206,6 +16771,8 @@ export interface operations {
                     label: string;
                     description?: string | null;
                     isRequired?: boolean;
+                    /** @description Counts towards completeness: a live CI without a value is incomplete. Not enforced on writes. */
+                    isExpected?: boolean;
                     enumValues?: string[] | null;
                     validation?: {
                         /** @description number/integer: minimum */
@@ -16541,6 +17108,8 @@ export interface operations {
                     label?: string;
                     description?: string | null;
                     isRequired?: boolean;
+                    /** @description Counts towards completeness: a live CI without a value is incomplete. Not enforced on writes. */
+                    isExpected?: boolean;
                     enumValues?: string[] | null;
                     validation?: {
                         /** @description number/integer: minimum */
@@ -27038,7 +27607,7 @@ export interface operations {
                     format: "shadoucmdb.config";
                     /**
                      * Format: int32
-                     * @description File format version; this server writes version 9 and reads 1 to 9
+                     * @description File format version; this server writes version 10 and reads 1 to 10
                      */
                     formatVersion: number;
                     exportedAt?: string | null;

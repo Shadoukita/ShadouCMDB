@@ -1,6 +1,7 @@
 //! Configuration items: inventory list, detail, CRUD, relationship graph and global search.
 
 pub mod facets;
+pub mod kpis;
 pub mod plan;
 pub mod schemas;
 pub mod service;
@@ -14,7 +15,8 @@ use crate::auth::permissions::GlobalPermission;
 use crate::api::route::{CheckedBody, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, Query, Route, route};
 use crate::http::error::ErrorCode;
 use schemas::{
-    ChangeHistogramQuery, CreateItemBody, FacetsQuery, GraphQuery, ListItemsQuery, SearchQuery, UpdateItemBody,
+    ChangeHistogramQuery, CompletenessQuery, CreateItemBody, FacetsQuery, GraphQuery, ItemCompletenessQuery,
+    ItemCountHistoryQuery, ListItemsQuery, RelationshipCountHistoryQuery, SearchQuery, UpdateItemBody,
 };
 
 const TAG: &str = "Configuration items";
@@ -51,6 +53,35 @@ pub fn routes() -> Vec<Route> {
             .handle(|api, In(NoPath, Query(q), NoBody): In<NoPath, Query<FacetsQuery>, NoBody>| async move {
                 Ok(Json(facets::facets(&api.pool, &api.ctx, &q).await?))
             }),
+        route(Method::GET, "/api/v1/configuration-items/completeness", "getConfigurationItemCompleteness")
+            .tag(TAG)
+            .summary("Completeness of the CIs of an inventory query: overall and per class")
+            .description(
+                "Takes the filters of `listConfigurationItems` and counts how complete the matching CIs are. A field is counted when it is active and, with `basis=expected` (the default), required or marked `isExpected` on its attribute definition; with `basis=all`, every active field counts. A CI is complete when it holds a value in every counted field of its class (inherited ones included); a CI of a class with no counted field is complete. Records complete is `overall.completeItems / overall.items`, values filled `overall.filledValues / overall.expectedValues`. Counts cover only CIs in classes the caller may view, like the list, and are read from one snapshot so the classes add up to `overall`.",
+            )
+            .handle(|api, In(NoPath, Query(q), NoBody): In<NoPath, Query<CompletenessQuery>, NoBody>| async move {
+                Ok(Json(kpis::completeness(&api.pool, &api.ctx, &q).await?))
+            }),
+        route(Method::GET, "/api/v1/configuration-items/count-history", "getConfigurationItemCountHistory")
+            .tag(TAG)
+            .summary("How many CIs there were per day or week")
+            .description(
+                "Returns the CI count at `from` and, per bucket, the count at its end with how many CIs started (`added`) and stopped (`removed`) counting in it, every bucket of the range included. A CI counts from its creation until it is deleted and, with `active=true` (the default), only inside its validity period. The history is derived from the CIs' own timestamps (`createdAt`, `deletedAt`, `validFrom`, `validUntil`): a restored CI counts as if it had never been deleted, and a purged one is gone from the past too. Buckets are UTC days or ISO weeks (Monday 00:00 UTC); `from` is rounded down to the start of its bucket. 400 `invalid_range` when `from` is not before `to`, `range_too_large` beyond 366 days or 260 weeks. Only CIs in classes the caller may view; process records only when `classId` names their type.",
+            )
+            .handle(|api, In(NoPath, Query(q), NoBody): In<NoPath, Query<ItemCountHistoryQuery>, NoBody>| async move {
+                Ok(Json(kpis::item_count_history(&api.pool, &api.ctx, &q).await?))
+            }),
+        route(Method::GET, "/api/v1/relationships/count-history", "getRelationshipCountHistory")
+            .tag("Relationships")
+            .summary("How many relationships there were per day or week")
+            .description(
+                "Like `getConfigurationItemCountHistory` for relationships: a relationship counts from its creation until it is deleted (deleting a CI deletes its relationships). Derived from `createdAt` and `deletedAt`. Only relationships whose both CIs are in classes the caller may view, as `listRelationships` shows them; `relationshipTypeId` limits the count to those types.",
+            )
+            .handle(
+                |api, In(NoPath, Query(q), NoBody): In<NoPath, Query<RelationshipCountHistoryQuery>, NoBody>| async move {
+                    Ok(Json(kpis::relationship_count_history(&api.pool, &api.ctx, &q).await?))
+                },
+            ),
         route(Method::GET, BY_ID, "getConfigurationItem")
             .tag(TAG)
             .summary("Get a CI with its attribute values")
@@ -111,6 +142,17 @@ pub fn routes() -> Vec<Route> {
             .class_checked()
             .handle(|api, In(IdPath(id), Query(q), NoBody): In<IdPath, Query<GraphQuery>, NoBody>| async move {
                 Ok(Json(service::graph(&api.pool, &api.ctx, id, &q).await?))
+            }),
+        route(Method::GET, "/api/v1/configuration-items/{id}/completeness", "getConfigurationItemCompletenessDetail")
+            .tag(TAG)
+            .summary("Which counted fields of a CI hold a value")
+            .description(
+                "The fields `getConfigurationItemCompleteness` counts for this CI (same `basis`), in form order, each with whether it holds a value. Needs view on the CI's class.",
+            )
+            .errors(&[ErrorCode::NotFound])
+            .class_checked()
+            .handle(|api, In(IdPath(id), Query(q), NoBody): In<IdPath, Query<ItemCompletenessQuery>, NoBody>| async move {
+                Ok(Json(kpis::item_completeness(&api.pool, &api.ctx, id, q.basis).await?))
             }),
         route(Method::GET, "/api/v1/search", "searchConfigurationItems")
             .tag("Search")

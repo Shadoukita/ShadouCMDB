@@ -143,3 +143,29 @@ pub async fn soft_delete(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<()> 
     sqlx::query!("UPDATE ci_relationships SET deleted_at = now() WHERE id = $1", id).execute(conn).await?;
     Ok(())
 }
+
+/// Relationships and the span in which each counts (see [`super::counts`]):
+/// from creation to deletion. With `visible`, only edges whose both CIs are in
+/// those classes, as the relationship list shows.
+pub fn push_count_spans(
+    qb: &mut sqlx::QueryBuilder<sqlx::Postgres>,
+    type_ids: Option<&[Uuid]>,
+    visible: Option<&[Uuid]>,
+) {
+    qb.push(
+        "SELECT r.created_at AS s, r.deleted_at AS e FROM ci_relationships r \
+         JOIN configuration_items s ON s.id = r.source_ci_id JOIN configuration_items g ON g.id = r.target_ci_id",
+    );
+    let mut w = Where::new(qb);
+    if let Some(classes) = visible {
+        w.and()
+            .push("s.class_id = ANY(")
+            .push_bind(classes.to_vec())
+            .push(") AND g.class_id = ANY(")
+            .push_bind(classes.to_vec())
+            .push(")");
+    }
+    if let Some(ids) = type_ids {
+        w.and().push("r.relationship_type_id = ANY(").push_bind(ids.to_vec()).push(")");
+    }
+}

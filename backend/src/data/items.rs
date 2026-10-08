@@ -426,6 +426,63 @@ pub async fn change_counts(
     qb.build_query_as().fetch_all(conn).await
 }
 
+/// CIs matching `f` (its `active` and `deleted` are ignored) and the span in which
+/// each counts (see [`super::counts`]): from creation to deletion, and with
+/// `validity` also only inside its validity period.
+pub fn push_count_spans(qb: &mut QueryBuilder<Postgres>, f: &ItemFilters, validity: bool) {
+    let f = ItemFilters { active: ActiveFilter::Any, deleted: None, ..f.clone() };
+    qb.push(if validity {
+        "SELECT greatest(ci.created_at, ci.valid_from) AS s, least(ci.deleted_at, ci.valid_until) AS e"
+    } else {
+        "SELECT ci.created_at AS s, ci.deleted_at AS e"
+    });
+    qb.push(format!(" FROM {COUNT_FROM}"));
+    push_filters(&mut Where::new(qb), &f);
+}
+
+/// CIs matching `f` per exact class (id, key, name, count), most first.
+pub async fn counts_per_class(
+    conn: &mut PgConnection,
+    f: &ItemFilters,
+) -> sqlx::Result<Vec<(Uuid, String, String, i64)>> {
+    let mut qb = QueryBuilder::<Postgres>::new(format!(
+        "SELECT cls.id, cls.key, cls.name, n.count FROM (SELECT ci.class_id, count(*) FROM {COUNT_FROM}"
+    ));
+    push_filters(&mut Where::new(&mut qb), f);
+    qb.push(" GROUP BY ci.class_id) n JOIN ci_classes cls ON cls.id = n.class_id ORDER BY n.count DESC, cls.key");
+    qb.build_query_as().fetch_all(conn).await
+}
+
+/// Completeness of the CIs of one class matching `f`: how many there are, how
+/// many hold every field of `fields` (fields of the class and its ancestors),
+/// and how many values of `fields` they hold together.
+pub async fn completeness_of_class(
+    conn: &mut PgConnection,
+    model: &Model,
+    class_id: Uuid,
+    fields: &[&Field],
+    f: &ItemFilters,
+) -> sqlx::Result<(i64, i64, i64)> {
+    let f = ItemFilters { class_ids: Some(vec![class_id]), ..f.clone() };
+    let mut joins = String::new();
+    let mut terms = Vec::new();
+    for (i, c) in model.lineage(class_id).into_iter().enumerate() {
+        let own: Vec<&&Field> = fields.iter().filter(|x| x.class_id == c.id).collect();
+        let Some(table) = model.table(c.id).filter(|_| !own.is_empty()) else { continue };
+        joins.push_str(&format!(" LEFT JOIN {} t{i} ON t{i}.id = ci.id", table.sql()));
+        terms.extend(own.iter().map(|x| format!("(t{i}.{} IS NOT NULL)::int", x.column())));
+    }
+    let filled = if terms.is_empty() { "0".to_owned() } else { terms.join(" + ") };
+    let mut qb = QueryBuilder::<Postgres>::new(format!(
+        "SELECT count(*), count(*) FILTER (WHERE n = {}), coalesce(sum(n), 0)::bigint \
+         FROM (SELECT {filled} AS n FROM {COUNT_FROM}{joins}",
+        terms.len()
+    ));
+    push_filters(&mut Where::new(&mut qb), &f);
+    qb.push(") c");
+    qb.build_query_as().persistent(false).fetch_one(conn).await
+}
+
 // ---------------------------------------------------------------------------
 // Writes
 // ---------------------------------------------------------------------------
