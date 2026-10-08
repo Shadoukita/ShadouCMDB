@@ -1,5 +1,7 @@
 //! Configuration items: inventory list, detail, CRUD, relationship graph and global search.
 
+#[cfg(test)]
+mod data_quality_tests;
 pub mod facets;
 pub mod kpis;
 pub mod plan;
@@ -15,8 +17,9 @@ use crate::auth::permissions::GlobalPermission;
 use crate::api::route::{CheckedBody, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, Query, Route, route};
 use crate::http::error::ErrorCode;
 use schemas::{
-    ChangeHistogramQuery, CompletenessQuery, CreateItemBody, FacetsQuery, GraphQuery, ItemCompletenessQuery,
-    ItemCountHistoryQuery, ListItemsQuery, RelationshipCountHistoryQuery, SearchQuery, UpdateItemBody,
+    ChangeHistogramQuery, CompletenessQuery, CreateItemBody, DataQualityQuery, FacetsQuery, GraphQuery,
+    ItemCompletenessQuery, ItemCountHistoryQuery, ListItemsQuery, RelationshipCountHistoryQuery, SearchQuery,
+    UpdateItemBody,
 };
 
 const TAG: &str = "Configuration items";
@@ -82,6 +85,15 @@ pub fn routes() -> Vec<Route> {
                     Ok(Json(kpis::relationship_count_history(&api.pool, &api.ctx, &q).await?))
                 },
             ),
+        route(Method::GET, "/api/v1/configuration-items/data-quality", "getConfigurationItemDataQuality")
+            .tag(TAG)
+            .summary("Data-quality checks (\"Needs attention\"): how many CIs each check finds")
+            .description(
+                "Counts, among the active, live CIs of asset types the caller may view (the inventory list's defaults), the CIs each check finds: `no_owner` (no value in the owner field of their type), `end_of_life` (end of life today or earlier, or within `endOfLifeWithinDays` days, default 90), `no_relationships` (no live relationship to a CI the caller may view) and `pending_approval` (a workflow approval request is pending). The owner and end-of-life fields are set per type (`CiClass.ownerAttributeId`, `endOfLifeAttributeId`; a subtype without its own setting takes its parent's); CIs of types without one are not counted by that check, and `configured` is false when no type the caller may view has one. Each check's `filter` holds the `listConfigurationItems` (and `getConfigurationItemFacets`) query parameters that list its CIs. Read-only; no audit entry.",
+            )
+            .handle(|api, In(NoPath, Query(q), NoBody): In<NoPath, Query<DataQualityQuery>, NoBody>| async move {
+                Ok(Json(service::data_quality(&api.pool, &api.ctx, &q).await?))
+            }),
         route(Method::GET, BY_ID, "getConfigurationItem")
             .tag(TAG)
             .summary("Get a CI with its attribute values")

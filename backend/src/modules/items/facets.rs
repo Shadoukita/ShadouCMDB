@@ -233,6 +233,8 @@ mod perf {
             layout_template: None,
             kind: None,
             business_service_id: None,
+            quality: None,
+            end_of_life_within_days: None,
             value_limit: 50,
         }
     }

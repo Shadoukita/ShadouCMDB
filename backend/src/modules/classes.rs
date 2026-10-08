@@ -78,6 +78,14 @@ pub struct CiClass {
     /// and search; null labels them by their ident
     #[schema(required = true)]
     pub title_attribute_id: Option<Uuid>,
+    /// Data quality: the field (of this class or an ancestor) holding a CI's owner. A CI without a value there counts
+    /// as "no owner". Null: the parent's setting applies; no setting in the lineage leaves the class out of the check
+    #[schema(required = true)]
+    pub owner_attribute_id: Option<Uuid>,
+    /// Data quality: the date or datetime field (of this class or an ancestor) holding a CI's end of life. Null: the
+    /// parent's setting applies; no setting in the lineage leaves the class out of the check
+    #[schema(required = true)]
+    pub end_of_life_attribute_id: Option<Uuid>,
     /// Set on the built-in type the application itself uses: `business_service` (the business services). It can be
     /// renamed and given fields, but not deleted, archived, purged, made abstract, given a parent or subtypes
     #[schema(required = true, inline)]
@@ -108,6 +116,30 @@ fn title_attribute_schema() -> Schema {
         a.description = Some(
             "Attribute of this class or an ancestor whose value labels the CIs (text, enum, number, integer, date, \
              datetime, ip or cidr); null labels them by their ident. A new class takes its parent's."
+                .into(),
+        );
+    }
+    s
+}
+
+fn owner_attribute_schema() -> Schema {
+    let mut s = nullable_uuid_schema();
+    if let Schema::AnyOf(a) = &mut s {
+        a.description = Some(
+            "Data quality: attribute of this class or an ancestor that holds a CI's owner (text, enum, lookup or \
+             reference). CIs without a value count in the `no_owner` check. Null: the parent's setting applies."
+                .into(),
+        );
+    }
+    s
+}
+
+fn end_of_life_attribute_schema() -> Schema {
+    let mut s = nullable_uuid_schema();
+    if let Schema::AnyOf(a) = &mut s {
+        a.description = Some(
+            "Data quality: attribute of this class or an ancestor that holds a CI's end of life (date or datetime), \
+             for the `end_of_life` check. Null: the parent's setting applies."
                 .into(),
         );
     }
@@ -173,6 +205,12 @@ pub struct CiClassCreate {
     #[schema(schema_with = title_attribute_schema)]
     #[serde(default)]
     title_attribute_id: Option<Uuid>,
+    #[schema(schema_with = owner_attribute_schema)]
+    #[serde(default)]
+    owner_attribute_id: Option<Uuid>,
+    #[schema(schema_with = end_of_life_attribute_schema)]
+    #[serde(default)]
+    end_of_life_attribute_id: Option<Uuid>,
     #[schema(schema_with = create_kind_schema)]
     #[serde(default)]
     kind: Option<ClassKind>,
@@ -212,6 +250,12 @@ pub struct CiClassUpdate {
     #[schema(schema_with = title_attribute_schema)]
     #[serde(default, deserialize_with = "schemas::patch")]
     title_attribute_id: Option<Option<Uuid>>,
+    #[schema(schema_with = owner_attribute_schema)]
+    #[serde(default, deserialize_with = "schemas::patch")]
+    owner_attribute_id: Option<Option<Uuid>>,
+    #[schema(schema_with = end_of_life_attribute_schema)]
+    #[serde(default, deserialize_with = "schemas::patch")]
+    end_of_life_attribute_id: Option<Option<Uuid>>,
     #[schema(schema_with = update_kind_schema)]
     kind: Option<ClassKind>,
 }
@@ -230,6 +274,8 @@ impl Writable for CiClassCreate {
             .opt("sort_order", self.sort_order)
             .opt("is_active", self.is_active)
             .opt("title_attribute_id", self.title_attribute_id.map(Some))
+            .opt("owner_attribute_id", self.owner_attribute_id.map(Some))
+            .opt("end_of_life_attribute_id", self.end_of_life_attribute_id.map(Some))
             .opt("kind", self.kind.map(|k| k.as_str().to_owned()));
         c
     }
@@ -248,6 +294,8 @@ impl Writable for CiClassUpdate {
             .opt("sort_order", self.sort_order)
             .opt("is_active", self.is_active)
             .opt("title_attribute_id", self.title_attribute_id)
+            .opt("owner_attribute_id", self.owner_attribute_id)
+            .opt("end_of_life_attribute_id", self.end_of_life_attribute_id)
             .opt("kind", self.kind.map(|k| k.as_str().to_owned()));
         c
     }
@@ -342,12 +390,12 @@ impl Resource for CiClasses {
     const COLUMNS: &'static str = "id, key, name, area_id,
         (SELECT a.key FROM cmdb.areas a WHERE a.id = ci_classes.area_id) || '.' || key AS table_name,
         (SELECT a.key FROM cmdb.areas a WHERE a.id = ci_classes.area_id) || '.v_' || key AS view_name,
-        description, parent_id, is_abstract, icon, color, sort_order, is_active, title_attribute_id, system_role,
-        kind, created_at, updated_at";
+        description, parent_id, is_abstract, icon, color, sort_order, is_active, title_attribute_id, owner_attribute_id,
+        end_of_life_attribute_id, system_role, kind, created_at, updated_at";
     const SEARCH_COLUMNS: &'static [&'static str] = &["key", "name", "description"];
     const ARCHIVE_ON_DELETE: bool = true;
     const WRITE_ERRORS: &'static [ErrorCode] = &[ErrorCode::InvalidName, ErrorCode::SchemaChangeRefused];
-    const UPDATE_DESCRIPTION: &'static str = "Changing `titleAttributeId` relabels the class's CIs. Moving the type to another parent (`parentId`) keeps its title attribute only if the new lineage provides it; otherwise it takes the new parent's (so do its subtypes), and the CIs are relabelled.";
+    const UPDATE_DESCRIPTION: &'static str = "Changing `titleAttributeId` relabels the class's CIs. Moving the type to another parent (`parentId`) keeps its title attribute only if the new lineage provides it; otherwise it takes the new parent's (so do its subtypes), and the CIs are relabelled. The same move clears an `ownerAttributeId` or `endOfLifeAttributeId` of the type or its subtypes that the new lineage does not provide (the parent's setting then applies).";
     const DELETE_DESCRIPTION: &'static str = "Archives the type (`isActive=false`): its table, CIs and values stay and stay readable, no new CIs can be created, and the UI hides it. `PATCH {\"isActive\": true}` restores it. To drop the table and delete its CIs, purge the type (`POST /api/v1/ci-classes/{id}/purge`).";
     // DELETE archives, which nothing blocks; `blocking` marks what refuses the
     // purge (the checks in `purge_class_in`). Everything else goes with the purge.
@@ -545,6 +593,7 @@ impl Resource for CiClasses {
                     move_to_new_parent(conn, ctx, row, previous).await?;
                     check_parent_fields_in_lineage(conn, row.id).await?;
                     repair_titles(conn, row, previous).await?;
+                    clear_stale_quality_fields(conn, row).await?;
                 }
                 if row.parent_id != previous.parent_id || row.title_attribute_id != previous.title_attribute_id {
                     let model = Model::load(conn).await?;
@@ -740,6 +789,51 @@ async fn repair_titles(conn: &mut PgConnection, row: &CiClass, previous: &CiClas
             .execute(&mut *conn)
             .await?;
         titles.insert(class_id, parent_title);
+    }
+    Ok(())
+}
+
+/// After a move: the owner and end-of-life settings in the moved type's subtree
+/// that name a field the new lineage does not provide are cleared, so the
+/// parent's setting applies (the trigger clears the moved type's own).
+async fn clear_stale_quality_fields(conn: &mut PgConnection, row: &CiClass) -> Result<(), AppError> {
+    for column in ["owner_attribute_id", "end_of_life_attribute_id"] {
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "UPDATE cmdb.ci_classes c SET {column} = NULL
+             FROM cmdb.ci_attribute_definitions d
+             WHERE d.id = c.{column} AND cmdb.ci_class_is_a(c.id, $1) AND NOT cmdb.ci_class_is_a(c.id, d.class_id)"
+        )))
+        .bind(row.id)
+        .execute(&mut *conn)
+        .await?;
+    }
+    Ok(())
+}
+
+/// A field that is a type's owner or end-of-life field keeps a data type that setting allows.
+async fn check_quality_field_type(conn: &mut PgConnection, row: &AttributeDefinition) -> Result<(), AppError> {
+    let (owner, end_of_life): (i64, i64) = sqlx::query_as(
+        "SELECT count(*) FILTER (WHERE owner_attribute_id = $1), count(*) FILTER (WHERE end_of_life_attribute_id = $1)
+         FROM cmdb.ci_classes WHERE owner_attribute_id = $1 OR end_of_life_attribute_id = $1",
+    )
+    .bind(row.id)
+    .fetch_one(&mut *conn)
+    .await?;
+    for (count, allowed, what, code) in [
+        (owner, OWNER_DATA_TYPES, "owner", "owner_attribute_type"),
+        (end_of_life, END_OF_LIFE_DATA_TYPES, "end-of-life", "end_of_life_attribute_type"),
+    ] {
+        if count > 0 && !allowed.contains(&row.data_type) {
+            return Err(engine::refused(
+                "dataType",
+                code,
+                format!(
+                    "This field is the {what} field of {count} types; a {} field cannot be. Choose another {what} \
+                     field on those types first.",
+                    row.data_type.as_str()
+                ),
+            ));
+        }
     }
     Ok(())
 }
@@ -1017,6 +1111,13 @@ pub const TITLE_DATA_TYPES: &[AttributeDataType] = &[
     AttributeDataType::Ip,
     AttributeDataType::Cidr,
 ];
+
+/// Data types an owner field can have (as `cmdb.owner_data_type()`).
+pub const OWNER_DATA_TYPES: &[AttributeDataType] =
+    &[AttributeDataType::Text, AttributeDataType::Enum, AttributeDataType::Lookup, AttributeDataType::Reference];
+
+/// Data types an end-of-life field can have (as `cmdb.end_of_life_data_type()`).
+pub const END_OF_LIFE_DATA_TYPES: &[AttributeDataType] = &[AttributeDataType::Date, AttributeDataType::Datetime];
 
 impl AttributeDataType {
     pub fn as_str(self) -> &'static str {
@@ -1746,6 +1847,7 @@ impl Resource for AttributeDefinitions {
                     ),
                 ));
             }
+            check_quality_field_type(conn, row).await?;
             check_default_value(conn, row).await?;
             let table: String =
                 sqlx::query_scalar("SELECT cmdb.type_table($1)").bind(row.class_id).fetch_one(&mut *conn).await?;

@@ -577,6 +577,70 @@ fn kind_schema() -> Schema {
         .into()
 }
 
+/// A data-quality check ("Needs attention"): which CIs it finds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum QualityCheck {
+    /// No value in the owner field of their type (`CiClass.ownerAttributeId`, or the nearest ancestor's)
+    NoOwner,
+    /// End of life (the type's `endOfLifeAttributeId` field) reached or within `endOfLifeWithinDays` days
+    EndOfLife,
+    /// No live relationship to a CI the caller may view, in either direction
+    NoRelationships,
+    /// A workflow instance on the CI waits for an approval decision
+    PendingApproval,
+}
+
+impl QualityCheck {
+    pub const ALL: [QualityCheck; 4] =
+        [QualityCheck::NoOwner, QualityCheck::EndOfLife, QualityCheck::NoRelationships, QualityCheck::PendingApproval];
+}
+
+/// Default and bounds of `endOfLifeWithinDays`.
+pub const END_OF_LIFE_DAYS_DEFAULT: i32 = 90;
+pub const END_OF_LIFE_DAYS_MAX: i32 = 3650;
+
+fn quality_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .enum_values(Some(["no_owner", "end_of_life", "no_relationships", "pending_approval"]))
+        .description(Some(
+            "Only CIs a data-quality check finds (see `getConfigurationItemDataQuality`): no_owner (no value in \
+             the owner field of their type), end_of_life (end of life reached or within `endOfLifeWithinDays` \
+             days), no_relationships (no live relationship to a CI the caller may view) or pending_approval (a \
+             workflow approval request is pending). CIs of types without an owner or end-of-life field match \
+             neither of those two checks.",
+        ))
+        .into()
+}
+
+fn end_of_life_days_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::Integer)
+        .format(Some(SchemaFormat::KnownFormat(KnownFormat::Int32)))
+        .minimum(Some(0))
+        .maximum(Some(END_OF_LIFE_DAYS_MAX))
+        .default(Some(END_OF_LIFE_DAYS_DEFAULT.into()))
+        .description(Some(
+            "For the end_of_life check: CIs whose end of life is today or earlier, or at most this many days from \
+             today (the database server's date).",
+        ))
+        .into()
+}
+
+/// `endOfLifeWithinDays`, defaulted and checked.
+pub fn end_of_life_days(days: Option<i32>) -> Result<i32, FieldError> {
+    match days.unwrap_or(END_OF_LIFE_DAYS_DEFAULT) {
+        d if (0..=END_OF_LIFE_DAYS_MAX).contains(&d) => Ok(d),
+        _ => Err(FieldError {
+            location: FieldLocation::Query,
+            field: "endOfLifeWithinDays".into(),
+            message: format!("Must be between 0 and {END_OF_LIFE_DAYS_MAX}"),
+            code: "out_of_range".into(),
+        }),
+    }
+}
+
 /// Filters shared by the inventory list and global search.
 pub trait ItemFilterQuery {
     fn class_id(&self) -> Option<&UuidList>;
@@ -588,10 +652,30 @@ pub trait ItemFilterQuery {
     fn deleted(&self) -> Deleted;
     fn kind(&self) -> Option<KindQuery>;
     fn business_service_id(&self) -> Option<&UuidList>;
+    /// The data-quality check filter (inventory list and facets only)
+    fn quality(&self) -> Option<QualityCheck> {
+        None
+    }
+    fn end_of_life_within_days(&self) -> Option<i32> {
+        None
+    }
 }
 
 macro_rules! item_filters {
+    ($t:ty, quality) => {
+        item_filters!($t, {
+            fn quality(&self) -> Option<QualityCheck> {
+                self.quality
+            }
+            fn end_of_life_within_days(&self) -> Option<i32> {
+                self.end_of_life_within_days
+            }
+        });
+    };
     ($t:ty) => {
+        item_filters!($t, {});
+    };
+    ($t:ty, { $($extra:tt)* }) => {
         impl ItemFilterQuery for $t {
             fn class_id(&self) -> Option<&UuidList> {
                 self.class_id.as_ref()
@@ -620,6 +704,7 @@ macro_rules! item_filters {
             fn business_service_id(&self) -> Option<&UuidList> {
                 self.business_service_id.as_ref()
             }
+            $($extra)*
         }
     };
 }
@@ -661,9 +746,13 @@ pub struct ListItemsQuery {
     pub kind: Option<KindQuery>,
     #[param(schema_with = business_service_filter_schema)]
     pub business_service_id: Option<UuidList>,
+    #[param(schema_with = quality_schema)]
+    pub quality: Option<QualityCheck>,
+    #[param(schema_with = end_of_life_days_schema)]
+    pub end_of_life_within_days: Option<i32>,
 }
 paged!(ListItemsQuery);
-item_filters!(ListItemsQuery);
+item_filters!(ListItemsQuery, quality);
 
 #[derive(Debug, Deserialize, IntoParams)]
 #[serde(rename_all = "camelCase")]
@@ -850,11 +939,15 @@ pub struct FacetsQuery {
     pub kind: Option<KindQuery>,
     #[param(schema_with = business_service_filter_schema)]
     pub business_service_id: Option<UuidList>,
+    #[param(schema_with = quality_schema)]
+    pub quality: Option<QualityCheck>,
+    #[param(schema_with = end_of_life_days_schema)]
+    pub end_of_life_within_days: Option<i32>,
     /// Values returned per facet, most CIs first (1-200); selected values are always returned
     #[param(required = false, default = 50, minimum = 1, maximum = 200)]
     pub value_limit: i64,
 }
-item_filters!(FacetsQuery);
+item_filters!(FacetsQuery, quality);
 
 /// What a facet counts, and so which list filter its value ids go into.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, ToSchema)]
@@ -1198,6 +1291,39 @@ pub struct CountHistoryBucket {
     pub removed: i64,
 }
 
+#[derive(Debug, Deserialize, IntoParams)]
+#[serde(rename_all = "camelCase")]
+#[into_params(parameter_in = Query)]
+pub struct DataQualityQuery {
+    #[param(schema_with = end_of_life_days_schema)]
+    pub end_of_life_within_days: Option<i32>,
+}
+
+/// The inventory filter a check's drill-down opens: `listConfigurationItems` with these query parameters.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DataQualityFilter {
+    pub quality: QualityCheck,
+    /// Set for the end_of_life check
+    #[schema(required = true)]
+    pub end_of_life_within_days: Option<i32>,
+}
+
+/// One data-quality check: how many CIs it finds.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DataQualityCheck {
+    pub key: QualityCheck,
+    /// CIs the check finds, among the active, live, non-process CIs the caller may view
+    pub count: i64,
+    /// False when the check cannot find anything yet: no type the caller may view has an owner field (no_owner)
+    /// or an end-of-life field (end_of_life), in its own setting or an ancestor's. The UI shows "not configured"
+    /// rather than a reassuring 0.
+    pub configured: bool,
+    /// The inventory list filter that lists these CIs
+    pub filter: DataQualityFilter,
+}
+
 #[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CountHistory {
@@ -1213,4 +1339,11 @@ pub struct CountHistory {
     pub count_at_from: i64,
     /// Every bucket of the range in order, empty ones included
     pub buckets: Vec<CountHistoryBucket>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DataQuality {
+    /// Every check, in a fixed order: no_owner, end_of_life, no_relationships, pending_approval
+    pub checks: Vec<DataQualityCheck>,
 }

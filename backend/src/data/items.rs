@@ -167,6 +167,31 @@ pub struct ItemFilters {
     pub search_tables: Vec<SearchTable>,
     /// Only direct members of one of these business services (see [`ServiceMembers`]).
     pub business_services: Option<ServiceMembers>,
+    /// Only CIs a data-quality check finds.
+    pub quality: Option<QualityFilter>,
+}
+
+/// One field a data-quality check reads, and the types whose setting names it.
+#[derive(Debug, Clone)]
+pub struct QualityColumn {
+    pub table: TableName,
+    pub column: Ident,
+    /// The types that take this field (their own setting or an ancestor's); CIs of other types do not match.
+    pub class_ids: Vec<Uuid>,
+    pub data_type: AttributeDataType,
+}
+
+/// The CIs a data-quality check finds (see `QualityCheck`).
+#[derive(Debug, Clone)]
+pub enum QualityFilter {
+    /// No value in the type's owner field
+    NoOwner(Vec<QualityColumn>),
+    /// The end-of-life value is at most `days` days from today
+    EndOfLife { columns: Vec<QualityColumn>, days: i32 },
+    /// No live relationship to a live CI of a visible class (`ItemFilters::visible_class_ids`)
+    NoRelationships,
+    /// A pending approval request on one of the CI's workflow instances
+    PendingApproval,
 }
 
 /// Direct members of business services: targets of live edges of the member
@@ -307,6 +332,9 @@ pub(crate) fn push_filters(w: &mut Where<'_>, f: &ItemFilters) {
             qb.push(format!("{c} <<= ")).push_bind(cidr.clone()).push("::inet");
         });
     }
+    if let Some(quality) = &f.quality {
+        push_quality(w, quality, f.visible_class_ids.as_deref());
+    }
     if let Some(members) = &f.business_services {
         let Some(member_type) = members.member_type else {
             w.and_sql("false");
@@ -317,6 +345,81 @@ pub(crate) fn push_filters(w: &mut Where<'_>, f: &ItemFilters) {
         push_member_edges(qb, member_type, f.visible_class_ids.as_deref());
         qb.push(" AND e.source_ci_id = ANY(").push_bind(members.service_ids.clone()).push("))");
     }
+}
+
+/// `(ci.class_id = ANY($types) AND <test on the field's row>) OR ...` per
+/// field; false when no type has the field. Every CI of a type (subtypes
+/// included) has a row in the table of each field it carries.
+fn push_quality_columns(
+    w: &mut Where<'_>,
+    columns: &[QualityColumn],
+    mut test: impl FnMut(&mut QueryBuilder<Postgres>, &QualityColumn),
+) {
+    if columns.is_empty() {
+        w.and_sql("false");
+        return;
+    }
+    let qb = w.and();
+    qb.push("(");
+    for (i, c) in columns.iter().enumerate() {
+        if i > 0 {
+            qb.push(" OR ");
+        }
+        qb.push("(ci.class_id = ANY(").push_bind(c.class_ids.clone()).push(") AND ");
+        test(qb, c);
+        qb.push(")");
+    }
+    qb.push(")");
+}
+
+fn push_quality(w: &mut Where<'_>, quality: &QualityFilter, visible: Option<&[Uuid]>) {
+    match quality {
+        QualityFilter::NoOwner(columns) => push_quality_columns(w, columns, |qb, c| {
+            qb.push(format!(
+                "NOT EXISTS (SELECT 1 FROM {} t WHERE t.id = ci.id AND t.{} IS NOT NULL",
+                c.table.sql(),
+                c.column
+            ));
+            if c.data_type == AttributeDataType::Text {
+                qb.push(format!(" AND btrim(t.{}) <> ''", c.column));
+            }
+            qb.push(")");
+        }),
+        QualityFilter::EndOfLife { columns, days } => push_quality_columns(w, columns, |qb, c| {
+            qb.push(format!("EXISTS (SELECT 1 FROM {} t WHERE t.id = ci.id AND t.{} ", c.table.sql(), c.column));
+            if c.data_type == AttributeDataType::Datetime {
+                // Through the end of the last day counted.
+                qb.push("< (current_date + 1 + ").push_bind(*days).push(")::timestamptz)");
+            } else {
+                qb.push("<= current_date + ").push_bind(*days).push(")");
+            }
+        }),
+        QualityFilter::NoRelationships => {
+            // One NOT EXISTS per direction, each on its own partial index.
+            for (own, other) in [("source_ci_id", "target_ci_id"), ("target_ci_id", "source_ci_id")] {
+                let qb = w.and();
+                qb.push(format!(
+                    "NOT EXISTS (SELECT 1 FROM ci_relationships e JOIN configuration_items o ON o.id = e.{other} \
+                     AND o.deleted_at IS NULL WHERE e.{own} = ci.id AND e.deleted_at IS NULL"
+                ));
+                if let Some(visible) = visible {
+                    qb.push(" AND o.class_id = ANY(").push_bind(visible.to_vec()).push(")");
+                }
+                qb.push(")");
+            }
+        }
+        QualityFilter::PendingApproval => w.and_sql(
+            "EXISTS (SELECT 1 FROM workflow_instances i JOIN workflow_approval_requests r ON r.instance_id = i.id \
+             AND r.status = 'pending' WHERE i.ci_id = ci.id)",
+        ),
+    }
+}
+
+/// How many CIs match `f`.
+pub async fn count(conn: &mut PgConnection, f: &ItemFilters) -> sqlx::Result<i64> {
+    let mut qb = QueryBuilder::<Postgres>::new(format!("SELECT count(*) FROM {COUNT_FROM}"));
+    push_filters(&mut Where::new(&mut qb), f);
+    qb.build_query_scalar::<i64>().fetch_one(conn).await
 }
 
 pub async fn list(

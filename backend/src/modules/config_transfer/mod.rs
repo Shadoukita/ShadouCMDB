@@ -257,7 +257,8 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
     let classes: Vec<CiClass> = crud::select_all(conn, CiClasses::TABLE, CiClasses::COLUMNS, "sort_order, key").await?;
     let class_key: HashMap<Uuid, String> = classes.iter().map(|c| (c.id, c.key.clone())).collect();
     let field_keys: HashMap<Uuid, String> = sqlx::query_as::<_, (Uuid, String)>(
-        "SELECT d.id, d.key FROM cmdb.ci_attribute_definitions d JOIN cmdb.ci_classes c ON c.title_attribute_id = d.id",
+        "SELECT DISTINCT d.id, d.key FROM cmdb.ci_attribute_definitions d JOIN cmdb.ci_classes c
+         ON d.id IN (c.title_attribute_id, c.owner_attribute_id, c.end_of_life_attribute_id)",
     )
     .fetch_all(&mut *conn)
     .await?
@@ -290,6 +291,8 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
             sort_order: c.sort_order,
             is_active: c.is_active,
             title_attribute: Some(c.title_attribute_id.and_then(|t| field_keys.get(&t).cloned())),
+            owner_attribute: Some(c.owner_attribute_id.and_then(|t| field_keys.get(&t).cloned())),
+            end_of_life_attribute: Some(c.end_of_life_attribute_id.and_then(|t| field_keys.get(&t).cloned())),
             system_role: class_roles.get(&c.id).copied(),
         })
         .collect();
@@ -1505,13 +1508,24 @@ async fn run(
         for (i, cls) in ordered {
             let existing = old.get(cls.key.as_str()).map(|o| (im.ids.classes[&cls.key], *o));
             // A class without an area (version 1 files) stays where it is; one without a
-            // title attribute (files from before SHAA-267) keeps its own.
+            // title attribute (files from before SHAA-267), or without an owner or
+            // end-of-life field (before version 11), keeps its own.
             let with_area;
             let cls = match existing {
-                Some((_, o)) if cls.area.is_none() || cls.title_attribute.is_none() => {
+                Some((_, o))
+                    if cls.area.is_none()
+                        || cls.title_attribute.is_none()
+                        || cls.owner_attribute.is_none()
+                        || cls.end_of_life_attribute.is_none() =>
+                {
                     with_area = ClassSpec {
                         area: cls.area.clone().or_else(|| o.area.clone()),
                         title_attribute: cls.title_attribute.clone().or_else(|| o.title_attribute.clone()),
+                        owner_attribute: cls.owner_attribute.clone().or_else(|| o.owner_attribute.clone()),
+                        end_of_life_attribute: cls
+                            .end_of_life_attribute
+                            .clone()
+                            .or_else(|| o.end_of_life_attribute.clone()),
                         ..cls.clone()
                     };
                     &with_area
@@ -1641,44 +1655,51 @@ async fn run(
             im.amend("attributes", format!("{}.{}", a.class, a.key), change);
         }
 
-        // Title attributes, now that the fields exist (a class may be titled by an inherited one).
+        // Title, owner and end-of-life fields, now that the fields exist (a class may name an inherited one).
         for (i, cls) in dm.classes.iter().enumerate() {
-            let Some(title) = &cls.title_attribute else { continue };
-            let class_id = im.ids.classes[&cls.key];
-            let path = format!("dataModel.classes.{i}.titleAttribute");
-            let wanted: Option<Uuid> = match title {
-                None => None,
-                Some(key) => Some(
-                    sqlx::query_scalar(
-                        "SELECT d.id FROM cmdb.ci_class_lineage($1) l
+            for (setting, file_field, column) in [
+                (&cls.title_attribute, "titleAttribute", "title_attribute_id"),
+                (&cls.owner_attribute, "ownerAttribute", "owner_attribute_id"),
+                (&cls.end_of_life_attribute, "endOfLifeAttribute", "end_of_life_attribute_id"),
+            ] {
+                let Some(title) = setting else { continue };
+                let class_id = im.ids.classes[&cls.key];
+                let path = format!("dataModel.classes.{i}.{file_field}");
+                let wanted: Option<Uuid> = match title {
+                    None => None,
+                    Some(key) => Some(
+                        sqlx::query_scalar(
+                            "SELECT d.id FROM cmdb.ci_class_lineage($1) l
                          JOIN cmdb.ci_attribute_definitions d ON d.class_id = l.class_id
                          WHERE d.key = $2 ORDER BY l.depth LIMIT 1",
-                    )
-                    .bind(class_id)
-                    .bind(key)
-                    .fetch_optional(&mut *im.conn)
-                    .await?
-                    .ok_or_else(|| {
-                        at(
-                            &path,
-                            AppError::field(
-                                "titleAttribute",
-                                format!("Class \"{}\" has no field \"{key}\" (own or inherited)", cls.key),
-                                "not_found",
-                            ),
                         )
-                    })?,
-                ),
-            };
-            let current: Option<Uuid> =
-                sqlx::query_scalar("SELECT title_attribute_id FROM cmdb.ci_classes WHERE id = $1")
-                    .bind(class_id)
-                    .fetch_one(&mut *im.conn)
-                    .await?;
-            if current != wanted {
-                let mut c = ColumnSet::default();
-                c.opt("title_attribute_id", Some(wanted));
-                simple::update_in::<CiClasses>(im.conn, im.ctx, class_id, c).await.map_err(|e| at(&path, e))?;
+                        .bind(class_id)
+                        .bind(key)
+                        .fetch_optional(&mut *im.conn)
+                        .await?
+                        .ok_or_else(|| {
+                            at(
+                                &path,
+                                AppError::field(
+                                    file_field,
+                                    format!("Class \"{}\" has no field \"{key}\" (own or inherited)", cls.key),
+                                    "not_found",
+                                ),
+                            )
+                        })?,
+                    ),
+                };
+                let current: Option<Uuid> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                    "SELECT {column} FROM cmdb.ci_classes WHERE id = $1"
+                )))
+                .bind(class_id)
+                .fetch_one(&mut *im.conn)
+                .await?;
+                if current != wanted {
+                    let mut c = ColumnSet::default();
+                    c.opt(column, Some(wanted));
+                    simple::update_in::<CiClasses>(im.conn, im.ctx, class_id, c).await.map_err(|e| at(&path, e))?;
+                }
             }
         }
 
@@ -2722,7 +2743,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(format!("{err:?}").contains("versions 1 to 10"), "{err:?}");
+        assert!(format!("{err:?}").contains(&format!("versions 1 to {FORMAT_VERSION}")), "{err:?}");
         let v3 = ConfigFile { format_version: 3, import_mappings: None, ..changed };
         import(&dst.pool, &system, &v3, ImportMode::DryRun).await.unwrap();
 
@@ -2957,6 +2978,24 @@ mod tests {
             serde_json::to_string_pretty(&comparable(&exported)).unwrap(),
             serde_json::to_string_pretty(&comparable(&reexported)).unwrap()
         );
+        // The template's owner fields travel (version 11), and a file without the
+        // settings (before version 11) leaves them as they are.
+        let owned = |f: &ConfigFile| {
+            f.data_model
+                .as_ref()
+                .unwrap()
+                .classes
+                .iter()
+                .filter(|c| c.owner_attribute == Some(Some("owner".into())))
+                .count()
+        };
+        assert!(owned(&reexported) > 0, "no class exports an owner field");
+        let mut old = exported.clone();
+        for c in &mut old.data_model.as_mut().unwrap().classes {
+            (c.owner_attribute, c.end_of_life_attribute) = (None, None);
+        }
+        import(&b.pool, &ctx, &ConfigFile { format_version: 10, ..old }, ImportMode::Apply).await.unwrap();
+        assert_eq!(owned(&export(&b.pool, &ctx).await.unwrap()), owned(&reexported));
         a.drop().await;
         b.drop().await;
     }
