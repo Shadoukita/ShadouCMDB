@@ -249,6 +249,13 @@ test("the UI shows a restricted user only what they may do", async ({ browser, r
   await expect(page.locator("#attr-name")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "More actions" })).toHaveCount(0);
   await expect(page.getByRole("tab", { name: "History" })).toHaveCount(0); // no audit.view
+  // No create right on Servers: no Clone (SHAA-2358); the QR label only reads, so it is offered.
+  await expect(page.getByTestId("ci-clone")).toHaveCount(0);
+  await expect(page.getByTestId("ci-qr")).toBeVisible();
+  // The clone URL itself is refused like any create in the class.
+  await page.goto(`/cis/new?classId=${serverId}&cloneFrom=${esx}`);
+  await expect(page.getByRole("alert")).toContainText("None of your permission profiles allows creating Server");
+  await expect(page.getByTestId("clone-notice")).toHaveCount(0);
   await page.goto(`/cis/${esx}/edit`);
   await expect(page.getByRole("heading", { name: "Permission denied" })).toBeVisible();
 
@@ -266,6 +273,8 @@ test("the UI shows a restricted user only what they may do", async ({ browser, r
   const app = await ciIdByName(request, `e2e-app-${stamp}`);
   await page.goto(`/cis/${app}`);
   await expect(page.getByRole("button", { name: "More actions" })).toHaveCount(0);
+  // Create right on Applications: Clone is offered.
+  await expect(page.getByTestId("ci-clone")).toBeVisible();
   // The ident is generated and only administrators may change it.
   await expect(roValue(page, "ident")).toHaveText(/\S/);
   await expect(page.locator("#f-ident")).toHaveCount(0);
