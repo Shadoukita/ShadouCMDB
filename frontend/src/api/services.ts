@@ -3,6 +3,7 @@
 import { keepPreviousData, useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/vue-query";
 import { computed, toValue, type MaybeRefOrGetter } from "vue";
 import { api, unwrap, type JsonBody, type ListQuery, type Schemas } from "./client";
+import { saveDownload } from "./download";
 import { keys as ciKeys } from "./queries";
 
 export type ServiceSettings = Schemas["BusinessServiceSettings"];
@@ -166,20 +167,8 @@ export function useRemoveMembers(serviceId: MaybeRefOrGetter<string>) {
 
 /** Downloads the member CSV (the list's filters, no paging; recorded in the audit log). */
 export async function downloadMembersCsv(serviceId: string, query: Omit<ServiceMemberQuery, "limit" | "offset">, fallbackName: string): Promise<void> {
-  const { data, error, response } = await api.GET("/api/v1/business-services/{id}/members/export", {
-    params: { path: { id: serviceId }, query },
-    parseAs: "blob",
-  });
-  if (!response.ok) await unwrap(Promise.resolve({ data: undefined, error, response }));
-  // The header is unreadable when the API is on another origin and does not expose it.
-  const name = /filename="?([^";]+)"?/.exec(response.headers.get("Content-Disposition") ?? "")?.[1] ?? fallbackName;
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(data as Blob);
-  a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  const request = () => api.GET("/api/v1/business-services/{id}/members/export", { params: { path: { id: serviceId }, query }, parseAs: "blob" });
+  return saveDownload(request, fallbackName);
 }
 
 /** Several services by id (the owners of the Impact tab's pinned services); a failed one is just left out. */

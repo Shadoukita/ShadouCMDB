@@ -3,7 +3,9 @@ import { computed, ref, watch } from "vue";
 import { useQuery } from "@tanstack/vue-query";
 import { RouterLink, useRouter } from "vue-router";
 import { useAllLookupListValues, useAreas, useLookupLists } from "../api/datamodel";
-import { ciCountQuery, useCiClasses, useCiList, useClassAttributes, useCriticalityValues, type CiListQuery } from "../api/queries";
+import { ApiError } from "../api/client";
+import { fileStamp } from "../api/download";
+import { ciCountQuery, downloadInventoryCsv, useCiClasses, useCiList, useClassAttributes, useCriticalityValues, type CiListQuery } from "../api/queries";
 import { dataModelEmpty } from "../lib/dataModel";
 import Breadcrumbs from "../components/Breadcrumbs.vue";
 import CiCell from "../components/CiCell.vue";
@@ -22,6 +24,7 @@ import ChangeHistogram from "../components/ChangeHistogram.vue";
 import FacetPanel from "../components/FacetPanel.vue";
 import { readFacetPref, writeFacetPref } from "../lib/facets";
 import { viewableClasses } from "../lib/permissions";
+import { exportFileName, exportUnsupported, inventoryExportQuery, type ExportDelimiter } from "../lib/inventoryExport";
 import { ATTRIBUTE_PREFIX, BUILTIN_FIELDS, fieldLabel, isSortableAttribute, listViewFor, lookupValueIds } from "../lib/uiSettings";
 import { useInventoryQueryState } from "../lib/useInventoryQueryState";
 import { useSavedViews } from "../api/savedViews";
@@ -200,6 +203,37 @@ function togglePage(on: boolean) {
 
 const viewMenu = ref<InstanceType<typeof SavedViewMenu>>();
 
+// CSV export (gap G9): every CI of the current query (filters, sort, the visible columns in their order), not just
+// this page. The server streams and audits it, and caps how many run at once (429 per user, 503 per server).
+const exporting = ref(false);
+const exportError = ref<unknown>(null);
+const exportBlocked = computed(() => exportUnsupported(state.listQuery.value as Record<string, unknown>));
+const exportItems = computed(() => [
+  { label: t("inventory.export.comma"), action: () => void exportCsv("comma") },
+  { label: t("inventory.export.semicolon"), action: () => void exportCsv("semicolon") },
+]);
+const exportTitle = computed(() => {
+  const e = exportError.value instanceof ApiError ? exportError.value : null;
+  if (e?.code === "RATE_LIMITED") return t("inventory.export.busyUser");
+  if (e?.code === "SERVER_BUSY") return t("inventory.export.busyServer");
+  return t("inventory.export.failed");
+});
+let lastDelimiter: ExportDelimiter = "comma";
+async function exportCsv(delimiter: ExportDelimiter) {
+  if (exporting.value) return;
+  lastDelimiter = delimiter;
+  exporting.value = true;
+  exportError.value = null;
+  try {
+    const query = inventoryExportQuery(state.listQuery.value as Record<string, unknown>, columns.value, delimiter);
+    await downloadInventoryCsv(query, exportFileName(currentClass.value?.key, fileStamp()));
+  } catch (e) {
+    exportError.value = e;
+  } finally {
+    exporting.value = false;
+  }
+}
+
 function clearFilters() {
   selection.skipNextDefault();
   state.clearFilters();
@@ -217,12 +251,22 @@ function clearFilters() {
         </span>
         <span v-if="list.isFetching.value && !list.isLoading.value" class="spinner" :aria-label="t('common.refreshing')" />
       </div>
-      <div v-if="canCreate || importAccess.available.value" class="actions">
-        <!-- Export slot: a CSV export of the current query waits for its endpoint (gap G9, SHAA-2353). -->
+      <div v-if="!classDenied || canCreate || importAccess.available.value" class="actions">
+        <RowMenu
+          v-if="!classDenied"
+          :label="t('inventory.export.menu')"
+          :text="exporting ? t('inventory.export.running') : t('inventory.export')"
+          icon="arrow-down-to-line"
+          :items="exportItems"
+          :disabled="exporting || exportBlocked || settledTotal === 0"
+          :title="exportBlocked ? t('inventory.export.quality') : undefined"
+          large
+        />
         <RouterLink v-if="importAccess.available.value" class="btn" :to="importTo"><Icon name="upload" />{{ t("inventory.import") }}</RouterLink>
         <RouterLink v-if="canCreate" class="btn btn-primary" :to="newTo"><Icon name="plus" />{{ t("inventory.new", { name: newLabel }) }}</RouterLink>
       </div>
     </div>
+    <ErrorAlert v-if="exportError" class="export-error" :error="exportError" :title="exportTitle" :on-retry="() => exportCsv(lastDelimiter)" />
 
     <form class="toolbar inventory-toolbar" role="search" @submit.prevent>
       <SavedViewMenu ref="viewMenu" context="inventory" :state="state" :selection="selection" :classes="classes.data.value" :catalogue="catalogue" :total="settledTotal" />

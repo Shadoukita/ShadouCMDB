@@ -1214,6 +1214,9 @@ table.data .select-col input[type="checkbox"] {
   min-width: 28px;
   min-height: 24px;
 }
+.inventory-head > .export-error {
+  margin: 0 0 var(--sp-3);
+}
 dialog.member-picker {
   width: min(960px, 96vw);
 }
