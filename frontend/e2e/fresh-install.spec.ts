@@ -187,11 +187,13 @@ test.describe("a bare install", () => {
     // The view leaves out Label, so the inventory shows it first: it is the link that opens the CI.
     await expect(page.locator("table.data thead th:not(.row-actions):not(.select-cell)")).toHaveText([/Label/, /Name/, /Status/, /Tier/, /Outlets/]);
     const rows = page.locator("table.data tbody tr");
+    // The data cells, without the row checkbox.
+    const cells = (row: number) => rows.nth(row).locator("td:not(.select-cell)");
     // Default sort: label (the name), descending.
     await expect(rows).toHaveCount(2);
-    await expect(rows.nth(0).getByRole("cell").nth(0).getByRole("link")).toHaveText(CIS[1].name);
-    await expect(rows.nth(0).getByRole("cell").nth(3)).toHaveText(CIS[1].tier);
-    await expect(rows.nth(1).getByRole("cell").nth(4)).toHaveText(CIS[0].outlets);
+    await expect(cells(0).nth(0).locator(".ci-name")).toHaveText(CIS[1].name);
+    await expect(cells(0).nth(3)).toHaveText(CIS[1].tier);
+    await expect(cells(1).nth(4)).toHaveText(CIS[0].outlets);
     await snap(page, "52-own-class-inventory");
 
     // The inventory filter and the API agree.
@@ -290,7 +292,7 @@ test.describe("imported into a fresh install", () => {
 
     await page.goto(`/cis?classId=${classId}`);
     await expect(page.locator("table.data thead th:not(.row-actions):not(.select-cell)")).toHaveText([/Label/, /Name/, /Status/, /Tier/, /Outlets/]);
-    await expect(page.locator("table.data tbody tr").first().getByRole("cell").nth(3)).toHaveText("Gold");
+    await expect(page.locator("table.data tbody tr").first().locator("td:not(.select-cell)").nth(3)).toHaveText("Gold");
     await snap(page, "54-imported-class-inventory");
 
     // The imported dashboard (an empty inventory shows a welcome instead, so only now).
