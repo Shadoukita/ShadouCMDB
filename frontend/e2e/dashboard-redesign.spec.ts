@@ -62,3 +62,67 @@ test("dashboard: greeting, period switch, KPI cards, changes chart, class bars a
   await checkA11y(page, testInfo, "dashboard-dark");
   await chooseTheme(page, "");
 });
+
+// "Needs attention" (gap G3): one row per data-quality check the caller can use, its count from the API, each a
+// link to the inventory filtered to the CIs it finds. A check no class the caller may view is set up for is left out.
+test("dashboard: Needs attention lists the data-quality checks and drills down into the inventory", async ({ page, request }, testInfo) => {
+  await resetUiSettings(request);
+  type Check = { key: string; count: number; configured: boolean; filter: { quality: string; endOfLifeWithinDays: number | null } };
+  const { checks } = await apiGet<{ checks: Check[] }>(request, "/configuration-items/data-quality");
+  const shown = checks.filter((c) => c.configured);
+  const titles: Record<string, RegExp> = {
+    no_owner: /^Without an owner$/,
+    end_of_life: /^End of life within \d+ days?$/,
+    no_relationships: /^No relationships$/,
+    pending_approval: /^Pending approvals$/,
+  };
+
+  await page.goto("/");
+  const panel = page.getByRole("region", { name: "Needs attention" });
+  await expect(panel).toBeVisible();
+  await expect(panel.getByText(`${shown.length} checks`)).toBeVisible();
+  await expect(panel.getByRole("listitem")).toHaveCount(shown.length);
+  for (const c of checks) {
+    const row = panel.locator(`[data-check="${c.key}"]`);
+    if (!c.configured) {
+      await expect(row).toHaveCount(0);
+      continue;
+    }
+    await expect(row.locator(".attention-count")).toHaveText(c.count.toLocaleString("en-US"));
+    await expect(row.locator(".attention-title")).toHaveText(titles[c.key]);
+    const href = await row.getByRole("link").getAttribute("href");
+    const url = new URL(href ?? "", "http://x");
+    expect(url.pathname).toBe("/cis");
+    expect(url.searchParams.get("quality")).toBe(c.filter.quality);
+    expect(url.searchParams.get("endOfLifeWithinDays")).toBe(c.filter.endOfLifeWithinDays === null ? null : String(c.filter.endOfLifeWithinDays));
+  }
+
+  // The panel beside the recent activity, in one row of the grid. Polled: the widgets above still settle
+  // (chart, counts) while they load, so two one-off measurements can straddle a layout shift.
+  await expect
+    .poll(async () => {
+      const recent = await page.locator('[data-widget="recent"]').boundingBox();
+      const aside = await panel.boundingBox();
+      return !!(recent && aside && Math.abs(recent.y - aside.y) < 2 && aside.x > recent.x);
+    })
+    .toBe(true);
+
+  await checkA11y(page, testInfo, "dashboard-attention-light", { include: '[data-testid="needs-attention"]' });
+  await chooseTheme(page, "dark");
+  await checkA11y(page, testInfo, "dashboard-attention-dark", { include: '[data-testid="needs-attention"]' });
+  await chooseTheme(page, "");
+
+  // Drill-down: the inventory lists exactly the CIs the check counted, under a removable chip.
+  const check = shown.find((c) => c.key === "no_relationships")!;
+  await panel.locator('[data-check="no_relationships"]').getByRole("link").click();
+  await expect(page).toHaveURL(/\/cis\?quality=no_relationships$/);
+  const chip = page.locator('[data-testid="filter-quality"]');
+  await expect(chip).toContainText("Needs attention:");
+  await expect(chip).toContainText("No relationships");
+  await expect(page.locator(".page-header .count")).toHaveText(new RegExp(`^${check.count.toLocaleString("en-US")} (of [\\d,]+|total)$`));
+  await page.reload();
+  await expect(page.locator('[data-testid="filter-quality"]')).toBeVisible();
+  await chip.getByRole("button", { name: "Remove the filter Needs attention: No relationships" }).click();
+  await expect(page).not.toHaveURL(/quality=/);
+  await expect(chip).toHaveCount(0);
+});

@@ -22,13 +22,14 @@ import { useBrandingStore } from "../stores/branding";
 import ChangesChart from "./dashboard/ChangesChart.vue";
 import DashboardKpis from "./dashboard/DashboardKpis.vue";
 import DashboardWidgets from "./dashboard/DashboardWidgets.vue";
+import NeedsAttention from "./dashboard/NeedsAttention.vue";
 
 /**
  * Operational overview (design §0 step 12e): the date and a greeting, the period switch, the KPI cards, then
  * one widget grid that starts with the changes chart. Every figure is counted by the server, so it stays
  * correct at any inventory size. The period is in the URL (`?period=24h|14d|90d`), so a view can be shared.
  * Customization › Dashboard can replace the built-in widgets with its own; both render through the same grid.
- * The dark "Needs attention" panel (gap G3, SHAA-2351) joins the grid once its data-quality endpoint ships.
+ * The dark "Needs attention" panel (gap G3) sits beside the recent activity, with or without customized widgets.
  */
 useDocumentTitle(() => t("dashboard.title"));
 const session = useSessionStore();
@@ -106,10 +107,12 @@ const widgets = computed<UiWidget[] | null>(() => {
         <template v-if="session.can('audit.view')" #lead>
           <div class="widget widget-medium" data-widget="changes"><ChangesChart :period="period" :now="now" /></div>
         </template>
+        <template #aside><NeedsAttention /></template>
       </DashboardWidgets>
       <template v-else-if="widgets">
-        <div v-if="session.can('audit.view')" class="widgets">
-          <div class="widget widget-large" data-widget="changes"><ChangesChart :period="period" :now="now" /></div>
+        <div class="widgets">
+          <div v-if="session.can('audit.view')" class="widget widget-beside-aside" data-widget="changes"><ChangesChart :period="period" :now="now" /></div>
+          <div :class="['widget', session.can('audit.view') ? 'widget-aside' : 'widget-medium']"><NeedsAttention /></div>
         </div>
         <section class="panel">
           <EmptyState :title="t('dashboard.noWidgets.title')" icon="layout-dashboard">
