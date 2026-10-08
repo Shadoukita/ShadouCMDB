@@ -116,7 +116,8 @@ fn pool_options(cfg: &DatabaseConfig) -> PgPoolOptions {
         .max_connections(cfg.pool_max)
         .min_connections(0)
         // Fail fast instead of hanging requests (and /readyz) when the database is unreachable.
-        .acquire_timeout(cfg.connect_timeout);
+        .acquire_timeout(cfg.connect_timeout)
+        .after_release(|conn, _| Box::pin(close_if_in_transaction(conn)));
     if cfg.roles == RoleNames::default() {
         return opts;
     }
@@ -125,6 +126,28 @@ fn pool_options(cfg: &DatabaseConfig) -> PgPoolOptions {
         let roles = roles.clone();
         Box::pin(async move { set_role_names(conn, &roles).await })
     })
+}
+
+/// The pool's release check (SHAA-2507). A request cancelled while sqlx's
+/// `begin()` waits for the server (the client went away mid-request) leaves
+/// the `BEGIN` applied but uncounted: sqlx 0.9's rollback guard only undoes a
+/// counted transaction, so the connection went back to the pool inside an open
+/// transaction. Its next user then ran in that transaction: `now()` stood still
+/// (fresh CIs fell outside `ACTIVE_SQL`), autocommit writes stayed uncommitted
+/// and `SET TRANSACTION` failed with a 500. Such a connection is closed, which
+/// ends the transaction, and the pool opens a new one when needed.
+///
+/// `now()` is the transaction's start and equals `statement_timestamp()` only
+/// in a statement's own implicit transaction. The simple protocol keeps both
+/// on one message. sqlx runs the check in the task that returns the connection,
+/// off the request's path.
+async fn close_if_in_transaction(conn: &mut sqlx::PgConnection) -> sqlx::Result<bool> {
+    use sqlx::Row;
+    let open: bool = sqlx::raw_sql("SELECT now() <> statement_timestamp()").fetch_one(&mut *conn).await?.try_get(0)?;
+    if open {
+        tracing::info!("closed a database connection a cancelled request left inside a transaction");
+    }
+    Ok(!open)
 }
 
 /// For the schema owner's sessions: migrations and [`act_as_api_role`] read the role names from here.
@@ -827,6 +850,57 @@ mod tests {
         super::migrate_with(&db.pool, &cfg, false).await.expect("first migrate");
         super::migrate_with(&db.pool, &cfg, false).await.expect("second migrate");
         assert_eq!(super::applied_count(&db.pool).await.unwrap(), super::expected_count());
+        db.drop().await;
+    }
+
+    /// SHAA-2507: a `begin()` cancelled after its `BEGIN` reached the server
+    /// leaves the transaction open. Without the release check the next user of
+    /// the pool's one connection ran inside it (frozen `now()`, uncommitted
+    /// writes); with it, that connection is closed and the next one is clean.
+    #[tokio::test]
+    async fn a_cancelled_begin_does_not_leak_its_transaction_into_the_pool() {
+        use sqlx::Connection;
+        use std::future::Future;
+        let Some(db) = super::scratch::empty("a_cancelled_begin_does_not_leak").await else { return };
+        let opts = (*db.pool.connect_options()).clone();
+        let cfg = crate::config::DatabaseConfig {
+            url: None,
+            host: None,
+            port: 5432,
+            database: None,
+            user: None,
+            password: None,
+            ssl: crate::config::SslMode::Disable,
+            ssl_ca_file: None,
+            pool_max: 1,
+            statement_timeout: std::time::Duration::ZERO,
+            connect_timeout: std::time::Duration::from_secs(5),
+            roles: Default::default(),
+        };
+        let mut monitor = sqlx::PgConnection::connect_with(&opts).await.unwrap();
+        let pool = super::pool_options(&cfg).connect_with(opts).await.unwrap();
+        for _ in 0..3 {
+            let mut c = pool.acquire().await.unwrap();
+            {
+                // One poll sends the statement; the server applies the BEGIN and
+                // holds the reply back, so begin() is still waiting when dropped.
+                let mut begin = std::pin::pin!((*c).begin_with("BEGIN; SELECT pg_sleep(0.3)"));
+                let polled = std::future::poll_fn(|cx| std::task::Poll::Ready(begin.as_mut().poll(cx))).await;
+                assert!(polled.is_pending(), "begin() waits for the server");
+            }
+            drop(c);
+            // The pool's one connection, once released: idle, not idle in transaction.
+            let mut next = pool.acquire().await.unwrap();
+            let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()").fetch_one(&mut *next).await.unwrap();
+            let state: String = sqlx::query_scalar("SELECT state FROM pg_stat_activity WHERE pid = $1")
+                .bind(pid)
+                .fetch_one(&mut monitor)
+                .await
+                .unwrap();
+            assert_eq!(state, "idle", "the connection the pool hands out next");
+        }
+        monitor.close().await.ok();
+        pool.close().await;
         db.drop().await;
     }
 

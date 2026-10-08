@@ -7,6 +7,8 @@ import {
   hasUrlState,
   isUsableColumn,
   parseColumns,
+  parseEndOfLifeDays,
+  parseQuality,
   patchQuery,
   resolveBaseline,
   toggleColumn,
@@ -106,5 +108,26 @@ describe("writing the URL", () => {
     assert.deepEqual(clearedQuery({ view: "v1", classId: "c1", sort: "label", limit: "50" }), { view: "v1", sort: "label", limit: "50" });
     assert.deepEqual(clearedQuery({ view: "v1", q: "web", classId: "c1", limit: "50" }, ["q"], "search"), { view: "v1", q: "web", limit: "50" });
     assert.deepEqual(clearedQuery({ view: "v1", classId: "c1" }), {}, "view=<id> alone would apply the view again");
+  });
+});
+
+describe("data-quality drill-down (dashboard \"Needs attention\")", () => {
+  test("the check comes from the URL only when the API knows it", () => {
+    assert.equal(parseQuality("no_owner"), "no_owner");
+    assert.equal(parseQuality("end_of_life"), "end_of_life");
+    assert.equal(parseQuality("orphans"), undefined);
+    assert.equal(parseQuality(""), undefined);
+  });
+  test("the day count goes with the end-of-life check only, within the API's bounds", () => {
+    assert.equal(parseEndOfLifeDays("end_of_life", "30"), 30);
+    assert.equal(parseEndOfLifeDays("end_of_life", "99999"), 3650);
+    assert.equal(parseEndOfLifeDays("end_of_life", "-5"), undefined);
+    assert.equal(parseEndOfLifeDays("end_of_life", ""), undefined);
+    assert.equal(parseEndOfLifeDays("no_owner", "30"), undefined);
+  });
+  test("the check is URL state and a filter that Clear filters removes with its day count", () => {
+    const query = { quality: "end_of_life", endOfLifeWithinDays: "90", sort: "-updatedAt" };
+    assert.equal(hasUrlState({ quality: "no_owner" }, "inventory"), true);
+    assert.deepEqual(clearedQuery(query), { sort: "-updatedAt" });
   });
 });
