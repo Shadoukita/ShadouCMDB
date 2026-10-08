@@ -1702,7 +1702,8 @@ impl Resource for AttributeDefinitions {
                     None
                 };
                 if let Some(what) = what {
-                    workflow_refs::check_attribute(conn, row.id, &row.key, workflow_refs::Reach::Live, what).await?;
+                    workflow_refs::check_attribute(conn, ctx, row.id, &row.key, workflow_refs::Reach::Live, what)
+                        .await?;
                 }
             }
             if let Some(clash) = data::attribute_key_clash(conn, row.class_id, &row.key, row.id).await? {
@@ -1779,7 +1780,7 @@ pub async fn purge_attribute_in(
             .await?
             .ok_or_else(|| AppError::missing(AttributeDefinitions::LABEL, id))?;
     check_purge("field", &row.key, row.is_active, confirm)?;
-    workflow_refs::check_attribute(conn, id, &row.key, workflow_refs::Reach::All, "purged").await?;
+    workflow_refs::check_attribute(conn, ctx, id, &row.key, workflow_refs::Reach::All, "purged").await?;
     let dependents: Vec<String> = sqlx::query_scalar(
         "SELECT c.key || '.' || d.key FROM ci_attribute_definitions d JOIN ci_classes c ON c.id = d.class_id
          WHERE d.parent_attribute_id = $1 ORDER BY 1",
