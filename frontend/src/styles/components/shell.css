@@ -852,12 +852,14 @@ button.who[aria-expanded="true"] {
 }
 /* Phone width (WCAG 1.4.10 reflow at 320 px, GH#363). */
 @media (max-width: 480px) {
+  /* The bell, "New CI" and the initials share 274 px with the search, which keeps at least 150 px: tighter gaps, and
+     the brand cell's own padding already separates its toggle from the search. */
   .shell-header {
     gap: var(--space-2);
-    padding: 0 var(--space-3);
+    padding: 0 var(--space-2) 0 var(--space-1);
   }
   .shell-actions {
-    gap: var(--space-2);
+    gap: var(--space-1);
   }
   .global-search {
     min-width: 120px;
@@ -869,7 +871,17 @@ button.who[aria-expanded="true"] {
     display: none;
   }
   .new-ci {
-    padding: 0 var(--space-2);
+    justify-content: center;
+    width: var(--control-h);
+    padding: 0;
+  }
+  /* The bell is not at the right edge here: the panel spans the window under the header instead of hanging off it. */
+  .notif-panel {
+    position: fixed;
+    top: calc(var(--header-h) + var(--space-1));
+    left: var(--space-2);
+    right: var(--space-2);
+    width: auto;
   }
   button.who {
     gap: var(--space-1);
