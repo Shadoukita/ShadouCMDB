@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { onBeforeRouteLeave, onBeforeRouteUpdate, RouterLink, useRoute, useRouter, type RouteLocationNormalized } from "vue-router";
 import { ApiError } from "../api/client";
+import { NOTES_PAGE, useCiNotes } from "../api/ciNotes";
 import { useAreas } from "../api/datamodel";
 import { useAuditLog, useCi, useCiClasses, useClassAttributes, useRelationships } from "../api/queries";
 import { useServiceSettings } from "../api/services";
@@ -38,6 +39,7 @@ import FactChips from "./detail/FactChips.vue";
 import HistoryPanel from "./detail/HistoryPanel.vue";
 import ImpactPanel from "./detail/ImpactPanel.vue";
 import LayoutPanels from "./detail/LayoutPanels.vue";
+import NotesPanel from "./detail/NotesPanel.vue";
 import PartOfServicesPanel from "./detail/PartOfServicesPanel.vue";
 import QrLabelDialog from "./detail/QrLabelDialog.vue";
 import RelationshipGraphPanel from "./detail/RelationshipGraphPanel.vue";
@@ -52,7 +54,7 @@ import CiWorkflowsPanel from "./workflows/CiWorkflowsPanel.vue";
  * read-only (ciDraft.ts, detail/LayoutPanels).
  *
  * The class layout's tabs (`layout:<key>`; a single one is "overview"), then the relationship map, the
- * impact analysis and the history. The Impact tab has its own URL (/cis/:id/impact, with its options
+ * impact analysis, the workflows, the notes and the history. The Impact tab has its own URL (/cis/:id/impact, with its options
  * in the query); the others are chosen on the page.
  *
  * The page head (design §0 step 12d) is a surface band: the breadcrumb, the class tile, the name in the data
@@ -154,11 +156,13 @@ const ciWorkflows = useCiWorkflows(() => (c.value ? id.value : undefined));
 const hasWorkflows = computed(() => !!ciWorkflows.data.value && (ciWorkflows.data.value.data.length > 0 || ciWorkflows.data.value.startable.length > 0));
 // Its count is the CI's running instances (gap G14); none when the API refuses the CI (404), so no false 0.
 const ciWorkflowCounts = useWorkflowCounts(() => id.value, () => hasWorkflows.value);
-// The tabs' counts: the direct relationships on the map, the running workflow instances, the history's entries (the
+// The tabs' counts: the direct relationships on the map, the running workflow instances, the notes, the history's entries (the
 // newest of them also show on the built-in Overview and give "Updated … by …").
 const rels = useRelationships(() => id.value, () => !!c.value);
 const canAudit = computed(() => session.can("audit.view"));
 const recent = useAuditLog(id, { limit: 5, offset: 0 }, [], () => canAudit.value && !!c.value);
+// The notes (gap G13): everyone who may view the CI reads them; the tab counts them (the panel's first page, one query).
+const notes = useCiNotes(id, { limit: NOTES_PAGE, offset: 0 }, () => !!c.value);
 const historyTotal = computed(() => (canAudit.value ? recent.data.value?.page.total : undefined));
 /** Who made the newest change of the record itself, when the history is visible (gap G16). */
 const lastActor = computed(() => {
@@ -172,6 +176,7 @@ const TABS = computed<[Tab, string, number?][]>(() => [
   ...(c.value?.deletedAt ? [] : [["impact", t("record.tab.impact")] as [Tab, string]]),
   // Its running and recent workflow instances (a deleted CI keeps their history), counted by the running ones.
   ...(hasWorkflows.value ? [["workflows", t("record.tab.workflows"), ciWorkflowCounts.data.value?.active] as [Tab, string, number?]] : []),
+  ["notes", t("record.tab.notes"), notes.data.value?.page.total],
   // The history is the audit log, which needs audit.view.
   ...(canAudit.value && !placed.value.has("history") ? [["history", t("record.actions.history"), historyTotal.value] as [Tab, string, number?]] : []),
 ]);
@@ -456,6 +461,7 @@ const crumbs = computed<Crumb[]>(() => {
       <RelationshipGraphPanel v-else-if="current === 'graph'" :ci="c" :self="self" :trail="trail" />
       <ImpactPanel v-else-if="current === 'impact'" :ci="c" :self="self" :trail="trail" />
       <CiWorkflowsPanel v-else-if="current === 'workflows'" :ci="c" />
+      <NotesPanel v-else-if="current === 'notes'" :ci="c" />
       <HistoryPanel v-else :ci="c" />
     </div>
     <SaveBar v-if="!editor.active && (draft.dirty || draft.pending)" :label="t('record.save.unsaved')" dirty :changes="draft.changeCount">
