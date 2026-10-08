@@ -349,6 +349,28 @@ pub struct WorkflowInstanceSummaryQuery {
     pub definition_key: Option<String>,
 }
 
+#[derive(Debug, Deserialize, IntoParams)]
+#[serde(rename_all = "camelCase")]
+#[into_params(parameter_in = Query)]
+pub struct WorkflowInstanceCountsQuery {
+    /// Only the instances and approval requests on this CI (404 if the caller may not view it)
+    pub ci_id: Option<Uuid>,
+}
+
+/// Open workflow work on the CIs the caller may view (or on one CI): the counts behind the navigation's
+/// Workflows item and a CI's Workflows tab
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowInstanceCounts {
+    /// Running (`active`) instances
+    pub active: i64,
+    /// Of `active`, the instances with a pending approval request
+    pub awaiting_approval: i64,
+    /// Pending approval requests the caller may decide now: the `view=actionable` inbox of
+    /// `listWorkflowApprovalRequests` (0 for a caller that is not a user)
+    pub awaiting_my_decision: i64,
+}
+
 /// Running instances of one workflow in one state
 #[derive(Debug, Clone, Serialize, ToSchema, sqlx::FromRow)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

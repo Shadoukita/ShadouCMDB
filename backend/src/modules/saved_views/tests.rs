@@ -1130,3 +1130,106 @@ async fn config_import_respects_what_the_importer_may_see() {
 
     db.drop().await;
 }
+
+/// SHAA-2352: the rail's counts are what the list shows the caller, never more.
+#[tokio::test]
+async fn view_counts_match_the_list_within_the_callers_rights() {
+    let Some((db, w)) = world("saved_views_counts").await else { return };
+    let admin = w.admin.clone();
+    let servers = w.profile("Servers", &[], &["server"]).await;
+    let (b, _) = w.user("bob", &[&servers]).await;
+    ci(&w, "server", "web-1", "production").await;
+    ci(&w, "server", "web-2", "staging").await;
+    ci(&w, "server", "db-1", "production").await;
+    ci(&w, "virtual_machine", "vm-1", "production").await;
+    let id = |v: &Value| v["id"].as_str().unwrap().to_owned();
+    let counts = |v: &Value| -> Vec<(String, String, Option<i64>)> {
+        v["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| {
+                (
+                    c["viewId"].as_str().unwrap().to_owned(),
+                    c["status"].as_str().unwrap().to_owned(),
+                    c["count"].as_i64(),
+                )
+            })
+            .collect()
+    };
+
+    let fleet = w
+        .created(&admin, view("inventory", "Fleet", "shared", json!({ "classKeys": ["server", "virtual_machine"] })))
+        .await;
+    let prod = w
+        .created(
+            &admin,
+            view(
+                "inventory",
+                "Production web",
+                "personal",
+                json!({ "classKeys": ["server"], "filters": { "lookups": { "environment": ["production"] }, "q": "web" } }),
+            ),
+        )
+        .await;
+    let vms = w.created(&admin, view("inventory", "VMs", "shared", json!({ "classKeys": ["virtual_machine"] }))).await;
+
+    // The admin: every view, in list order, each count equal to the list's total.
+    let (status, v) = w.call(&admin, "GET", &format!("{VIEWS}/counts"), None).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!((v["cap"].as_i64(), v["truncated"].as_bool()), (Some(10_000), Some(false)));
+    assert_eq!(
+        counts(&v),
+        [
+            (id(&prod), "counted".into(), Some(1)),
+            (id(&fleet), "counted".into(), Some(4)),
+            (id(&vms), "counted".into(), Some(1)),
+        ]
+    );
+    let (_, listed) = w
+        .call(
+            &admin,
+            "GET",
+            &format!("/api/v1/configuration-items?{}", query_string(&fleet["resolved"]["query"])),
+            None,
+        )
+        .await;
+    assert_eq!(listed["page"]["total"].as_i64(), Some(4));
+
+    // B may view servers only: Fleet counts the servers, the VM view is not there, A's personal view neither.
+    let (_, v) = w.call(&b, "GET", &format!("{VIEWS}/counts"), None).await;
+    assert_eq!(counts(&v), [(id(&fleet), "counted".into(), Some(3))]);
+    let (_, v) =
+        w.call(&b, "GET", &format!("{VIEWS}/counts?ids={},{},{}", id(&vms), id(&prod), id(&fleet)), None).await;
+    assert_eq!(counts(&v), [(id(&fleet), "counted".into(), Some(3))], "hidden views are left out, not refused");
+
+    // `ids` sets the order; more than 50 are refused; a context filter applies.
+    let (_, v) = w.call(&admin, "GET", &format!("{VIEWS}/counts?ids={},{}", id(&vms), id(&fleet)), None).await;
+    assert_eq!(counts(&v).iter().map(|c| c.0.clone()).collect::<Vec<_>>(), [id(&vms), id(&fleet)]);
+    let many = (0..51).map(|_| Uuid::new_v4().to_string()).collect::<Vec<_>>().join(",");
+    let (status, v) = w.call(&admin, "GET", &format!("{VIEWS}/counts?ids={many}"), None).await;
+    assert!(status == 400 && has(&v, "ids", "too_big"), "{v}");
+    let (_, v) = w.call(&admin, "GET", &format!("{VIEWS}/counts?context=search"), None).await;
+    assert!(counts(&v).is_empty(), "{v}");
+
+    // Counting is read-only: nothing audited (the shared views' create only; personal views write none).
+    for (v, rows) in [(&fleet, 1), (&prod, 0), (&vms, 1)] {
+        assert_eq!(w.audit_rows(&id(v)).await.len(), rows, "{v}");
+    }
+
+    // A stored CIDR the list cannot apply makes that view unavailable, not the request a failure.
+    sqlx::query(
+        "UPDATE saved_views SET definition = jsonb_set(definition, '{filters}', '{\"ipWithin\": \"not-a-cidr\"}')
+         WHERE id = $1::uuid",
+    )
+    .bind(id(&vms))
+    .execute(&w.pool)
+    .await
+    .unwrap();
+    let (status, v) = w.call(&admin, "GET", &format!("{VIEWS}/counts"), None).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(counts(&v)[2], (id(&vms), "unavailable".into(), None));
+    assert_eq!(counts(&v)[1], (id(&fleet), "counted".into(), Some(4)), "the others are still counted");
+
+    db.drop().await;
+}

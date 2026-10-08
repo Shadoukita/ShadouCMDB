@@ -529,6 +529,22 @@ pub fn runtime_routes() -> Vec<Route> {
                     Ok(Json(runtime::summary(&api.pool, &api.ctx, &q).await?))
                 },
             ),
+        route(Method::GET, "/api/v1/workflow-instances/counts", "countWorkflowInstances")
+            .tag(RUN_TAG)
+            .summary("Count open workflow work: running instances and your approval inbox (navigation badges)")
+            .description(
+                "On the CIs the caller may view, or with `ciId` on that CI (404 for a CI of a type the caller may \
+                 not view, as for `getConfigurationItemWorkflows`). `active` counts running instances, \
+                 `awaitingApproval` those of them with a pending approval request, and `awaitingMyDecision` the \
+                 caller's approval inbox (`listWorkflowApprovalRequests?view=actionable`, its `page.total`). \
+                 Read-only; not audited.",
+            )
+            .errors(&[ErrorCode::NotFound])
+            .handle(
+                |api, In(NoPath, Query(q), NoBody): In<NoPath, Query<WorkflowInstanceCountsQuery>, NoBody>| async move {
+                    Ok(Json(runtime::counts(&api.pool, &api.ctx, &q).await?))
+                },
+            ),
         route(Method::POST, INSTANCES, "startWorkflowInstance")
             .tag(RUN_TAG)
             .summary("Start a workflow on a CI")

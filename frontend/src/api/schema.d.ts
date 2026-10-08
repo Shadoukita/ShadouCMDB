@@ -2451,6 +2451,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/saved-views/counts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * How many CIs each of the caller's views shows (for the navigation rail)
+         * @description Session only. Each view is resolved as `listSavedViews` resolves it and counted as the list (a search view: global search) would count it for the caller, within their class rights, so a count never includes a CI the caller could not list. Counts stop at `cap` (10,000): a larger result is `at_least` with `count` = `cap`. An `unavailable` view has no count. All counts of one request share a 2-second allowance; views not counted within it are `timed_out` (retry later, or ask for fewer `ids`). At most 50 views per request; without `ids`, the first 50 of `listSavedViews` (`truncated` says whether there were more). Read-only; not audited. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        get: operations["countSavedViews"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/saved-views/defaults": {
         parameters: {
             query?: never;
@@ -3280,6 +3300,26 @@ export interface paths {
         };
         /** Count running instances per workflow and state, on the CIs you may view (for dashboards) */
         get: operations["getWorkflowInstanceSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflow-instances/counts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Count open workflow work: running instances and your approval inbox (navigation badges)
+         * @description On the CIs the caller may view, or with `ciId` on that CI (404 for a CI of a type the caller may not view, as for `getConfigurationItemWorkflows`). `active` counts running instances, `awaitingApproval` those of them with a pending approval request, and `awaitingMyDecision` the caller's approval inbox (`listWorkflowApprovalRequests?view=actionable`, its `page.total`). Read-only; not audited.
+         */
+        get: operations["countWorkflowInstances"];
         put?: never;
         post?: never;
         delete?: never;
@@ -6240,6 +6280,31 @@ export interface components {
          * @enum {string}
          */
         SavedViewContext: "inventory" | "search";
+        /** @description The number of CIs a view shows the caller */
+        SavedViewCount: {
+            /** Format: uuid */
+            viewId: string;
+            /**
+             * @description How a view's count came out
+             * @enum {string}
+             */
+            status: "counted" | "at_least" | "unavailable" | "timed_out";
+            /**
+             * Format: int64
+             * @description Null when `unavailable` or `timed_out`
+             */
+            count?: number | null;
+        };
+        SavedViewCounts: {
+            data: components["schemas"]["SavedViewCount"][];
+            /**
+             * Format: int64
+             * @description The count limit: `at_least` results have this count
+             */
+            cap: number;
+            /** @description Without `ids`: whether the caller has more than 50 views (of the context), so not all were counted */
+            truncated: boolean;
+        };
         /** @description The caller's default for one inventory list */
         SavedViewDefault: {
             /**
@@ -8043,6 +8108,28 @@ export interface components {
              */
             ciVersion: number;
             pendingApproval: components["schemas"]["WorkflowPendingApproval"] | null;
+        };
+        /**
+         * @description Open workflow work on the CIs the caller may view (or on one CI): the counts behind the navigation's
+         *     Workflows item and a CI's Workflows tab
+         */
+        WorkflowInstanceCounts: {
+            /**
+             * Format: int64
+             * @description Running (`active`) instances
+             */
+            active: number;
+            /**
+             * Format: int64
+             * @description Of `active`, the instances with a pending approval request
+             */
+            awaitingApproval: number;
+            /**
+             * Format: int64
+             * @description Pending approval requests the caller may decide now: the `view=actionable` inbox of
+             *     `listWorkflowApprovalRequests` (0 for a caller that is not a user)
+             */
+            awaitingMyDecision: number;
         };
         /** @description An instance with its pinned graph and what the caller can do with it */
         WorkflowInstanceDetail: {
@@ -23944,6 +24031,85 @@ export interface operations {
             };
         };
     };
+    countSavedViews: {
+        parameters: {
+            query?: {
+                /** @description Only the views of this context; left out: both */
+                context?: "inventory" | "search";
+                /** @description View ids, comma-separated (at most 50) */
+                ids?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedViewCounts"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     setSavedViewDefault: {
         parameters: {
             query?: never;
@@ -30409,6 +30575,92 @@ export interface operations {
             };
             /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    countWorkflowInstances: {
+        parameters: {
+            query?: {
+                /** @description Only the instances and approval requests on this CI (404 if the caller may not view it) */
+                ciId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowInstanceCounts"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

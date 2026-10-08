@@ -23475,6 +23475,118 @@
         ]
       }
     },
+    "/api/v1/saved-views/counts": {
+      "get": {
+        "tags": [
+          "Saved views"
+        ],
+        "summary": "How many CIs each of the caller's views shows (for the navigation rail)",
+        "description": "Session only. Each view is resolved as `listSavedViews` resolves it and counted as the list (a search view: global search) would count it for the caller, within their class rights, so a count never includes a CI the caller could not list. Counts stop at `cap` (10,000): a larger result is `at_least` with `count` = `cap`. An `unavailable` view has no count. All counts of one request share a 2-second allowance; views not counted within it are `timed_out` (retry later, or ask for fewer `ids`). At most 50 views per request; without `ids`, the first 50 of `listSavedViews` (`truncated` says whether there were more). Read-only; not audited. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "countSavedViews",
+        "parameters": [
+          {
+            "name": "context",
+            "in": "query",
+            "description": "Only the views of this context; left out: both",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Where a view applies: the inventory list or global search",
+              "enum": [
+                "inventory",
+                "search"
+              ]
+            }
+          },
+          {
+            "name": "ids",
+            "in": "query",
+            "description": "View ids, comma-separated (at most 50)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedViewCounts"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/saved-views/defaults": {
       "put": {
         "tags": [
@@ -33525,6 +33637,118 @@
           },
           "403": {
             "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/workflow-instances/counts": {
+      "get": {
+        "tags": [
+          "Workflow instances"
+        ],
+        "summary": "Count open workflow work: running instances and your approval inbox (navigation badges)",
+        "description": "On the CIs the caller may view, or with `ciId` on that CI (404 for a CI of a type the caller may not view, as for `getConfigurationItemWorkflows`). `active` counts running instances, `awaitingApproval` those of them with a pending approval request, and `awaitingMyDecision` the caller's approval inbox (`listWorkflowApprovalRequests?view=actionable`, its `page.total`). Read-only; not audited.",
+        "operationId": "countWorkflowInstances",
+        "parameters": [
+          {
+            "name": "ciId",
+            "in": "query",
+            "description": "Only the instances and approval requests on this CI (404 if the caller may not view it)",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowInstanceCounts"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
             "content": {
               "application/json": {
                 "schema": {
@@ -43956,6 +44180,63 @@
           "search"
         ]
       },
+      "SavedViewCount": {
+        "type": "object",
+        "description": "The number of CIs a view shows the caller",
+        "required": [
+          "viewId",
+          "status"
+        ],
+        "properties": {
+          "viewId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "description": "How a view's count came out",
+            "enum": [
+              "counted",
+              "at_least",
+              "unavailable",
+              "timed_out"
+            ]
+          },
+          "count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Null when `unavailable` or `timed_out`"
+          }
+        }
+      },
+      "SavedViewCounts": {
+        "type": "object",
+        "required": [
+          "data",
+          "cap",
+          "truncated"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SavedViewCount"
+            }
+          },
+          "cap": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The count limit: `at_least` results have this count"
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "Without `ids`: whether the caller has more than 50 views (of the context), so not all were counted"
+          }
+        }
+      },
       "SavedViewDefault": {
         "type": "object",
         "description": "The caller's default for one inventory list",
@@ -49003,6 +49284,32 @@
           }
         },
         "additionalProperties": false
+      },
+      "WorkflowInstanceCounts": {
+        "type": "object",
+        "description": "Open workflow work on the CIs the caller may view (or on one CI): the counts behind the navigation's\nWorkflows item and a CI's Workflows tab",
+        "required": [
+          "active",
+          "awaitingApproval",
+          "awaitingMyDecision"
+        ],
+        "properties": {
+          "active": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Running (`active`) instances"
+          },
+          "awaitingApproval": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Of `active`, the instances with a pending approval request"
+          },
+          "awaitingMyDecision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Pending approval requests the caller may decide now: the `view=actionable` inbox of\n`listWorkflowApprovalRequests` (0 for a caller that is not a user)"
+          }
+        }
       },
       "WorkflowInstanceDetail": {
         "type": "object",

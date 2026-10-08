@@ -303,6 +303,26 @@ pub async fn list(
     Ok(Page { data, page: q.page_meta(total) })
 }
 
+/// How many requests the caller's inbox (`view=actionable`) holds, on the CIs
+/// they may view, or on `ci` only.
+pub(crate) async fn count_actionable(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    ci: Option<Uuid>,
+) -> Result<i64, AppError> {
+    let Some(me) = me(ctx) else { return Ok(0) };
+    let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new(format!("SELECT count(*) FROM {FROM}"));
+    let mut w = Where::new(&mut qb);
+    if let Some(classes) = ctx.class_scope(ClassOp::View) {
+        w.and().push("ci.class_id = ANY(").push_bind(classes).push(")");
+    }
+    if let Some(ci) = ci {
+        w.and().push("wi.ci_id = ").push_bind(ci);
+    }
+    actionable(&mut w, &me);
+    Ok(qb.build_query_scalar::<i64>().fetch_one(conn).await?)
+}
+
 /// The approval requests of one instance, newest first.
 pub async fn of_instance(
     pool: &PgPool,
