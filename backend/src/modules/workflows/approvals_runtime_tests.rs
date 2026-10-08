@@ -224,6 +224,17 @@ async fn approval_requests_run_to_quorum_and_apply_the_transition() {
         (pa["stepNo"].as_i64(), pa["stepKey"].as_str(), pa["stepCount"].as_i64()),
         (Some(1), Some("tech"), Some(2))
     );
+    // The data-quality check counts the CI, and its filter lists it (SHAA-2351).
+    let v = w.ok("GET", "/api/v1/configuration-items/data-quality", json!(null)).await;
+    let check = v["checks"].as_array().unwrap().iter().find(|c| c["key"] == "pending_approval").unwrap();
+    assert_eq!(
+        (check["count"].as_i64(), &check["filter"]),
+        (Some(1), &json!({ "quality": "pending_approval", "endOfLifeWithinDays": null })),
+        "{v}"
+    );
+    let v = w.ok("GET", "/api/v1/configuration-items?quality=pending_approval", json!(null)).await;
+    let listed: Vec<Uuid> = v["data"].as_array().unwrap().iter().map(id).collect();
+    assert_eq!(listed, [ci], "{v}");
     assert_eq!(
         (pa["approvals"].as_i64(), pa["required"].as_i64(), pa["toState"].as_str()),
         (Some(0), Some(1), Some("approved"))

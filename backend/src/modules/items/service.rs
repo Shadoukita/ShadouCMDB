@@ -13,9 +13,10 @@ use ipnetwork::IpNetwork;
 use super::plan::{self, DbResolver, Needs, is_visible};
 use super::schemas::{
     ActiveQuery, AttributeReference, ChangeHistogram, ChangeHistogramBucket, ChangeHistogramQuery, ConfigurationItem,
-    ConfigurationItemSummary, CreateItemBody, CriticalityRef, Graph, GraphDirection, GraphEdge, GraphEdgeType,
-    GraphNode, GraphQuery, HistogramBucket, ItemFilterQuery, KindQuery, ListItemsQuery, SearchHit, SearchMatch,
-    SearchQuery, SearchResults, UpdateItemBody,
+    ConfigurationItemSummary, CreateItemBody, CriticalityRef, DataQuality, DataQualityCheck, DataQualityFilter,
+    DataQualityQuery, Graph, GraphDirection, GraphEdge, GraphEdgeType, GraphNode, GraphQuery, HistogramBucket,
+    ItemFilterQuery, KindQuery, ListItemsQuery, QualityCheck, SearchHit, SearchMatch, SearchQuery, SearchResults,
+    UpdateItemBody, end_of_life_days,
 };
 use crate::api::context::{Caller, RequestContext};
 use crate::api::route::InvalidBody;
@@ -28,10 +29,10 @@ use crate::data::items::{
     self as data, ATTRIBUTE_SORT_PREFIX, ActiveFilter, Direction, ItemFilters, ListSort, SORT_FIELDS, SummaryRow,
 };
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
-use crate::modules::classes::AttributeDataType;
+use crate::modules::classes::{AttributeDataType, END_OF_LIFE_DATA_TYPES, OWNER_DATA_TYPES};
 use crate::modules::workflows::adopt;
 use crate::modules::workflows::state_field::StateFields;
-use crate::schema::model::{Field, Model};
+use crate::schema::model::{Field, Model, QualityField};
 
 pub fn summary_dto(r: SummaryRow) -> ConfigurationItemSummary {
     ConfigurationItemSummary {
@@ -234,7 +235,95 @@ pub(super) async fn filters(
         // Also where ipWithin looks.
         search_tables: data::search_tables(model),
         business_services,
+        quality: match q.quality() {
+            Some(check) => Some(quality_filter(model, check, q.end_of_life_within_days())?),
+            None => None,
+        },
     })
+}
+
+/// Per owner or end-of-life field: its table and column, and the types whose
+/// effective setting (own or inherited) names it.
+fn quality_columns(model: &Model, which: QualityField) -> Vec<data::QualityColumn> {
+    let allowed = match which {
+        QualityField::Owner => OWNER_DATA_TYPES,
+        QualityField::EndOfLife => END_OF_LIFE_DATA_TYPES,
+    };
+    let mut columns: Vec<(Uuid, data::QualityColumn)> = Vec::new();
+    for class in &model.classes {
+        let Some(field) = model.quality_field(class.id, which).filter(|f| allowed.contains(&f.data_type)) else {
+            continue;
+        };
+        if let Some((_, c)) = columns.iter_mut().find(|(id, _)| *id == field.id) {
+            c.class_ids.push(class.id);
+            continue;
+        }
+        let Some(table) = model.table(field.class_id) else { continue };
+        columns.push((
+            field.id,
+            data::QualityColumn {
+                table,
+                column: field.column(),
+                class_ids: vec![class.id],
+                data_type: field.data_type,
+            },
+        ));
+    }
+    columns.into_iter().map(|(_, c)| c).collect()
+}
+
+fn quality_filter(model: &Model, check: QualityCheck, days: Option<i32>) -> Result<data::QualityFilter, AppError> {
+    Ok(match check {
+        QualityCheck::NoOwner => data::QualityFilter::NoOwner(quality_columns(model, QualityField::Owner)),
+        QualityCheck::EndOfLife => data::QualityFilter::EndOfLife {
+            columns: quality_columns(model, QualityField::EndOfLife),
+            days: end_of_life_days(days).map_err(|e| AppError::validation(vec![e]))?,
+        },
+        QualityCheck::NoRelationships => data::QualityFilter::NoRelationships,
+        QualityCheck::PendingApproval => data::QualityFilter::PendingApproval,
+    })
+}
+
+/// The "Needs attention" counts: per check, the CIs the inventory list would
+/// show with that check's filter and no other (active, live, non-process CIs
+/// of the classes the caller may view).
+pub async fn data_quality(pool: &PgPool, ctx: &RequestContext, q: &DataQualityQuery) -> Result<DataQuality, AppError> {
+    let days = end_of_life_days(q.end_of_life_within_days).map_err(|e| AppError::validation(vec![e]))?;
+    let mut conn = pool.acquire().await?;
+    let model = Model::load(&mut conn).await?;
+    let visible = ctx.class_scope(ClassOp::View);
+    let base = ItemFilters {
+        active: ActiveFilter::Active,
+        deleted: Some(crate::api::schemas::Deleted::Exclude),
+        visible_class_ids: visible.clone(),
+        excluded_class_ids: Some(class_data::process_class_ids(&mut conn).await?),
+        ..Default::default()
+    };
+    let mut checks = Vec::with_capacity(QualityCheck::ALL.len());
+    for check in QualityCheck::ALL {
+        let quality = quality_filter(&model, check, Some(days))?;
+        let configured = match &quality {
+            data::QualityFilter::NoOwner(columns) | data::QualityFilter::EndOfLife { columns, .. } => {
+                columns.iter().flat_map(|c| &c.class_ids).any(|id| is_visible(visible.as_deref(), *id))
+            }
+            _ => true,
+        };
+        let count = if configured {
+            data::count(&mut conn, &ItemFilters { quality: Some(quality), ..base.clone() }).await?
+        } else {
+            0
+        };
+        checks.push(DataQualityCheck {
+            key: check,
+            count,
+            configured,
+            filter: DataQualityFilter {
+                quality: check,
+                end_of_life_within_days: (check == QualityCheck::EndOfLife).then_some(days),
+            },
+        });
+    }
+    Ok(DataQuality { checks })
 }
 
 /// The inventory list's filters, view scope included: the list and its facet counts.

@@ -46,9 +46,10 @@ pub const FORMAT: &str = "shadoucmdb.config";
 /// version 6 shared saved views, version 7 layout templates in the UI settings (`layoutTemplates`, and
 /// `layouts[].templateKey`; versions 1 to 6 have class layouts, which become templates), version 8 workflows
 /// (the current published version of each), version 9 approval policies on workflow transitions and each
-/// workflow's approvers, version 10 expected fields (`isExpected`, counted by the completeness metric); versions
-/// 1 to 9 are still read.
-pub const FORMAT_VERSION: i32 = 10;
+/// workflow's approvers, version 10 expected fields (`isExpected`, counted by the completeness metric), version 11
+/// the owner and end-of-life fields of a class (`ownerAttribute`, `endOfLifeAttribute`, for the data-quality
+/// checks); versions 1 to 11 are read.
+pub const FORMAT_VERSION: i32 = 11;
 
 fn yes() -> bool {
     true
@@ -142,6 +143,17 @@ pub struct ClassSpec {
     #[schema(schema_with = nullable_key_schema)]
     #[serde(default, deserialize_with = "schemas::patch", skip_serializing_if = "Option::is_none")]
     pub title_attribute: Option<Option<String>>,
+    /// Key of the field (of the class or an ancestor) holding a CI's owner, for the data-quality checks; null: the
+    /// parent's setting applies. Left out (files before version 11): unchanged, null for a new class.
+    #[schema(schema_with = nullable_key_schema)]
+    #[serde(default, deserialize_with = "schemas::patch", skip_serializing_if = "Option::is_none")]
+    pub owner_attribute: Option<Option<String>>,
+    /// Key of the date or datetime field (of the class or an ancestor) holding a CI's end of life, for the
+    /// data-quality checks; null: the parent's setting applies. Left out (files before version 11): unchanged, null
+    /// for a new class.
+    #[schema(schema_with = nullable_key_schema)]
+    #[serde(default, deserialize_with = "schemas::patch", skip_serializing_if = "Option::is_none")]
+    pub end_of_life_attribute: Option<Option<String>>,
     /// Set on the built-in business service class (version 5). An import matches such a class to this install's
     /// class of the same role, whatever its key, and keeps that class's key and area; it never gives a class a
     /// role or takes one away
@@ -753,8 +765,8 @@ fn exported_at_schema() -> Schema {
 pub struct ConfigFile {
     #[schema(schema_with = format_schema)]
     pub format: String,
-    /// File format version; this server writes version 10 and reads 1 to 10
-    #[schema(minimum = 1, maximum = 10)]
+    /// File format version; this server writes version 11 and reads 1 to 11
+    #[schema(minimum = 1, maximum = 11)]
     pub format_version: i32,
     /// When and by which server version the file was written (informational)
     #[schema(schema_with = exported_at_schema)]

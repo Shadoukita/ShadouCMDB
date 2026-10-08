@@ -507,6 +507,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/configuration-items/data-quality": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Data-quality checks ("Needs attention"): how many CIs each check finds
+         * @description Counts, among the active, live CIs of asset types the caller may view (the inventory list's defaults), the CIs each check finds: `no_owner` (no value in the owner field of their type), `end_of_life` (end of life today or earlier, or within `endOfLifeWithinDays` days, default 90), `no_relationships` (no live relationship to a CI the caller may view) and `pending_approval` (a workflow approval request is pending). The owner and end-of-life fields are set per type (`CiClass.ownerAttributeId`, `endOfLifeAttributeId`; a subtype without its own setting takes its parent's); CIs of types without one are not counted by that check, and `configured` is false when no type the caller may view has one. Each check's `filter` holds the `listConfigurationItems` (and `getConfigurationItemFacets`) query parameters that list its CIs. Read-only; no audit entry.
+         */
+        get: operations["getConfigurationItemDataQuality"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/configuration-items/{id}": {
         parameters: {
             query?: never;
@@ -1328,7 +1348,7 @@ export interface paths {
         head?: never;
         /**
          * Update a ci class (partial)
-         * @description Requires `datamodel.manage`. Changing `titleAttributeId` relabels the class's CIs. Moving the type to another parent (`parentId`) keeps its title attribute only if the new lineage provides it; otherwise it takes the new parent's (so do its subtypes), and the CIs are relabelled.
+         * @description Requires `datamodel.manage`. Changing `titleAttributeId` relabels the class's CIs. Moving the type to another parent (`parentId`) keeps its title attribute only if the new lineage provides it; otherwise it takes the new parent's (so do its subtypes), and the CIs are relabelled. The same move clears an `ownerAttributeId` or `endOfLifeAttributeId` of the type or its subtypes that the new lineage does not provide (the parent's setting then applies).
          */
         patch: operations["updateCiClass"];
         trace?: never;
@@ -3958,6 +3978,18 @@ export interface components {
              */
             titleAttributeId: string | null;
             /**
+             * Format: uuid
+             * @description Data quality: the field (of this class or an ancestor) holding a CI's owner. A CI without a value there counts
+             *     as "no owner". Null: the parent's setting applies; no setting in the lineage leaves the class out of the check
+             */
+            ownerAttributeId: string | null;
+            /**
+             * Format: uuid
+             * @description Data quality: the date or datetime field (of this class or an ancestor) holding a CI's end of life. Null: the
+             *     parent's setting applies; no setting in the lineage leaves the class out of the check
+             */
+            endOfLifeAttributeId: string | null;
+            /**
              * @description Set on the built-in type the application itself uses: `business_service` (the business services). It can be
              *     renamed and given fields, but not deleted, archived, purged, made abstract, given a parent or subtypes
              */
@@ -4139,7 +4171,7 @@ export interface components {
             format: "shadoucmdb.config";
             /**
              * Format: int32
-             * @description File format version; this server writes version 10 and reads 1 to 10
+             * @description File format version; this server writes version 11 and reads 1 to 11
              */
             formatVersion: number;
             exportedAt?: string | null;
@@ -4451,6 +4483,8 @@ export interface components {
                 sortOrder?: number;
                 isActive?: boolean;
                 titleAttribute?: string | null;
+                ownerAttribute?: string | null;
+                endOfLifeAttribute?: string | null;
                 /**
                  * @description Set on the built-in business service class (version 5). An import matches such a class to this install's
                  *     class of the same role, whatever its key, and keeps that class's key and area; it never gives a class a
@@ -4534,6 +4568,36 @@ export interface components {
                 /** @description Stable machine key, lower_snake_case */
                 targetClass: string;
             }[];
+        };
+        DataQuality: {
+            /** @description Every check, in a fixed order: no_owner, end_of_life, no_relationships, pending_approval */
+            checks: components["schemas"]["DataQualityCheck"][];
+        };
+        /** @description One data-quality check: how many CIs it finds. */
+        DataQualityCheck: {
+            key: components["schemas"]["QualityCheck"];
+            /**
+             * Format: int64
+             * @description CIs the check finds, among the active, live, non-process CIs the caller may view
+             */
+            count: number;
+            /**
+             * @description False when the check cannot find anything yet: no type the caller may view has an owner field (no_owner)
+             *     or an end-of-life field (end_of_life), in its own setting or an ancestor's. The UI shows "not configured"
+             *     rather than a reassuring 0.
+             */
+            configured: boolean;
+            /** @description The inventory list filter that lists these CIs */
+            filter: components["schemas"]["DataQualityFilter"];
+        };
+        /** @description The inventory filter a check's drill-down opens: `listConfigurationItems` with these query parameters. */
+        DataQualityFilter: {
+            quality: components["schemas"]["QualityCheck"];
+            /**
+             * Format: int32
+             * @description Set for the end_of_life check
+             */
+            endOfLifeWithinDays: number | null;
         };
         /** @description What a directory says about a user (connection test) */
         DirectoryUserPreview: {
@@ -5883,6 +5947,11 @@ export interface components {
         PurgeResult: {
             schemaChange: components["schemas"]["SchemaChange"] | null;
         };
+        /**
+         * @description A data-quality check ("Needs attention"): which CIs it finds.
+         * @enum {string}
+         */
+        QualityCheck: "no_owner" | "end_of_life" | "no_relationships" | "pending_approval";
         Readiness: {
             /** @enum {string} */
             status: "ready" | "not_ready";
@@ -10073,6 +10142,10 @@ export interface operations {
                 kind?: "asset" | "process" | "any";
                 /** @description Business service ids (CI ids), comma-separated: CIs that are a direct member of one of them. A service the caller may not view, or a deleted one, has no members here. */
                 businessServiceId?: string;
+                /** @description Only CIs a data-quality check finds (see `getConfigurationItemDataQuality`): no_owner (no value in the owner field of their type), end_of_life (end of life reached or within `endOfLifeWithinDays` days), no_relationships (no live relationship to a CI the caller may view) or pending_approval (a workflow approval request is pending). CIs of types without an owner or end-of-life field match neither of those two checks. */
+                quality?: "no_owner" | "end_of_life" | "no_relationships" | "pending_approval";
+                /** @description For the end_of_life check: CIs whose end of life is today or earlier, or at most this many days from today (the database server's date). */
+                endOfLifeWithinDays?: number;
             };
             header?: never;
             path?: never;
@@ -10401,6 +10474,10 @@ export interface operations {
                 kind?: "asset" | "process" | "any";
                 /** @description Business service ids (CI ids), comma-separated: CIs that are a direct member of one of them. A service the caller may not view, or a deleted one, has no members here. */
                 businessServiceId?: string;
+                /** @description Only CIs a data-quality check finds (see `getConfigurationItemDataQuality`): no_owner (no value in the owner field of their type), end_of_life (end of life reached or within `endOfLifeWithinDays` days), no_relationships (no live relationship to a CI the caller may view) or pending_approval (a workflow approval request is pending). CIs of types without an owner or end-of-life field match neither of those two checks. */
+                quality?: "no_owner" | "end_of_life" | "no_relationships" | "pending_approval";
+                /** @description For the end_of_life check: CIs whose end of life is today or earlier, or at most this many days from today (the database server's date). */
+                endOfLifeWithinDays?: number;
                 /** @description Values returned per facet, most CIs first (1-200); selected values are always returned */
                 valueLimit?: number;
             };
@@ -10686,6 +10763,83 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CountHistory"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getConfigurationItemDataQuality: {
+        parameters: {
+            query?: {
+                /** @description For the end_of_life check: CIs whose end of life is today or earlier, or at most this many days from today (the database server's date). */
+                endOfLifeWithinDays?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataQuality"];
                 };
             };
             /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
@@ -15938,6 +16092,10 @@ export interface operations {
                     isActive?: boolean;
                     /** @description Attribute of this class or an ancestor whose value labels the CIs (text, enum, number, integer, date, datetime, ip or cidr); null labels them by their ident. A new class takes its parent's. */
                     titleAttributeId?: string | null;
+                    /** @description Data quality: attribute of this class or an ancestor that holds a CI's owner (text, enum, lookup or reference). CIs without a value count in the `no_owner` check. Null: the parent's setting applies. */
+                    ownerAttributeId?: string | null;
+                    /** @description Data quality: attribute of this class or an ancestor that holds a CI's end of life (date or datetime), for the `end_of_life` check. Null: the parent's setting applies. */
+                    endOfLifeAttributeId?: string | null;
                     /**
                      * @description asset (inventory CIs) or process (records such as change requests, kept out of the inventory). Leave out to take the parent's kind (asset for a root type); a type has its parent's kind.
                      * @enum {string}
@@ -16247,6 +16405,10 @@ export interface operations {
                     isActive?: boolean;
                     /** @description Attribute of this class or an ancestor whose value labels the CIs (text, enum, number, integer, date, datetime, ip or cidr); null labels them by their ident. A new class takes its parent's. */
                     titleAttributeId?: string | null;
+                    /** @description Data quality: attribute of this class or an ancestor that holds a CI's owner (text, enum, lookup or reference). CIs without a value count in the `no_owner` check. Null: the parent's setting applies. */
+                    ownerAttributeId?: string | null;
+                    /** @description Data quality: attribute of this class or an ancestor that holds a CI's end of life (date or datetime), for the `end_of_life` check. Null: the parent's setting applies. */
+                    endOfLifeAttributeId?: string | null;
                     /**
                      * @description Only for a type that has never held a CI (deleted ones included) and has no subtypes
                      * @enum {string}
@@ -27607,7 +27769,7 @@ export interface operations {
                     format: "shadoucmdb.config";
                     /**
                      * Format: int32
-                     * @description File format version; this server writes version 10 and reads 1 to 10
+                     * @description File format version; this server writes version 11 and reads 1 to 11
                      */
                     formatVersion: number;
                     exportedAt?: string | null;
