@@ -33,6 +33,8 @@ import Icon from "./Icon.vue";
 const props = defineProps<{
   /** The list's filters (GET /configuration-items without sort and paging). */
   filters: Omit<ChangeHistogramQuery, "from" | "to" | "bucket">;
+  /** Set when the API cannot count the list's set (a filter it does not take): the strip says why and sends no request. */
+  unavailable?: string;
 }>();
 
 const PLOT_H = 80;
@@ -51,7 +53,7 @@ onBeforeUnmount(() => clearInterval(clock));
 const win = computed(() => (zoomDay.value ? dayWindow(zoomDay.value, now.value) : rangeWindow(pref.value.range, now.value)));
 const query = useChangeHistogram(
   () => ({ ...props.filters, ...win.value }),
-  () => pref.value.open,
+  () => pref.value.open && !props.unavailable,
 );
 // A changed filter starts again from the range: the zoomed day may not mean much for the new set.
 watch(
@@ -161,7 +163,7 @@ function toggleOpen() {
           <Icon :name="pref.open ? 'chevron-down' : 'chevron-right'" />{{ t("histogram.title") }}
         </button>
       </h2>
-      <template v-if="pref.open">
+      <template v-if="pref.open && !unavailable">
         <span id="histogram-summary" class="histogram-summary">{{ summary }}</span>
         <ul class="histogram-legend" :aria-label="t('histogram.legend')">
           <li v-for="s in SERIES" :key="s"><span :class="['histogram-swatch', `s-${s}`]" aria-hidden="true" />{{ t(`histogram.series.${s}`) }}</li>
@@ -181,7 +183,10 @@ function toggleOpen() {
     </div>
 
     <div v-if="pref.open" id="histogram-body" class="histogram-body">
-      <p v-if="query.isError.value" class="histogram-error">
+      <p v-if="unavailable" class="histogram-unavailable" data-testid="histogram-unavailable">
+        <Icon name="info" />{{ unavailable }}
+      </p>
+      <p v-else-if="query.isError.value" class="histogram-error">
         <Icon name="circle-alert" />{{ t("histogram.error") }}
         <button type="button" class="btn btn-sm" @click="query.refetch()">{{ t("common.retry") }}</button>
       </p>

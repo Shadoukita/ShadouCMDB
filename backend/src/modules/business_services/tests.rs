@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use axum::Router;
 use axum::body::Body as HttpBody;
@@ -28,7 +28,7 @@ use crate::db::scratch;
 use crate::http::error::ErrorCode;
 use crate::modules::api_tokens::tests::{Creds, app_with_business_services, call, session_of};
 use crate::modules::impact::ImpactState;
-use crate::modules::impact::engine::ASSEMBLY_ALLOWANCE;
+use crate::modules::impact::engine::assert_bounded_by_the_allowance;
 
 // ---------------------------------------------------------------------------
 // Fixture
@@ -1347,6 +1347,8 @@ async fn impact_follows_membership_and_part_of_lists_nesting() {
 /// allowance. Another session's lock makes reading the owners wait, as on a
 /// very slow database: the view ends at the end of the allowance with 503
 /// SERVER_BUSY instead of holding the connection until the request times out.
+/// The bounds are checked on the view's own clock, not by timing the request,
+/// which a loaded host stretches (GH#791).
 #[tokio::test]
 async fn a_slow_part_of_ends_within_the_allowance() {
     let Some(db) = scratch::database("business_services_part_of_allowance").await else { return };
@@ -1359,30 +1361,26 @@ async fn a_slow_part_of_ends_within_the_allowance() {
     let timeout = Duration::from_millis(100);
     let impact = Arc::new(ImpactState::new(ImpactConfig { timeout, ..ImpactConfig::default() }));
     let cfg = BusinessServiceConfig::default();
-    let slack = Duration::from_millis(500);
+    crate::modules::impact::engine::CANCEL_AT.take();
 
     let mut blocker = w.pool.begin().await.unwrap();
     sqlx::query("LOCK TABLE cmdb.business_service_owners IN ACCESS EXCLUSIVE MODE")
         .execute(&mut *blocker)
         .await
         .unwrap();
-    let started = Instant::now();
     let err = service::part_of(&w.pool, &ctx, &impact, cfg, db01).await.err().unwrap();
-    let elapsed = started.elapsed();
     blocker.rollback().await.unwrap();
     assert_eq!((err.code, err.retry_after), (ErrorCode::ServerBusy, Some(1)), "{err:?}");
-    assert!(elapsed < timeout + ASSEMBLY_ALLOWANCE + slack, "{elapsed:?}");
+    assert_bounded_by_the_allowance();
 
     // The relationship types, read before the walk and by the walk itself
     // (`data::types` in `engine::traverse`), are bounded by the same allowance.
     let mut blocker = w.pool.begin().await.unwrap();
     sqlx::query("LOCK TABLE cmdb.relationship_types IN ACCESS EXCLUSIVE MODE").execute(&mut *blocker).await.unwrap();
-    let started = Instant::now();
     let err = service::part_of(&w.pool, &ctx, &impact, cfg, db01).await.err().unwrap();
-    let elapsed = started.elapsed();
     blocker.rollback().await.unwrap();
     assert_eq!((err.code, err.retry_after), (ErrorCode::ServerBusy, Some(1)), "{err:?}");
-    assert!(elapsed < timeout + ASSEMBLY_ALLOWANCE + slack, "{elapsed:?}");
+    assert_bounded_by_the_allowance();
 
     // Without the lock the view is answered, and the analysis place was given back.
     let r = service::part_of(&w.pool, &ctx, &impact, cfg, db01).await.unwrap();
@@ -2127,5 +2125,41 @@ async fn inventory_export_streams_past_one_batch() {
     let labels: Vec<String> = csv_rows(&body)[1..].iter().map(|r| r[0].clone()).collect();
     let expected: Vec<String> = (1..=1234).map(|i| format!("bulk-{i:05}")).collect();
     assert_eq!(labels, expected);
+    db.drop().await;
+}
+
+/// A restricted caller's export past several cursor batches, with hidden CIs
+/// interleaved in the sort order: only the classes they may view, every one
+/// once, in order, and the audit row counts what they were sent.
+#[tokio::test]
+async fn inventory_export_streams_only_the_restricted_callers_view() {
+    let Some(db) = scratch::database("inventory_export_restricted_batches").await else { return };
+    let w = World::new(&db, BusinessServiceConfig::default()).await;
+    sqlx::query(
+        "INSERT INTO configuration_items (class_id, label)
+         SELECT CASE WHEN g % 3 = 0 THEN $2 ELSE $1 END, 'bulk-' || lpad(g::text, 5, '0') FROM generate_series(1, 2500) g",
+    )
+    .bind(w.classes["server"])
+    .bind(w.classes["datastore"])
+    .execute(&w.pool)
+    .await
+    .unwrap();
+    let (viewer_id, viewer) = w.user("viewer", &[("server", false)], &[]).await;
+    let (status, _, body) =
+        raw(&w.app, "GET", "/api/v1/configuration-items/export?columns=label,class&sort=label", &viewer, None).await;
+    assert_eq!(status, 200, "{body}");
+    let rows = csv_rows(&body);
+    let labels: Vec<&str> = rows[1..].iter().map(|r| r[0].as_str()).collect();
+    let expected: Vec<String> = (1..=2500).filter(|i| i % 3 != 0).map(|i| format!("bulk-{i:05}")).collect();
+    assert_eq!(labels, expected, "no datastore, none twice, the list's order");
+    let row_count: Value =
+        sqlx::query_scalar("SELECT new_value -> 'rowCount' FROM audit_log WHERE action = 'export' AND actor_id = $1")
+            .bind(viewer_id.to_string())
+            .fetch_one(&w.pool)
+            .await
+            .unwrap();
+    assert_eq!(row_count, json!(expected.len()));
+    let (_, list) = w.get(&viewer, "/api/v1/configuration-items?limit=1").await;
+    assert_eq!(list["page"]["total"], json!(expected.len()), "the list agrees");
     db.drop().await;
 }

@@ -1332,3 +1332,63 @@ async fn view_counts_wait_for_a_slot_and_time_out_without_one() {
 
     db.drop().await;
 }
+
+/// The count limits at their boundaries: 50 `ids` are counted and 51 refused
+/// (above); without `ids`, the first 50 of 51 views with `truncated`; a view
+/// of 9,999 CIs is `counted`, of 10,000 `at_least` the cap.
+#[tokio::test]
+async fn view_counts_hold_their_limits_at_the_boundaries() {
+    use super::service::{COUNT_CAP, MAX_COUNTED};
+
+    let Some((db, w)) = world("saved_views_count_limits").await else { return };
+    let admin = w.admin.clone();
+    let server = w.class("server").await;
+    sqlx::query(
+        "INSERT INTO configuration_items (class_id, label) SELECT $1, 'bulk-' || g FROM generate_series(1, $2::int) g",
+    )
+    .bind(server)
+    .bind(COUNT_CAP as i32 - 1)
+    .execute(&w.pool)
+    .await
+    .unwrap();
+    let mut ids = Vec::new();
+    for i in 0..=MAX_COUNTED {
+        let v = w
+            .created(
+                &admin,
+                view("inventory", &format!("Servers {i:02}"), "shared", json!({ "classKeys": ["server"] })),
+            )
+            .await;
+        ids.push(v["id"].as_str().unwrap().to_owned());
+    }
+    let statuses = |v: &Value| -> Vec<(String, Option<i64>)> {
+        v["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| (c["status"].as_str().unwrap().to_owned(), c["count"].as_i64()))
+            .collect()
+    };
+
+    let (status, v) = w.call(&admin, "GET", &format!("{VIEWS}/counts"), None).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!((v["data"].as_array().unwrap().len(), v["truncated"].as_bool()), (MAX_COUNTED, Some(true)), "{v}");
+    assert!(statuses(&v).iter().all(|s| *s == ("counted".to_owned(), Some(COUNT_CAP - 1))), "{v}");
+
+    let fifty = ids[1..].join(",");
+    let (status, v) = w.call(&admin, "GET", &format!("{VIEWS}/counts?ids={fifty}"), None).await;
+    assert_eq!(status, 200, "exactly {MAX_COUNTED} ids: {v}");
+    assert_eq!((v["data"].as_array().unwrap().len(), v["truncated"].as_bool()), (MAX_COUNTED, Some(false)), "{v}");
+    assert_eq!(v["data"][0]["viewId"].as_str(), Some(ids[1].as_str()), "in the order of `ids`");
+
+    sqlx::query("INSERT INTO configuration_items (class_id, label) VALUES ($1, 'one more')")
+        .bind(server)
+        .execute(&w.pool)
+        .await
+        .unwrap();
+    let (_, v) = w.call(&admin, "GET", &format!("{VIEWS}/counts?ids={}", ids[0]), None).await;
+    assert_eq!(statuses(&v), [("at_least".to_owned(), Some(COUNT_CAP))], "{v}");
+    assert_eq!(v["cap"].as_i64(), Some(COUNT_CAP));
+
+    db.drop().await;
+}

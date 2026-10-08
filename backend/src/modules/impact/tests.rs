@@ -398,6 +398,11 @@ async fn budgets_and_the_deadline_truncate_deterministically() {
 /// getting their own 2 s each. The in-edge counts are made to sleep until
 /// cancelled, and another session's lock makes reading the class model wait,
 /// as on a very slow database.
+///
+/// The bounds are checked on the analysis's own clock (when each statement
+/// would be cancelled), not by timing the request: a loaded host stretches the
+/// request but not the deadlines (GH#791). The walk's timeout is long enough
+/// for its one hop on such a host.
 #[tokio::test]
 async fn a_slow_assembly_ends_within_the_allowance() {
     let Some(db) = scratch::database("a_slow_assembly_ends_within_the_allowance").await else { return };
@@ -407,21 +412,19 @@ async fn a_slow_assembly_ends_within_the_allowance() {
     let (down_ci, up_ci) = (f.ci("db").await, f.ci("svc").await);
     f.affects(root, down_ci).await;
     f.affects(up_ci, root).await;
-    let timeout = Duration::from_millis(100);
+    let timeout = Duration::from_secs(1);
     let state = Arc::new(ImpactState::new(ImpactConfig { timeout, ..ImpactConfig::default() }));
     let both = q(AnalysisDirection::Both, 3);
-    let slack = Duration::from_millis(500);
     engine::SLOW_COUNTS.lock().unwrap().push(root);
+    engine::CANCEL_AT.take();
 
     // The downstream counts end at half the allowance (before: 2 s for each
     // walk's counts) and fall back to the via edge; the upstream walk is then
     // out of time, and the truncated result is answered.
-    let started = std::time::Instant::now();
     let r = run_with(&f, &ctx, &state, root, &both).await;
-    let elapsed = started.elapsed();
     assert_eq!((r.truncated_reason, r.items.len()), (Some(TruncatedReason::Timeout), 1));
     assert!(r.items.iter().all(|i| i.reached_by_count == 1));
-    assert!(elapsed < timeout + engine::ASSEMBLY_ALLOWANCE / 2 + slack, "{elapsed:?}");
+    assert_eq!(engine::assert_bounded_by_the_allowance(), 1, "the downstream counts only");
 
     // The class model waits too: the analysis ends at the end of the allowance
     // with 503 SERVER_BUSY (before: 2 s more, then 500).
@@ -430,12 +433,10 @@ async fn a_slow_assembly_ends_within_the_allowance() {
         .execute(&mut *blocker)
         .await
         .unwrap();
-    let started = std::time::Instant::now();
     let err = service::analyse(&f.pool, &ctx, &state, root, &both).await.err().unwrap();
-    let elapsed = started.elapsed();
     blocker.rollback().await.unwrap();
     assert_eq!((err.code, err.retry_after), (ErrorCode::ServerBusy, Some(1)), "{err:?}");
-    assert!(elapsed < timeout + engine::ASSEMBLY_ALLOWANCE + slack, "{elapsed:?}");
+    engine::assert_bounded_by_the_allowance();
     engine::SLOW_COUNTS.lock().unwrap().retain(|r| *r != root);
 
     // statement_timeout limits each statement, not the analysis: two
@@ -449,16 +450,14 @@ async fn a_slow_assembly_ends_within_the_allowance() {
         .await
         .unwrap();
     let release = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(1900)).await;
+        tokio::time::sleep(timeout + Duration::from_millis(1900)).await;
         first.rollback().await.unwrap();
     });
-    let started = std::time::Instant::now();
     let err = service::analyse(&f.pool, &ctx, &state, root, &both).await.err().unwrap();
-    let elapsed = started.elapsed();
     release.await.unwrap();
     second.rollback().await.unwrap();
     assert_eq!((err.code, err.retry_after), (ErrorCode::ServerBusy, Some(1)), "{err:?}");
-    assert!(elapsed < timeout + engine::ASSEMBLY_ALLOWANCE + slack, "{elapsed:?}");
+    engine::assert_bounded_by_the_allowance();
 
     // Without the injected delays the counts are exact again.
     let r = run(&f, &ctx, root, &both).await;

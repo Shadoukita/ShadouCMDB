@@ -153,10 +153,42 @@ pub(crate) fn is_query_canceled(err: &sqlx::Error) -> bool {
     err.as_database_error().and_then(|e| e.code()).is_some_and(|c| c == "57014")
 }
 
+#[cfg(test)]
+thread_local! {
+    /// When each statement bounded on this thread would be cancelled, and whether
+    /// it was the in-edge counts: tests of the allowance compare these with the
+    /// deadline on the analysis's own clock instead of timing the request, which a
+    /// loaded host stretches (GH#791). `#[tokio::test]` runs the analysis's task on
+    /// the test's thread.
+    pub static CANCEL_AT: std::cell::RefCell<Vec<(Instant, bool)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Takes the bounds recorded on this thread since the last call and checks
+/// them against the allowance of the analysis they belong to (GH#791). Its
+/// first statement is bounded by the end of the allowance, which fixes that end
+/// to the millisecond: every statement must be cancelled by then, the in-edge
+/// counts half the allowance earlier. Returns how many counts were bounded.
+#[cfg(test)]
+pub fn assert_bounded_by_the_allowance() -> usize {
+    let bounds = CANCEL_AT.take();
+    let Some(&(first, _)) = bounds.first() else { panic!("no statement was bounded") };
+    let end = first + Duration::from_millis(1);
+    for (i, &(at, counts)) in bounds.iter().enumerate() {
+        let limit = if counts { end - ASSEMBLY_ALLOWANCE / 2 } else { end };
+        assert!(at <= limit, "statement {i} (counts: {counts}) ends {:?} after its limit", at - limit);
+    }
+    bounds.iter().filter(|b| b.1).count()
+}
+
 /// The time left, in whole milliseconds (at least 1), or `None` once it has run out.
 pub(crate) fn remaining_ms(deadline: Instant) -> Option<u64> {
-    let left = deadline.checked_duration_since(Instant::now())?;
+    let now = Instant::now();
+    let left = deadline.checked_duration_since(now)?;
     let ms = left.as_millis() as u64;
+    #[cfg(test)]
+    if ms > 0 {
+        CANCEL_AT.with_borrow_mut(|c| c.push((now + Duration::from_millis(ms), false)));
+    }
     (ms > 0).then_some(ms)
 }
 
@@ -324,6 +356,8 @@ pub async fn traverse(conn: &mut PgConnection, roots: &[Uuid], opts: &Options<'_
         let counts: HashMap<Uuid, i64> = match remaining_ms(counts_deadline) {
             None => HashMap::new(),
             Some(ms) => {
+                #[cfg(test)]
+                CANCEL_AT.with_borrow_mut(|c| c.last_mut().expect("recorded by remaining_ms").1 = true);
                 let mut sp = conn.begin().await?;
                 data::set_statement_timeout(&mut sp, ms).await?;
                 let counted = async {

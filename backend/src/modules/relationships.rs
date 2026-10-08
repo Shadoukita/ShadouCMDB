@@ -32,6 +32,9 @@ pub struct RelationshipTypeRef {
     pub forward_label: String,
     pub reverse_label: String,
     pub is_directional: bool,
+    /// The type's category (group heading on the CI page); null: none
+    #[schema(required = true)]
+    pub category: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -83,6 +86,7 @@ impl From<RelationshipRow> for Relationship {
                 forward_label: r.forward_label,
                 reverse_label: r.reverse_label,
                 is_directional: r.is_directional,
+                category: r.type_category,
             },
             source_ci_id: r.source_ci_id,
             source: Endpoint {
