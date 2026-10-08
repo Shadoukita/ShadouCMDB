@@ -869,4 +869,81 @@ mod tests {
 
         db.drop().await;
     }
+
+    /// SHAA-2553 (#764, #779): the Groups and Permission profiles screens rest on
+    /// these rights. Groups: `users.manage` only. Profiles: read with
+    /// `profiles.manage` or `users.manage`, change with `profiles.manage` only.
+    /// Any other permission opens neither.
+    #[tokio::test]
+    async fn groups_and_profiles_are_gated_by_the_admin_rights() {
+        let Some(db) = scratch::database("groups_and_profiles_rights").await else { return };
+        let app = app(db.pool.clone());
+        let pool = &db.pool;
+
+        let password = format!("test passphrase {}", Uuid::new_v4());
+        let setup = json!({ "username": "admin", "email": "admin@example.test", "displayName": "Admin", "password": password,
+            "setupToken": crate::auth::setup_token::TEST_TOKEN });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
+        assert_eq!(status, 201, "{me}");
+        let admin = session_of(&me, &headers);
+        let (status, g, _) = call(&app, "POST", "/api/v1/admin/groups", &admin, Some(json!({ "name": "Ops" }))).await;
+        assert_eq!(status, 201, "{g}");
+        let group = format!("/api/v1/admin/groups/{}", g["id"].as_str().unwrap());
+
+        let mut sessions = Vec::new();
+        for (name, permission) in [("um", "users.manage"), ("pm", "profiles.manage"), ("dm", "datamodel.manage")] {
+            let profile: Uuid = sqlx::query_scalar("INSERT INTO permission_profiles (name) VALUES ($1) RETURNING id")
+                .bind(format!("Only {permission}"))
+                .fetch_one(pool)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO permission_profile_global_permissions (profile_id, permission) VALUES ($1, $2)")
+                .bind(profile)
+                .bind(permission)
+                .execute(pool)
+                .await
+                .unwrap();
+            let body = json!({ "username": name, "email": format!("{name}@example.test"), "displayName": name,
+                "password": password, "profileIds": [profile] });
+            let (status, v, _) = call(&app, "POST", "/api/v1/admin/users", &admin, Some(body)).await;
+            assert_eq!(status, 201, "{v}");
+            sessions.push((permission, profile, login(&app, name, &password).await));
+        }
+
+        for (permission, profile, who) in &sessions {
+            let groups = *permission == "users.manage";
+            let read_profiles = matches!(*permission, "users.manage" | "profiles.manage");
+            let manage_profiles = *permission == "profiles.manage";
+            let profile_url = format!("/api/v1/admin/profiles/{profile}");
+            let checks: [(&str, &str, Option<Value>, bool); 7] = [
+                ("GET", "/api/v1/admin/groups", None, groups),
+                ("GET", &group, None, groups),
+                ("GET", &format!("{group}/members"), None, groups),
+                ("POST", "/api/v1/admin/groups", Some(json!({ "name": format!("By {permission}") })), groups),
+                ("GET", "/api/v1/admin/profiles", None, read_profiles),
+                ("GET", &profile_url, None, read_profiles),
+                (
+                    "POST",
+                    "/api/v1/admin/profiles",
+                    Some(json!({ "name": format!("Made by {permission}"), "globalPermissions": [permission] })),
+                    manage_profiles,
+                ),
+            ];
+            for (method, url, body, allowed) in checks {
+                let (status, v, _) = call(&app, method, url, who, body).await;
+                if allowed {
+                    assert!((200..300).contains(&status), "{permission}: {method} {url} -> {status} {v}");
+                } else {
+                    assert_eq!((status, code(&v)), (403, "FORBIDDEN"), "{permission}: {method} {url}: {v}");
+                }
+            }
+            // Deleting a profile is for profile managers only (the delete itself is checked last).
+            let (status, v, _) = call(&app, "DELETE", &profile_url, who, None).await;
+            if !manage_profiles {
+                assert_eq!((status, code(&v)), (403, "FORBIDDEN"), "{permission}: DELETE {profile_url}: {v}");
+            }
+        }
+
+        db.drop().await;
+    }
 }

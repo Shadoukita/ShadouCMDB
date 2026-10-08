@@ -635,5 +635,7 @@ test("stop: the confirmation states what happens, with counts, and starts on Can
   await checkA11y(page, testInfo, "import-stop-dialog");
   await dialog.getByRole("button", { name: "Cancel" }).click();
   await expect(stop).toBeFocused();
+  // As in support.ts (GH#774): a refetch still in the route handler fails the test once the context closes.
+  await page.unrouteAll({ behavior: "ignoreErrors" });
   await page.context().close();
 });

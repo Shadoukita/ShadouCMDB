@@ -1233,3 +1233,61 @@ async fn view_counts_match_the_list_within_the_callers_rights() {
 
     db.drop().await;
 }
+
+/// SHAA-2553 (#766, #778): a restricted caller's counts equal what the list and
+/// global search show them. A view of a type takes in its subtypes, but only
+/// those the caller may view; a search view counts only CIs of visible types.
+#[tokio::test]
+async fn view_counts_leave_out_subtypes_and_search_hits_the_caller_may_not_view() {
+    let Some((db, w)) = world("saved_views_counts_restricted").await else { return };
+    let admin = w.admin.clone();
+    let (status, blade) = w
+        .call(
+            &admin,
+            "POST",
+            "/api/v1/ci-classes",
+            Some(json!({ "key": "blade", "name": "Blade", "parentId": w.class("server").await })),
+        )
+        .await;
+    assert_eq!(status, 201, "{blade}");
+    let servers = w.profile("Servers only", &[], &["server"]).await;
+    let (b, _) = w.user("bob", &[&servers]).await;
+    ci(&w, "server", "web-1", "production").await;
+    ci(&w, "server", "db-1", "production").await;
+    ci(&w, "blade", "web-blade-1", "production").await;
+    ci(&w, "blade", "web-blade-2", "staging").await;
+    ci(&w, "virtual_machine", "web-vm-1", "production").await;
+
+    let servers_view =
+        w.created(&admin, view("inventory", "All servers", "shared", json!({ "classKeys": ["server"] }))).await;
+    let web = w.created(&admin, view("search", "Web", "shared", json!({ "filters": { "q": "web" } }))).await;
+    let count_of = |v: &Value, id: &Value| {
+        v["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["viewId"] == *id)
+            .map(|c| (c["status"].clone(), c["count"].clone()))
+    };
+    let ids = format!("{VIEWS}/counts?ids={},{}", servers_view["id"].as_str().unwrap(), web["id"].as_str().unwrap());
+
+    for (who, servers_total, web_total) in [(&admin, 4, 4), (&b, 2, 1)] {
+        let (status, v) = w.call(who, "GET", &ids, None).await;
+        assert_eq!(status, 200, "{v}");
+        let (_, listed) = w
+            .call(
+                who,
+                "GET",
+                &format!("/api/v1/configuration-items?{}", query_string(&servers_view["resolved"]["query"])),
+                None,
+            )
+            .await;
+        assert_eq!(listed["page"]["total"], json!(servers_total), "{listed}");
+        assert_eq!(count_of(&v, &servers_view["id"]), Some((json!("counted"), json!(servers_total))), "{v}");
+        let (_, found) = w.call(who, "GET", "/api/v1/search?q=web", None).await;
+        assert_eq!(found["page"]["total"], json!(web_total), "{found}");
+        assert_eq!(count_of(&v, &web["id"]), Some((json!("counted"), json!(web_total))), "{v}");
+    }
+
+    db.drop().await;
+}

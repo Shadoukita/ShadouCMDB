@@ -904,6 +904,66 @@ mod tests {
         db.drop().await;
     }
 
+    /// SHAA-2553 (#771): the release check closes only connections left inside
+    /// a transaction. One used for plain statements or a finished transaction
+    /// goes back to the pool and is handed out again (same backend), so the
+    /// check does not turn every request into a new connection. A transaction
+    /// opened by a raw `BEGIN`, not through `begin()`, is closed as well, and
+    /// its uncommitted write is gone.
+    #[tokio::test]
+    async fn the_release_check_keeps_clean_connections_and_closes_open_transactions() {
+        use sqlx::Connection;
+        let Some(db) = super::scratch::empty("the_release_check_keeps_clean").await else { return };
+        let opts = (*db.pool.connect_options()).clone();
+        let cfg = crate::config::DatabaseConfig {
+            url: None,
+            host: None,
+            port: 5432,
+            database: None,
+            user: None,
+            password: None,
+            ssl: crate::config::SslMode::Disable,
+            ssl_ca_file: None,
+            pool_max: 1,
+            statement_timeout: std::time::Duration::ZERO,
+            connect_timeout: std::time::Duration::from_secs(5),
+            roles: Default::default(),
+        };
+        let pool = super::pool_options(&cfg).connect_with(opts).await.unwrap();
+        sqlx::raw_sql("CREATE TABLE release_check (n int)").execute(&pool).await.unwrap();
+        async fn pid(c: &mut sqlx::PgConnection) -> i32 {
+            sqlx::query_scalar("SELECT pg_backend_pid()").fetch_one(c).await.unwrap()
+        }
+
+        let mut c = pool.acquire().await.unwrap();
+        let first = pid(&mut c).await;
+        drop(c);
+        let mut c = pool.acquire().await.unwrap();
+        assert_eq!(pid(&mut c).await, first, "a connection used outside a transaction is kept");
+        let mut tx = (*c).begin().await.unwrap();
+        sqlx::query("INSERT INTO release_check VALUES (1)").execute(&mut *tx).await.unwrap();
+        tx.commit().await.unwrap();
+        drop(c);
+        let mut c = pool.acquire().await.unwrap();
+        assert_eq!(pid(&mut c).await, first, "a connection whose transaction committed is kept");
+        let tx = (*c).begin().await.unwrap();
+        drop(tx);
+        drop(c);
+        let mut c = pool.acquire().await.unwrap();
+        assert_eq!(pid(&mut c).await, first, "a connection whose transaction rolled back is kept");
+
+        sqlx::raw_sql("BEGIN; INSERT INTO release_check VALUES (2)").execute(&mut *c).await.unwrap();
+        drop(c);
+        let mut c = pool.acquire().await.unwrap();
+        assert_ne!(pid(&mut c).await, first, "a connection left inside a transaction is replaced");
+        let rows: Vec<i32> =
+            sqlx::query_scalar("SELECT n FROM release_check ORDER BY n").fetch_all(&mut *c).await.unwrap();
+        assert_eq!(rows, [1], "the open transaction's write was not committed");
+        drop(c);
+        pool.close().await;
+        db.drop().await;
+    }
+
     /// GH#545: a migration's `RAISE EXCEPTION` stop prints its message once,
     /// without sqlx's chain and the `at line N` of the PostgreSQL source.
     #[tokio::test]

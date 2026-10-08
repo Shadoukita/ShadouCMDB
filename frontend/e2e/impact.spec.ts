@@ -301,6 +301,8 @@ test("8. empty states: nothing affected, and nothing configured, worded for admi
     await expect(viewer.locator(".impact .state")).toContainText("Ask an administrator to configure which relationship types propagate impact.");
     await expect(viewer.getByRole("link", { name: "Data model › Relationship types" })).toHaveCount(0);
   } finally {
+    // As in support.ts (GH#774): a refetch still in the route handler fails the test once the context closes.
+    await viewer.unrouteAll({ behavior: "ignoreErrors" });
     await viewer.context().close();
   }
 });
