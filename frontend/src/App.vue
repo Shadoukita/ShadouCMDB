@@ -93,10 +93,11 @@ function retry() {
     <header class="shell-header">
       <GlobalSearch />
       <div class="shell-actions">
+        <!-- Notifications slot (design §0.6 gap G5, SHAA-2356): the bell goes before "New CI" once notifications exist. -->
         <RouterLink v-if="session.canOnAnyClass('create')" class="btn btn-primary new-ci" to="/cis/new" :title="t('shell.newCi')">
           <Icon name="plus" /><span class="btn-label">{{ t("shell.newCi") }}</span>
         </RouterLink>
-        <UserMenu />
+        <UserMenu v-if="narrow" />
       </div>
     </header>
     <nav id="shell-nav" class="shell-nav" :aria-label="t('shell.mainNav')">
@@ -116,6 +117,7 @@ function retry() {
           <Icon :name="collapsed ? 'panel-left-open' : 'panel-left-close'" :size="collapsed ? 20 : 16" />
           <span v-if="!collapsed" class="nav-label" aria-hidden="true">{{ t("shell.nav.collapse") }}</span>
         </button>
+        <UserMenu placement="rail" />
       </div>
     </nav>
     <div v-if="narrow && navOpen" class="nav-scrim" aria-hidden="true" @click="navOpen = false"></div>

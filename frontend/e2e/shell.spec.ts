@@ -1,4 +1,4 @@
-import { snap, expect, resetUiSettings, test } from "./support";
+import { apiSend, checkA11y, openUserMenu, snap, expect, resetUiSettings, test } from "./support";
 
 test("dashboard shows server-side counts and the class nav has live counts", async ({ page, request }) => {
   await resetUiSettings(request); // the built-in widgets, not a customized dashboard
@@ -27,6 +27,43 @@ test("dashboard shows server-side counts and the class nav has live counts", asy
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Server");
   await expect(serverLink).toHaveAttribute("aria-current", "page");
   await expect(nav.getByRole("link", { name: "All configuration items" })).not.toHaveAttribute("aria-current", "page");
+});
+
+// Step 12b (design §0): the rail's sections, the mono Inventory count, saved views as links, the user block.
+test("rail: Workspace, Administration and Saved views sections; a saved view opens from the rail", async ({ page, request }, testInfo) => {
+  await resetUiSettings(request);
+  const name = `E2E rail view ${Date.now().toString(36)}`;
+  const view = await apiSend<{ id: string }>(request, "POST", "/saved-views", {
+    context: "inventory",
+    name,
+    visibility: "personal",
+    definition: { classKeys: ["server"] },
+  });
+  await page.goto("/");
+  const nav = page.getByRole("navigation", { name: "Main" });
+  await expect(nav.getByRole("heading", { level: 2 })).toContainText(["Workspace", "Administration", "Saved views"]);
+  // The count stays out of the link's name; the exact figure is its tooltip.
+  const inventory = nav.getByRole("link", { name: "All configuration items", exact: true });
+  await expect(inventory.locator(".nav-count")).toHaveText(/^\d[\d.,]*\s?[KkMT]?$/);
+  await expect(inventory.locator(".nav-count")).toHaveAttribute("title", /^\d[\d,.]* configuration items$/);
+  await expect(nav.getByRole("button", { name: /^Signed in as \S/ })).toBeVisible();
+  await checkA11y(page, testInfo, "shell-rail", { include: "#shell-nav" });
+  await snap(page, "12b-shell-rail");
+
+  const link = nav.getByRole("link", { name, exact: true });
+  await link.click();
+  await expect(page).toHaveURL(new RegExp(`/cis\\?.*view=${view.id}`));
+  await expect(link).toHaveAttribute("aria-current", "page");
+  // The view's class and the inventory do not light up as well.
+  await expect(nav.locator('a[aria-current="page"]')).toHaveCount(1);
+
+  // The menu opens upwards over the dark rail but keeps its light surface: the rail's link styles stay out of it.
+  await openUserMenu(page);
+  await expect(page.locator(".user-menu-panel")).toBeVisible();
+  await checkA11y(page, testInfo, "shell-user-block-menu", { include: ".user-menu-panel" });
+
+  const csrf = (await request.storageState()).cookies.find((c) => c.name === "shadoucmdb_csrf")?.value ?? "";
+  await request.delete(`/api/v1/saved-views/${view.id}?version=1`, { headers: { "X-CSRF-Token": csrf } });
 });
 
 test("global search: '/' focuses it, type-ahead finds by IP, Enter opens results", async ({ page }) => {
