@@ -5,13 +5,15 @@ import { useCiClasses, useCriticalityValues } from "../api/queries";
 import { useUiSettings } from "../api/uiSettings";
 import { t } from "../i18n";
 import { idsOf } from "../lib/facets";
+import { END_OF_LIFE_DAYS } from "../lib/inventoryQuery";
 import type { useInventoryQueryState } from "../lib/useInventoryQueryState";
 import Icon from "./Icon.vue";
 
 /**
  * The applied filters as removable chips. One chip pattern for every list (audit I6). By default only
  * the filters without a control of their own in the toolbar (lookup values from a dashboard count or
- * the facet panel, an IP network, the layout filters from Customization › Layouts). With `all` (the
+ * the facet panel, an IP network, the layout filters from Customization › Layouts, a data-quality check from
+ * the dashboard's "Needs attention"). With `all` (the
  * inventory, whose filter controls sit behind "Add filter"), class, criticality, validity and deleted
  * get a chip as well. Lookup values get one chip per list ("Status: In production, Maintenance").
  */
@@ -107,6 +109,21 @@ const chips = computed<Chip[]>(() => {
       testid: "filter-layout-template",
       clear: () => void st.update({ layoutTemplate: undefined }),
     });
+
+  // A data-quality check from the dashboard's "Needs attention"; removing it removes its day count too.
+  const quality = st.quality.value;
+  if (quality) {
+    const days = st.listQuery.value.endOfLifeWithinDays ?? END_OF_LIFE_DAYS.default;
+    const value = t(`dashboard.attention.${quality}.title`, { days });
+    out.push({
+      key: "quality",
+      label: t("filters.quality"),
+      value,
+      remove: t("filters.remove", { name: t("filters.quality"), value }),
+      testid: "filter-quality",
+      clear: () => void st.update({ quality: undefined, endOfLifeWithinDays: undefined }),
+    });
+  }
 
   if (props.all) {
     const active = st.active.value;
