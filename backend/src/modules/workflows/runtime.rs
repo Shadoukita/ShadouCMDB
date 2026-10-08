@@ -1106,6 +1106,41 @@ pub async fn summary(
     Ok(WorkflowInstanceSummary { data })
 }
 
+/// Running instances, those awaiting approval, and the caller's approval inbox,
+/// on the CIs they may view or on one CI (SHAA-2352). Cheap enough for every
+/// page: the instance counts read the partial index of running instances and
+/// join the CI only for a restricted caller.
+pub async fn counts(
+    pool: &PgPool,
+    ctx: &RequestContext,
+    q: &WorkflowInstanceCountsQuery,
+) -> Result<WorkflowInstanceCounts, AppError> {
+    let mut conn = pool.acquire().await?;
+    if let Some(ci) = q.ci_id {
+        let class_id: Option<Uuid> = sqlx::query_scalar("SELECT class_id FROM cmdb.configuration_items WHERE id = $1")
+            .bind(ci)
+            .fetch_optional(&mut *conn)
+            .await?;
+        let class_id = class_id.ok_or_else(|| AppError::missing(CI, ci))?;
+        ctx.require_class_visible(class_id, CI, ci)?;
+    }
+    let (active, awaiting_approval): (i64, i64) = sqlx::query_as(
+        "SELECT count(*), count(*) FILTER (WHERE EXISTS (SELECT 1 FROM cmdb.workflow_approval_requests r
+                                                          WHERE r.instance_id = wi.id AND r.status = 'pending'))
+         FROM cmdb.workflow_instances wi
+         WHERE wi.status = 'active'
+           AND ($1::uuid IS NULL OR wi.ci_id = $1)
+           AND ($2::uuid[] IS NULL
+                OR wi.ci_id IN (SELECT id FROM cmdb.configuration_items WHERE class_id = ANY($2)))",
+    )
+    .bind(q.ci_id)
+    .bind(ctx.class_scope(ClassOp::View))
+    .fetch_one(&mut *conn)
+    .await?;
+    let awaiting_my_decision = approval_lists::count_actionable(&mut conn, ctx, q.ci_id).await?;
+    Ok(WorkflowInstanceCounts { active, awaiting_approval, awaiting_my_decision })
+}
+
 pub async fn of_ci(pool: &PgPool, ctx: &RequestContext, ci: Uuid) -> Result<CiWorkflows, AppError> {
     let mut conn = pool.acquire().await?;
     let found: Option<(Uuid, bool)> =

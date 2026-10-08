@@ -17,8 +17,8 @@ use axum::http::{HeaderValue, Method, StatusCode, header};
 use crate::api::route::{Body, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, Query, Route, WithHeaders, route};
 use crate::http::error::{AppError, ErrorCode};
 use service::{
-    CopySavedView, CreateSavedView, DeleteSavedViewQuery, ListSavedViewsQuery, SavedView, SetSavedViewDefault,
-    UpdateSavedView,
+    CopySavedView, CreateSavedView, DeleteSavedViewQuery, ListSavedViewsQuery, SavedView, SavedViewCountsQuery,
+    SetSavedViewDefault, UpdateSavedView,
 };
 
 pub const TAG: &str = "Saved views";
@@ -51,6 +51,24 @@ pub fn routes() -> Vec<Route> {
             .handle(|api, In(NoPath, Query(q), NoBody): In<NoPath, Query<ListSavedViewsQuery>, NoBody>| async move {
                 Ok(Json(service::list(&api.pool, &api.ctx, &q).await?))
             }),
+        route(Method::GET, "/api/v1/saved-views/counts", "countSavedViews")
+            .tag(TAG)
+            .summary("How many CIs each of the caller's views shows (for the navigation rail)")
+            .description(
+                "Session only. Each view is resolved as `listSavedViews` resolves it and counted as the list (a \
+                 search view: global search) would count it for the caller, within their class rights, so a count \
+                 never includes a CI the caller could not list. Counts stop at `cap` (10,000): a larger result is \
+                 `at_least` with `count` = `cap`. An `unavailable` view has no count. All counts of one request \
+                 share a 2-second allowance; views not counted within it are `timed_out` (retry later, or ask for \
+                 fewer `ids`). At most 50 views per request; without `ids`, the first 50 of `listSavedViews` \
+                 (`truncated` says whether there were more). Read-only; not audited.",
+            )
+            .session_only()
+            .handle(
+                |api, In(NoPath, Query(q), NoBody): In<NoPath, Query<SavedViewCountsQuery>, NoBody>| async move {
+                    Ok(Json(service::counts_of(&api.pool, &api.ctx, &q).await?))
+                },
+            ),
         route(Method::POST, VIEWS, "createSavedView")
             .tag(TAG)
             .summary("Save a view")

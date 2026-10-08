@@ -436,6 +436,15 @@ pub async fn list(
     crud::select_page_counted(conn, &from, COUNT_FROM, &summary_columns(), &filter, &order, limit, offset).await
 }
 
+/// How many CIs match the list's filters, counting no further than `cap`:
+/// the result is `cap` when there are `cap` or more (saved-view counts, SHAA-2352).
+pub async fn count_capped(conn: &mut PgConnection, f: &ItemFilters, cap: i64) -> sqlx::Result<i64> {
+    let mut qb = QueryBuilder::<Postgres>::new(format!("SELECT count(*) FROM (SELECT 1 FROM {COUNT_FROM}"));
+    push_filters(&mut Where::new(&mut qb), f);
+    qb.push(" LIMIT ").push_bind(cap).push(") AS capped");
+    qb.build_query_scalar::<i64>().fetch_one(conn).await
+}
+
 /// Global search: same predicate as the list, ranked by exact / prefix / trigram similarity.
 pub async fn search(
     conn: &mut PgConnection,

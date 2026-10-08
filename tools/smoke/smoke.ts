@@ -1033,6 +1033,10 @@ async function workflows(x: Json) {
   check((await get(`${instances}/${started.id}/events?limit=10`)).json.data.length === 3, 'start, transition and force are in the history');
   check((await get(`${instances}?ciId=${ci.id}&status=active`)).json.data.some((i: Json) => i.id === started.id), 'the instance is listed');
   check((await get(`${instances}/summary?definitionKey=${def.key}`)).json.data.length > 0, 'the instance is counted per state');
+  const ciCounts = (await get(`${instances}/counts?ciId=${ci.id}`)).json;
+  check(ciCounts.active === 1 && ciCounts.awaitingApproval === 0, 'the open instance is counted on its CI');
+  check((await get(`${instances}/counts`)).json.active >= 1, 'the open instance is counted for the caller');
+  await get(`${instances}/counts?ciId=00000000-0000-4000-8000-000000000000`, 404);
   const cancelled = (await post(`${instances}/${started.id}/cancel`, { expectedVersion: forced.version, reason: 'Smoke done' }, 200)).json;
   check(cancelled.status === 'cancelled', 'the instance is cancelled');
   await post(`${instances}/${started.id}/cancel`, { expectedVersion: cancelled.version, reason: 'Again' }, 409);
@@ -1166,6 +1170,10 @@ async function savedViews(x: Json) {
   const list = (await get('/api/v1/saved-views?context=inventory')).json;
   check(list.data.some((v: Json) => v.id === view.id) && list.limits.personal.max === 200 && list.limits.shared.max === 500,
     'the view is listed with the limits');
+  const counts = (await get(`/api/v1/saved-views/counts?context=inventory&ids=${view.id}`)).json;
+  check(counts.cap === 10000 && counts.data.length === 1 && counts.data[0].viewId === view.id
+    && counts.data[0].status === 'counted' && counts.data[0].count === listed.json.page.total, 'the view is counted as its list counts');
+  await get('/api/v1/saved-views/counts?ids=not-a-uuid', 400);
   await get(`/api/v1/saved-views/${view.id}`);
   check((await patch(`/api/v1/saved-views/${view.id}`, { version: 1, description: 'Smoke' })).json.version === 2, 'the view is changed');
   await patch(`/api/v1/saved-views/${view.id}`, { version: 1, name: 'stale' }, 409);

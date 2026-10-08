@@ -491,6 +491,227 @@ pub async fn list(pool: &PgPool, ctx: &RequestContext, q: &ListSavedViewsQuery) 
     })
 }
 
+// ---------------------------------------------------------------------------
+// Result counts (SHAA-2352): the rail shows each view with how many CIs it has
+// ---------------------------------------------------------------------------
+
+/// Most views counted in one request.
+pub const MAX_COUNTED: usize = 50;
+/// Counts stop here: a larger result is reported as `at_least` this many.
+pub const COUNT_CAP: i64 = 10_000;
+/// Time for all counts of one request together; views not reached by then are `timed_out`.
+const COUNT_BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[serde(rename_all = "camelCase")]
+#[into_params(parameter_in = Query)]
+pub struct SavedViewCountsQuery {
+    /// Only the views of this context; left out: both
+    #[param(inline)]
+    pub context: Option<SavedViewContext>,
+    /// View ids, comma-separated (at most 50), counted in this order. Left out: the first 50 views of
+    /// `listSavedViews`, in its order. A view the caller may not read is left out, as if it did not exist.
+    #[param(value_type = Option<String>, schema_with = view_ids_schema)]
+    pub ids: Option<schemas::UuidList>,
+}
+
+fn view_ids_schema() -> utoipa::openapi::schema::Schema {
+    schemas::uuid_list_described("View ids, comma-separated (at most 50)")
+}
+
+/// How a view's count came out
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SavedViewCountStatus {
+    /// `count` is exact
+    Counted,
+    /// There are `count` (the cap) or more
+    AtLeast,
+    /// The view is `unavailable` (see `resolved.state`) and is never applied; no count
+    Unavailable,
+    /// The time for this request ran out before the view was counted; no count
+    TimedOut,
+}
+
+/// The number of CIs a view shows the caller
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedViewCount {
+    pub view_id: Uuid,
+    #[schema(inline)]
+    pub status: SavedViewCountStatus,
+    /// Null when `unavailable` or `timed_out`
+    pub count: Option<i64>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedViewCounts {
+    pub data: Vec<SavedViewCount>,
+    /// The count limit: `at_least` results have this count
+    pub cap: i64,
+    /// Without `ids`: whether the caller has more than 50 views (of the context), so not all were counted
+    pub truncated: bool,
+}
+
+/// A resolved view query as list filters (the same parameters the list would get).
+struct ViewFilter {
+    class_id: Option<schemas::UuidList>,
+    include_subclasses: bool,
+    active: crate::modules::items::schemas::ActiveQuery,
+    lookup_value_id: Option<schemas::UuidList>,
+    criticality_value_id: Option<schemas::UuidList>,
+    deleted: schemas::Deleted,
+    ip_within: Option<String>,
+}
+
+fn ids(s: &Option<String>) -> Option<schemas::UuidList> {
+    s.as_deref().map(|s| schemas::UuidList(s.split(',').filter_map(|p| p.parse().ok()).collect()))
+}
+
+impl ViewFilter {
+    fn of(q: &super::resolve::SavedViewQuery) -> Self {
+        use super::definition::{SavedViewActive, SavedViewDeleted};
+        use crate::modules::items::schemas::ActiveQuery;
+        ViewFilter {
+            class_id: ids(&q.class_id),
+            include_subclasses: q.include_subclasses.as_deref() != Some("false"),
+            active: match q.active {
+                None | Some(SavedViewActive::True) => ActiveQuery::True,
+                Some(SavedViewActive::False) => ActiveQuery::False,
+                Some(SavedViewActive::All) => ActiveQuery::All,
+            },
+            lookup_value_id: ids(&q.lookup_value_id),
+            criticality_value_id: ids(&q.criticality_value_id),
+            deleted: match q.deleted {
+                None | Some(SavedViewDeleted::Exclude) => schemas::Deleted::Exclude,
+                Some(SavedViewDeleted::Include) => schemas::Deleted::Include,
+                Some(SavedViewDeleted::Only) => schemas::Deleted::Only,
+            },
+            ip_within: q.ip_within.clone(),
+        }
+    }
+}
+
+impl crate::modules::items::schemas::ItemFilterQuery for ViewFilter {
+    fn class_id(&self) -> Option<&schemas::UuidList> {
+        self.class_id.as_ref()
+    }
+    fn include_subclasses(&self) -> bool {
+        self.include_subclasses
+    }
+    fn active(&self) -> crate::modules::items::schemas::ActiveQuery {
+        self.active
+    }
+    fn lookup_value_id(&self) -> Option<&schemas::UuidList> {
+        self.lookup_value_id.as_ref()
+    }
+    fn ip_within(&self) -> Option<&str> {
+        self.ip_within.as_deref()
+    }
+    fn criticality_value_id(&self) -> Option<&schemas::UuidList> {
+        self.criticality_value_id.as_ref()
+    }
+    fn deleted(&self) -> schemas::Deleted {
+        self.deleted
+    }
+    fn kind(&self) -> Option<crate::modules::items::schemas::KindQuery> {
+        None
+    }
+    fn business_service_id(&self) -> Option<&schemas::UuidList> {
+        None
+    }
+}
+
+/// Counts what each view shows the caller: the view resolved as `listSavedViews` resolves it, run as a list (or, for
+/// a search view, a search) request with the caller's class rights. Read-only, so not audited. Each count runs in a
+/// savepoint under what is left of [`COUNT_BUDGET`], so one slow view cannot hold the page.
+pub async fn counts_of(
+    pool: &PgPool,
+    ctx: &RequestContext,
+    q: &SavedViewCountsQuery,
+) -> Result<SavedViewCounts, AppError> {
+    use crate::modules::impact::engine::{is_query_canceled, remaining_ms};
+    use sqlx::Connection;
+
+    let (me, _) = me(ctx)?;
+    if q.ids.as_ref().is_some_and(|l| l.0.len() > MAX_COUNTED) {
+        return Err(AppError::validation(vec![FieldError {
+            location: FieldLocation::Query,
+            field: "ids".into(),
+            message: format!("At most {MAX_COUNTED} views per request"),
+            code: "too_big".into(),
+        }]));
+    }
+    let deadline = tokio::time::Instant::now() + COUNT_BUDGET;
+    let mut tx = pool.begin().await?;
+    let cat = Catalogue::load(&mut tx).await?;
+    let viewer = Viewer::of(ctx);
+    let rows: Vec<Row> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "{SELECT} WHERE (v.owner_id = $1 OR v.owner_id IS NULL) AND ($2::text IS NULL OR v.context = $2)
+           AND ($3::uuid[] IS NULL OR v.id = ANY($3))
+         ORDER BY v.owner_id IS NULL, lower(v.name), v.name, v.id"
+    )))
+    .bind(me)
+    .bind(q.context.map(SavedViewContext::as_str))
+    .bind(q.ids.as_ref().map(|l| l.0.clone()))
+    .fetch_all(&mut *tx)
+    .await?;
+    let mut views = Vec::new();
+    for row in rows {
+        let stored = row.definition()?;
+        if readable(&row, &stored, me, &viewer, &cat) {
+            let context = row.context()?;
+            views.push((row.id, resolve(&stored, context, &cat, &viewer).query));
+        }
+    }
+    if let Some(order) = &q.ids {
+        views.sort_by_key(|(id, _)| order.0.iter().position(|o| o == id));
+    }
+    let truncated = q.ids.is_none() && views.len() > MAX_COUNTED;
+    views.truncate(MAX_COUNTED);
+
+    let model = crate::schema::model::Model::load(&mut tx).await?;
+    let mut data = Vec::with_capacity(views.len());
+    for (view_id, query) in views {
+        let Some(query) = query else {
+            data.push(SavedViewCount { view_id, status: SavedViewCountStatus::Unavailable, count: None });
+            continue;
+        };
+        let timed_out = SavedViewCount { view_id, status: SavedViewCountStatus::TimedOut, count: None };
+        let Some(ms) = remaining_ms(deadline) else {
+            data.push(timed_out);
+            continue;
+        };
+        let filter = ViewFilter::of(&query);
+        let f = crate::modules::items::service::list_filters(&mut tx, ctx, &model, &filter, query.q.as_deref()).await?;
+        let mut sp = tx.begin().await?;
+        crate::data::impact::set_statement_timeout(&mut sp, ms).await?;
+        let counted = crate::data::items::count_capped(&mut sp, &f, COUNT_CAP).await;
+        sp.rollback().await?;
+        match counted {
+            Ok(n) => {
+                let status = if n >= COUNT_CAP { SavedViewCountStatus::AtLeast } else { SavedViewCountStatus::Counted };
+                data.push(SavedViewCount { view_id, status, count: Some(n) });
+            }
+            Err(e) if is_query_canceled(&e) => data.push(timed_out),
+            // A stored value the list cannot apply (an `ipWithin` that is not a CIDR): the list would
+            // refuse it, so the view has no count; the savepoint keeps the other counts going.
+            Err(e) if is_data_exception(&e) => {
+                data.push(SavedViewCount { view_id, status: SavedViewCountStatus::Unavailable, count: None })
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+    tx.rollback().await?;
+    Ok(SavedViewCounts { data, cap: COUNT_CAP, truncated })
+}
+
+/// A PostgreSQL data exception (SQLSTATE class 22), e.g. a value that does not cast to `inet`.
+fn is_data_exception(e: &sqlx::Error) -> bool {
+    e.as_database_error().and_then(|d| d.code()).is_some_and(|c| c.starts_with("22"))
+}
+
 pub async fn get(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<SavedView, AppError> {
     let (me, _) = me(ctx)?;
     let mut conn = pool.acquire().await?;

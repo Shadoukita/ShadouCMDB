@@ -819,6 +819,30 @@ async fn approval_lists_show_what_each_caller_may_decide() {
     let planned = v["data"].as_array().unwrap().iter().find(|s| s["stateKey"] == "planned").unwrap().clone();
     assert_eq!((planned["count"].as_i64(), planned["awaitingApproval"].as_i64()), (Some(4), Some(3)), "{v}");
 
+    // SHAA-2352: the navigation counts agree with the lists, globally and per CI, within the caller's rights.
+    let counts = |v: &Value| {
+        (
+            v["active"].as_i64().unwrap(),
+            v["awaitingApproval"].as_i64().unwrap(),
+            v["awaitingMyDecision"].as_i64().unwrap(),
+        )
+    };
+    let (status, v) = w.call(&w.admin, "GET", &format!("{RUN}/counts"), None).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(counts(&v), (4, 3, listed(&w, &w.admin, "").await.0), "{v}");
+    let (_, v) = w.call(&p.a2.0, "GET", &format!("{RUN}/counts"), None).await;
+    assert_eq!(counts(&v), (4, 3, 2), "a2's inbox holds r1 and r2: {v}");
+    let (_, v) = w.call(&p.a2.0, "GET", &format!("{RUN}/counts?ciId={c1}"), None).await;
+    assert_eq!(counts(&v), (1, 1, listed(&w, &p.a2.0, &format!("ciId={c1}")).await.0), "{v}");
+    let (_, v) = w.call(&p.a2.0, "GET", &format!("{RUN}/counts?ciId={c_idle}"), None).await;
+    assert_eq!(counts(&v), (1, 0, 0), "{v}");
+    let (_, v) = w.call(&p.blind.0, "GET", &format!("{RUN}/counts"), None).await;
+    assert_eq!(counts(&v), (0, 0, 0), "nothing on CIs the caller may not view: {v}");
+    let (status, v) = w.call(&p.blind.0, "GET", &format!("{RUN}/counts?ciId={c1}"), None).await;
+    assert_eq!((status, code(&v)), (404, "NOT_FOUND"), "{v}");
+    let (status, _) = w.call(&w.admin, "GET", &format!("{RUN}/counts?ciId={}", Uuid::new_v4()), None).await;
+    assert_eq!(status, 404);
+
     // History of an instance: newest first, whatever became of each.
     assert_eq!(decide(&w, &p.tech.0, i3, "reject", Some("no")).await.0, 200);
     assert_eq!(request(&w, &p.req2.0, i3, "approve", fields.clone()).await.0, 202);

@@ -411,6 +411,19 @@ pub async fn list(
     Ok(Page { data, page: q.page_meta(total) })
 }
 
+/// The filters the inventory list (or, with `text`, global search) applies
+/// for this query, within the caller's class rights. Saved-view counts
+/// (SHAA-2352) count each view through [`data::count_capped`] with these.
+pub(crate) async fn list_filters(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    model: &Model,
+    q: &impl ItemFilterQuery,
+    text: Option<&str>,
+) -> Result<ItemFilters, AppError> {
+    inventory_filters(conn, ctx, model, q, text, None, None).await
+}
+
 fn check_layout_template(key: Option<&str>) -> Result<(), AppError> {
     match key {
         Some(key) if !validate::cached_regex(KEY_PATTERN).is_some_and(|r| r.is_match(key)) => {
