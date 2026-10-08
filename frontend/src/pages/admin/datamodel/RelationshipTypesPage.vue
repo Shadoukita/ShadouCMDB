@@ -130,6 +130,7 @@ const TYPE_FIELDS: FieldSpec[] = [
   { name: "key", label: t("dm.lookup.col.key"), type: "key", createOnly: true, from: "name" },
   { name: "forwardLabel", label: t("dm.relTypes.field.forward"), type: "text", required: true, hint: t("dm.relTypes.field.forwardHint") },
   { name: "reverseLabel", label: t("dm.relTypes.field.reverse"), type: "text", required: true, hint: t("dm.relTypes.field.reverseHint") },
+  { name: "category", label: t("dm.relTypes.field.category"), type: "text", hint: t("dm.relTypes.field.categoryHint") },
   { name: "isDirectional", label: t("dm.relTypes.field.direction"), type: "checkbox", createOnly: true, text: t("dm.relTypes.field.directional") },
   {
     name: "impactDirection",
@@ -253,6 +254,7 @@ const ruleMenu = (r: Rule): RowMenuItem[] => [{ label: t("common.delete"), actio
             <th scope="col">{{ t("dm.lookup.col.key") }}</th>
             <th scope="col">{{ t("dm.relTypes.col.forward") }}</th>
             <th scope="col">{{ t("dm.relTypes.col.reverse") }}</th>
+            <th scope="col">{{ t("dm.relTypes.col.category") }}</th>
             <th scope="col">{{ t("dm.relTypes.col.impact") }}</th>
             <th scope="col">{{ t("dm.relTypes.col.rules") }}</th>
             <th scope="col">{{ t("admin.col.status") }}</th>
@@ -276,6 +278,9 @@ const ruleMenu = (r: Rule): RowMenuItem[] => [{ label: t("common.delete"), actio
             <td class="mono">{{ rt.key }}</td>
             <td>{{ rt.forwardLabel }}</td>
             <td>{{ rt.reverseLabel }}</td>
+            <td dir="auto">
+              <template v-if="rt.category">{{ rt.category }}</template><span v-else class="muted">—</span>
+            </td>
             <td :title="impactTitle(rt)">
               <span v-if="rt.impactDirection === 'none'" class="muted">—</span>
               <template v-else>{{ impactLabel(rt.impactDirection) }}</template>

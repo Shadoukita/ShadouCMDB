@@ -17,11 +17,11 @@ import { useSessionStore } from "../../stores/session";
 import AddRelationshipForm from "./AddRelationshipForm.vue";
 
 /**
- * The CI's direct relationships (design §0 step 12d, audit R5), grouped by how the edge reads from this CI
- * ("is located in", "hosts"): relationship types have no category yet (gap G15), so the sentence is the
- * group. Each row is the related CI's class tile, its name as a link with the class and the notes under it,
- * a pill with the direction (an icon named for assistive technology) and the type's key, and an action menu
- * (Remove). All / Outgoing / Incoming and a text filter narrow the list; a relationship that goes both ways
+ * The CI's direct relationships (design §0 step 12d, audit R5), grouped under their type's category
+ * ("Location", "Network & power"; gap G15), the categories by name, then the types without one under
+ * "Other" (no heading when no type has a category). Each row is the related CI's class tile, its name as a
+ * link with the class and the notes under it, a pill with the direction (an icon named for assistive
+ * technology) and how the edge reads from this CI ("is located in", "hosts"), and an action menu (Remove). All / Outgoing / Incoming and a text filter narrow the list; a relationship that goes both ways
  * counts under either direction. `embedded`: placed in a layout section, which gives the heading; only the
  * content is drawn.
  */
@@ -39,6 +39,7 @@ type Way = "out" | "in" | "both";
 const rows = computed(() =>
   [...(rels.data.value?.data ?? [])]
     .map((r) => ({ r, d: describeEdge(r, props.ci.id), dir: direction(r) }))
+    .map((x) => ({ ...x, category: x.r.type.category?.trim() || null }))
     .sort((a, b) => a.d.label.localeCompare(b.d.label) || a.d.other.name.localeCompare(b.d.other.name)),
 );
 const shownWay = ref<"all" | "out" | "in">("all");
@@ -61,15 +62,19 @@ const filtered = computed(() => {
   return rows.value.filter(
     (x) =>
       (shownWay.value === "all" || x.dir.way === shownWay.value || x.dir.way === "both") &&
-      (!q || [x.d.label, x.d.other.name, x.d.other.className, x.r.type.key, x.r.notes ?? ""].some((v) => v.toLocaleLowerCase().includes(q))),
+      (!q || [x.d.label, x.d.other.name, x.d.other.className, x.r.type.key, x.category ?? "", x.r.notes ?? ""].some((v) => v.toLocaleLowerCase().includes(q))),
   );
 });
-/** The rows by sentence, in the order of the sorted rows. */
+/** The rows by category (by name, "Other" last), each in the order of the sorted rows. */
 const groups = computed(() => {
-  const out = new Map<string, (typeof filtered.value)[number][]>();
-  for (const x of filtered.value) out.set(x.d.label, [...(out.get(x.d.label) ?? []), x]);
-  return [...out].map(([label, items], i) => ({ label, items, id: `rel-group-${props.ci.id}-${i}` }));
+  const out = new Map<string | null, (typeof filtered.value)[number][]>();
+  for (const x of filtered.value) out.set(x.category, [...(out.get(x.category) ?? []), x]);
+  return [...out]
+    .sort(([a], [b]) => (a === null ? 1 : b === null ? -1 : a.localeCompare(b)))
+    .map(([category, items], i) => ({ label: category ?? t("rel.group.other"), category, items, id: `rel-group-${props.ci.id}-${i}` }));
 });
+/** No type has a category: one list, without a heading. */
+const ungrouped = computed(() => rows.value.every((x) => x.category === null));
 /** Not every relationship was fetched (more than one page): the filter and the groups cover the loaded ones. */
 const partial = computed(() => !!rels.data.value && rels.data.value.data.length < rels.data.value.page.total);
 const tileStyle = (classKey: string) => {
@@ -121,11 +126,11 @@ function confirmRemove() {
         </div>
         <p v-if="partial" class="hint rel-partial">{{ t("rel.partial", { n: rels.data.value!.data.length, total: rels.data.value!.page.total }) }}</p>
         <p v-if="filtered.length === 0" class="rel-none muted" role="status">{{ t("rel.filter.none") }}</p>
-        <div v-for="g in groups" :key="g.label" class="rel-group">
-          <h3 :id="g.id" class="rel-group-head">
+        <div v-for="g in groups" :key="g.category ?? ''" class="rel-group" :data-category="g.category ?? undefined">
+          <h3 v-if="!ungrouped" :id="g.id" class="rel-group-head">
             <span dir="auto">{{ g.label }}</span> <span class="count mono">{{ g.items.length }}</span>
           </h3>
-          <ul class="rel-list" :aria-labelledby="g.id">
+          <ul class="rel-list" :aria-labelledby="ungrouped ? undefined : g.id" :aria-label="ungrouped ? t('rel.title') : undefined">
             <li v-for="{ r, d, dir: way } in g.items" :key="r.id" class="rel-row">
               <span class="class-tile" :style="tileStyle(d.other.classKey)" aria-hidden="true">
                 <ClassBadge :icon="classByKey.get(d.other.classKey)?.icon" :color="classByKey.get(d.other.classKey)?.color" />
@@ -137,9 +142,9 @@ function confirmRemove() {
                 </span>
                 <span class="rel-sub" dir="auto">{{ d.other.className }}<template v-if="r.notes"> · {{ r.notes }}</template></span>
               </span>
-              <span class="rel-type" :title="r.type.name">
+              <span class="rel-type" :title="`${r.type.name} (${r.type.key})`" :data-type-key="r.type.key">
                 <Icon :name="way.icon" :size="12" :label="way.label" class="rel-dir" />
-                <span class="mono">{{ r.type.key }}</span>
+                <span class="rel-type-label" dir="auto">{{ d.label }}</span>
               </span>
               <span class="rel-actions">
                 <RowMenu v-if="!ci.deletedAt && menuItems(r).length > 0" :label="t('rel.actions', { other: d.other.name })" :items="menuItems(r)" />

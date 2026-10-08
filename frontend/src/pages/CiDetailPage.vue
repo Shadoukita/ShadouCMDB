@@ -56,7 +56,8 @@ import CiWorkflowsPanel from "./workflows/CiWorkflowsPanel.vue";
  * in the query); the others are chosen on the page.
  *
  * The page head (design §0 step 12d) is a surface band: the breadcrumb, the class tile, the name in the data
- * font, the class, state and criticality chips, "ident · Updated … by …", the actions, and the tabs with their
+ * font with the class's subtitle field under it (gap G8), the class, state and criticality chips, "ident ·
+ * Updated … by …" (gap G16), the actions, and the tabs with their
  * counts. A class without a layout of its own shows the built-in arrangement as the default layout: the field
  * sections in one card beside the relationships and the newest history entries.
  */
@@ -155,15 +156,22 @@ const hasWorkflows = computed(() => !!ciWorkflows.data.value && (ciWorkflows.dat
 // Its count is the CI's running instances (gap G14); none when the API refuses the CI (404), so no false 0.
 const ciWorkflowCounts = useWorkflowCounts(() => id.value, () => hasWorkflows.value);
 // The tabs' counts: the direct relationships on the map, the running workflow instances, the history's entries (the
-// newest of them also show on the built-in Overview and give "Updated … by …").
+// newest of them also show on the built-in Overview).
 const rels = useRelationships(() => id.value, () => !!c.value);
 const canAudit = computed(() => session.can("audit.view"));
 const recent = useAuditLog(id, { limit: 5, offset: 0 }, [], () => canAudit.value && !!c.value);
 const historyTotal = computed(() => (canAudit.value ? recent.data.value?.page.total : undefined));
-/** Who made the newest change of the record itself, when the history is visible (gap G16). */
-const lastActor = computed(() => {
-  const e = canAudit.value ? recent.data.value?.data[0] : undefined;
-  return e && (e.action === "update" || e.action === "create") ? (e.actorName ?? undefined) : undefined;
+/**
+ * The newest change of the record itself (gap G16): its time, and who made it for those with audit.view (the API
+ * leaves the actor out otherwise). Null once retention removed the CI's audit entries: then the line is left out.
+ */
+const lastChange = computed(() => c.value?.lastChange ?? null);
+const lastActor = computed(() => lastChange.value?.actor?.name ?? undefined);
+/** The class's subtitle field (gap G8) and the CI's value in it; none when unset or empty (the class chip follows). */
+const subtitleDef = computed(() => (cls.value?.subtitleAttributeId ? attrs.data.value?.find((d) => d.id === cls.value!.subtitleAttributeId) : undefined));
+const subtitleValue = computed(() => {
+  const v = subtitleDef.value ? c.value?.attributes[subtitleDef.value.key] : undefined;
+  return v === null || v === undefined || v === "" ? undefined : v;
 });
 const TABS = computed<[Tab, string, number?][]>(() => [
   ...(layoutTabs.value.length > 1 ? layoutTabs.value.map((l): [Tab, string] => [`layout:${l.key}`, l.label]) : [["overview", t("record.tab.overview")] as [Tab, string]]),
@@ -319,6 +327,9 @@ const crumbs = computed<Crumb[]>(() => {
               <h1 dir="auto" class="mono">{{ c.label }}</h1>
               <span v-if="ownLayout" class="badge ci-own-layout" data-testid="ci-own-layout" :title="ownLayout.title">{{ ownLayout.label }}</span>
             </div>
+            <p v-if="subtitleDef && subtitleValue !== undefined" class="record-subtitle" data-testid="record-subtitle" :title="subtitleDef.label">
+              <AttributeValue :def="subtitleDef" :value="subtitleValue" :ref-info="c.attributeReferences[subtitleDef.key]" :self="self" :trail="trail" />
+            </p>
             <p class="record-meta" data-testid="record-meta">
               <RouterLink class="badge record-class-chip" :to="`/cis?classId=${c.classId}`" dir="auto">{{ c.class.name }}</RouterLink>
               <span v-if="c.deletedAt" class="badge danger">Deleted {{ formatDateTime(c.deletedAt) }}</span>
@@ -329,10 +340,12 @@ const crumbs = computed<Crumb[]>(() => {
               <CriticalityBadge v-if="c.criticality" :value="c.criticality" />
               <span class="record-meta-line">
                 <span class="ident" :title="t('record.meta.ident')">{{ c.ident }}</span>
-                <span class="sep" aria-hidden="true">·</span>
-                <time :datetime="c.updatedAt" :title="formatDateTime(c.updatedAt)">{{
-                  lastActor ? t("record.meta.updatedBy", { when: formatRelative(c.updatedAt), actor: lastActor }) : t("record.meta.updated", { when: formatRelative(c.updatedAt) })
-                }}</time>
+                <template v-if="lastChange">
+                  <span class="sep" aria-hidden="true">·</span>
+                  <time :datetime="lastChange.at" :title="formatDateTime(lastChange.at)">{{
+                    lastActor ? t("record.meta.updatedBy", { when: formatRelative(lastChange.at), actor: lastActor }) : t("record.meta.updated", { when: formatRelative(lastChange.at) })
+                  }}</time>
+                </template>
               </span>
             </p>
           </div>
