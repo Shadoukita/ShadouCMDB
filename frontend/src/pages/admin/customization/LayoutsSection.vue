@@ -230,7 +230,7 @@ async function edit(key: string) {
         </EmptyState>
         <template v-else>
           <div class="table-wrap">
-            <table class="data compact" data-testid="layout-classes">
+            <table class="data compact list-table" data-testid="layout-classes">
               <caption class="sr-only">{{ t("customization.layouts.classesCaption") }}</caption>
               <thead>
                 <tr>
@@ -244,7 +244,7 @@ async function edit(key: string) {
                 <tr v-for="r in page" :key="r.key" :class="{ selected: selected?.key === r.key }">
                   <th scope="row">
                     {{ r.name }} <span class="mono muted">{{ r.key }}</span>
-                    <span v-if="!r.isActive" class="badge">{{ t("customization.layouts.archived") }}</span>
+                    <span v-if="!r.isActive" class="badge off"><span class="status-dot" aria-hidden="true" />{{ t("customization.layouts.archived") }}</span>
                   </th>
                   <td>
                     <label class="sr-only" :for="`layout-default-${r.key}`">{{ t("customization.layouts.defaultFor", { class: r.name }) }}</label>
@@ -269,7 +269,7 @@ async function edit(key: string) {
               </tbody>
             </table>
           </div>
-          <PaginationBar :total="rows.length" :limit="lq.limit.value" :offset="lq.offset.value" @change="lq.onPage" />
+          <PaginationBar numbered :total="rows.length" :limit="lq.limit.value" :offset="lq.offset.value" @change="lq.onPage" />
         </template>
         <p class="hint">{{ t("customization.layouts.classesHint") }}</p>
       </template>
@@ -294,7 +294,7 @@ async function edit(key: string) {
       <ErrorAlert v-if="usage.isError.value" :error="usage.error.value" :title="t('layoutTemplates.usageError')" :on-retry="() => usage.refetch()" />
       <ErrorAlert v-if="openError" :error="openError" :title="t('layoutTemplates.openError')" />
       <div class="table-wrap">
-        <table class="data compact" data-testid="layout-templates">
+        <table class="data compact list-table" data-testid="layout-templates">
           <caption class="sr-only">{{ t("customization.layouts.templatesCaption") }}</caption>
           <thead>
             <tr>
@@ -310,7 +310,7 @@ async function edit(key: string) {
               <th scope="row">
                 {{ tp.name }}
                 <span v-if="tp.key === STANDARD_TEMPLATE" class="badge">{{ t("layoutTemplates.builtIn") }}</span>
-                <span v-if="usage.data.value && !saved.has(tp.key)" class="badge warn">{{ t("layoutTemplates.unsaved") }}</span>
+                <span v-if="usage.data.value && !saved.has(tp.key)" class="badge warn"><span class="status-dot" aria-hidden="true" />{{ t("layoutTemplates.unsaved") }}</span>
               </th>
               <td :title="tp.description">{{ tp.description ?? "" }}</td>
               <td class="num" :title="users(tp.key).classKeys.map(className).join(', ') || undefined">{{ users(tp.key).classKeys.length.toLocaleString() }}</td>

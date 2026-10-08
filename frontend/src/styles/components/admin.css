@@ -120,6 +120,15 @@
 .record-head.record-head-plain {
   padding-bottom: var(--space-1);
 }
+/* Customization (12f-10): a settings page, not a record. The band holds the title with the version in mono,
+   the intro and the section tabs on its lower edge, as on a CI page; the title stays in the UI font. */
+.cust-head .page-header .count {
+  font-size: var(--fs-md);
+  color: var(--c-text-secondary);
+}
+.cust-head .page-intro {
+  margin: calc(-1 * var(--space-1)) 0 var(--space-2);
+}
 /* The permission matrix (A7): Read and Change column groups, the class column and both header rows kept
    in view while the matrix scrolls inside its panel. */
 .matrix-wrap {

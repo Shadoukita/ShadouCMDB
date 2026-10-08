@@ -161,7 +161,7 @@ const columns = computed(() => listColumns(view.value?.columns));
     <ErrorAlert v-else-if="preview.isError.value" :error="preview.error.value" :on-retry="() => preview.refetch()" />
     <p v-else-if="preview.data.value?.data.length === 0" class="muted">{{ t("customization.lists.noCis", { class: cls.name }) }}</p>
     <div v-else class="table-wrap">
-      <table class="data">
+      <table class="data list-table">
         <thead>
           <tr><th v-for="c in columns" :key="c" scope="col">{{ fieldLabel(c, attrDefs) }}</th></tr>
         </thead>

@@ -86,7 +86,7 @@ const staleSort = (w: UiWidget) => (classAttrs.value ? unavailableSortLabel(w.se
 
     <template v-if="widgets !== null">
       <div class="panel-body flush">
-        <table class="data">
+        <table class="data list-table">
           <thead>
             <tr>
               <th scope="col">{{ t("customization.dashboard.colWidget") }}</th>
