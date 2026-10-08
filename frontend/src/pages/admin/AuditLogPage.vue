@@ -202,17 +202,16 @@ const pastEnd = computed(() => !!list.data.value && total.value > 0 && rows.valu
 </script>
 
 <template>
-  <Breadcrumbs :items="adminCrumbs('audit')" />
-  <div class="page-header">
-    <div class="title">
-      <h1>{{ t("admin.section.audit") }}</h1>
-      <span v-if="list.data.value" class="muted count">{{ t("audit.entries", { n: total, count: formatNumber(total) }) }}</span>
-      <span v-if="list.isFetching.value && !list.isPending.value" class="spinner" :aria-label="t('common.refreshing')" />
+  <div class="list-head">
+    <Breadcrumbs :items="adminCrumbs('audit')" />
+    <div class="page-header">
+      <div class="title">
+        <h1>{{ t("admin.section.audit") }}</h1>
+        <span v-if="list.data.value" class="count mono">{{ t("audit.entries", { n: total, count: formatNumber(total) }) }}</span>
+        <span v-if="list.isFetching.value && !list.isPending.value" class="spinner" :aria-label="t('common.refreshing')" />
+      </div>
     </div>
-  </div>
-  <p class="page-intro">{{ t("audit.intro") }}</p>
-
-  <section class="panel explorer event-stream audit-stream" :aria-label="t('admin.section.audit')">
+    <p class="page-intro">{{ t("audit.intro") }}</p>
     <form class="toolbar" role="search" @submit.prevent>
       <div v-if="get('actorId')" class="field">
         <span class="label">{{ t("history.col.actor") }}</span>
@@ -259,6 +258,9 @@ const pastEnd = computed(() => !!list.data.value && total.value > 0 && rows.valu
       </div>
       <button v-if="filtered" type="button" class="btn btn-ghost" @click="clearFilters"><Icon name="x" />{{ t("admin.filter.clear") }}</button>
     </form>
+  </div>
+
+  <section class="panel explorer event-stream audit-stream" :aria-label="t('admin.section.audit')">
 
     <div v-if="list.isError.value" class="panel-body">
       <ErrorAlert :error="list.error.value" :on-retry="() => list.refetch()" />
@@ -275,7 +277,7 @@ const pastEnd = computed(() => !!list.data.value && total.value > 0 && rows.valu
 
     <template v-if="rows.length > 0 && !list.isError.value">
       <div class="table-wrap table-scroll">
-        <table :class="['data', 'event-table', { loading: list.isPlaceholderData.value }]">
+        <table :class="['data', 'list-table', 'event-table', { loading: list.isPlaceholderData.value }]">
           <thead>
             <tr>
               <th scope="col" :aria-sort="lq.ariaSort('occurredAt')">
@@ -298,7 +300,7 @@ const pastEnd = computed(() => !!list.data.value && total.value > 0 && rows.valu
               <td><span :class="['badge', actionTone(e.action)]" :title="e.action">{{ actionLabel(e.action) }}</span></td>
               <td>{{ t(ENTITY_LABELS[e.entityType as EntityType] ?? "audit.entity.unknown", { type: e.entityType }) }}</td>
               <td :title="recordTitle(e)">
-                <RouterLink v-if="recordLink(e)" :to="recordLink(e)!" dir="auto">{{ recordName(e) }}</RouterLink>
+                <RouterLink v-if="recordLink(e)" :to="recordLink(e)!" class="list-name" dir="auto">{{ recordName(e) }}</RouterLink>
                 <bdi v-else>{{ recordName(e) }}</bdi>
               </td>
               <td class="audit-fields" :title="changedFields(e).join(', ')">
@@ -309,7 +311,9 @@ const pastEnd = computed(() => !!list.data.value && total.value > 0 && rows.valu
           </tbody>
         </table>
       </div>
-      <PaginationBar :total="total" :limit="limit" :offset="offset" @change="lq.onPage" />
+      <div class="table-footer">
+        <PaginationBar numbered :total="total" :limit="limit" :offset="offset" @change="lq.onPage" />
+      </div>
     </template>
   </section>
 </template>

@@ -103,7 +103,7 @@
   gap: var(--space-1) var(--space-2);
 }
 /* The source chips sit in the toolbar at the control height, like the inputs beside them. */
-.audit-stream .toolbar .event-sources {
+.list-head .toolbar .event-sources {
   min-height: var(--control-h);
 }
 /* Changed fields: the keys as mono chips that wrap inside the cell. */
