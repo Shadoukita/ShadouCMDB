@@ -148,7 +148,7 @@ const rowMenu = (r: Row): RowMenuItem[] => [
       </template>
     </EmptyState>
     <div v-else class="table-wrap">
-      <table class="data reorderable">
+      <table class="data list-table reorderable">
         <thead>
           <tr>
             <th scope="col" class="drag-col"><span class="sr-only">{{ t("dm.lookup.col.drag") }}</span></th>
@@ -164,7 +164,7 @@ const rowMenu = (r: Row): RowMenuItem[] => [
         <tbody>
           <tr v-for="r in list" :key="r.id" v-bind="dnd.row(r.id)" :class="{ disabled: !r.isActive }">
             <td class="drag-handle" aria-hidden="true" :title="t('dm.lookup.col.drag')"><Icon name="grip-vertical" /></td>
-            <td><button type="button" class="btn-link" @click="open(r)">{{ r.name }}</button></td>
+            <td><button type="button" class="btn-link list-name" dir="auto" @click="open(r)">{{ r.name }}</button></td>
             <td class="mono">{{ r.key }}</td>
             <td v-for="c in columns ?? []" :key="c.key">
               <slot v-if="slots.cell" name="cell" :row="r" :column="c.key" />
@@ -172,8 +172,8 @@ const rowMenu = (r: Row): RowMenuItem[] => [
             </td>
             <td class="muted fill" :title="r.description ?? undefined">{{ r.description ?? "" }}</td>
             <td>
-              <span v-if="r.isActive" class="badge ok">{{ t("common.active") }}</span>
-              <span v-else class="badge off">{{ t("dm.lookup.archivedBadge") }}</span>
+              <span v-if="r.isActive" class="badge ok"><span class="status-dot" aria-hidden="true" />{{ t("common.active") }}</span>
+              <span v-else class="badge off"><span class="status-dot" aria-hidden="true" />{{ t("dm.lookup.archivedBadge") }}</span>
             </td>
             <td class="order-buttons">
               <button type="button" class="btn btn-sm btn-icon" :disabled="reorder.isPending.value || list.indexOf(r) === 0" :aria-label="t('dm.lookup.moveUp', { name: r.name })" @click="step(r, -1)"><Icon name="arrow-up" /></button>
