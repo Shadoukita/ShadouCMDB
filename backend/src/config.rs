@@ -318,6 +318,20 @@ impl Default for ExportConfig {
 /// when impact analyses, saved-view counts and exports all use their caps.
 pub const POOL_RESERVE: usize = 2;
 
+/// In-app notifications (`NOTIFICATION_*`, SHAA-2356); see
+/// [`crate::modules::notifications`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NotificationConfig {
+    /// Days a notification is kept (`NOTIFICATION_RETENTION_DAYS`, 1 to 3650).
+    pub retention_days: i32,
+}
+
+impl Default for NotificationConfig {
+    fn default() -> Self {
+        NotificationConfig { retention_days: 90 }
+    }
+}
+
 /// Hard ceilings of the `BUSINESS_SERVICE_*` settings (the nesting ceiling is
 /// also the database trigger's, migration 0033).
 pub const BUSINESS_SERVICE_MAX_MEMBERS_CEILING: i64 = 50_000;
@@ -360,6 +374,7 @@ pub struct Config {
     pub imports: ImportConfig,
     pub business_services: BusinessServiceConfig,
     pub exports: ExportConfig,
+    pub notifications: NotificationConfig,
 }
 
 /// The env file the variables were read from (`--env-file`, or `./.env`), as an absolute path.
@@ -428,6 +443,7 @@ impl std::fmt::Debug for Config {
             imports,
             business_services,
             exports,
+            notifications,
         } = self;
         f.debug_struct("Config")
             .field("api_host", api_host)
@@ -446,6 +462,7 @@ impl std::fmt::Debug for Config {
             .field("imports", imports)
             .field("business_services", business_services)
             .field("exports", exports)
+            .field("notifications", notifications)
             .finish()
     }
 }
@@ -872,6 +889,12 @@ impl Config {
             None => ExportConfig::for_pool(pool_max),
         };
 
+        let notifications = NotificationConfig {
+            retention_days: r
+                .int::<i32>("NOTIFICATION_RETENTION_DAYS", 1, 3650)
+                .unwrap_or(NotificationConfig::default().retention_days),
+        };
+
         let encryption = EncryptionConfig {
             key_file: r.raw("ENCRYPTION_KEY_FILE").map(PathBuf::from),
             previous_key_file: r.raw("ENCRYPTION_KEY_PREVIOUS_FILE").map(PathBuf::from),
@@ -945,6 +968,7 @@ impl Config {
             imports,
             business_services,
             exports,
+            notifications,
         })
     }
 }

@@ -23,6 +23,8 @@ pub mod eval;
 pub mod graph;
 pub mod migration;
 #[cfg(test)]
+mod notifications_tests;
+#[cfg(test)]
 mod perf;
 pub mod refs;
 pub mod runtime;
