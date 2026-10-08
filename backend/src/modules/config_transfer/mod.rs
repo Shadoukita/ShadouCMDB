@@ -368,6 +368,7 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
                 data_type: a.data_type,
                 is_required: a.is_required,
                 is_expected: Some(a.is_expected),
+                is_identifying: Some(a.is_identifying),
                 enum_values: a.enum_values.as_ref().map(|v| v.0.clone()),
                 reference_class: a.reference_class_id.and_then(|id| class_key.get(&id).cloned()),
                 lookup_list: a.lookup_list_id.and_then(|id| list_key.get(&id).cloned()),
@@ -1584,6 +1585,7 @@ async fn run(
                 .opt("description", Some(a.description.clone()))
                 .opt("is_required", Some(a.is_required))
                 .opt("is_expected", Some(a.is_expected.unwrap_or_default()))
+                .opt("is_identifying", Some(a.is_identifying.unwrap_or_default()))
                 .opt(
                     "enum_values",
                     Some(a.enum_values.as_ref().map(|v| Value::Array(v.iter().cloned().map(Value::String).collect()))),
@@ -2033,7 +2035,8 @@ fn keep_current_parents(file: &ConfigFile, current: &ConfigFile) -> ConfigFile {
 }
 
 /// What a file leaves out keeps its current value: whether an existing field
-/// is expected (files before version 10), which a new field is not, and the
+/// is expected (files before version 10) or identifying (before version 12),
+/// which a new field is not, and the
 /// impact direction of an existing relationship type (files before version 4,
 /// or a hand-written one), which a new type gets as none. The system role of a list is never
 /// imported, so the file's is replaced with the current one.
@@ -2049,6 +2052,10 @@ fn keep_current_settings(mut file: ConfigFile, current: &ConfigFile) -> ConfigFi
             if a.is_expected.is_none() {
                 let old = cur.get(&(a.class.as_str(), a.key.as_str())).and_then(|o| o.is_expected);
                 a.is_expected = Some(old.unwrap_or_default());
+            }
+            if a.is_identifying.is_none() {
+                let old = cur.get(&(a.class.as_str(), a.key.as_str())).and_then(|o| o.is_identifying);
+                a.is_identifying = Some(old.unwrap_or_default());
             }
         }
         let cur: HashMap<&str, &RelationshipTypeSpec> =
@@ -3384,6 +3391,76 @@ mod tests {
         let err = import(&b.pool, &ctx, &bad, ImportMode::DryRun).await.unwrap_err();
         let fields: Vec<String> = err.details.unwrap().into_iter().map(|d| d.field).collect();
         assert!(fields.iter().any(|f| f.ends_with(".impactDirection")), "{fields:?}");
+        a.drop().await;
+        b.drop().await;
+    }
+
+    /// SHAA-2460: identifying fields (not copied on clone) travel with the
+    /// file from version 12; an older file keeps the current setting.
+    #[tokio::test]
+    async fn identifying_fields_round_trip() {
+        const TEST: &str = "identifying_fields_round_trip";
+        let Some(a) = scratch::database(TEST).await else { return };
+        let Some(b) = scratch::database(TEST).await else {
+            a.drop().await;
+            return;
+        };
+        let ctx = RequestContext::system("test", "test");
+        for db in [&a, &b] {
+            crate::seed::seed_system_rows(&db.pool).await.unwrap();
+            crate::modules::templates::install_by_key(&db.pool, &ctx, "it_infrastructure").await.unwrap();
+        }
+        let identifying = |f: &ConfigFile| -> Vec<String> {
+            let dm = f.data_model.as_ref().unwrap();
+            dm.attributes.iter().filter(|a| a.is_identifying == Some(true)).map(|a| a.key.clone()).collect()
+        };
+        // The template marks serial number and asset tag.
+        let exported = export(&a.pool, &ctx).await.unwrap();
+        assert_eq!(identifying(&exported), vec!["serial_number", "asset_tag"]);
+        assert!(exported.data_model.as_ref().unwrap().attributes.iter().all(|a| a.is_identifying.is_some()));
+
+        sqlx::query(
+            "UPDATE ci_attribute_definitions SET is_identifying = true
+             WHERE key = 'hostname' AND class_id = (SELECT id FROM ci_classes WHERE key = 'hardware')",
+        )
+        .execute(&a.pool)
+        .await
+        .unwrap();
+        sqlx::query("UPDATE ci_attribute_definitions SET is_identifying = false WHERE key = 'asset_tag'")
+            .execute(&a.pool)
+            .await
+            .unwrap();
+        let exported = export(&a.pool, &ctx).await.unwrap();
+        let mut keys = identifying(&exported);
+        keys.sort();
+        assert_eq!(keys, vec!["hostname", "serial_number"]);
+
+        let result = import(&b.pool, &ctx, &exported, ImportMode::DryRun).await.unwrap();
+        let changed: Vec<(&str, Vec<&str>)> = result
+            .changes
+            .iter()
+            .map(|c| (c.key.as_str(), c.fields.iter().map(|f| f.field.as_str()).collect()))
+            .collect();
+        assert!(changed.contains(&("hardware.hostname", vec!["isIdentifying"])), "{changed:?}");
+        assert!(changed.contains(&("hardware.asset_tag", vec!["isIdentifying"])), "{changed:?}");
+        import(&b.pool, &ctx, &exported, ImportMode::Apply).await.unwrap();
+        let reexported = export(&b.pool, &ctx).await.unwrap();
+        assert_eq!(
+            serde_json::to_string_pretty(&comparable(&exported)).unwrap(),
+            serde_json::to_string_pretty(&comparable(&reexported)).unwrap()
+        );
+
+        // A version 11 file (no isIdentifying) changes nothing.
+        let mut v11 = ConfigFile { format_version: 11, ..reexported };
+        for a in &mut v11.data_model.as_mut().unwrap().attributes {
+            a.is_identifying = None;
+        }
+        let result = import(&b.pool, &ctx, &v11, ImportMode::DryRun).await.unwrap();
+        assert!(result.changes.iter().all(|c| c.fields.is_empty()), "{:?}", result.changes);
+        import(&b.pool, &ctx, &v11, ImportMode::Apply).await.unwrap();
+        let mut keys = identifying(&export(&b.pool, &ctx).await.unwrap());
+        keys.sort();
+        assert_eq!(keys, vec!["hostname", "serial_number"]);
         a.drop().await;
         b.drop().await;
     }

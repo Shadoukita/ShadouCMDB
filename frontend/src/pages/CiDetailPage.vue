@@ -39,6 +39,7 @@ import HistoryPanel from "./detail/HistoryPanel.vue";
 import ImpactPanel from "./detail/ImpactPanel.vue";
 import LayoutPanels from "./detail/LayoutPanels.vue";
 import PartOfServicesPanel from "./detail/PartOfServicesPanel.vue";
+import QrLabelDialog from "./detail/QrLabelDialog.vue";
 import RelationshipGraphPanel from "./detail/RelationshipGraphPanel.vue";
 import RelationshipsPanel from "./detail/RelationshipsPanel.vue";
 import SignInAccountPanel from "./detail/SignInAccountPanel.vue";
@@ -268,6 +269,10 @@ const deleting = ref(false);
 const moreActions = computed<RowMenuItem[]>(() =>
   c.value && session.canOnClass(c.value.classId, "delete") ? [{ label: t("common.delete"), danger: true, action: () => (deleting.value = true) }] : [],
 );
+// Clone (gap G11): the create form prefilled from this CI (CiCreatePage, lib/ciClone), for those who may create CIs of
+// its class while it takes new ones. QR label (gap G12): drawn in the browser (QrLabelDialog).
+const canClone = computed(() => !!c.value && !!cls.value && cls.value.isActive && !cls.value.isAbstract && session.canOnClass(c.value.classId, "create"));
+const qrOpen = ref(false);
 const hasTab = (key: Tab) => TABS.value.some(([k]) => k === key);
 const classTile = computed(() => (cls.value?.color ? { "--tile-c": cls.value.color } : undefined));
 
@@ -331,15 +336,24 @@ const crumbs = computed<Crumb[]>(() => {
           </div>
         </div>
         <div v-if="!c.deletedAt" class="actions">
-          <!-- QR label and Clone slots: built in the browser on SHAA-2358 (gaps G11, G12). -->
           <EditLayoutButton v-if="editor.allowed && !editor.active" :editor="editor" />
           <template v-if="!editor.active">
+            <RouterLink
+              v-if="canClone"
+              class="btn"
+              :to="{ path: '/cis/new', query: { classId: c.classId, cloneFrom: c.id } }"
+              :title="t('record.actions.cloneTitle', { class: c.class.name })"
+              data-testid="ci-clone"
+              >{{ t("record.actions.clone") }}</RouterLink
+            >
+            <button type="button" class="btn" data-testid="ci-qr" @click="qrOpen = true">{{ t("record.actions.qr") }}</button>
             <RouterLink v-if="!onImpactRoute" class="btn" :to="`/cis/${c.id}/impact`">{{ t("record.actions.impact") }}</RouterLink>
             <button v-if="current !== 'graph'" type="button" class="btn" @click="selectTab('graph')">{{ t("record.actions.map") }}</button>
             <button v-if="hasTab('history') && current !== 'history'" type="button" class="btn" @click="selectTab('history')">{{ t("record.actions.history") }}</button>
           </template>
           <RowMenu v-if="moreActions.length > 0" :label="t('record.actions.more')" :items="moreActions" large />
           <DeleteCiDialog v-if="moreActions.length > 0" v-model:open="deleting" :ci="c" />
+          <QrLabelDialog v-model:open="qrOpen" :ci="c" />
         </div>
       </div>
       <FactChips v-if="!editor.active" :ci="c" :defs="defs" />

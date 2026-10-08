@@ -13039,6 +13039,18 @@
                 "false"
               ]
             }
+          },
+          {
+            "name": "isIdentifying",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
           }
         ],
         "responses": {
@@ -13224,6 +13236,10 @@
                   "isExpected": {
                     "type": "boolean",
                     "description": "Counts towards completeness: a live CI without a value is incomplete. Not enforced on writes."
+                  },
+                  "isIdentifying": {
+                    "type": "boolean",
+                    "description": "Identifies one CI (serial number, asset tag, ...): not copied when a CI is cloned. Uniqueness is not enforced on writes."
                   },
                   "enumValues": {
                     "anyOf": [
@@ -13762,6 +13778,10 @@
                   "isExpected": {
                     "type": "boolean",
                     "description": "Counts towards completeness: a live CI without a value is incomplete. Not enforced on writes."
+                  },
+                  "isIdentifying": {
+                    "type": "boolean",
+                    "description": "Identifies one CI (serial number, asset tag, ...): not copied when a CI is cloned. Uniqueness is not enforced on writes."
                   },
                   "enumValues": {
                     "anyOf": [
@@ -29362,8 +29382,8 @@
                   "formatVersion": {
                     "type": "integer",
                     "format": "int32",
-                    "description": "File format version; this server writes version 11 and reads 1 to 11",
-                    "maximum": 11,
+                    "description": "File format version; this server writes version 12 and reads 1 to 12",
+                    "maximum": 12,
                     "minimum": 1
                   },
                   "exportedAt": {
@@ -36038,6 +36058,7 @@
           "dataType",
           "isRequired",
           "isExpected",
+          "isIdentifying",
           "enumValues",
           "referenceClassId",
           "lookupListId",
@@ -36095,6 +36116,10 @@
           "isExpected": {
             "type": "boolean",
             "description": "Counts towards completeness: a live CI without a value is incomplete. Not enforced on writes."
+          },
+          "isIdentifying": {
+            "type": "boolean",
+            "description": "Identifies one CI (serial number, asset tag, ...): not copied when a CI is cloned. Uniqueness is not enforced on writes."
           },
           "enumValues": {
             "type": [
@@ -37277,8 +37302,8 @@
           "formatVersion": {
             "type": "integer",
             "format": "int32",
-            "description": "File format version; this server writes version 11 and reads 1 to 11",
-            "maximum": 11,
+            "description": "File format version; this server writes version 12 and reads 1 to 12",
+            "maximum": 12,
             "minimum": 1
           },
           "exportedAt": {
@@ -38481,6 +38506,13 @@
                   ],
                   "description": "Counts towards completeness. Left out (files before version 10): an existing field keeps its value, a\nnew one is not expected"
                 },
+                "isIdentifying": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ],
+                  "description": "Identifies one CI: not copied when a CI is cloned. Left out (files before version 12): an existing field\nkeeps its value, a new one is not identifying"
+                },
                 "enumValues": {
                   "anyOf": [
                     {
@@ -38889,6 +38921,7 @@
           "dataType",
           "isRequired",
           "isExpected",
+          "isIdentifying",
           "enumValues",
           "referenceClassId",
           "lookupListId",
@@ -38948,6 +38981,10 @@
           "isExpected": {
             "type": "boolean",
             "description": "Counts towards completeness: a live CI without a value is incomplete. Not enforced on writes."
+          },
+          "isIdentifying": {
+            "type": "boolean",
+            "description": "Identifies one CI (serial number, asset tag, ...): not copied when a CI is cloned. Uniqueness is not enforced on writes."
           },
           "enumValues": {
             "type": [
