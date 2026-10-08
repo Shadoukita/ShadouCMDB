@@ -9,11 +9,14 @@ import {
   DEFAULT_SORT,
   effectiveColumns,
   FILTER_KEYS,
+  INVENTORY_ONLY_FILTERS,
   isUsableColumn,
   param,
   parseActive,
   parseColumns,
   parseDeleted,
+  parseEndOfLifeDays,
+  parseQuality,
   patchQuery,
   resolveBaseline,
   toggleColumn,
@@ -144,11 +147,15 @@ export function useInventoryQueryState(options: QueryStateOptions) {
     active: active.value,
     deleted: deleted.value,
   }));
+  /** The data-quality check the list shows (the dashboard's "Needs attention" drill-down). */
+  const quality = computed(() => parseQuality(get("quality")));
   /** Parameters of the list request (GET /configuration-items). */
   const listQuery = computed(() => ({
     ...filters.value,
     ownLayout: get("ownLayout") === "true" || get("ownLayout") === "false" ? (get("ownLayout") as "true" | "false") : undefined,
     layoutTemplate: get("layoutTemplate") || undefined,
+    quality: quality.value,
+    endOfLifeWithinDays: parseEndOfLifeDays(quality.value, get("endOfLifeWithinDays")),
     sort: sort.value,
     limit: limit.value,
     offset: offset.value,
@@ -157,7 +164,7 @@ export function useInventoryQueryState(options: QueryStateOptions) {
   const searchFilters = computed(() => ({ ...filters.value, limit: limit.value, offset: offset.value }));
 
   /** The filters set (on the search page the term is the search itself, not a filter). */
-  const activeFilters = computed(() => FILTER_KEYS.filter((k) => get(k) && !(options.context === "search" && (k === "q" || k === "ownLayout" || k === "layoutTemplate"))));
+  const activeFilters = computed(() => FILTER_KEYS.filter((k) => get(k) && !(options.context === "search" && (k === "q" || INVENTORY_ONLY_FILTERS.includes(k)))));
 
   function update(patch: Record<string, string | undefined>, resetPage = true) {
     const to = { path, query: patchQuery(route.query, patch, resetPage) };
@@ -200,6 +207,7 @@ export function useInventoryQueryState(options: QueryStateOptions) {
     sort,
     active,
     deleted,
+    quality,
     columns,
     columnsCustomized,
     settled,

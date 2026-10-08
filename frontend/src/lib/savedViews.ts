@@ -106,6 +106,9 @@ export function definitionFromUrl(
   if (param(query, "ownLayout") || param(query, "layoutTemplate")) {
     return { ok: false, message: t("views.def.layout") };
   }
+  if (param(query, "quality")) {
+    return { ok: false, message: t("views.def.quality") };
+  }
   const classKeys: string[] = [];
   for (const id of ids("classId")) {
     const c = cat.classes.find((x) => x.id === id);
