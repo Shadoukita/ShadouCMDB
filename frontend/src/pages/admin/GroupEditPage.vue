@@ -246,7 +246,7 @@ const notFound = computed(() => {
 </script>
 
 <template>
-  <Breadcrumbs :items="crumbs" />
+  <Breadcrumbs v-if="!isNew && (group.isLoading.value || (group.isError.value && !group.data.value))" :items="crumbs" />
   <LoadingState v-if="!isNew && group.isLoading.value" :label="t('groups.loadingOne')" />
   <template v-else-if="!isNew && group.isError.value && !group.data.value">
     <EmptyState v-if="notFound" :title="t('groups.notFound.title')">
@@ -256,22 +256,28 @@ const notFound = computed(() => {
     <ErrorAlert v-else :error="group.error.value" :on-retry="() => group.refetch()" />
   </template>
   <template v-else>
-    <div class="page-header record-header">
-      <div class="record-heading">
-        <div class="title">
-          <Icon name="users" class="class-icon" />
-          <h1 dir="auto">{{ isNew ? t("groups.new") : group.data.value?.name }}</h1>
+    <div class="record-head record-head-plain">
+      <Breadcrumbs :items="crumbs" />
+      <div class="page-header record-header">
+        <div class="record-heading">
+          <span class="class-tile class-tile-lg" aria-hidden="true"><Icon name="users" class="class-icon" /></span>
+          <div class="record-title">
+            <div class="title">
+              <h1 dir="auto">{{ isNew ? t("groups.new") : group.data.value?.name }}</h1>
+            </div>
+            <p v-if="group.data.value && !isNew" class="record-meta" data-testid="record-meta">
+              <span class="badge">{{ t("groups.members.count", { n: memberCount }) }}</span>
+              <span class="record-meta-line">
+                <time :datetime="group.data.value.updatedAt" :title="formatDateTime(group.data.value.updatedAt)">
+                  {{ t("record.meta.updated", { when: formatRelative(group.data.value.updatedAt) }) }}
+                </time>
+              </span>
+            </p>
+          </div>
         </div>
-        <p v-if="group.data.value && !isNew" class="record-meta" data-testid="record-meta">
-          <span>{{ t("groups.members.count", { n: memberCount }) }}</span>
-          <span class="sep" aria-hidden="true">·</span>
-          <time :datetime="group.data.value.updatedAt" :title="formatDateTime(group.data.value.updatedAt)">
-            {{ t("record.meta.updated", { when: formatRelative(group.data.value.updatedAt) }) }}
-          </time>
-        </p>
-      </div>
-      <div v-if="group.data.value && !isNew" class="actions">
-        <RowMenu :label="t('record.actions.more')" :items="moreActions" large />
+        <div v-if="group.data.value && !isNew" class="actions">
+          <RowMenu :label="t('record.actions.more')" :items="moreActions" large />
+        </div>
       </div>
     </div>
 
@@ -359,7 +365,7 @@ const notFound = computed(() => {
       </EmptyState>
       <template v-if="memberRows.length > 0">
         <div class="table-wrap">
-          <table :class="['data', { loading: members.isPlaceholderData.value }]">
+          <table :class="['data', 'list-table', { loading: members.isPlaceholderData.value }]">
             <thead>
               <tr>
                 <th v-for="c in MEMBER_COLUMNS" :key="c.key" scope="col" :aria-sort="c.sort ? lq.ariaSort(c.sort) : undefined">
@@ -371,11 +377,11 @@ const notFound = computed(() => {
             </thead>
             <tbody>
               <tr v-for="m in memberRows" :key="m.id" :class="{ disabled: !m.isActive }">
-                <td><RouterLink :to="`/admin/users/${m.id}`">{{ m.username }}</RouterLink></td>
+                <td><RouterLink class="list-name" :to="`/admin/users/${m.id}`">{{ m.username }}</RouterLink></td>
                 <td>{{ m.displayName }}</td>
                 <td>
-                  <span v-if="m.isActive" class="badge ok">{{ t("common.active") }}</span>
-                  <span v-else class="badge off">{{ t("common.disabled") }}</span>
+                  <span v-if="m.isActive" class="badge ok"><span class="status-dot" aria-hidden="true" />{{ t("common.active") }}</span>
+                  <span v-else class="badge off"><span class="status-dot" aria-hidden="true" />{{ t("common.disabled") }}</span>
                 </td>
                 <td :title="m.addedAt">{{ formatRelative(m.addedAt) }}</td>
                 <td class="row-actions">
@@ -393,7 +399,9 @@ const notFound = computed(() => {
             </tbody>
           </table>
         </div>
-        <PaginationBar :total="memberTotal" :limit="lq.limit.value" :offset="lq.offset.value" @change="lq.onPage" />
+        <div class="table-footer">
+          <PaginationBar numbered :total="memberTotal" :limit="lq.limit.value" :offset="lq.offset.value" @change="lq.onPage" />
+        </div>
       </template>
     </section>
 

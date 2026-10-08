@@ -61,20 +61,19 @@ function clearSearch() {
 </script>
 
 <template>
-  <Breadcrumbs :items="adminCrumbs('groups')" />
-  <div class="page-header">
-    <div class="title">
-      <h1>{{ t("groups.title") }}</h1>
-      <span v-if="list.data.value" class="muted count">{{ t("common.total", { n: formatNumber(total) }) }}</span>
-      <span v-if="list.isFetching.value && !list.isPending.value" class="spinner" :aria-label="t('common.refreshing')" />
+  <div class="list-head">
+    <Breadcrumbs :items="adminCrumbs('groups')" />
+    <div class="page-header">
+      <div class="title">
+        <h1>{{ t("groups.title") }}</h1>
+        <span v-if="list.data.value" class="count mono">{{ t("common.total", { n: formatNumber(total) }) }}</span>
+        <span v-if="list.isFetching.value && !list.isPending.value" class="spinner" :aria-label="t('common.refreshing')" />
+      </div>
+      <div class="actions">
+        <RouterLink class="btn btn-primary" to="/admin/groups/new"><Icon name="plus" />{{ t("groups.create") }}</RouterLink>
+      </div>
     </div>
-    <div class="actions">
-      <RouterLink class="btn btn-primary" to="/admin/groups/new"><Icon name="plus" />{{ t("groups.create") }}</RouterLink>
-    </div>
-  </div>
-  <p class="page-intro">{{ t("admin.groups.intro") }}</p>
-
-  <section class="panel explorer" :aria-label="t('groups.title')">
+    <p class="page-intro">{{ t("admin.groups.intro") }}</p>
     <form class="toolbar" role="search" @submit.prevent>
       <div class="field search">
         <label for="g-q">{{ t("groups.search") }}</label>
@@ -85,7 +84,9 @@ function clearSearch() {
       </div>
       <button v-if="filtered" type="button" class="btn btn-ghost" @click="clearSearch"><Icon name="x" />{{ t("groups.clearSearch") }}</button>
     </form>
+  </div>
 
+  <section class="panel explorer" :aria-label="t('groups.title')">
     <div v-if="list.isError.value" class="panel-body">
       <ErrorAlert :error="list.error.value" :on-retry="() => list.refetch()" />
     </div>
@@ -103,7 +104,7 @@ function clearSearch() {
 
     <template v-if="rows.length > 0 && !list.isError.value">
       <div class="table-wrap table-scroll">
-        <table :class="['data', { loading: list.isPlaceholderData.value }]" aria-describedby="groups-keys">
+        <table :class="['data', 'list-table', { loading: list.isPlaceholderData.value }]" aria-describedby="groups-keys">
           <thead>
             <tr>
               <th v-for="c in COLUMNS" :key="c.key" scope="col" :class="{ num: c.num }" :aria-sort="c.sort ? lq.ariaSort(c.sort) : undefined">
@@ -117,7 +118,7 @@ function clearSearch() {
           </thead>
           <tbody @keydown="onRowKeydown($event)">
             <tr v-for="g in rows" :key="g.id" :data-id="g.id">
-              <td><RouterLink :to="`/admin/groups/${g.id}`" dir="auto">{{ g.name }}</RouterLink></td>
+              <td><RouterLink class="list-name" :to="`/admin/groups/${g.id}`" dir="auto">{{ g.name }}</RouterLink></td>
               <td :title="g.description ?? undefined" dir="auto">{{ g.description ?? "" }}</td>
               <td class="num">{{ formatNumber(g.memberCount) }}</td>
               <td><time :datetime="g.updatedAt" :title="formatDateTime(g.updatedAt)">{{ formatRelative(g.updatedAt) }}</time></td>
@@ -128,7 +129,9 @@ function clearSearch() {
           </tbody>
         </table>
       </div>
-      <PaginationBar :total="total" :limit="limit" :offset="offset" @change="lq.onPage" />
+      <div class="table-footer">
+        <PaginationBar numbered :total="total" :limit="limit" :offset="offset" @change="lq.onPage" />
+      </div>
       <KeyboardHints id="groups-keys" />
     </template>
   </section>
