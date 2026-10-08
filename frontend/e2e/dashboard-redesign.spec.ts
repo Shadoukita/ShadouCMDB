@@ -97,10 +97,15 @@ test("dashboard: Needs attention lists the data-quality checks and drills down i
     expect(url.searchParams.get("endOfLifeWithinDays")).toBe(c.filter.endOfLifeWithinDays === null ? null : String(c.filter.endOfLifeWithinDays));
   }
 
-  // The panel beside the recent activity, in one row of the grid.
-  const recent = await page.locator('[data-widget="recent"]').boundingBox();
-  const aside = await panel.boundingBox();
-  expect(recent && aside && Math.abs(recent.y - aside.y) < 2 && aside.x > recent.x).toBe(true);
+  // The panel beside the recent activity, in one row of the grid. Polled: the widgets above still settle
+  // (chart, counts) while they load, so two one-off measurements can straddle a layout shift.
+  await expect
+    .poll(async () => {
+      const recent = await page.locator('[data-widget="recent"]').boundingBox();
+      const aside = await panel.boundingBox();
+      return !!(recent && aside && Math.abs(recent.y - aside.y) < 2 && aside.x > recent.x);
+    })
+    .toBe(true);
 
   await checkA11y(page, testInfo, "dashboard-attention-light", { include: '[data-testid="needs-attention"]' });
   await chooseTheme(page, "dark");
