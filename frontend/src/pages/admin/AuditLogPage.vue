@@ -64,6 +64,8 @@ const ENTITY_LABELS: Record<EntityType, MessageKey> = {
   workflow_definitions: "audit.entity.workflow_definitions",
   workflow_approval_delegations: "audit.entity.workflow_approval_delegations",
   inventory: "audit.entity.inventory",
+  ci_notes: "audit.entity.ci_notes",
+  ci_note_settings: "audit.entity.ci_note_settings",
 };
 const ENTITY_TYPES = (Object.keys(ENTITY_LABELS) as EntityType[]).map((value) => ({ value, label: t(ENTITY_LABELS[value]) }));
 // Both ways: an action added to the API fails the typecheck until lib/auditEvents names it, and back.

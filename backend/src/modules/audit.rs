@@ -76,6 +76,10 @@ pub enum EntityType {
     WorkflowDefinitions,
     /// Approval delegations: create, update (revocation).
     WorkflowApprovalDelegations,
+    /// Notes on CIs (entity id: the note's id; the CI is `ciId` in the values): create, update, delete
+    CiNotes,
+    /// The note policy (edit window, retention period)
+    CiNoteSettings,
 }
 
 impl EntityType {
@@ -113,6 +117,8 @@ impl EntityType {
             EntityType::CiLayoutOverrides => "ci_layout_overrides",
             EntityType::WorkflowDefinitions => "workflow_definitions",
             EntityType::WorkflowApprovalDelegations => "workflow_approval_delegations",
+            EntityType::CiNotes => "ci_notes",
+            EntityType::CiNoteSettings => "ci_note_settings",
         }
     }
 }
@@ -409,6 +415,13 @@ pub(crate) fn push_visible(qb: &mut QueryBuilder<Postgres>, visible: &[Uuid]) {
     )
     .push_bind(visible.to_vec())
     .push(")))");
+    // A note on a CI: only with the CI (SHAA-2355). Every value names it.
+    qb.push(
+        " AND (entity_type <> 'ci_notes' \
+         OR coalesce(new_value ->> 'ciId', old_value ->> 'ciId') IN (SELECT id::text FROM cmdb.configuration_items WHERE class_id = ANY(",
+    )
+    .push_bind(visible.to_vec())
+    .push(")))");
     // Import jobs and saved mappings name their class by key (T21).
     qb.push(
         " AND (entity_type NOT IN ('import_jobs', 'import_mappings') \
@@ -492,6 +505,9 @@ fn referenced_cis(rows: &[AuditEntry]) -> Vec<Uuid> {
             }
             "ci_layout_overrides" => {
                 ids.insert(e.entity_id);
+            }
+            "ci_notes" => {
+                ids.extend(values(e).filter_map(|v| uuid_at(v, "ciId")));
             }
             _ => {}
         }
@@ -608,6 +624,7 @@ fn redact(
                     })
                 })
             }),
+            "ci_notes" => values(e).all(|v| uuid_at(v, "ciId").is_some_and(can_view)),
             // Without its record there is no telling what the counts describe.
             "schema_changes" => match changes.get(&e.entity_id) {
                 Some(change) => {

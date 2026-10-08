@@ -5,6 +5,7 @@ pub mod areas;
 pub mod audit;
 pub mod auth;
 pub mod business_services;
+pub mod ci_notes;
 pub mod classes;
 pub mod config_transfer;
 pub mod csv_safe;
