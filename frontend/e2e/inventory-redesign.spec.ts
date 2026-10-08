@@ -52,6 +52,16 @@ test("inventory: filter chips, Add filter, row selection and page numbers", asyn
 
   // Selection: per row and per page, counted in the footer; Bulk edit says why it is not available.
   const footer = page.locator(".table-footer");
+  // From a row's checkbox ↓/↑ move to the neighbouring row's checkbox and Space ticks it (GH#750).
+  const boxA = rows.nth(0).getByRole("checkbox", { name: `Select ${stamp}-srv-a` });
+  const boxB = rows.nth(1).getByRole("checkbox", { name: `Select ${stamp}-srv-b` });
+  await boxA.focus();
+  await page.keyboard.press("ArrowDown");
+  await expect(boxB).toBeFocused();
+  await page.keyboard.press("Space");
+  await expect(boxB).toBeChecked();
+  await page.keyboard.press("ArrowUp");
+  await expect(boxA).toBeFocused();
   await rows.nth(0).getByRole("checkbox", { name: `Select ${stamp}-srv-a` }).check();
   await rows.nth(1).getByRole("checkbox", { name: `Select ${stamp}-srv-b` }).check();
   await expect(footer.getByRole("status")).toHaveText("2 selected");
