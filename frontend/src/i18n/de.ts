@@ -805,6 +805,7 @@ export const de: { [K in MessageKey]: string } = {
   "dashboard.attention.pending_approval.title": "Offene Genehmigungen",
   "dashboard.attention.pending_approval.body": "CIs mit einer Workflow-Genehmigung, die auf eine Entscheidung wartet",
   "dashboard.attention.off": "{n, plural, one {# Prüfung ist} other {# Prüfungen sind}} aus: Noch keine CI-Klasse benennt ein Verantwortlichen- oder Lebensende-Feld.",
+  "dashboard.attention.offLink": "Felder in den Klassen festlegen",
   "dashboard.col.ci": "Configuration Item",
   "dashboard.col.change": "Änderung",
   "dashboard.col.by": "Von",

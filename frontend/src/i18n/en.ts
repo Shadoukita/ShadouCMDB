@@ -791,6 +791,7 @@ export const en = {
   "dashboard.attention.pending_approval.title": "Pending approvals",
   "dashboard.attention.pending_approval.body": "CIs with a workflow approval waiting for a decision",
   "dashboard.attention.off": "{n, plural, one {# check is} other {# checks are}} off: no CI class names an owner or end-of-life field yet.",
+  "dashboard.attention.offLink": "Set the fields in the classes",
   "dashboard.col.ci": "Configuration item",
   "dashboard.col.change": "Change",
   "dashboard.col.by": "By",

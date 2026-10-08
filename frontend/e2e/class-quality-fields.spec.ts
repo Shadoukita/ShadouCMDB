@@ -102,3 +102,30 @@ test("the checks count the class's CIs by the fields set in the UI", async ({ re
   expect((await qualityList(request, "end_of_life")).data.map((c) => c.id)).toEqual([unowned]);
   expect(owned).toBeTruthy();
 });
+
+test("the dashboard counts the checks after a reload, and its 'checks are off' note links to the classes", async ({ page, request }) => {
+  // The fields set in the UI above turn both checks on: after a reload the panel lists them with the API's counts.
+  type Check = { key: string; count: number; configured: boolean };
+  const { checks } = await apiGet<{ checks: Check[] }>(request, "/configuration-items/data-quality");
+  await page.goto("/");
+  const panel = page.getByRole("region", { name: "Needs attention" });
+  for (const key of ["no_owner", "end_of_life"]) {
+    const c = checks.find((x) => x.key === key)!;
+    expect(c.configured).toBe(true);
+    expect(c.count).toBeGreaterThanOrEqual(1);
+    await expect(panel.locator(`[data-check="${key}"] .attention-count`)).toHaveText(c.count.toLocaleString("en-US"));
+  }
+
+  // While a check is off, a data-model administrator is told so and sent to the classes, where the fields are set.
+  await page.route("**/api/v1/configuration-items/data-quality", async (route) => {
+    const body = await (await route.fetch()).json();
+    for (const c of body.checks) if (c.key === "no_owner" || c.key === "end_of_life") c.configured = false;
+    await route.fulfill({ json: body });
+  });
+  await page.reload();
+  await expect(panel.locator('[data-check="no_owner"]')).toHaveCount(0);
+  const note = panel.locator(".attention-off");
+  await expect(note).toContainText("2 checks are off");
+  await note.getByRole("link", { name: "Set the fields in the classes" }).click();
+  await expect(page).toHaveURL(/\/admin\/classes$/);
+});
