@@ -257,3 +257,157 @@ async fn data_quality_checks_count_and_drill_down() {
     let (status, v, _) = call(&app, "PATCH", &format!("/api/v1/attribute-definitions/{eol}"), &admin, Some(body)).await;
     assert!((400..500).contains(&status), "{status} {v}");
 }
+
+/// A signed-in user with a restricted permission profile (SHAA-2530): every
+/// count the "Needs attention" panel shows matches the list its link opens,
+/// and neither reveals a CI of a class the profile does not grant.
+#[tokio::test]
+async fn data_quality_is_scoped_for_a_restricted_user() {
+    let Some(db) = scratch::database("data_quality_restricted").await else { return };
+    let pool = &db.pool;
+    let app = app(pool.clone());
+    let setup = json!({ "username": "owner", "email": "owner@example.test", "displayName": "Owner", "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
+    let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
+    assert_eq!(status, 201, "{me}");
+    let admin = session_of(&me, &headers);
+    let post = |path: &'static str, body: Value| {
+        let (app, admin) = (&app, &admin);
+        async move {
+            let (status, v, _) = call(app, "POST", path, admin, Some(body)).await;
+            assert_eq!(status, 201, "{path}: {v}");
+            id(&v)
+        }
+    };
+
+    // srv and app both name an owner field; app also an end-of-life field. The user may view srv only.
+    let srv = post("/api/v1/ci-classes", json!({ "key": "srv", "name": "Srv" })).await;
+    let apps = post("/api/v1/ci-classes", json!({ "key": "app", "name": "App" })).await;
+    let field =
+        |class: Uuid, key: &str, ty: &str| json!({ "classId": class, "key": key, "label": key, "dataType": ty });
+    let srv_owner = post("/api/v1/attribute-definitions", field(srv, "owner", "text")).await;
+    let app_owner = post("/api/v1/attribute-definitions", field(apps, "owner", "text")).await;
+    let app_eol = post("/api/v1/attribute-definitions", field(apps, "eol", "date")).await;
+    for (class, body) in [
+        (srv, json!({ "ownerAttributeId": srv_owner })),
+        (apps, json!({ "ownerAttributeId": app_owner, "endOfLifeAttributeId": app_eol })),
+    ] {
+        let (status, v, _) = call(&app, "PATCH", &format!("/api/v1/ci-classes/{class}"), &admin, Some(body)).await;
+        assert_eq!(status, 200, "{v}");
+    }
+    let soon = (Utc::now().date_naive() + TimeDelta::days(5)).to_string();
+    let ci = |class: Uuid, attrs: Value| {
+        post("/api/v1/configuration-items", json!({ "classId": class, "attributes": attrs }))
+    };
+    let s1 = ci(srv, json!({})).await;
+    let s2 = ci(srv, json!({ "owner": "ops" })).await;
+    let a1 = ci(apps, json!({ "eol": soon })).await;
+    let a2 = ci(apps, json!({ "owner": "dev", "eol": soon })).await;
+
+    // s2 -> a2: the restricted user sees s2's only relationship lead to a CI it may not view.
+    let rt: Uuid = sqlx::query_scalar(
+        "INSERT INTO relationship_types (key, name, forward_label, reverse_label, is_directional)
+         VALUES ('uses', 'Uses', 'uses', 'used by', true) RETURNING id",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO relationship_type_rules (relationship_type_id, source_class_id, target_class_id) VALUES ($1, $2, $3)")
+        .bind(rt)
+        .bind(srv)
+        .bind(apps)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO ci_relationships (relationship_type_id, source_ci_id, target_ci_id) VALUES ($1, $2, $3)")
+        .bind(rt)
+        .bind(s2)
+        .bind(a2)
+        .execute(pool)
+        .await
+        .unwrap();
+
+    // A profile that may view srv only, and a user holding it.
+    let profile: Uuid =
+        sqlx::query_scalar("INSERT INTO permission_profiles (name) VALUES ('Server viewers') RETURNING id")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    sqlx::query(
+        "INSERT INTO permission_profile_class_permissions (profile_id, class_id, can_view, can_edit) VALUES ($1, $2, true, false)",
+    )
+    .bind(profile)
+    .bind(srv)
+    .execute(pool)
+    .await
+    .unwrap();
+    let body = json!({ "username": "viewer", "email": "viewer@example.test", "displayName": "Viewer", "password": "a long enough password", "profileIds": [profile] });
+    let (status, v, _) = call(&app, "POST", "/api/v1/admin/users", &admin, Some(body)).await;
+    assert_eq!(status, 201, "{v}");
+    let login = json!({ "username": "viewer", "password": "a long enough password" });
+    let (status, me, headers) = call(&app, "POST", "/api/v1/auth/login", &Creds::default(), Some(login)).await;
+    assert_eq!(status, 200, "{me}");
+    let viewer = session_of(&me, &headers);
+
+    let mine: BTreeSet<Uuid> = [s1, s2, a1, a2].into();
+    // (key, count, configured) and the CIs each drill-down lists, for a caller.
+    let walk = |creds: &Creds| {
+        let (app, mine) = (&app, &mine);
+        let creds = creds.clone();
+        async move {
+            let (status, v, _) = call(app, "GET", "/api/v1/configuration-items/data-quality", &creds, None).await;
+            assert_eq!(status, 200, "{v}");
+            let mut out = Vec::new();
+            for check in v["checks"].as_array().unwrap() {
+                let key = check["key"].as_str().unwrap().to_owned();
+                let filter = check["filter"].as_object().unwrap();
+                let mut path =
+                    format!("/api/v1/configuration-items?limit=200&quality={}", filter["quality"].as_str().unwrap());
+                if let Some(days) = filter["endOfLifeWithinDays"].as_i64() {
+                    path.push_str(&format!("&endOfLifeWithinDays={days}"));
+                }
+                let (status, list, _) = call(app, "GET", &path, &creds, None).await;
+                assert_eq!(status, 200, "{path}: {list}");
+                let listed: BTreeSet<Uuid> =
+                    list["data"].as_array().unwrap().iter().map(id).filter(|i| mine.contains(i)).collect();
+                // The panel's count is the total of the list its link opens.
+                if check["configured"] == json!(true) {
+                    assert_eq!(list["page"]["total"], check["count"], "{key}: {list}");
+                }
+                out.push((key, check["count"].as_i64().unwrap(), check["configured"].as_bool().unwrap(), listed));
+            }
+            out
+        }
+    };
+
+    let set = |ids: &[Uuid]| ids.iter().copied().collect::<BTreeSet<Uuid>>();
+    // The administrator: s1 and a1 lack an owner, a1 and a2 reach end of life, s1 and a1 have no relationship
+    // (as have the person CIs of owner and viewer, outside `mine`).
+    let all = walk(&admin).await;
+    assert_eq!(
+        all,
+        [
+            ("no_owner".to_owned(), 2, true, set(&[s1, a1])),
+            ("end_of_life".to_owned(), 2, true, set(&[a1, a2])),
+            ("no_relationships".to_owned(), 4, true, set(&[s1, a1])),
+            ("pending_approval".to_owned(), 0, true, set(&[])),
+        ]
+    );
+    // The restricted user: only srv CIs. End of life is named on app only, so it is not configured for them,
+    // and its drill-down lists nothing; s2's relationship leads to a CI it may not view. The person CIs are
+    // outside the profile too, so no_relationships counts s1 and s2 alone.
+    let scoped = walk(&viewer).await;
+    assert_eq!(
+        scoped,
+        [
+            ("no_owner".to_owned(), 1, true, set(&[s1])),
+            ("end_of_life".to_owned(), 0, false, set(&[])),
+            ("no_relationships".to_owned(), 2, true, set(&[s1, s2])),
+            ("pending_approval".to_owned(), 0, true, set(&[])),
+        ]
+    );
+    for (_, _, _, listed) in &scoped {
+        assert!(listed.is_disjoint(&set(&[a1, a2])), "a CI of a class the profile does not grant: {listed:?}");
+    }
+
+    db.drop().await;
+}
