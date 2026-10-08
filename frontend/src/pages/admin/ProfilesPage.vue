@@ -61,20 +61,19 @@ const rowMenu = (p: PermissionProfile): RowMenuItem[] => [
 </script>
 
 <template>
-  <Breadcrumbs :items="adminCrumbs('profiles')" />
-  <div class="page-header">
-    <div class="title">
-      <h1>{{ t("admin.section.profiles") }}</h1>
-      <span v-if="list.data.value" class="muted count">{{ t("common.total", { n: formatNumber(total) }) }}</span>
-      <span v-if="list.isFetching.value && !list.isPending.value" class="spinner" :aria-label="t('common.refreshing')" />
+  <div class="list-head">
+    <Breadcrumbs :items="adminCrumbs('profiles')" />
+    <div class="page-header">
+      <div class="title">
+        <h1>{{ t("admin.section.profiles") }}</h1>
+        <span v-if="list.data.value" class="count mono">{{ t("common.total", { n: formatNumber(total) }) }}</span>
+        <span v-if="list.isFetching.value && !list.isPending.value" class="spinner" :aria-label="t('common.refreshing')" />
+      </div>
+      <div v-if="canManage" class="actions">
+        <RouterLink class="btn btn-primary" to="/admin/profiles/new"><Icon name="plus" />{{ t("admin.profiles.new") }}</RouterLink>
+      </div>
     </div>
-    <div v-if="canManage" class="actions">
-      <RouterLink class="btn btn-primary" to="/admin/profiles/new"><Icon name="plus" />{{ t("admin.profiles.new") }}</RouterLink>
-    </div>
-  </div>
-  <p class="page-intro">{{ t("admin.profiles.intro") }}</p>
-
-  <section class="panel explorer" :aria-label="t('admin.section.profiles')">
+    <p class="page-intro">{{ t("admin.profiles.intro") }}</p>
     <form class="toolbar" role="search" @submit.prevent>
       <div class="field search">
         <label for="p-q">{{ t("admin.search") }}</label>
@@ -93,7 +92,9 @@ const rowMenu = (p: PermissionProfile): RowMenuItem[] => [
       </div>
       <button v-if="get('q')" type="button" class="btn btn-ghost" @click="clearSearch"><Icon name="x" />{{ t("groups.clearSearch") }}</button>
     </form>
+  </div>
 
+  <section class="panel explorer" :aria-label="t('admin.section.profiles')">
     <div v-if="list.isError.value" class="panel-body">
       <ErrorAlert :error="list.error.value" :on-retry="() => list.refetch()" />
     </div>
@@ -113,7 +114,7 @@ const rowMenu = (p: PermissionProfile): RowMenuItem[] => [
 
     <template v-if="rows.length > 0 && !list.isError.value">
       <div class="table-wrap table-scroll">
-        <table :class="['data', 'profile-table', { loading: list.isPlaceholderData.value }]" aria-describedby="profiles-keys">
+        <table :class="['data', 'list-table', 'profile-table', { loading: list.isPlaceholderData.value }]" aria-describedby="profiles-keys">
           <thead>
             <tr>
               <th scope="col">{{ t("admin.profiles.col.name") }}</th>
@@ -127,7 +128,7 @@ const rowMenu = (p: PermissionProfile): RowMenuItem[] => [
             <tr v-for="p in rows" :key="p.id" :data-id="p.id">
               <td :title="p.description ?? undefined">
                 <span class="name-badges">
-                  <RouterLink :to="`/admin/profiles/${p.id}`" dir="auto">{{ p.name }}</RouterLink>
+                  <RouterLink class="list-name" :to="`/admin/profiles/${p.id}`" dir="auto">{{ p.name }}</RouterLink>
                   <span v-if="p.isBuiltin" class="badge">{{ t("admin.profiles.builtin") }}</span>
                   <span v-if="p.requireMfa" class="badge warn" :title="t('admin.profiles.mfaRequiredTitle')">{{ t("admin.profiles.mfaRequired") }}</span>
                 </span>
@@ -147,7 +148,9 @@ const rowMenu = (p: PermissionProfile): RowMenuItem[] => [
           </tbody>
         </table>
       </div>
-      <PaginationBar :total="total" :limit="limit" :offset="offset" @change="lq.onPage" />
+      <div class="table-footer">
+        <PaginationBar numbered :total="total" :limit="limit" :offset="offset" @change="lq.onPage" />
+      </div>
       <KeyboardHints id="profiles-keys" />
     </template>
   </section>
