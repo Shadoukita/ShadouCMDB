@@ -784,6 +784,37 @@ async function main() {
   const inverted = await get('/api/v1/configuration-items/change-histogram?from=2026-01-02T00:00:00Z&to=2026-01-01T00:00:00Z', 400);
   check(inverted.json.error?.details?.[0]?.code === 'invalid_range', 'change histogram: an inverted range is refused');
 
+  // Dashboard KPIs (SHAA-2350): record completeness and CI / relationship count history.
+  const completeness = (await get('/api/v1/configuration-items/completeness?basis=all')).json;
+  const summed = completeness.classes.reduce((n: number, c: Json) => n + c.counts.items, 0);
+  check(
+    completeness.basis === 'all' && completeness.overall.items > 0 && completeness.overall.completeItems <= completeness.overall.items &&
+      completeness.overall.filledValues <= completeness.overall.expectedValues && summed === completeness.overall.items,
+    'completeness: overall counts are bounded and equal the sum of the per-class counts',
+  );
+  await get(`/api/v1/configuration-items/completeness?classId=${appClass}`);
+  const itemCompleteness = (await get(`/api/v1/configuration-items/${app.id}/completeness?basis=all`)).json;
+  check(
+    itemCompleteness.id === app.id && itemCompleteness.countedFields === itemCompleteness.fields.length &&
+      itemCompleteness.filledFields === itemCompleteness.fields.filter((f: Json) => f.filled).length &&
+      itemCompleteness.complete === (itemCompleteness.filledFields === itemCompleteness.countedFields),
+    'completeness of one CI: the counts match its field list',
+  );
+  await get('/api/v1/configuration-items/00000000-0000-4000-8000-000000000000/completeness', 404);
+  const ciHistory = (await get('/api/v1/configuration-items/count-history')).json;
+  const last = (h: Json) => h.buckets[h.buckets.length - 1];
+  check(
+    ciHistory.bucket === 'day' && ciHistory.buckets.length > 0 && last(ciHistory).count > 0 &&
+      last(ciHistory).count === ciHistory.countAtFrom + ciHistory.buckets.reduce((n: number, b: Json) => n + b.added - b.removed, 0),
+    'CI count history: the last count is the starting count plus every bucket\'s added minus removed',
+  );
+  const weekly = (await get('/api/v1/configuration-items/count-history?bucket=week&active=all')).json;
+  check(weekly.bucket === 'week' && last(weekly).count >= last(ciHistory).count, 'CI count history: week buckets, all validity states');
+  const relHistory = (await get(`/api/v1/relationships/count-history?relationshipTypeId=${dependsOn}`)).json;
+  check(last(relHistory).count > 0, 'relationship count history counts this run\'s relationships');
+  const relInverted = await get('/api/v1/relationships/count-history?from=2026-01-02T00:00:00Z&to=2026-01-01T00:00:00Z', 400);
+  check(relInverted.json.error?.details?.[0]?.code === 'invalid_range', 'relationship count history: an inverted range is refused');
+
   // --- Sign-out ------------------------------------------------------------------
   console.log('\n# Sign-out');
   await call('POST', '/api/v1/auth/logout', undefined, 403, { 'x-csrf-token': 'wrong' });
@@ -1983,7 +2014,7 @@ async function customization(x: Json) {
   const file = exported.json;
   const raw = JSON.stringify(file);
   check(/^attachment; filename="shadoucmdb-config-/.test(exported.headers.get('content-disposition') ?? ''), 'the export downloads as a file');
-  check(file.format === 'shadoucmdb.config' && file.formatVersion === 9 && Array.isArray(file.workflows) && Array.isArray(file.importMappings) && Array.isArray(file.savedViews) && file.dataModel.areas.some((a: Json) => a.key === 'infrastruktur') && !('users' in file) && !raw.includes('argon2') && !raw.includes('"username"') && !raw.includes('password'), 'the export has no users or password hashes');
+  check(file.format === 'shadoucmdb.config' && file.formatVersion === 10 && Array.isArray(file.workflows) && Array.isArray(file.importMappings) && Array.isArray(file.savedViews) && file.dataModel.areas.some((a: Json) => a.key === 'infrastruktur') && !('users' in file) && !raw.includes('argon2') && !raw.includes('"username"') && !raw.includes('password'), 'the export has no users or password hashes');
   check(file.permissionProfiles.every((p: Json) => p.name !== 'Administrator') && file.uiSettings.logo?.data === PNG_1X1, 'the export has editable profiles and the images');
   check(file.dataModel.attributes.every((a: Json) => typeof a.class === 'string' && !('classId' in a)), 'the export refers to classes by key');
   const noop = (await post('/api/v1/admin/config/import?mode=dry_run', file, 200)).json;
@@ -2032,7 +2063,7 @@ async function customization(x: Json) {
   attr.dataType = 'text';
   const immutable = await post('/api/v1/admin/config/import?mode=dry_run', retyped, 400);
   check(immutable.json.error?.details?.some((d: Json) => d.code === 'immutable'), 'the data type of an existing attribute cannot change');
-  await post('/api/v1/admin/config/import?mode=apply', { format: 'shadoucmdb.config', formatVersion: 10 }, 400);
+  await post('/api/v1/admin/config/import?mode=apply', { format: 'shadoucmdb.config', formatVersion: 11 }, 400);
   // Format 4: saved import mappings, merged by class key and name (SHAA-714 §6.2).
   const cfgMapping = { name: `Smoke config ${RUN}`, classKey: 'server', definition: { mode: 'create_only', columns: [{ header: 'Hostname', target: { kind: 'attribute', key: 'hostname' } }, { header: 'Notes', target: { kind: 'ignore' } }] } };
   const mappingFile = { format: 'shadoucmdb.config', formatVersion: 4, importMappings: [cfgMapping] };
