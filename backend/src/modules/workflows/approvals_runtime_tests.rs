@@ -1865,10 +1865,10 @@ async fn a_requester_who_owns_the_service_is_refused_and_a_lent_token_group_owne
 // GH#715: a field staged on an earlier gated transition is the requester's
 // ---------------------------------------------------------------------------
 
-/// GH#715 as reported: `prepare` is gated (a Tech check) and takes `owner`.
-/// req stages owner = pal on it, tech approves, and the final approval writes
-/// the field as tech. req then requests `approve`, whose approver is the owner:
-/// pal may not decide, as if req had set the field directly.
+/// GH#715 as reported: `prepare` is gated (an Approvers check) and takes
+/// `owner`. req stages owner = pal on it, req2 approves, and the final approval
+/// writes the field as req2. req then requests `approve`, whose approver is the
+/// owner: pal may not decide, as if req had set the field directly.
 #[tokio::test]
 async fn a_field_staged_on_an_earlier_gated_transition_does_not_pick_the_approver() {
     let Some(db) = scratch::database("workflow_approvals_staged_field").await else { return };
@@ -1902,7 +1902,7 @@ async fn a_field_staged_on_an_earlier_gated_transition_does_not_pick_the_approve
         "PUT",
         &format!("{DEFS}/{}/approvers", w.definition),
         json!({ "version": def["version"], "approvers": [
-            { "transitionKey": "prepare", "stepKey": "check", "source": "profile", "profile": "Tech" },
+            { "transitionKey": "prepare", "stepKey": "check", "source": "profile", "profile": "Approvers" },
             { "transitionKey": "approve", "stepKey": "owner", "source": "ci_attribute", "attribute": "owner" }
         ] }),
     )
@@ -1911,7 +1911,7 @@ async fn a_field_staged_on_an_earlier_gated_transition_does_not_pick_the_approve
     o.set_owner(&w.admin, ci, o.owner_person).await;
     let (status, v) = request(w, &o.req.0, instance, "prepare", json!({ "owner": o.pal_person })).await;
     assert_eq!(status, 202, "{v}");
-    let (status, v) = decide(w, &o.tech.0, instance, "approve", None).await;
+    let (status, v) = decide(w, &o.req2.0, instance, "approve", None).await;
     assert_eq!((status, v["instance"]["state"]["key"].as_str()), (200, Some("ready")), "{v}");
     assert_eq!(w.ci_values(ci).await["attributes"]["owner"], json!(o.pal_person));
 
@@ -1920,14 +1920,15 @@ async fn a_field_staged_on_an_earlier_gated_transition_does_not_pick_the_approve
     assert_eq!((status, reason(&v)), (403, refused("FORBIDDEN", "not_eligible")), "{v}");
     let v = o.view(instance).await;
     let step = &v["steps"][0];
-    // The change is recorded as tech's, who approved it; the request it applied was req's.
-    assert_eq!(dropped(step), by("field_set_by_requester", "tech"), "{v}");
+    // The change is recorded as req2's, who approved it; the request it applied was req's.
+    assert_eq!(dropped(step), by("field_set_by_requester", "req2"), "{v}");
     let d = &step["droppedSources"][0];
     assert_eq!(d["fieldLastChanged"]["approvalRequestedBy"], json!([o.req.1]), "{d}");
     assert!(d["message"].as_str().unwrap().contains("by approving a request made by someone"), "{d}");
     assert_eq!((step["eligibleCount"].as_i64(), v["approvers"].clone()), (Some(0), json!([])), "{v}");
 
-    // The preview agrees; for another requester the field still names pal.
+    // The preview agrees; for someone else (neither the staging requester nor
+    // the approver who wrote the field) it still names pal.
     let preview = format!("{DEFS}/{}/approvers/preview?transition=approve&step=owner&ciId={ci}", w.definition);
     let (_, v) = w.call(&w.admin, "GET", &format!("{preview}&requestedBy={}", o.req.1), None).await;
     assert_eq!(
@@ -1935,7 +1936,7 @@ async fn a_field_staged_on_an_earlier_gated_transition_does_not_pick_the_approve
         (Some("field_set_by_requester"), Some(0)),
         "{v}"
     );
-    let (_, v) = w.call(&w.admin, "GET", &format!("{preview}&requestedBy={}", o.req2.1), None).await;
+    let (_, v) = w.call(&w.admin, "GET", &format!("{preview}&requestedBy={}", o.ed.1), None).await;
     assert_eq!((v["sources"][0]["dropped"].clone(), v["eligibleCount"].as_i64()), (Value::Null, Some(1)), "{v}");
     audit_ok(w).await;
     db.drop().await;
