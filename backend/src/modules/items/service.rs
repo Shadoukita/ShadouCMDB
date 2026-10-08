@@ -567,7 +567,7 @@ pub async fn create(
     // A state field an active workflow drives takes no value of the caller's
     // own (Q3); a workflow that starts on its own sets its initial value.
     let state = StateFields::load(&mut tx).await?;
-    state.check_create(&model, input.class_id, &defs, input.attributes.as_ref())?;
+    state.check_create(ctx, &model, input.class_id, &defs, input.attributes.as_ref())?;
     let starts = adopt::auto_starts(&mut tx, &model, input.class_id).await?;
     let seeded;
     let input = if adopt::sets_state(&starts) {

@@ -411,3 +411,38 @@ async fn an_auto_start_workflow_starts_on_a_new_ci() {
     }
     db.drop().await;
 }
+
+/// GH#734: the refusal of a driven field names its workflow only to a caller
+/// who may view every type it covers (the rule of GH#718). A Blade editor may
+/// not view Server, whose workflow drives `lifecycle` on Blades too: their
+/// write is refused with the same status and codes, but unnamed.
+#[tokio::test]
+async fn a_driven_state_field_refusal_does_not_name_a_workflow_the_caller_cannot_view() {
+    let Some(db) = scratch::database("workflow_controlled_field_scope").await else { return };
+    let w = world(&db).await;
+    let blade =
+        id(&w.ok("POST", "/api/v1/ci-classes", json!({ "key": "blade", "name": "Blade", "parentId": w.server })).await);
+    let blades = w.profile("Blade editors", &[(blade, true)]).await;
+    let (only_blades, _) = w.user("only_blades", &[blades]).await;
+    let both = w.profile("Server and blade editors", &[(w.server, true), (blade, true)]).await;
+    let (sees_all, _) = w.user("sees_all", &[both]).await;
+    let ci = id(&w.ok("POST", CIS, json!({ "classId": blade, "attributes": { "environment": "test" } })).await);
+    let approved = json!(w.value("approved").to_string());
+    let patch = json!({ "attributes": { "lifecycle": approved } });
+    let create = json!({ "classId": blade, "attributes": { "environment": "test", "lifecycle": approved } });
+    let (status, v) = w.call(&only_blades, "GET", &format!("{CIS}/{}", w.ci(w.server).await), None).await;
+    assert_eq!(status, 404, "{v}");
+
+    for (who, may_view) in [(&only_blades, false), (&sees_all, true), (&w.admin, true)] {
+        for (method, path, body) in [("PATCH", format!("{CIS}/{ci}"), &patch), ("POST", CIS.to_owned(), &create)] {
+            let (status, v) = w.call(who, method, &path, Some(body.clone())).await;
+            assert_eq!((status, code(&v)), (409, "WORKFLOW_CONTROLLED_FIELD"), "{v}");
+            assert_eq!(first_detail(&v), ("attributes.lifecycle", "workflow_controlled"));
+            assert_eq!(v.to_string().contains("server_lifecycle"), may_view, "{method}: {v}");
+            let message = v["error"]["message"].as_str().unwrap_or_default();
+            assert!(message.starts_with("lifecycle is set by "), "{v}");
+        }
+    }
+    assert_eq!(w.lifecycle_of(ci).await, Value::Null, "a refused write changes nothing");
+    db.drop().await;
+}

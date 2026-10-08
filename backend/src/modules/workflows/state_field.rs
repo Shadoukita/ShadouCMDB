@@ -44,6 +44,13 @@ impl Driver {
         }
     }
 
+    /// This driver as `ctx` gets it: [`Driver::hidden`] unless the caller may
+    /// view every type it covers (GH#718, GH#734).
+    fn for_caller(&self, ctx: &RequestContext, model: &Model) -> Driver {
+        let covered = if self.include_subclasses { model.subtree(self.class_id) } else { vec![self.class_id] };
+        Driver { hidden: !ctx.may_view_all(&covered), ..self.clone() }
+    }
+
     fn covers(&self, model: &Model, class_id: Uuid) -> bool {
         self.class_id == class_id
             || (self.include_subclasses && model.lineage(class_id).iter().any(|c| c.id == self.class_id))
@@ -60,13 +67,16 @@ pub enum StateFields {
     WorkflowWrite,
 }
 
-fn refused(def: &EffectiveAttributeRow, driver: &Driver) -> FieldError {
+/// The refusal of a driven field, naming its workflow only when the caller
+/// may view it (GH#734: one they may not answers 404, so it is not named here).
+fn refused(ctx: &RequestContext, model: &Model, def: &EffectiveAttributeRow, driver: &Driver) -> FieldError {
     FieldError {
         location: FieldLocation::Body,
         field: format!("attributes.{}", def.key),
         message: format!(
-            "{} is set by the workflow {}: run a transition of its instance instead",
-            def.label, driver.definition_key
+            "{} is set by {}: run a transition of its instance instead",
+            def.label,
+            driver.for_caller(ctx, model).named()
         ),
         code: "workflow_controlled".into(),
     }
@@ -125,10 +135,7 @@ impl StateFields {
                 d.covers(model, class_id)
                     || (include_subclasses && model.lineage(d.class_id).iter().any(|c| c.id == class_id))
             })
-            .map(|d| {
-                let covered = if d.include_subclasses { model.subtree(d.class_id) } else { vec![d.class_id] };
-                Driver { hidden: !ctx.may_view_all(&covered), ..d.clone() }
-            })
+            .map(|d| d.for_caller(ctx, model))
             .collect()
     }
 
@@ -162,6 +169,7 @@ impl StateFields {
     /// fills in); any other value is refused.
     pub fn check_create(
         &self,
+        ctx: &RequestContext,
         model: &Model,
         class_id: Uuid,
         defs: &[EffectiveAttributeRow],
@@ -174,15 +182,17 @@ impl StateFields {
             if value_id(v).is_some_and(|id| Some(id) == driver.initial_value_id) || Some(v) == default {
                 continue;
             }
-            errors.push(refused(def, driver));
+            errors.push(refused(ctx, model, def, driver));
         }
         error(errors)
     }
 
     /// A change of an existing CI may resend a driven field's current value
     /// (a form saving every field), but not set another one or clear it.
+    #[allow(clippy::too_many_arguments)]
     pub fn check_update(
         &self,
+        ctx: &RequestContext,
         model: &Model,
         class_id: Uuid,
         defs: &[EffectiveAttributeRow],
@@ -199,7 +209,7 @@ impl StateFields {
                 None => clear.contains(&def.id) && current.is_some(),
             };
             if changes {
-                errors.push(refused(def, driver));
+                errors.push(refused(ctx, model, def, driver));
             }
         }
         error(errors)
