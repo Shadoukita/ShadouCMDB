@@ -245,6 +245,7 @@ function defaultText(d: AttributeDefinition): string {
               <button type="button" class="btn-link" :title="t('dm.attr.editTitle', { name: d.label })" @click="openEdit(d)">{{ d.label }}</button>
               <span v-if="!d.isActive" class="badge off" :title="t('dm.attr.archivedTitle')">{{ t("dm.attr.archived") }}</span>
               <span v-if="d.systemRole" class="badge" :title="t('people.datamodel.systemTitle')" data-testid="system-attribute">{{ t("people.datamodel.system") }}</span>
+              <span v-if="d.isIdentifying" class="badge" :title="t('dm.attr.identifyingTitle')">{{ t("dm.attr.f.identifying") }}</span>
               <div v-if="d.helpText" class="muted cell-note">{{ d.helpText }}</div>
             </td>
             <td class="mono">{{ d.key }}</td>
