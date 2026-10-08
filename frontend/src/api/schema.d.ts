@@ -1460,7 +1460,7 @@ export interface paths {
         head?: never;
         /**
          * Update a ci class (partial)
-         * @description Requires `datamodel.manage`. Changing `titleAttributeId` relabels the class's CIs. Moving the type to another parent (`parentId`) keeps its title attribute only if the new lineage provides it; otherwise it takes the new parent's (so do its subtypes), and the CIs are relabelled. The same move clears an `ownerAttributeId` or `endOfLifeAttributeId` of the type or its subtypes that the new lineage does not provide (the parent's setting then applies).
+         * @description Requires `datamodel.manage`. Changing `titleAttributeId` relabels the class's CIs. Moving the type to another parent (`parentId`) keeps its title attribute only if the new lineage provides it; otherwise it takes the new parent's (so do its subtypes), and the CIs are relabelled. The same move clears an `ownerAttributeId` or `endOfLifeAttributeId` of the type or its subtypes that the new lineage does not provide (the parent's setting then applies). A `subtitleAttributeId` the new lineage does not provide is replaced by the new parent's, which changes no stored CI data.
          */
         patch: operations["updateCiClass"];
         trace?: never;
@@ -1623,7 +1623,7 @@ export interface paths {
         };
         /**
          * List relationship type records (paginated, searchable, sortable)
-         * @description `q` matches key, name, forward_label, reverse_label (case-insensitive substring).
+         * @description `q` matches key, name, forward_label, reverse_label, category (case-insensitive substring).
          */
         get: operations["listRelationshipTypes"];
         put?: never;
@@ -4183,6 +4183,12 @@ export interface components {
              */
             endOfLifeAttributeId: string | null;
             /**
+             * Format: uuid
+             * @description The attribute (of this class or an ancestor) whose value the UI shows under a CI's name, e.g. the model of a
+             *     server; null shows the class name instead
+             */
+            subtitleAttributeId: string | null;
+            /**
              * @description Set on the built-in type the application itself uses: `business_service` (the business services). It can be
              *     renamed and given fields, but not deleted, archived, purged, made abstract, given a parent or subtypes
              */
@@ -4432,7 +4438,7 @@ export interface components {
             format: "shadoucmdb.config";
             /**
              * Format: int32
-             * @description File format version; this server writes version 12 and reads 1 to 12
+             * @description File format version; this server writes version 13 and reads 1 to 13
              */
             formatVersion: number;
             exportedAt?: string | null;
@@ -4576,6 +4582,8 @@ export interface components {
                     hidden: boolean;
                 };
             };
+            /** @description Only on getConfigurationItem: the CI's last change (its newest create, update, delete or restore audit entry), without reading the audit log; null when the log holds none for it (entries removed by audit retention before this field existed). */
+            lastChange?: components["schemas"]["LastChange"] | null;
         };
         ConfigurationItemList: {
             data: components["schemas"]["ConfigurationItem"][];
@@ -4746,6 +4754,7 @@ export interface components {
                 titleAttribute?: string | null;
                 ownerAttribute?: string | null;
                 endOfLifeAttribute?: string | null;
+                subtitleAttribute?: string | null;
                 /**
                  * @description Set on the built-in business service class (version 5). An import matches such a class to this install's
                  *     class of the same role, whatever its key, and keeps that class's key and area; it never gives a class a
@@ -4817,6 +4826,7 @@ export interface components {
                  *     value, a new one gets none
                  */
                 impactDirection?: ("none" | "target_to_source" | "source_to_target" | "both") | null;
+                category?: string | null;
                 sortOrder?: number;
                 isActive?: boolean;
                 /**
@@ -5013,6 +5023,8 @@ export interface components {
                 forwardLabel: string;
                 reverseLabel: string;
                 isDirectional: boolean;
+                /** @description The relationship type's category (group heading); null: none */
+                category: string | null;
             };
             /** Format: uuid */
             sourceCiId: string;
@@ -5814,6 +5826,31 @@ export interface components {
                 truncated: boolean;
             }[];
         };
+        /**
+         * @description The CI's newest create, update, delete or restore entry in the audit log:
+         *     when, what, and who. Kept per CI by the database from the audit log itself,
+         *     so it never disagrees with it; read events (exports) and workflow events
+         *     do not count.
+         */
+        LastChange: {
+            /** Format: date-time */
+            at: string;
+            /**
+             * @description The kinds of audit entry that count as a change to a CI.
+             * @enum {string}
+             */
+            action: "create" | "update" | "delete" | "restore";
+            actor: components["schemas"]["LastChangeActor"] | null;
+        };
+        /** @description Who made a change, as its audit entry records it. */
+        LastChangeActor: {
+            /** @enum {string} */
+            type: "system" | "user" | "api_client" | "import";
+            /** @description The user's id for `user` and `api_client` (the token's owner) */
+            id: string | null;
+            /** @description The username at the time of the change (or the system actor's name) */
+            name: string | null;
+        };
         /** @description Who uses a template */
         LayoutTemplateUsage: {
             key: string;
@@ -6258,6 +6295,8 @@ export interface components {
                 forwardLabel: string;
                 reverseLabel: string;
                 isDirectional: boolean;
+                /** @description The type's category (group heading on the CI page); null: none */
+                category: string | null;
             };
             /** Format: uuid */
             sourceCiId: string;
@@ -6389,6 +6428,11 @@ export interface components {
              * @enum {string}
              */
             impactDirection: "none" | "target_to_source" | "source_to_target" | "both";
+            /**
+             * @description Group heading the UI lists the type's relationships under, e.g. "Location"; types with the same category form
+             *     one group, null: no group
+             */
+            category: string | null;
             /** Format: int32 */
             sortOrder: number;
             isActive: boolean;
@@ -17227,6 +17271,8 @@ export interface operations {
                     ownerAttributeId?: string | null;
                     /** @description Data quality: attribute of this class or an ancestor that holds a CI's end of life (date or datetime), for the `end_of_life` check. Null: the parent's setting applies. */
                     endOfLifeAttributeId?: string | null;
+                    /** @description Attribute of this class or an ancestor (any data type) whose value the UI shows under a CI's name; null shows the class name. A new class takes its parent's. */
+                    subtitleAttributeId?: string | null;
                     /**
                      * @description asset (inventory CIs) or process (records such as change requests, kept out of the inventory). Leave out to take the parent's kind (asset for a root type); a type has its parent's kind.
                      * @enum {string}
@@ -17540,6 +17586,8 @@ export interface operations {
                     ownerAttributeId?: string | null;
                     /** @description Data quality: attribute of this class or an ancestor that holds a CI's end of life (date or datetime), for the `end_of_life` check. Null: the parent's setting applies. */
                     endOfLifeAttributeId?: string | null;
+                    /** @description Attribute of this class or an ancestor (any data type) whose value the UI shows under a CI's name; null shows the class name. A new class takes its parent's. */
+                    subtitleAttributeId?: string | null;
                     /**
                      * @description Only for a type that has never held a CI (deleted ones included) and has no subtypes
                      * @enum {string}
@@ -18865,6 +18913,8 @@ export interface operations {
                     description?: string | null;
                     forwardLabel: string;
                     reverseLabel: string;
+                    /** @description Group heading for the type's relationships on the CI page, e.g. "Location" or "Network & power"; types with the same text form one group. Trimmed; null or an empty text: no group. */
+                    category?: string | null;
                     sortOrder?: number;
                     isActive?: boolean;
                 };
@@ -19156,6 +19206,8 @@ export interface operations {
                     description?: string | null;
                     forwardLabel?: string;
                     reverseLabel?: string;
+                    /** @description Group heading for the type's relationships on the CI page, e.g. "Location" or "Network & power"; types with the same text form one group. Trimmed; null or an empty text: no group. */
+                    category?: string | null;
                     sortOrder?: number;
                     isActive?: boolean;
                     /**
@@ -28984,7 +29036,7 @@ export interface operations {
                     format: "shadoucmdb.config";
                     /**
                      * Format: int32
-                     * @description File format version; this server writes version 12 and reads 1 to 12
+                     * @description File format version; this server writes version 13 and reads 1 to 13
                      */
                     formatVersion: number;
                     exportedAt?: string | null;

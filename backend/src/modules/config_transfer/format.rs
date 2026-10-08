@@ -48,9 +48,9 @@ pub const FORMAT: &str = "shadoucmdb.config";
 /// (the current published version of each), version 9 approval policies on workflow transitions and each
 /// workflow's approvers, version 10 expected fields (`isExpected`, counted by the completeness metric), version 11
 /// the owner and end-of-life fields of a class (`ownerAttribute`, `endOfLifeAttribute`, for the data-quality
-/// checks), version 12 identifying fields (`isIdentifying`, not copied when a CI is cloned); versions 1 to 12 are
-/// read.
-pub const FORMAT_VERSION: i32 = 12;
+/// checks), version 12 identifying fields (`isIdentifying`, not copied when a CI is cloned), version 13 the subtitle
+/// field of a class (`subtitleAttribute`) and the category of relationship types; versions 1 to 13 are read.
+pub const FORMAT_VERSION: i32 = 13;
 
 fn yes() -> bool {
     true
@@ -61,6 +61,10 @@ fn nullable_key_schema() -> Schema {
         .item(key_schema())
         .item(ObjectBuilder::new().schema_type(Type::Null))
         .into()
+}
+
+fn nullable_category_schema() -> Schema {
+    schemas::nullable_string_schema(super::super::classes::CATEGORY_MAX)
 }
 
 fn format_schema() -> Schema {
@@ -155,6 +159,11 @@ pub struct ClassSpec {
     #[schema(schema_with = nullable_key_schema)]
     #[serde(default, deserialize_with = "schemas::patch", skip_serializing_if = "Option::is_none")]
     pub end_of_life_attribute: Option<Option<String>>,
+    /// Key of the field (of the class or an ancestor) whose value the UI shows under a CI's name; null: the class
+    /// name. Left out (files before version 13): unchanged, or the parent's for a new class.
+    #[schema(schema_with = nullable_key_schema)]
+    #[serde(default, deserialize_with = "schemas::patch", skip_serializing_if = "Option::is_none")]
+    pub subtitle_attribute: Option<Option<String>>,
     /// Set on the built-in business service class (version 5). An import matches such a class to this install's
     /// class of the same role, whatever its key, and keeps that class's key and area; it never gives a class a
     /// role or takes one away
@@ -249,6 +258,11 @@ pub struct RelationshipTypeSpec {
     #[schema(inline)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub impact_direction: Option<ImpactDirection>,
+    /// Group heading for the type's relationships on the CI page; null: none. Left out (files before version 13):
+    /// an existing type keeps its value, a new one gets none
+    #[schema(schema_with = nullable_category_schema)]
+    #[serde(default, deserialize_with = "schemas::patch", skip_serializing_if = "Option::is_none")]
+    pub category: Option<Option<String>>,
     #[schema(schema_with = sort_order_schema)]
     #[serde(default)]
     pub sort_order: i32,
@@ -770,8 +784,8 @@ fn exported_at_schema() -> Schema {
 pub struct ConfigFile {
     #[schema(schema_with = format_schema)]
     pub format: String,
-    /// File format version; this server writes version 12 and reads 1 to 12
-    #[schema(minimum = 1, maximum = 12)]
+    /// File format version; this server writes version 13 and reads 1 to 13
+    #[schema(minimum = 1, maximum = 13)]
     pub format_version: i32,
     /// When and by which server version the file was written (informational)
     #[schema(schema_with = exported_at_schema)]
