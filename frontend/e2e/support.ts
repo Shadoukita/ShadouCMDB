@@ -277,3 +277,19 @@ export async function checkA11y(
   const failing = results.violations.filter((v) => options.strict || FAILING.has(v.impact ?? ""));
   expect(failing.map(describe), `critical/serious WCAG 2.1 AA violations on ${name}`).toEqual([]);
 }
+
+/**
+ * The inventory's class, criticality, validity and deleted selects sit in the "Add filter" popover (design
+ * document §0, step 12c). Opens it, runs `fn` on the page, then closes it with Done, so later clicks never
+ * land on the open popover. The selects keep their ids (#f-class, #f-criticality, #f-active, #f-deleted).
+ */
+export async function withInventoryFilters<T>(page: Page, fn: () => Promise<T>): Promise<T> {
+  const button = page.locator(".add-filter-button");
+  if ((await button.getAttribute("aria-expanded")) !== "true") await button.click();
+  const popover = page.locator(".add-filter-popover");
+  await expect(popover).toBeVisible();
+  const out = await fn();
+  await popover.locator(".popover-actions .btn").click();
+  await expect(popover).toHaveCount(0);
+  return out;
+}

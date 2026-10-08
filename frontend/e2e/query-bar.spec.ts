@@ -1,4 +1,4 @@
-import { apiGet, expect, test } from "./support";
+import { apiGet, expect, test, withInventoryFilters } from "./support";
 
 // The inventory's query bar: key:value tokens are a front end to the list's URL filters
 // (lib/queryBar), with key and value suggestions from the data model.
@@ -26,7 +26,7 @@ test("inventory: the query bar writes key:value tokens into the URL filters, and
   await expect(bar).toHaveValue(`class:${server!.key} `);
   await expect(page).toHaveURL(new RegExp(`classId=${server!.id}`));
   // The class select follows, as any control on the same URL state does.
-  await expect(page.locator("#f-class")).toHaveValue(server!.id);
+  await withInventoryFilters(page, () => expect(page.locator("#f-class")).toHaveValue(server!.id));
 
   // A key the API cannot filter on is reported under the bar, and the list keeps its filters.
   // Lookup lists are keys too, and other specs create them (an "owner" list among them),
@@ -46,10 +46,10 @@ test("inventory: the query bar writes key:value tokens into the URL filters, and
   await bar.fill("");
   await bar.press("Enter");
   await expect(page).not.toHaveURL(/classId=/);
-  await expect(page.locator("#f-class")).toHaveValue("");
+  await withInventoryFilters(page, () => expect(page.locator("#f-class")).toHaveValue(""));
 
   // And the other way: a select writes its token into the bar.
-  await page.locator("#f-deleted").selectOption("include");
+  await withInventoryFilters(page, () => page.locator("#f-deleted").selectOption("include"));
   await expect(bar).toHaveValue("deleted:include");
 });
 

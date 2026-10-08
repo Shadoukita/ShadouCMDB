@@ -2,7 +2,7 @@
 // and the stored preference. Run: npm run test:unit -w frontend
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { FACET_PREVIEW, barWidth, isFacetParam, readFacetPref, toggleId, visibleValues, writeFacetPref } from "../src/lib/facets";
+import { FACET_PREVIEW, isFacetParam, readFacetPref, toggleId, visibleValues, writeFacetPref } from "../src/lib/facets";
 
 describe("toggleId", () => {
   test("adds and removes an id in a comma-separated parameter", () => {
@@ -34,16 +34,6 @@ describe("visibleValues", () => {
   });
   test("shows every value when expanded", () => {
     assert.equal(visibleValues(values, true).length, 12);
-  });
-});
-
-describe("barWidth", () => {
-  test("is relative to the largest count and keeps a small count visible", () => {
-    assert.equal(barWidth(50, 100), 50);
-    assert.equal(barWidth(100, 100), 100);
-    assert.equal(barWidth(1, 10_000), 2);
-    assert.equal(barWidth(0, 100), 0);
-    assert.equal(barWidth(0, 0), 0);
   });
 });
 

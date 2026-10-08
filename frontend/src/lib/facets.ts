@@ -29,12 +29,6 @@ export function visibleValues<V extends { selected: boolean }>(values: readonly 
   return values.filter((v, i) => i < FACET_PREVIEW || v.selected);
 }
 
-/** A count bar's width in percent of the group's largest count (a non-zero count stays visible). */
-export function barWidth(count: number, max: number): number {
-  if (count <= 0 || max <= 0) return 0;
-  return Math.max(2, Math.round((count / max) * 100));
-}
-
 // ---------- Preference: whether the panel is open, and which groups are collapsed ----------
 
 export interface FacetPref {

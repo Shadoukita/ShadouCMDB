@@ -94,7 +94,8 @@ test('every former fixed field shows on the detail page as a class field; no "Ot
 
 test("the CI is labelled by its former name in the inventory, search and references", async ({ page }) => {
   await page.goto(`/cis?classId=${snapshot.ids.classes.server}`);
-  const labels = page.locator("table tbody tr td:first-child");
+  // The name link only: without a class column the cell also carries the class name as a subtitle.
+  const labels = page.locator("table tbody tr td.select-cell + td .ci-name");
   const live = seeded.filter((c) => c.classId === snapshot.ids.classes.server).map((c) => c.name!);
   // In any order: the administrator's list view that upgrade-check.ts seeds sorts the list by creation date.
   await expect(labels).toHaveCount(live.length);

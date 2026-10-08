@@ -267,6 +267,14 @@ function openDialog(mode: SavedViewDialogMode, view?: SavedView) {
   dialogError.value = null;
   dialog.value = { mode, view };
 }
+/**
+ * "Save view" outside the menu (the inventory toolbar, design document §0 step 12c): the menu's "Save as
+ * new view…", with the same reason when it is not available.
+ */
+defineExpose({
+  saveAs: () => openDialog("create"),
+  saveAsDisabled: computed(() => searchNeedsTerm.value || !props.catalogue),
+});
 function closeDialog() {
   dialog.value = null;
   dialogError.value = null;

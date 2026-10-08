@@ -8,10 +8,15 @@ import AttributeValue from "../pages/detail/AttributeValue.vue";
 import CiStateBadge from "./CiStateBadge.vue";
 import ClassBadge from "./ClassBadge.vue";
 import CriticalityBadge from "./CriticalityBadge.vue";
+import CriticalityMeter from "./CriticalityMeter.vue";
 
 /**
  * One inventory cell: a built-in field or `attributes.<key>`, as chosen by the
  * class's list view (Administration › Customization › List views).
+ *
+ * `rich` is the inventory's row (design document §0, step 12c): the label in mono with a subtitle under
+ * it, and criticality as a meter of `criticalityLevels` bars. The subtitle is the class name until class
+ * metadata names a subtitle attribute (gap G8, SHAA-2357); it is left out when the class has a column.
  */
 const props = defineProps<{
   ci: Ci;
@@ -19,6 +24,11 @@ const props = defineProps<{
   defs: readonly EffectiveAttribute[];
   /** The class catalogue, for the class column's icon (audit I8). Without it the column shows the name only. */
   classOf?: (id: string) => CiClass | undefined;
+  rich?: boolean;
+  /** The ranks in the criticality list (rich only). */
+  criticalityLevels?: number;
+  /** Whether the row also has a class column (rich only): then the label has no subtitle. */
+  classColumn?: boolean;
 }>();
 const cls = computed(() => (props.field === "class" ? props.classOf?.(props.ci.classId) : undefined));
 const attr = computed(() => attributeKey(props.field));
@@ -33,12 +43,17 @@ const self = computed(() => ({ id: props.ci.id, name: props.ci.label }));
     <AttributeValue v-if="def" :def="def" :value="values?.[attr]" :ref-info="refs?.[attr]" :self="self" :trail="[]" />
     <span v-else class="muted">—</span>
   </template>
+  <span v-else-if="field === 'label' && rich" class="ci-name-cell">
+    <RouterLink :to="`/cis/${ci.id}`" class="ci-name" dir="auto">{{ ci.label }}</RouterLink>
+    <bdi v-if="!classColumn" class="ci-subtitle">{{ ci.class.name }}</bdi>
+  </span>
   <RouterLink v-else-if="field === 'label'" :to="`/cis/${ci.id}`" dir="auto">{{ ci.label }}</RouterLink>
   <span v-else-if="field === 'ident'" class="mono">{{ ci.ident }}</span>
   <ClassBadge v-else-if="field === 'class' && cls" :icon="cls.icon" :color="cls.color" :name="ci.class.name" />
   <bdi v-else-if="field === 'class'">{{ ci.class.name }}</bdi>
   <template v-else-if="field === 'criticality'">
-    <CriticalityBadge v-if="ci.criticality" :value="ci.criticality" /><span v-else class="muted">—</span>
+    <CriticalityMeter v-if="ci.criticality && rich" :value="ci.criticality" :levels="criticalityLevels ?? 4" />
+    <CriticalityBadge v-else-if="ci.criticality" :value="ci.criticality" /><span v-else class="muted">—</span>
   </template>
   <CiStateBadge v-else-if="field === 'active'" :ci="ci" show-active />
   <span v-else-if="field === 'validFrom'" :title="formatDateTime(ci.validFrom)">{{ formatDate(ci.validFrom) }}</span>

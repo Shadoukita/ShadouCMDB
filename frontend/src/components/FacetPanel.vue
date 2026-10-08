@@ -3,7 +3,7 @@ import { computed, ref } from "vue";
 import { useAllLookupListValues } from "../api/datamodel";
 import { useCiClasses, useCiFacets, type Facet, type FacetsQuery } from "../api/queries";
 import { formatNumber, t } from "../i18n";
-import { barWidth, isFacetParam, toggleId, visibleValues } from "../lib/facets";
+import { isFacetParam, toggleId, visibleValues } from "../lib/facets";
 import type { useInventoryQueryState } from "../lib/useInventoryQueryState";
 import ClassBadge from "./ClassBadge.vue";
 import Icon from "./Icon.vue";
@@ -53,7 +53,6 @@ function title(f: Facet): string {
   if (f.kind === "criticality") return t("filters.criticality");
   return f.label;
 }
-const max = (f: Facet) => Math.max(0, ...f.values.map((v) => v.count));
 const domId = (f: Facet) => `facet-${f.key.replace(/[^A-Za-z0-9_-]/g, "-")}`;
 
 function onTick(f: Facet, id: string, e: Event) {
@@ -64,7 +63,7 @@ function onTick(f: Facet, id: string, e: Event) {
 
 <template>
   <section id="facets" class="facets" aria-labelledby="facets-title">
-    <h2 id="facets-title" class="facets-title">{{ t("facets.title") }}</h2>
+    <h2 id="facets-title" class="sr-only">{{ t("facets.title") }}</h2>
     <SkeletonRows v-if="query.isPending.value && enabled" :label="t('facets.loading')" :rows="6" />
     <p v-else-if="query.isError.value" class="facets-error">
       <Icon name="circle-alert" />{{ t("facets.error") }}
@@ -88,7 +87,6 @@ function onTick(f: Facet, id: string, e: Event) {
         <template v-if="!collapsed.includes(f.key)">
           <div :id="`${domId(f)}-values`" class="facet-values" role="group" :aria-label="t('facets.group', { name: title(f) })">
             <label v-for="v in visibleValues(f.values, expanded.has(f.key))" :key="v.id" class="facet-row" :class="{ selected: v.selected }">
-              <span class="facet-bar" aria-hidden="true" :style="{ width: `${barWidth(v.count, max(f))}%` }" />
               <input type="checkbox" :checked="v.selected" @change="onTick(f, v.id, $event)" />
               <ClassBadge v-if="f.kind === 'class'" :icon="classOf(v.id)?.icon" :color="classOf(v.id)?.color" />
               <span v-else-if="colorOf(v.id)" class="class-swatch" aria-hidden="true" :style="{ background: colorOf(v.id) }" />

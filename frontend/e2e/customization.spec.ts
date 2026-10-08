@@ -1,5 +1,5 @@
 import type { APIRequestContext, Page } from "@playwright/test";
-import { apiGet, ciIdByName, classIdByName, createCi, csrf, expect, fieldLabels, resetUiSettings as resetSettings, saveCi, saveLayout, snap, test, chooseTheme } from "./support";
+import { apiGet, ciIdByName, classIdByName, createCi, csrf, expect, fieldLabels, resetUiSettings as resetSettings, saveCi, saveLayout, snap, test, chooseTheme, withInventoryFilters } from "./support";
 
 // Administration › Customization and Export / import, against the demo seed (the Server class
 // and its attributes). The settings apply to every user, so the walk starts from and ends with
@@ -179,7 +179,7 @@ test("list views: a class's columns, default sort, filter and page size apply to
   await expect(page.getByRole("columnheader", { name: /Updated/ })).toHaveAttribute("aria-sort", "descending");
   await expect(page.locator(".pagination select")).toHaveValue("25");
   // Clearing the filter sticks: a reload and Back show the URL as the operator left it.
-  await page.getByRole("button", { name: "Remove the lookup value filter" }).click();
+  await page.getByTestId("filter-lookup").getByRole("button", { name: /^Remove the filter / }).click();
   await expect(page).not.toHaveURL(/lookupValueId=/);
   await page.reload();
   await expect(page.getByRole("columnheader", { name: "CPU cores" })).toBeVisible();
@@ -213,7 +213,7 @@ test("list views: an attribute default sort, and attribute column headers sort t
   }
   await save(page, "e2e attribute sort");
 
-  const names = page.locator("table.data tbody tr td:first-child");
+  const names = page.locator("table.data tbody tr td.select-cell + td");
   await page.goto(`/cis?classId=${serverId}&q=e2e-sort-${stamp}`);
   await expect(page.getByRole("columnheader", { name: /Hostname/ })).toHaveAttribute("aria-sort", "ascending");
   await expect(names).toHaveText([`e2e-sort-${stamp}-y`, `e2e-sort-${stamp}-x`, `e2e-sort-${stamp}-z`]);
@@ -228,7 +228,7 @@ test("list views: an attribute default sort, and attribute column headers sort t
   // The sort survives a reload; another class drops it (it may not have the attribute).
   await page.reload();
   await expect(page.getByRole("columnheader", { name: /IP address/ })).toHaveAttribute("aria-sort", "descending");
-  await page.getByLabel("Class", { exact: true }).selectOption({ label: "All classes" });
+  await withInventoryFilters(page, () => page.getByLabel("Class", { exact: true }).selectOption({ label: "All classes" }));
   await expect(page).not.toHaveURL(/sort=/);
   await expect(page.getByRole("columnheader", { name: /Label/ })).toHaveAttribute("aria-sort", "ascending");
 });
@@ -256,7 +256,7 @@ test("list views: adding a column to a view without columns keeps the default co
   await save(page, "e2e add column to default view");
 
   await page.goto(`/cis?classId=${serverId}`);
-  await expect(page.locator("table.data thead th:not(.row-actions)")).toHaveText([...defaults, "Hostname"].map((h) => new RegExp(`^${h}`)));
+  await expect(page.locator("table.data thead th:not(.row-actions):not(.select-cell)")).toHaveText([...defaults, "Hostname"].map((h) => new RegExp(`^${h}`)));
   // The label column still opens the CI.
   await expect(page.locator("table.data tbody tr a").first()).toBeVisible();
 });
@@ -275,12 +275,12 @@ test("list views: a view without the Label column still shows it first, so every
   // Wait for the view (its Hostname column, page size and sort) and the list it refetches: until the
   // settings load, the inventory shows the default columns and page size.
   await expect(page.getByRole("columnheader", { name: /Hostname/ })).toBeVisible();
-  await expect(page.getByRole("columnheader").first()).toHaveText(/^Label/);
+  await expect(page.locator("table.data thead th:not(.select-cell)").first()).toHaveText(/^Label/);
   await expect(page.locator("table.data.loading")).toHaveCount(0);
   const rows = page.locator("table.data tbody tr");
   await expect(rows.first()).toBeVisible();
-  await expect(rows.filter({ hasNot: page.locator("td:first-child a") })).toHaveCount(0);
-  await rows.first().locator("td:first-child a").click();
+  await expect(rows.filter({ hasNot: page.locator("td.select-cell + td a") })).toHaveCount(0);
+  await rows.first().locator("td.select-cell + td a").click();
   await expect(page).toHaveURL(/\/cis\/[0-9a-f-]{36}$/);
 });
 

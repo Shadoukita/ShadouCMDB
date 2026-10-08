@@ -1,5 +1,5 @@
 import type { Browser, Page } from "@playwright/test";
-import { apiGet, apiSend, expect, fieldLabels, roValue, saveCi, snap, test } from "./support";
+import { apiGet, apiSend, expect, fieldLabels, roValue, saveCi, snap, test, withInventoryFilters } from "./support";
 
 // The barebone CI core every class shares: a General section with ident, valid from and valid
 // until, then the class's own attributes; validity decides whether a CI is active; date inputs
@@ -109,11 +109,11 @@ test("validity: lists hide inactive CIs by default and say when an active one de
   await expect(scheduledRow).toContainText(/Active\s*· deactivates on/);
   await expect(page.getByRole("link", { name: `core-${stamp}-expired` })).toHaveCount(0);
 
-  await page.locator("#f-active").selectOption({ label: "Show inactive" });
+  await withInventoryFilters(page, () => page.locator("#f-active").selectOption({ label: "Show inactive" }));
   await expect(page).toHaveURL(/active=all/);
   await expect(page.getByRole("row", { name: new RegExp(`core-${stamp}-expired`) })).toContainText("Inactive");
   await page.reload();
-  await expect(page.locator("#f-active")).toHaveValue("all");
+  await withInventoryFilters(page, () => expect(page.locator("#f-active")).toHaveValue("all"));
   await expect(page.getByRole("link", { name: `core-${stamp}-expired` })).toBeVisible();
   await snap(page, "core-fields-list-inactive");
 

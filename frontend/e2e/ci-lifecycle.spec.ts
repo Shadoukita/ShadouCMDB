@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { apiGet, apiSend, ciIdByName, classIdByName, pickCi, snap, expect, test } from "./support";
+import { apiGet, apiSend, ciIdByName, classIdByName, pickCi, snap, expect, test, withInventoryFilters } from "./support";
 
 // One CI walks the whole lifecycle: create (with validation) → find in the inventory
 // → edit on its page → version conflict → relate → navigate → delete.
@@ -82,7 +82,7 @@ test("inventory: search and class filter live in the URL and survive a reload", 
   await page.locator("#f-q").fill(name);
   const req = await listRequest; // filtering happens in the API, not the browser
   expect(new URL(req.url()).searchParams.get("limit")).toBe("50");
-  await page.locator("#f-class").selectOption({ label: "Server" });
+  await withInventoryFilters(page, () => page.locator("#f-class").selectOption({ label: "Server" }));
   await expect(page).toHaveURL(new RegExp(`q=${name}`));
   await expect(page).toHaveURL(new RegExp(`classId=${serverId}`));
   await expect(page.getByRole("link", { name, exact: true })).toBeVisible();
@@ -90,7 +90,7 @@ test("inventory: search and class filter live in the URL and survive a reload", 
   await page.reload();
   // The query bar shows the class filter as a token ahead of the search term.
   await expect(page.locator("#f-q")).toHaveValue(new RegExp(`^class:\\S+ ${name}$`));
-  await expect(page.locator("#f-class")).toHaveValue(serverId);
+  await withInventoryFilters(page, () => expect(page.locator("#f-class")).toHaveValue(serverId));
   await expect(page.getByRole("link", { name, exact: true })).toBeVisible();
   await snap(page, "06-inventory-filtered");
 
@@ -350,7 +350,7 @@ test("delete: the confirmation lists the relationships that will break", async (
 
   await page.goto(`/cis?q=${name}`);
   await expect(page.getByRole("heading", { name: "No configuration items match these filters" })).toBeVisible();
-  await page.locator("#f-deleted").selectOption("only");
+  await withInventoryFilters(page, () => page.locator("#f-deleted").selectOption("only"));
   await expect(page).toHaveURL(/deleted=only/);
   const row = page.getByRole("row", { name: new RegExp(name) });
   await expect(row).toContainText("Deleted");

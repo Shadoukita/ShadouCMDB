@@ -1,6 +1,6 @@
 import type { APIRequestContext, Browser, Page, Route } from "@playwright/test";
 import { readFile } from "node:fs/promises";
-import { apiGet, apiSend, at, checkA11y, expect, snap, test, chooseTheme } from "./support";
+import { apiGet, apiSend, at, checkA11y, expect, snap, test, chooseTheme, withInventoryFilters } from "./support";
 
 // Impact analysis (v0.3.0, the Impact tab of a CI): the e2e plan §6.3 and the axe checks §6.4 of the SHAA-883 spec.
 // The data is the spec's own, under a stamp: a root "db" that three apps depend on (one of them twice), a fourth app
@@ -362,9 +362,9 @@ test("criticality: set on the CI form, shown as a column and filtered in the inv
   expect(saved.criticality?.key).toBe("medium");
 
   await page.goto(`/cis?q=${stamp}&columns=label,criticality`);
-  await page.getByLabel("Criticality", { exact: true }).selectOption({ label: "Critical" });
+  await withInventoryFilters(page, () => page.getByLabel("Criticality", { exact: true }).selectOption({ label: "Critical" }));
   await expect(page).toHaveURL(/criticalityValueId=/);
   await expect(page.locator("table.data tbody tr")).toHaveCount(1);
   await expect(page.locator("table.data tbody tr").first()).toContainText(N("app-a"));
-  await expect(page.locator("table.data tbody tr .badge.criticality")).toHaveText("Critical");
+  await expect(page.locator("table.data tbody tr .crit-meter")).toHaveText("Critical");
 });

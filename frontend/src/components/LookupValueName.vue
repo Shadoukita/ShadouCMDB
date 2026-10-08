@@ -9,7 +9,7 @@ const value = computed(() => values.data.value?.find((v) => v.id === props.value
 </script>
 
 <template>
-  <span v-if="value" class="class-badge">
+  <span v-if="value" class="class-badge lookup-value" :class="{ coloured: !!value.color }" :style="value.color ? { '--swatch': value.color } : undefined">
     <span v-if="value.color" class="class-swatch" aria-hidden="true" :style="{ background: value.color }" />
     <bdi>{{ value.name }}</bdi><span v-if="!value.isActive" class="muted"> (retired)</span>
   </span>

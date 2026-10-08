@@ -39,7 +39,7 @@ const NAME = "Upgrade check: servers by update";
 const viewButton = (page: Page) => page.getByRole("button", { name: /^View / });
 const menu = (page: Page) => page.getByRole("menu", { name: "Views" });
 /** Column headers by their text (not innerText: the stylesheet sets headers in uppercase). */
-const headers = async (page: Page) => (await page.locator("table.data thead th:not(.row-actions)").allTextContents()).map((h) => h.trim()).filter(Boolean);
+const headers = async (page: Page) => (await page.locator("table.data thead th:not(.row-actions):not(.select-cell)").allTextContents()).map((h) => h.trim()).filter(Boolean);
 const HEADER: Record<string, string> = { label: "Label", class: "Class", createdAt: "Created", updatedAt: "Updated" };
 const SORT_HEADER = () => new RegExp(`^${HEADER[listView.defaultSort.field]}`);
 
@@ -53,14 +53,14 @@ test("the upgraded inventory opens with the administrator's list view, not a sav
     "aria-sort",
     listView.defaultSort.direction === "desc" ? "descending" : "ascending",
   );
-  await expect(page.getByLabel("Rows")).toHaveValue(String(listView.pageSize));
+  await expect(page.getByRole("combobox", { name: /^Rows\b/ })).toHaveValue(String(listView.pageSize));
   await snap(page, "upgrade-list-view");
 });
 
 test("a view saved from the upgraded inventory keeps the list view's columns and comes back by link", async ({ page, request }) => {
   await page.goto(`/cis?classId=${serverId}`);
   await expect(page.locator("table.data tbody tr").first()).toBeVisible();
-  const rows = await page.locator("table.data tbody tr td:first-child").allInnerTexts();
+  const rows = await page.locator("table.data tbody tr td.select-cell + td .ci-name").allInnerTexts();
 
   await viewButton(page).click();
   await menu(page).getByRole("menuitem", { name: "Save as new view…", exact: true }).click();
@@ -82,7 +82,7 @@ test("a view saved from the upgraded inventory keeps the list view's columns and
   await other.goto(`/cis?view=${saved!.id}`);
   await expect(viewButton(other)).toContainText(NAME);
   await expect(other.locator("table.data tbody tr").first()).toBeVisible();
-  expect(await other.locator("table.data tbody tr td:first-child").allInnerTexts()).toEqual(rows);
+  expect(await other.locator("table.data tbody tr td.select-cell + td .ci-name").allInnerTexts()).toEqual(rows);
   expect(await headers(other)).toEqual(await headers(page));
   await other.close();
 

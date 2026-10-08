@@ -218,6 +218,7 @@ test("the UI shows a restricted user only what they may do", async ({ browser, r
   await expect(page.getByText("None of your permission profiles allows viewing Database")).toBeVisible();
   // The class filter offers the viewable classes and their abstract parents (Hardware lists Servers), plus the one in the URL.
   // Roots follow the classes' sort order, so only the denied class's place and Server under Hardware are fixed.
+  await page.locator(".add-filter-button").click();
   const classOptions = page.locator("#f-class option");
   await expect(classOptions).toHaveCount(5);
   await expect(classOptions.nth(0)).toHaveText("All classes");

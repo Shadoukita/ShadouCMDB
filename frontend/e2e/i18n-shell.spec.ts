@@ -71,9 +71,9 @@ test("not found, the pagination bar and the error alert are German with the Germ
   await page.goto("/cis");
   const pagination = page.locator(".pagination");
   await expect(pagination).toContainText(/^1–\d+ von [\d.]+/);
-  await expect(pagination).toContainText(/Seite 1 \/ \d+/);
+  await expect(pagination.getByRole("navigation", { name: "Seiten" }).getByRole("button", { name: "Seite 1" })).toHaveAttribute("aria-current", "page");
   await expect(pagination.getByLabel("Zeilen")).toBeVisible();
-  await expect(pagination.getByRole("button", { name: "Weiter ›" })).toBeVisible();
+  await expect(pagination.getByRole("button", { name: "Nächste Seite" })).toBeVisible();
   await expectNoEnglish(pagination);
 
   await page.route("**/api/v1/**", (route) => route.abort("connectionrefused"));
@@ -89,7 +89,7 @@ test("the inventory's built-in column headers and the Columns popover are German
   await resetUiSettings(request); // the default columns, not a list view's
   await forceGerman(page);
   await page.goto("/cis");
-  const headers = page.locator("table.data thead th:not(.row-actions)");
+  const headers = page.locator("table.data thead th:not(.row-actions):not(.select-cell)");
   await expect(headers).toHaveText([/^\s*Bezeichnung/, /^\s*Ident/, /^\s*Klasse/, /^\s*Aktiv/, /^\s*Geändert/]);
   await expect(page.getByRole("columnheader", { name: /^Label|^Class|^Active|^Updated/ })).toHaveCount(0);
 
