@@ -1716,6 +1716,8 @@ export const en = {
   "audit.entity.ci_layout_overrides": "CI layout",
   "audit.entity.workflow_definitions": "Workflow",
   "audit.entity.workflow_approval_delegations": "Approval delegation",
+  "audit.entity.ci_notes": "CI note",
+  "audit.entity.ci_note_settings": "Note policy",
   "event.action.login.success": "Signed in",
   "event.action.login.failure": "Sign-in failed",
   "event.action.login.locked": "Account locked",

@@ -29,6 +29,7 @@ pub fn routes() -> Vec<Route> {
         modules::mfa::routes(),
         modules::sso::routes(),
         modules::items::routes(),
+        modules::ci_notes::routes(),
         modules::impact::routes(),
         modules::business_services::routes(),
         modules::imports::routes(),

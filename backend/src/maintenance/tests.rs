@@ -630,6 +630,63 @@ async fn saved_views_and_defaults_survive_backup_and_restore() {
     b.drop().await;
 }
 
+/// SHAA-2355: a backup keeps the notes of every CI and the note policy; a
+/// restore brings them back as they were, and a factory reset clears the notes
+/// and puts the installed policy back, with no reset code of their own.
+#[tokio::test]
+async fn ci_notes_and_their_policy_survive_backup_and_restore() {
+    let Some(a) = scratch::database("ci_notes_backup_a").await else { return };
+    let Some(b) = scratch::database("ci_notes_backup_b").await else { return };
+    populate(&a.pool).await;
+    let mut ca = a.pool.acquire().await.unwrap();
+    let mut cb = b.pool.acquire().await.unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO cmdb.ci_notes (ci_id, body, author_id, author_name, created_at, edited_at, version)
+           SELECT id, 'Checked by the night shift', (SELECT u.id FROM cmdb.users u LIMIT 1), 'admin',
+                  now() - interval '2 days', now() - interval '1 day', 2
+             FROM cmdb.configuration_items ci ORDER BY ci.id LIMIT 2;
+         INSERT INTO cmdb.ci_notes (ci_id, body, author_id, author_name)
+           SELECT id, 'Author since deleted', NULL, 'former.colleague' FROM cmdb.configuration_items ORDER BY id LIMIT 1;
+         UPDATE cmdb.ci_note_settings SET edit_window_minutes = NULL, retention_days = 400, updated_by_name = 'admin';",
+    )
+    .execute(&mut *ca)
+    .await
+    .unwrap();
+    let before = ci_notes_snapshot(&mut ca).await;
+    assert_eq!(before.0.len(), 3);
+
+    let (buf, checked) = take_backup(&mut ca).await;
+    let header = &checked.header;
+    let rows = |name: &str| header.tables.iter().find(|t| t.schema == "cmdb" && t.name == name).map(|t| t.rows);
+    assert_eq!((rows("ci_notes"), rows("ci_note_settings")), (Some(3), Some(1)));
+    serial::restore(&mut cb, buf.as_slice(), &checked, true, true).await.unwrap();
+    assert_eq!(ci_notes_snapshot(&mut cb).await, before);
+
+    serial::factory_reset(&mut cb).await.unwrap();
+    let (notes, policy) = ci_notes_snapshot(&mut cb).await;
+    assert_eq!((notes.len(), policy), (0, (Some(1440), None)));
+    drop((ca, cb));
+    a.drop().await;
+    b.drop().await;
+}
+
+type NoteRow = (uuid::Uuid, uuid::Uuid, String, Option<uuid::Uuid>, String, String, Option<String>, i32);
+
+async fn ci_notes_snapshot(c: &mut sqlx::PgConnection) -> (Vec<NoteRow>, (Option<i32>, Option<i32>)) {
+    let notes = sqlx::query_as(
+        "SELECT id, ci_id, body, author_id, author_name, created_at::text, edited_at::text, version
+         FROM cmdb.ci_notes ORDER BY id",
+    )
+    .fetch_all(&mut *c)
+    .await
+    .unwrap();
+    let policy = sqlx::query_as("SELECT edit_window_minutes, retention_days FROM cmdb.ci_note_settings")
+        .fetch_one(&mut *c)
+        .await
+        .unwrap();
+    (notes, policy)
+}
+
 async fn saved_views_snapshot(c: &mut sqlx::PgConnection) -> Vec<(String, Option<uuid::Uuid>, serde_json::Value, i64)> {
     sqlx::query_as(
         "SELECT v.name, v.owner_id, v.definition, (SELECT count(*) FROM cmdb.saved_view_defaults d WHERE d.view_id = v.id)

@@ -1730,6 +1730,8 @@ export const de: { [K in MessageKey]: string } = {
   "audit.entity.ci_layout_overrides": "CI-Layout",
   "audit.entity.workflow_definitions": "Workflow",
   "audit.entity.workflow_approval_delegations": "Genehmigungsvertretung",
+  "audit.entity.ci_notes": "CI-Notiz",
+  "audit.entity.ci_note_settings": "Notizrichtlinie",
   "event.action.login.success": "Angemeldet",
   "event.action.login.failure": "Anmeldung fehlgeschlagen",
   "event.action.login.locked": "Konto gesperrt",

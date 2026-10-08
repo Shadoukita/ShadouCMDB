@@ -829,6 +829,7 @@ pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'sta
         cfg.audit.export.clone().map(|export| crate::audit_export::spawn(pool.clone(), export)).transpose()?;
     let import_workers = crate::modules::imports::worker::spawn(pool.clone(), state.imports.clone());
     let refusals = crate::auth::token::RefusalFlush::spawn(pool.clone());
+    let note_retention = crate::modules::ci_notes::service::spawn_retention(pool.clone());
 
     let listener = TcpListener::bind((cfg.api_host.as_str(), cfg.api_port))
         .await
@@ -888,6 +889,7 @@ pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'sta
         exporter.stop().await;
     }
     import_workers.stop().await;
+    note_retention.stop().await;
     tracing::info!("draining complete, closing database pool");
     // Do not let a wedged connection hold up process exit.
     let _ = tokio::time::timeout(Duration::from_secs(5), pool.close()).await;
