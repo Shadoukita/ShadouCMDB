@@ -13158,6 +13158,18 @@
                     ],
                     "description": "Data quality: attribute of this class or an ancestor that holds a CI's end of life (date or datetime), for the `end_of_life` check. Null: the parent's setting applies."
                   },
+                  "subtitleAttributeId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Attribute of this class or an ancestor (any data type) whose value the UI shows under a CI's name; null shows the class name. A new class takes its parent's."
+                  },
                   "kind": {
                     "type": "string",
                     "description": "asset (inventory CIs) or process (records such as change requests, kept out of the inventory). Leave out to take the parent's kind (asset for a root type); a type has its parent's kind.",
@@ -13523,7 +13535,7 @@
           "CI classes"
         ],
         "summary": "Update a ci class (partial)",
-        "description": "Requires `datamodel.manage`. Changing `titleAttributeId` relabels the class's CIs. Moving the type to another parent (`parentId`) keeps its title attribute only if the new lineage provides it; otherwise it takes the new parent's (so do its subtypes), and the CIs are relabelled. The same move clears an `ownerAttributeId` or `endOfLifeAttributeId` of the type or its subtypes that the new lineage does not provide (the parent's setting then applies).",
+        "description": "Requires `datamodel.manage`. Changing `titleAttributeId` relabels the class's CIs. Moving the type to another parent (`parentId`) keeps its title attribute only if the new lineage provides it; otherwise it takes the new parent's (so do its subtypes), and the CIs are relabelled. The same move clears an `ownerAttributeId` or `endOfLifeAttributeId` of the type or its subtypes that the new lineage does not provide (the parent's setting then applies). A `subtitleAttributeId` the new lineage does not provide is replaced by the new parent's, which changes no stored CI data.",
         "operationId": "updateCiClass",
         "parameters": [
           {
@@ -13640,6 +13652,18 @@
                       }
                     ],
                     "description": "Data quality: attribute of this class or an ancestor that holds a CI's end of life (date or datetime), for the `end_of_life` check. Null: the parent's setting applies."
+                  },
+                  "subtitleAttributeId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Attribute of this class or an ancestor (any data type) whose value the UI shows under a CI's name; null shows the class name. A new class takes its parent's."
                   },
                   "kind": {
                     "type": "string",
@@ -15620,7 +15644,7 @@
           "Relationship types"
         ],
         "summary": "List relationship type records (paginated, searchable, sortable)",
-        "description": "`q` matches key, name, forward_label, reverse_label (case-insensitive substring).",
+        "description": "`q` matches key, name, forward_label, reverse_label, category (case-insensitive substring).",
         "operationId": "listRelationshipTypes",
         "parameters": [
           {
@@ -15863,6 +15887,18 @@
                     "maxLength": 200,
                     "minLength": 1,
                     "pattern": "\\S"
+                  },
+                  "category": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 100
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Group heading for the type's relationships on the CI page, e.g. \"Location\" or \"Network & power\"; types with the same text form one group. Trimmed; null or an empty text: no group."
                   },
                   "sortOrder": {
                     "type": "integer",
@@ -16267,6 +16303,18 @@
                     "maxLength": 200,
                     "minLength": 1,
                     "pattern": "\\S"
+                  },
+                  "category": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 100
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Group heading for the type's relationships on the CI page, e.g. \"Location\" or \"Network & power\"; types with the same text form one group. Trimmed; null or an empty text: no group."
                   },
                   "sortOrder": {
                     "type": "integer",
@@ -30790,8 +30838,8 @@
                   "formatVersion": {
                     "type": "integer",
                     "format": "int32",
-                    "description": "File format version; this server writes version 12 and reads 1 to 12",
-                    "maximum": 12,
+                    "description": "File format version; this server writes version 13 and reads 1 to 13",
+                    "maximum": 13,
                     "minimum": 1
                   },
                   "exportedAt": {
@@ -38450,6 +38498,7 @@
           "titleAttributeId",
           "ownerAttributeId",
           "endOfLifeAttributeId",
+          "subtitleAttributeId",
           "systemRole",
           "kind",
           "createdAt",
@@ -38543,6 +38592,14 @@
             ],
             "format": "uuid",
             "description": "Data quality: the date or datetime field (of this class or an ancestor) holding a CI's end of life. Null: the\nparent's setting applies; no setting in the lineage leaves the class out of the check"
+          },
+          "subtitleAttributeId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The attribute (of this class or an ancestor) whose value the UI shows under a CI's name, e.g. the model of a\nserver; null shows the class name instead"
           },
           "systemRole": {
             "oneOf": [
@@ -39133,8 +39190,8 @@
           "formatVersion": {
             "type": "integer",
             "format": "int32",
-            "description": "File format version; this server writes version 12 and reads 1 to 12",
-            "maximum": 12,
+            "description": "File format version; this server writes version 13 and reads 1 to 13",
+            "maximum": 13,
             "minimum": 1
           },
           "exportedAt": {
@@ -39724,6 +39781,17 @@
               },
               "additionalProperties": false
             }
+          },
+          "lastChange": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LastChange"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only on getConfigurationItem: the CI's last change (its newest create, update, delete or restore audit entry), without reading the audit log; null when the log holds none for it (entries removed by audit retention before this field existed)."
           }
         },
         "additionalProperties": false
@@ -40251,6 +40319,18 @@
                     }
                   ]
                 },
+                "subtitleAttribute": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "description": "Stable machine key, lower_snake_case",
+                      "pattern": "^[a-z][a-z0-9_]{0,62}$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "systemRole": {
                   "oneOf": [
                     {
@@ -40562,6 +40642,17 @@
                     }
                   ],
                   "description": "How impact flows across the type's edges. Left out (files before version 4): an existing type keeps its\nvalue, a new one gets none"
+                },
+                "category": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 100
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 "sortOrder": {
                   "type": "integer",
@@ -41216,7 +41307,8 @@
               "name",
               "forwardLabel",
               "reverseLabel",
-              "isDirectional"
+              "isDirectional",
+              "category"
             ],
             "properties": {
               "key": {
@@ -41233,6 +41325,13 @@
               },
               "isDirectional": {
                 "type": "boolean"
+              },
+              "category": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The relationship type's category (group heading); null: none"
               }
             },
             "additionalProperties": false
@@ -43639,6 +43738,78 @@
         },
         "additionalProperties": false
       },
+      "LastChange": {
+        "type": "object",
+        "description": "The CI's newest create, update, delete or restore entry in the audit log:\nwhen, what, and who. Kept per CI by the database from the audit log itself,\nso it never disagrees with it; read events (exports) and workflow events\ndo not count.",
+        "required": [
+          "at",
+          "action",
+          "actor"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "action": {
+            "type": "string",
+            "description": "The kinds of audit entry that count as a change to a CI.",
+            "enum": [
+              "create",
+              "update",
+              "delete",
+              "restore"
+            ]
+          },
+          "actor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LastChangeActor",
+                "description": "Null when the caller lacks `audit.view`: who changed what is audit data"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "LastChangeActor": {
+        "type": "object",
+        "description": "Who made a change, as its audit entry records it.",
+        "required": [
+          "type",
+          "id",
+          "name"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "system",
+              "user",
+              "api_client",
+              "import"
+            ]
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The user's id for `user` and `api_client` (the token's owner)"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The username at the time of the change (or the system actor's name)"
+          }
+        },
+        "additionalProperties": false
+      },
       "LayoutTemplateUsage": {
         "type": "object",
         "description": "Who uses a template",
@@ -45142,7 +45313,8 @@
               "name",
               "forwardLabel",
               "reverseLabel",
-              "isDirectional"
+              "isDirectional",
+              "category"
             ],
             "properties": {
               "id": {
@@ -45163,6 +45335,13 @@
               },
               "isDirectional": {
                 "type": "boolean"
+              },
+              "category": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The type's category (group heading on the CI page); null: none"
               }
             },
             "additionalProperties": false
@@ -45486,6 +45665,7 @@
           "reverseLabel",
           "isDirectional",
           "impactDirection",
+          "category",
           "sortOrder",
           "isActive",
           "systemRole",
@@ -45530,6 +45710,13 @@
               "source_to_target",
               "both"
             ]
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Group heading the UI lists the type's relationships under, e.g. \"Location\"; types with the same category form\none group, null: no group"
           },
           "sortOrder": {
             "type": "integer",

@@ -326,6 +326,11 @@ pub async fn update_in<R: Resource>(
     R::before_change(&before, Some(&columns))?;
     let row: R::Dto = crud::update_row(conn, R::TABLE, R::COLUMNS, id, columns).await?;
     R::after_write(conn, ctx, &row, Some(&before)).await?;
+    // The hook may repair the row (a moved type's title and subtitle fields):
+    // answer and audit what is stored.
+    let row: R::Dto = crud::select_by_id(conn, R::TABLE, R::COLUMNS, id, false)
+        .await?
+        .ok_or_else(|| AppError::missing(R::LABEL, id))?;
     let entry = AuditEntry {
         action: AuditAction::Update,
         entity_type: R::TABLE,

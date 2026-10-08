@@ -341,7 +341,7 @@ test("layouts: Edit CI opens the layout editor on a Server, whose layout the det
   // The detail page: the layout's tabs, then the relationship map.
   await page.goto(`/cis/${ci.id}`);
   const tabs = page.getByRole("tablist", { name: "CI sections" }).getByRole("tab");
-  await expect(tabs).toHaveText(["General", "Hardware", "Relationship map", "Impact", "History"]);
+  await expect(tabs).toHaveText(["General", "Hardware", "Relationship map", "Impact", "Notes", "History"]);
   await expect(page.locator(".layout-container").getByText("CPU cores", { exact: true })).toHaveCount(0);
   await expect(page.locator(".layout-container").getByText("Asset tag", { exact: true })).toHaveCount(0);
   await tabs.filter({ hasText: "Hardware" }).click();

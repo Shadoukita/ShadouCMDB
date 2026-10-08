@@ -16,13 +16,14 @@ use super::schemas::{
     ChangeHistogram, ChangeHistogramBucket, ChangeHistogramQuery, ConfigurationItem, ConfigurationItemSummary,
     CreateItemBody, CriticalityRef, DataQuality, DataQualityCheck, DataQualityFilter, DataQualityQuery, Graph,
     GraphDirection, GraphEdge, GraphEdgeType, GraphNode, GraphQuery, HistogramBucket, ItemFilterQuery, KindQuery,
-    ListItemsQuery, QualityCheck, SearchHit, SearchMatch, SearchQuery, SearchResults, UpdateItemBody, end_of_life_days,
+    LastChange, LastChangeActor, ListItemsQuery, QualityCheck, SearchHit, SearchMatch, SearchQuery, SearchResults,
+    UpdateItemBody, end_of_life_days,
 };
 use crate::api::context::{Caller, RequestContext};
 use crate::api::route::InvalidBody;
 use crate::api::schemas::{KEY_PATTERN, LookupRef, Page, Paged, Sort, UuidList};
 use crate::api::validate;
-use crate::auth::permissions::ClassOp;
+use crate::auth::permissions::{ClassOp, GlobalPermission};
 use crate::data::classes as class_data;
 use crate::data::crud::{self, AuditAction, AuditEntry};
 use crate::data::items::{
@@ -581,6 +582,7 @@ async fn with_attributes(
             summary: summary_dto(row),
             attributes: Map::new(),
             attribute_references: Map::new(),
+            last_change: None,
         })
         .collect();
     let index: HashMap<Uuid, usize> = items.iter().enumerate().map(|(i, item)| (item.summary.id, i)).collect();
@@ -649,8 +651,17 @@ pub async fn get(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<Config
     ctx.require_class_visible(row.class_id, "Configuration item", id)?;
     let model = Model::load(&mut conn).await?;
     let visible = ctx.class_scope(ClassOp::View);
-    let dto = with_attributes(&mut conn, &model, vec![row], visible.as_deref()).await?.pop();
-    dto.ok_or_else(|| AppError::missing("Configuration item", id))
+    let mut dto = with_attributes(&mut conn, &model, vec![row], visible.as_deref())
+        .await?
+        .pop()
+        .ok_or_else(|| AppError::missing("Configuration item", id))?;
+    let show_actor = ctx.require(GlobalPermission::AuditView).is_ok();
+    dto.last_change = Some(data::last_change(&mut conn, id).await?.map(|c| LastChange {
+        at: c.changed_at,
+        action: c.action,
+        actor: show_actor.then_some(LastChangeActor { actor_type: c.actor_type, id: c.actor_id, name: c.actor_name }),
+    }));
+    Ok(dto)
 }
 
 // ---------------------------------------------------------------------------
@@ -1175,6 +1186,7 @@ pub async fn graph(pool: &PgPool, ctx: &RequestContext, root_id: Uuid, q: &Graph
                     forward_label: e.forward_label,
                     reverse_label: e.reverse_label,
                     is_directional: e.is_directional,
+                    category: e.type_category,
                 },
                 source_ci_id: e.source_ci_id,
                 target_ci_id: e.target_ci_id,
@@ -1775,6 +1787,7 @@ mod tests {
             forward_label: String::new(),
             reverse_label: String::new(),
             is_directional: false,
+            type_category: None,
         };
         let (mut budget, mut truncated) = (3, false);
         assert_eq!(spend_edge_budget((0..3).map(row).collect(), &mut budget, &mut truncated).len(), 3);

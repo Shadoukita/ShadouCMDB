@@ -154,7 +154,7 @@ test("the editor window: add a tab and a section, move fields, save, and a viewe
   await expect(bar(page).getByText("Unsaved changes")).toHaveCount(0);
   // The page the editor was opened from shows the saved layout without a reload.
   const tabs = origin.getByRole("tablist", { name: "CI sections" }).getByRole("tab");
-  await expect(tabs).toHaveText(["General", "Hardware", "Relationship map", "Impact", "History"]);
+  await expect(tabs).toHaveText(["General", "Hardware", "Relationship map", "Impact", "Notes", "History"]);
   // Done closes the editor's window.
   await closeEditor(page);
 
@@ -166,7 +166,7 @@ test("the editor window: add a tab and a section, move fields, save, and a viewe
   const viewer = await signInUi(browser, VIEWER, PASSWORD);
   await viewer.goto(`/cis/${ci.id}`);
   const vtabs = viewer.getByRole("tablist", { name: "CI sections" }).getByRole("tab");
-  await expect(vtabs).toHaveText(["General", "Hardware", "Relationship map", "Impact"]);
+  await expect(vtabs).toHaveText(["General", "Hardware", "Relationship map", "Impact", "Notes"]);
   await expect(viewer.locator(".lg-free > .layout-panel > .panel-header h2")).toContainText(["Lifecycle"]);
   await expect(viewer.locator(".layout-container").getByText("Asset tag", { exact: true })).toHaveCount(0);
   await expect(viewer.getByRole("button", { name: "Edit layout" })).toHaveCount(0);
@@ -434,7 +434,7 @@ test("content blocks: a note and built-in panels placed in the editor, on the de
   // The detail page: the note and the record details on General, the panels on Links; History keeps its tab.
   await page.goto(`/cis/${ci.id}`);
   const tabs = page.getByRole("tablist", { name: "CI sections" }).getByRole("tab");
-  await expect(tabs).toHaveText(["General", "Links", "Relationship map", "Impact", "History"]);
+  await expect(tabs).toHaveText(["General", "Links", "Relationship map", "Impact", "Notes", "History"]);
   const heads = page.locator(".layout-container .layout-panel > .panel-header h2");
   await expect(heads).toContainText(["General", "Record", "Before you edit"]);
   await expect(page.locator(".lg-free .note-text strong")).toHaveText("Ops");
@@ -700,7 +700,7 @@ test("record details and relationships are panels: moved, removed and added back
   // The detail page: no relationships, the record details on Meta, the separator a line across General.
   await page.goto(`/cis/${ci.id}`);
   const ciTabs = page.getByRole("tablist", { name: "CI sections" }).getByRole("tab");
-  await expect(ciTabs).toHaveText(["General", "Meta", "Relationship map", "Impact", "History"]);
+  await expect(ciTabs).toHaveText(["General", "Meta", "Relationship map", "Impact", "Notes", "History"]);
   await expect(page.getByRole("separator", { name: "Lifecycle" })).toBeVisible();
   await expect(page.locator('.layout-panel[data-section="general"] [data-separator]')).toHaveText("Lifecycle");
   await expect(page.locator("#rel-title")).toHaveCount(0);

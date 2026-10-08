@@ -258,7 +258,7 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
     let class_key: HashMap<Uuid, String> = classes.iter().map(|c| (c.id, c.key.clone())).collect();
     let field_keys: HashMap<Uuid, String> = sqlx::query_as::<_, (Uuid, String)>(
         "SELECT DISTINCT d.id, d.key FROM cmdb.ci_attribute_definitions d JOIN cmdb.ci_classes c
-         ON d.id IN (c.title_attribute_id, c.owner_attribute_id, c.end_of_life_attribute_id)",
+         ON d.id IN (c.title_attribute_id, c.owner_attribute_id, c.end_of_life_attribute_id, c.subtitle_attribute_id)",
     )
     .fetch_all(&mut *conn)
     .await?
@@ -293,6 +293,7 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
             title_attribute: Some(c.title_attribute_id.and_then(|t| field_keys.get(&t).cloned())),
             owner_attribute: Some(c.owner_attribute_id.and_then(|t| field_keys.get(&t).cloned())),
             end_of_life_attribute: Some(c.end_of_life_attribute_id.and_then(|t| field_keys.get(&t).cloned())),
+            subtitle_attribute: Some(c.subtitle_attribute_id.and_then(|t| field_keys.get(&t).cloned())),
             system_role: class_roles.get(&c.id).copied(),
         })
         .collect();
@@ -401,6 +402,7 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
             reverse_label: t.reverse_label.clone(),
             is_directional: t.is_directional,
             impact_direction: Some(t.impact_direction),
+            category: Some(t.category.clone()),
             sort_order: t.sort_order,
             is_active: t.is_active,
             system_role: type_roles.get(&t.id).copied(),
@@ -1509,15 +1511,17 @@ async fn run(
         for (i, cls) in ordered {
             let existing = old.get(cls.key.as_str()).map(|o| (im.ids.classes[&cls.key], *o));
             // A class without an area (version 1 files) stays where it is; one without a
-            // title attribute (files from before SHAA-267), or without an owner or
-            // end-of-life field (before version 11), keeps its own.
+            // title attribute (files from before SHAA-267), without an owner or end-of-life
+            // field (before version 11), or without a subtitle field (before version 13),
+            // keeps its own.
             let with_area;
             let cls = match existing {
                 Some((_, o))
                     if cls.area.is_none()
                         || cls.title_attribute.is_none()
                         || cls.owner_attribute.is_none()
-                        || cls.end_of_life_attribute.is_none() =>
+                        || cls.end_of_life_attribute.is_none()
+                        || cls.subtitle_attribute.is_none() =>
                 {
                     with_area = ClassSpec {
                         area: cls.area.clone().or_else(|| o.area.clone()),
@@ -1527,6 +1531,7 @@ async fn run(
                             .end_of_life_attribute
                             .clone()
                             .or_else(|| o.end_of_life_attribute.clone()),
+                        subtitle_attribute: cls.subtitle_attribute.clone().or_else(|| o.subtitle_attribute.clone()),
                         ..cls.clone()
                     };
                     &with_area
@@ -1657,12 +1662,13 @@ async fn run(
             im.amend("attributes", format!("{}.{}", a.class, a.key), change);
         }
 
-        // Title, owner and end-of-life fields, now that the fields exist (a class may name an inherited one).
+        // Title, subtitle, owner and end-of-life fields, now that the fields exist (a class may name an inherited one).
         for (i, cls) in dm.classes.iter().enumerate() {
             for (setting, file_field, column) in [
                 (&cls.title_attribute, "titleAttribute", "title_attribute_id"),
                 (&cls.owner_attribute, "ownerAttribute", "owner_attribute_id"),
                 (&cls.end_of_life_attribute, "endOfLifeAttribute", "end_of_life_attribute_id"),
+                (&cls.subtitle_attribute, "subtitleAttribute", "subtitle_attribute_id"),
             ] {
                 let Some(title) = setting else { continue };
                 let class_id = im.ids.classes[&cls.key];
@@ -1717,6 +1723,7 @@ async fn run(
                 .opt("forward_label", Some(t.forward_label.clone()))
                 .opt("reverse_label", Some(t.reverse_label.clone()))
                 .opt("impact_direction", t.impact_direction.map(|d| d.as_str().to_owned()))
+                .opt("category", t.category.as_ref().map(|c| c.as_deref().and_then(super::classes::category_value)))
                 .opt("sort_order", Some(t.sort_order))
                 .opt("is_active", Some(t.is_active));
             let mut create = c.clone();
@@ -2063,6 +2070,9 @@ fn keep_current_settings(mut file: ConfigFile, current: &ConfigFile) -> ConfigFi
         for t in &mut dm.relationship_types {
             if t.impact_direction.is_none() {
                 t.impact_direction = Some(cur.get(t.key.as_str()).and_then(|o| o.impact_direction).unwrap_or_default());
+            }
+            if t.category.is_none() {
+                t.category = Some(cur.get(t.key.as_str()).and_then(|o| o.category.clone()).flatten());
             }
         }
     }
