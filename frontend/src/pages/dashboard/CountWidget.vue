@@ -69,6 +69,7 @@ const countRows = computed<CountRow[]>(() => rows.value.map((r, i) => ({ ...r, c
     :total="total.data.value ?? 0"
     :loading="loading"
     :error="sourceError ?? counts.find((c) => c.error)?.error"
+    :more="widget.type === 'count_by_class' ? { to: '/cis', label: t('dashboard.openInventory') } : undefined"
   >
     <template v-if="listIsMissing" #note>
       <p class="muted no-margin">{{ listMissing[0] }}<code>{{ widget.lookupListKey }}</code>{{ listMissing[1] }}</p>

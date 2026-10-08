@@ -27,6 +27,9 @@ export type ImpactSettings = Schemas["ImpactSettings"];
 export type ImpactParams = NonNullable<paths["/api/v1/configuration-items/{id}/impact"]["get"]["parameters"]["query"]>;
 
 export type ChangeHistogramQuery = NonNullable<paths["/api/v1/configuration-items/change-histogram"]["get"]["parameters"]["query"]>;
+export type CountHistoryQuery = NonNullable<paths["/api/v1/configuration-items/count-history"]["get"]["parameters"]["query"]>;
+export type CountHistory = Schemas["CountHistory"];
+export type CompletenessQuery = NonNullable<paths["/api/v1/configuration-items/completeness"]["get"]["parameters"]["query"]>;
 export type FacetsQuery = NonNullable<paths["/api/v1/configuration-items/facets"]["get"]["parameters"]["query"]>;
 export type ItemFacets = Schemas["ItemFacets"];
 export type Facet = ItemFacets["facets"][number];
@@ -44,6 +47,10 @@ export const keys = {
   ciList: (q: CiListQuery) => ["cis", "list", q] as const,
   ciCount: (q: CiListQuery) => ["cis", "count", q] as const,
   changeHistogram: (q: ChangeHistogramQuery) => ["cis", "change-histogram", q] as const,
+  countHistory: (q: CountHistoryQuery) => ["cis", "count-history", q] as const,
+  relationshipCountHistory: (q: CountHistoryQuery) => ["relationships", "count-history", q] as const,
+  completeness: (q: CompletenessQuery) => ["cis", "completeness", q] as const,
+  recentActivity: (limit: number) => ["audit", "recent-activity", limit] as const,
   facets: (q: FacetsQuery) => ["cis", "facets", q] as const,
   ci: (id: string) => ["cis", "detail", id] as const,
   graph: (id: string, depth: number, direction: string) => ["cis", "graph", id, depth, direction] as const,
@@ -86,6 +93,56 @@ export function useChangeHistogram(query: MaybeRefOrGetter<ChangeHistogramQuery>
       staleTime: 60_000,
       queryFn: ({ signal }: { signal: AbortSignal }) => unwrap(api.GET("/api/v1/configuration-items/change-histogram", { params: { query: q }, signal })),
       placeholderData: keepPreviousData,
+    };
+  });
+}
+
+/**
+ * How many CIs, or relationships, there were per UTC day or ISO week of a range (G2): the count at its start
+ * and per bucket the count at its end. Only CIs in classes the caller may view count, as in the list.
+ */
+export function useCountHistory(
+  of: "cis" | "relationships",
+  query: MaybeRefOrGetter<CountHistoryQuery>,
+  enabled: MaybeRefOrGetter<boolean> = true,
+) {
+  return useQuery(() => {
+    const q = toValue(query);
+    return {
+      queryKey: of === "cis" ? keys.countHistory(q) : keys.relationshipCountHistory(q),
+      enabled: toValue(enabled),
+      staleTime: 60_000,
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        of === "cis"
+          ? unwrap(api.GET("/api/v1/configuration-items/count-history", { params: { query: q }, signal }))
+          : unwrap(api.GET("/api/v1/relationships/count-history", { params: { query: { from: q.from, to: q.to, bucket: q.bucket } }, signal })),
+      placeholderData: keepPreviousData,
+    };
+  });
+}
+
+/** How many CIs of a list query hold a value in every counted field (G1), overall and per class. */
+export function useCompleteness(query: MaybeRefOrGetter<CompletenessQuery> = {}) {
+  return useQuery(() => {
+    const q = toValue(query);
+    return {
+      queryKey: keys.completeness(q),
+      staleTime: 60_000,
+      queryFn: ({ signal }: { signal: AbortSignal }) => unwrap(api.GET("/api/v1/configuration-items/completeness", { params: { query: q }, signal })),
+    };
+  });
+}
+
+/** The newest changes to CIs across the inventory, from the audit log (needs audit.view). */
+export function useRecentActivity(limit: MaybeRefOrGetter<number>, enabled: MaybeRefOrGetter<boolean> = true) {
+  return useQuery(() => {
+    const n = toValue(limit);
+    return {
+      queryKey: keys.recentActivity(n),
+      enabled: toValue(enabled),
+      staleTime: 30_000,
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        unwrap(api.GET("/api/v1/audit-log", { params: { query: { entityType: "configuration_items", sort: "-occurredAt", limit: n } }, signal })),
     };
   });
 }

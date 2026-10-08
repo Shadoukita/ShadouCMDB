@@ -30,18 +30,20 @@ test("the shell and the dashboard are German with the German catalog", async ({ 
   await resetUiSettings(request); // the built-in panels, not a customized dashboard
   await forceGerman(page);
   await page.goto("/");
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
   await expect(page).toHaveTitle(/^Dashboard · /);
+  await expect(page.getByRole("heading", { level: 1, name: /^Dashboard: Guten (Morgen|Tag|Abend)$/ })).toBeVisible();
+  await expect(page.getByRole("radiogroup", { name: "Zeitraum" }).getByRole("radio", { name: "14 Tage" })).toBeChecked();
   await expect(page.getByRole("heading", { name: "CIs nach Klasse", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Zuletzt geändert", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Letzte Aktivität", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Änderungen der letzten 14 Tage", exact: true })).toBeVisible();
   const stats = page.getByRole("region", { name: "Kennzahlen" });
   await expect(stats.locator('[data-stat="total"] .label')).toHaveText("Configuration Items");
-  await expect(stats.locator('[data-stat="total"] .note')).toHaveText(/^in \d+ Klassen?$/);
-  await expect(stats.locator('[data-stat="changes"] .label')).toHaveText("Änderungen (7 Tage)");
-  await expect(page.getByRole("columnheader", { name: "Bezeichnung" })).toBeVisible();
-  await expect(page.getByRole("columnheader", { name: "Anteil" }).first()).toBeVisible();
-  await expect(page.locator("table.data td.num .spinner")).toHaveCount(0); // every count has loaded
-  await expect(page.locator(".share-pct").first()).toHaveText(/^(<1|\d+) %$/);
+  await expect(stats.locator('[data-stat="relationships"] .label')).toHaveText("Beziehungen");
+  await expect(stats.locator('[data-stat="changes"] .label')).toHaveText("Änderungen im Zeitraum");
+  await expect(stats.locator('[data-stat="complete"] .label')).toHaveText("Vollständige Datensätze");
+  await expect(page.getByRole("columnheader", { name: "Änderung" })).toBeVisible();
+  await expect(page.locator(".count-value .spinner")).toHaveCount(0); // every count has loaded
+  await expect(page.locator(".count-value").first()).toHaveAttribute("title", /^(<1|\d+) % aller CIs$/);
 
   const nav = page.getByRole("navigation", { name: "Hauptmenü" });
   await expect(nav.getByRole("link", { name: "Alle Configuration Items" })).toBeVisible();
