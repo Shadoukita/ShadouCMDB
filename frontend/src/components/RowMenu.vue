@@ -30,14 +30,19 @@ const props = defineProps<{
   /** A text button (a page header's Export) instead of the ellipsis icon: its text, and an icon before it. */
   text?: string;
   icon?: IconName;
+  /**
+   * The button stays focusable (aria-disabled, not disabled) so focus does not drop to the page when it turns disabled
+   * under the keyboard, as after choosing an export format, and Tab still reaches it with its reason.
+   */
   disabled?: boolean;
-  /** Shown as the button's tooltip, e.g. why it is disabled. */
+  /** Why it is disabled: the tooltip, and its accessible description for keyboard and screen-reader users. */
   title?: string;
 }>();
 const open = ref(false);
 const button = ref<HTMLButtonElement>();
 const menu = ref<HTMLElement>();
 const menuId = `row-menu-${useId()}`;
+const reasonId = `${menuId}-reason`;
 /** The menu sits under <body> at the button's place: a table cell clips what overflows it. */
 const place = ref<{ top: string; left: string }>({ top: "0", left: "0" });
 /**
@@ -86,7 +91,12 @@ const onScroll = (e: Event) => {
 };
 onBeforeUnmount(() => hide(false));
 
+function toggle() {
+  if (open.value) hide(false);
+  else if (!props.disabled) void show();
+}
 function onButtonKey(e: KeyboardEvent) {
+  if (props.disabled) return;
   if ((e.key === "ArrowDown" || e.key === "ArrowUp") && !props.rowFocus) {
     e.preventDefault();
     void show(e.key === "ArrowDown" ? "first" : "last");
@@ -123,15 +133,17 @@ function run(item: RowMenuItem) {
       :aria-expanded="open"
       :aria-controls="open ? menuId : undefined"
       :aria-label="text ? undefined : label"
-      :disabled="disabled"
+      :aria-disabled="disabled || undefined"
+      :aria-describedby="title ? reasonId : undefined"
       :title="title"
       :data-row-focus="rowFocus || undefined"
-      @click="open ? hide(false) : show()"
+      @click="toggle"
       @keydown="onButtonKey"
     >
       <template v-if="text"><Icon v-if="icon" :name="icon" />{{ text }}<Icon name="chevron-down" /></template>
       <Icon v-else name="ellipsis" />
     </button>
+    <span v-if="title" :id="reasonId" class="sr-only">{{ title }}</span>
     <Teleport to="body">
       <ul v-if="open" :id="menuId" ref="menu" class="row-menu-list" role="menu" :aria-label="label" :style="place" @keydown="onMenuKey">
         <li v-for="item in items" :key="item.label" role="none">

@@ -90,3 +90,39 @@ test("inventory: filter chips, Add filter, row selection and page numbers", asyn
   await expect(footer.getByRole("status")).toHaveText("");
   await expect(rows.locator("input[type=checkbox]:checked")).toHaveCount(0);
 });
+
+test("inventory: Export keeps keyboard focus and says why it is unavailable", async ({ page }) => {
+  // Held until checked, so "Exporting…" lasts long enough to look at.
+  let release = () => {};
+  const held = new Promise<void>((r) => (release = r));
+  await page.route("**/api/v1/configuration-items/export?*", async (route) => {
+    await held;
+    await route.fulfill({ status: 200, contentType: "text/csv", headers: { "Content-Disposition": 'attachment; filename="x.csv"' }, body: '"label"\n' });
+  });
+
+  await page.goto("/cis");
+  const exportButton = page.locator(".page-header .actions .row-menu > button");
+  await expect(exportButton).toHaveText("Export");
+  await exportButton.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("menuitem", { name: "CSV, comma-separated" })).toBeFocused();
+  await page.keyboard.press("Enter");
+  // While the export runs the button is aria-disabled, not disabled, so focus stays on it (GH#785).
+  await expect(exportButton).toHaveText("Exporting…");
+  await expect(exportButton).toHaveAttribute("aria-disabled", "true");
+  await expect(exportButton).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  release();
+  await expect(exportButton).toHaveText("Export");
+  await expect(exportButton).toBeFocused();
+
+  // A data-quality drill-down the export cannot apply: reachable by Tab, with the reason as its description (GH#786).
+  await page.goto("/cis?quality=no_owner");
+  await expect(exportButton).toHaveAttribute("aria-disabled", "true");
+  await expect(exportButton).toHaveAccessibleDescription("The export cannot apply the data-quality filter. Remove it to export the list.");
+  await exportButton.focus();
+  await expect(exportButton).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByRole("menu")).toHaveCount(0);
+});
