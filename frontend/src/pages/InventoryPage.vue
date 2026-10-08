@@ -7,6 +7,7 @@ import { ApiError } from "../api/client";
 import { fileStamp } from "../api/download";
 import { ciCountQuery, downloadInventoryCsv, useCiClasses, useCiList, useClassAttributes, useCriticalityValues, type CiListQuery } from "../api/queries";
 import { dataModelEmpty } from "../lib/dataModel";
+import BulkEditDialog from "../components/BulkEditDialog.vue";
 import Breadcrumbs from "../components/Breadcrumbs.vue";
 import CiCell from "../components/CiCell.vue";
 import ColumnsPopover from "../components/ColumnsPopover.vue";
@@ -36,6 +37,7 @@ import Icon from "../components/Icon.vue";
 import InventoryFilterChips from "../components/InventoryFilterChips.vue";
 import RowMenu from "../components/RowMenu.vue";
 import SkeletonRows from "../components/SkeletonRows.vue";
+import { BULK_EDIT_LIMIT, bulkEditBlocked, retryable, type BulkOutcome } from "../lib/bulkEdit";
 import { ciRowMenu } from "../lib/ciRowMenu";
 import { onRowKeydown } from "../lib/rowKeyboard";
 import KeyboardHints from "../components/KeyboardHints.vue";
@@ -178,15 +180,22 @@ const rowKeys = {
 };
 
 // Row selection (design document §0, step 12c). It survives paging and is cleared when the filters change,
-// so "n selected" never counts rows the list no longer holds. Bulk edit waits for an endpoint (gap G10, SHAA-2354).
+// so "n selected" never counts rows the list no longer holds. Each selected row's label is kept to name it
+// in the bulk edit's result, also once the operator has paged away from it.
 const selected = ref(new Set<string>());
+const selectedLabels = new Map<string, string>();
 watch(
   () => JSON.stringify(listFilters.value),
   () => (selected.value = new Set()),
 );
 const pageIds = computed(() => rows.value.map((r) => r.id));
 const pageSelected = computed(() => pageIds.value.filter((id) => selected.value.has(id)).length);
+function remember(id: string) {
+  const ci = rows.value.find((r) => r.id === id);
+  if (ci) selectedLabels.set(id, ci.label);
+}
 function toggleRow(id: string, on: boolean) {
+  if (on) remember(id);
   const next = new Set(selected.value);
   if (on) next.add(id);
   else next.delete(id);
@@ -195,10 +204,31 @@ function toggleRow(id: string, on: boolean) {
 function togglePage(on: boolean) {
   const next = new Set(selected.value);
   for (const id of pageIds.value) {
+    if (on) remember(id);
     if (on) next.add(id);
     else next.delete(id);
   }
   selected.value = next;
+}
+
+// Bulk edit (gap G10): the selection in one request (POST /configuration-items/bulk-update, at most
+// BULK_EDIT_LIMIT CIs). With one class shown, its attributes can be set (every selected CI has them);
+// otherwise only the criticality. Afterwards the updated CIs leave the selection and the refused ones stay,
+// except those that no longer exist.
+const bulkOpen = ref(false);
+const selectedIds = computed(() => [...selected.value]);
+const bulkBlocked = computed(() => {
+  const n = selected.value.size;
+  const why = bulkEditBlocked(n, session.canOnAnyClass("edit"));
+  if (why === "tooMany") return t("inventory.bulkEdit.tooMany", { max: formatNumber(BULK_EDIT_LIMIT), n: formatNumber(n) });
+  return why === "noPermission" ? t("inventory.bulkEdit.noPermission") : null;
+});
+function openBulkEdit() {
+  if (!bulkBlocked.value) bulkOpen.value = true;
+}
+function closeBulkEdit(outcome: BulkOutcome | null) {
+  bulkOpen.value = false;
+  if (outcome?.committed) selected.value = new Set(outcome.refused.filter((r) => retryable(r.code)).map((r) => r.id));
 }
 
 const viewMenu = ref<InstanceType<typeof SavedViewMenu>>();
@@ -386,11 +416,18 @@ function clearFilters() {
             <div class="selection-status">
               <span role="status">{{ selected.size > 0 ? t("inventory.selected", { n: formatNumber(selected.size) }) : "" }}</span>
               <template v-if="selected.size > 0">
-                <!-- Bulk edit waits for a bulk-update endpoint (gap G10, SHAA-2354): shown, focusable, with the reason. -->
-                <button type="button" class="btn btn-sm btn-ghost" aria-disabled="true" :title="t('inventory.bulkEdit.unavailable')" aria-describedby="bulk-edit-reason">
+                <!-- Refused before sending (over the limit, no edit right): shown, focusable, with the reason. -->
+                <button
+                  type="button"
+                  class="btn btn-sm btn-ghost"
+                  :aria-disabled="bulkBlocked ? 'true' : undefined"
+                  :title="bulkBlocked ?? undefined"
+                  :aria-describedby="bulkBlocked ? 'bulk-edit-reason' : undefined"
+                  @click="openBulkEdit"
+                >
                   {{ t("inventory.bulkEdit") }}
                 </button>
-                <span id="bulk-edit-reason" class="sr-only">{{ t("inventory.bulkEdit.unavailable") }}</span>
+                <span v-if="bulkBlocked" id="bulk-edit-reason" class="hint">{{ bulkBlocked }}</span>
                 <button type="button" class="btn btn-sm btn-ghost" @click="selected = new Set()">{{ t("inventory.select.clear") }}</button>
               </template>
             </div>
@@ -398,6 +435,14 @@ function clearFilters() {
           </div>
           <KeyboardHints id="inventory-keys" :edit="anyEditable" columns />
         </template>
+        <BulkEditDialog
+          :open="bulkOpen"
+          :ids="selectedIds"
+          :labels="selectedLabels"
+          :defs="currentClass ? attrDefs : []"
+          :class-name="currentClass?.name"
+          @close="closeBulkEdit"
+        />
       </div>
     </div>
   </section>

@@ -62,3 +62,52 @@ dialog.form-dialog .body {
 dialog.form-dialog .body > .alert {
   margin-bottom: var(--space-4);
 }
+
+/* Bulk edit (InventoryPage): one row per field to change with its remove button, then the refused CIs. */
+dialog.bulk-edit .body > .hint,
+dialog.bulk-edit .bulk-change,
+dialog.bulk-edit .bulk-add {
+  margin: 0 0 var(--space-3);
+}
+dialog.bulk-edit .bulk-change {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+dialog.bulk-edit .bulk-change > .field {
+  flex: 1;
+  min-width: 0;
+}
+dialog.bulk-edit .bulk-change > .btn {
+  margin-top: calc(var(--fs-sm) * 1.5 + var(--space-1));
+}
+dialog.bulk-edit .bulk-add-row {
+  display: flex;
+  gap: var(--space-2);
+}
+dialog.bulk-edit .bulk-add-row > select {
+  flex: 1;
+  min-width: 0;
+}
+dialog.bulk-edit h3 {
+  margin: var(--space-4) 0 var(--space-2);
+  font-size: var(--fs-h3);
+}
+dialog.bulk-edit .bulk-refused {
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  list-style: none;
+}
+dialog.bulk-edit .bulk-refused > li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-2);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--c-border);
+}
+dialog.bulk-edit .bulk-refused > li > ul {
+  flex-basis: 100%;
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-5);
+  color: var(--c-text-muted);
+}
