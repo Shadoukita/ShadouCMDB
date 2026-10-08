@@ -10,17 +10,25 @@ const defs = [
   { id: "a-cpu", key: "cpu_cores", dataType: "integer", systemRole: null },
   { id: "a-mail", key: "email", dataType: "text", systemRole: "person_email" },
   { id: "a-state", key: "state", dataType: "lookup", systemRole: null },
+  { id: "a-sn", key: "serial_number", dataType: "text", systemRole: null, isIdentifying: true },
+  { id: "a-tag", key: "asset_tag", dataType: "text", systemRole: null, isIdentifying: true },
+  { id: "a-model", key: "model", dataType: "text", systemRole: null, isIdentifying: false },
 ];
 
 describe("cloneClearedKeys", () => {
   test("the title attribute, system-role fields and IP addresses are left empty", () => {
-    assert.deepEqual(cloneClearedKeys(defs, "a-name"), ["hostname", "ip_address", "email"]);
+    assert.deepEqual(cloneClearedKeys(defs, "a-name"), ["hostname", "ip_address", "email", "serial_number", "asset_tag"]);
+  });
+  test("fields marked identifying are left empty, other text fields are copied (GH#761)", () => {
+    const keys = cloneClearedKeys(defs, null);
+    assert.ok(keys.includes("serial_number") && keys.includes("asset_tag"));
+    assert.ok(!keys.includes("model"));
   });
   test("a reference to a CI the user may not view is left empty", () => {
-    assert.deepEqual(cloneClearedKeys(defs, null, { cpu_cores: { hidden: false }, state: { hidden: true } }), ["ip_address", "email", "state"]);
+    assert.deepEqual(cloneClearedKeys(defs, null, { cpu_cores: { hidden: false }, state: { hidden: true } }), ["ip_address", "email", "state", "serial_number", "asset_tag"]);
   });
   test("a class without a title attribute clears only the others", () => {
-    assert.deepEqual(cloneClearedKeys(defs, null), ["ip_address", "email"]);
+    assert.deepEqual(cloneClearedKeys(defs, null), ["ip_address", "email", "serial_number", "asset_tag"]);
   });
 });
 
