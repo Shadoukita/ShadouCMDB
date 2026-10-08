@@ -16,7 +16,15 @@ interface Ci {
 test("clone: the form starts from the CI's values, saves as a new CI and leaves the source alone", async ({ page, request }) => {
   const stamp = Date.now();
   const serverId = await classIdByName(request, "Server");
-  const created = await createCi(request, serverId, `zz-clone-src-${stamp}`, { hostname: `zz-src-${stamp}`, ip_address: "10.99.0.7", cpu_cores: 24 });
+  const created = await createCi(request, serverId, `zz-clone-src-${stamp}`, {
+    hostname: `zz-src-${stamp}`,
+    ip_address: "10.99.0.7",
+    cpu_cores: 24,
+    serial_number: `SN-zz-${stamp}`,
+  });
+  // The template marks the serial number as identifying: one CI's only, not copied (GH#761).
+  const attrs = await apiGet<{ data: { key: string; isIdentifying: boolean }[] }>(request, `/ci-classes/${serverId}/attributes`);
+  expect(attrs.data.find((d) => d.key === "serial_number")?.isIdentifying).toBe(true);
   const rack = await ciIdByName(request, "FRA1 Rack A01");
   const types = await apiGet<{ data: { id: string; key: string }[] }>(request, "/relationship-types?limit=200");
   const located = types.data.find((x) => x.key === "located_in")!;
@@ -33,8 +41,10 @@ test("clone: the form starts from the CI's values, saves as a new CI and leaves 
   await expect(notice).toContainText("Not copied: the ident, relationships");
   await expect(notice).toContainText("Left empty for you to fill in: Name");
   await expect(notice).toContainText("IP address");
+  await expect(notice).toContainText("Serial number");
   await expect(page.locator("#attr-name")).toHaveValue("");
   await expect(page.locator("#attr-ip_address")).toHaveValue("");
+  await expect(page.locator("#attr-serial_number")).toHaveValue("");
   await expect(page.locator("#attr-hostname")).toHaveValue(`zz-src-${stamp}`);
   await expect(page.locator("#attr-cpu_cores")).toHaveValue("24");
   await expect(page.locator("#attr-status")).toHaveValue(String(before.attributes.status));
@@ -56,6 +66,7 @@ test("clone: the form starts from the CI's values, saves as a new CI and leaves 
   expect(copy.attributes.cpu_cores).toBe(24);
   expect(copy.attributes.status).toBe(before.attributes.status);
   expect(copy.attributes.ip_address ?? null).toBeNull();
+  expect(copy.attributes.serial_number ?? null).toBeNull();
   // No relationships were copied; the source keeps its own, its values and its version.
   expect((await apiGet<{ page: { total: number } }>(request, `/relationships?ciId=${copyId}&limit=1`)).page.total).toBe(0);
   expect((await apiGet<{ page: { total: number } }>(request, `/relationships?ciId=${created.id}&limit=1`)).page.total).toBe(1);
