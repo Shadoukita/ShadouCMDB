@@ -81,20 +81,19 @@ function clearFilters() {
 </script>
 
 <template>
-  <Breadcrumbs :items="adminCrumbs('users')" />
-  <div class="page-header">
-    <div class="title">
-      <h1>{{ t("admin.section.users") }}</h1>
-      <span v-if="list.data.value" class="muted count">{{ t("common.total", { n: formatNumber(total) }) }}</span>
-      <span v-if="list.isFetching.value && !list.isPending.value" class="spinner" :aria-label="t('common.refreshing')" />
+  <div class="list-head">
+    <Breadcrumbs :items="adminCrumbs('users')" />
+    <div class="page-header">
+      <div class="title">
+        <h1>{{ t("admin.section.users") }}</h1>
+        <span v-if="list.data.value" class="count mono">{{ t("common.total", { n: formatNumber(total) }) }}</span>
+        <span v-if="list.isFetching.value && !list.isPending.value" class="spinner" :aria-label="t('common.refreshing')" />
+      </div>
+      <div class="actions">
+        <RouterLink class="btn btn-primary" to="/admin/users/new"><Icon name="plus" />{{ t("admin.users.new") }}</RouterLink>
+      </div>
     </div>
-    <div class="actions">
-      <RouterLink class="btn btn-primary" to="/admin/users/new"><Icon name="plus" />{{ t("admin.users.new") }}</RouterLink>
-    </div>
-  </div>
-  <p class="page-intro">{{ t("admin.users.intro") }}</p>
-
-  <section class="panel explorer" :aria-label="t('admin.section.users')">
+    <p class="page-intro">{{ t("admin.users.intro") }}</p>
     <form class="toolbar" role="search" @submit.prevent>
       <div class="field search">
         <label for="u-q">{{ t("admin.search") }}</label>
@@ -131,7 +130,9 @@ function clearFilters() {
       </div>
       <button v-if="filtered" type="button" class="btn btn-ghost" @click="clearFilters"><Icon name="x" />{{ t("admin.filter.clear") }}</button>
     </form>
+  </div>
 
+  <section class="panel explorer" :aria-label="t('admin.section.users')">
     <div v-if="list.isError.value" class="panel-body">
       <ErrorAlert :error="list.error.value" :on-retry="() => list.refetch()" />
     </div>
@@ -150,7 +151,7 @@ function clearFilters() {
 
     <template v-if="rows.length > 0 && !list.isError.value">
       <div class="table-wrap table-scroll">
-        <table :class="['data', { loading: list.isPlaceholderData.value }]" aria-describedby="users-keys">
+        <table :class="['data', 'list-table', { loading: list.isPlaceholderData.value }]" aria-describedby="users-keys">
           <thead>
             <tr>
               <th v-for="c in COLUMNS" :key="c.key" scope="col" :aria-sort="c.sort ? lq.ariaSort(c.sort) : undefined">
@@ -164,7 +165,7 @@ function clearFilters() {
           </thead>
           <tbody @keydown="onRowKeydown($event)">
             <tr v-for="u in rows" :key="u.id" :data-id="u.id" :class="{ disabled: !u.isActive }">
-              <td class="mono"><RouterLink :to="`/admin/users/${u.id}`">{{ u.username }}</RouterLink></td>
+              <td><RouterLink class="list-name" :to="`/admin/users/${u.id}`">{{ u.username }}</RouterLink></td>
               <td dir="auto">{{ u.displayName }}</td>
               <td>
                 <template v-if="u.email">{{ u.email }}</template>
@@ -184,8 +185,8 @@ function clearFilters() {
                 <template v-for="(p, i) in u.profiles" :key="p.id"><template v-if="i > 0">, </template>{{ p.name }}</template>
               </td>
               <td>
-                <span v-if="u.isActive" class="badge ok">{{ t("common.active") }}</span>
-                <span v-else class="badge off">{{ t("common.disabled") }}</span>
+                <span v-if="u.isActive" class="badge ok"><span class="status-dot" aria-hidden="true" />{{ t("common.active") }}</span>
+                <span v-else class="badge off"><span class="status-dot" aria-hidden="true" />{{ t("common.disabled") }}</span>
               </td>
               <td>
                 <span v-if="u.identityProvider" class="badge" :title="t('admin.users.idpTitle', { name: u.identityProvider.name })">
@@ -209,7 +210,9 @@ function clearFilters() {
           </tbody>
         </table>
       </div>
-      <PaginationBar :total="total" :limit="limit" :offset="offset" @change="lq.onPage" />
+      <div class="table-footer">
+        <PaginationBar numbered :total="total" :limit="limit" :offset="offset" @change="lq.onPage" />
+      </div>
       <KeyboardHints id="users-keys" />
     </template>
   </section>

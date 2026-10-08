@@ -176,7 +176,7 @@ const notFound = computed(() => {
 </script>
 
 <template>
-  <Breadcrumbs :items="crumbs" />
+  <Breadcrumbs v-if="!isNew && (user.isLoading.value || user.isError.value)" :items="crumbs" />
   <LoadingState v-if="!isNew && user.isLoading.value" :label="t('admin.user.loading')" />
   <template v-else-if="!isNew && user.isError.value">
     <EmptyState v-if="notFound" :title="t('admin.user.notFound.title')">
@@ -186,45 +186,49 @@ const notFound = computed(() => {
     <ErrorAlert v-else :error="user.error.value" :on-retry="() => user.refetch()" />
   </template>
   <template v-else>
-    <div class="page-header record-header">
-      <div class="record-heading">
-        <div class="title">
-          <Icon name="user" class="class-icon" />
-          <h1 dir="auto">{{ isNew ? t("admin.users.new") : user.data.value?.username }}</h1>
+    <div class="record-head record-head-plain">
+      <Breadcrumbs :items="crumbs" />
+      <div class="page-header record-header">
+        <div class="record-heading">
+          <span class="class-tile class-tile-lg" aria-hidden="true"><Icon name="user" class="class-icon" /></span>
+          <div class="record-title">
+            <div class="title">
+              <h1 dir="auto">{{ isNew ? t("admin.users.new") : user.data.value?.username }}</h1>
+            </div>
+            <p v-if="user.data.value && !isNew" class="record-meta" data-testid="record-meta">
+              <span :class="['badge', user.data.value.isActive ? 'ok' : 'off']"
+                ><span class="status-dot" aria-hidden="true" />{{ user.data.value.isActive ? t("common.active") : t("common.disabled") }}</span
+              >
+              <span v-if="user.data.value.isAdministrator" class="badge">{{ t("admin.user.administrator") }}</span>
+              <span v-if="user.data.value.mfaEnabled" class="badge ok" :title="t('admin.user.mfaOnTitle')">{{ t("admin.user.mfaOn") }}</span>
+              <span v-if="provider" class="badge" data-testid="user-provider">{{ t("admin.user.signsInWith", { name: provider.name }) }}</span>
+              <span v-if="isSelf" class="badge">{{ t("admin.user.you") }}</span>
+              <span
+                v-if="user.data.value.signInStatus !== 'ready'"
+                :class="['badge', user.data.value.signInStatus === 'person_missing' ? 'danger' : 'warn']"
+                :title="user.data.value.signInStatus === 'person_missing' ? t('people.users.incompleteTitle') : t('people.users.emailRequiredTitle')"
+                data-testid="user-sign-in-status"
+              >
+                {{ signInStatusLabel(user.data.value.signInStatus) }}
+              </span>
+              <span class="record-meta-line">
+                <span dir="auto">{{ user.data.value.displayName }}</span>
+                <span class="sep" aria-hidden="true">·</span>
+                <time v-if="user.data.value.lastLoginAt" :datetime="user.data.value.lastLoginAt" :title="formatDateTime(user.data.value.lastLoginAt)">
+                  {{ t("admin.user.lastSignIn", { when: formatRelative(user.data.value.lastLoginAt) }) }}
+                </time>
+                <span v-else>{{ t("admin.user.neverSignedIn") }}</span>
+              </span>
+            </p>
+          </div>
         </div>
-        <p v-if="user.data.value && !isNew" class="record-meta" data-testid="record-meta">
-          <span class="status">
-            <span :class="['status-dot', user.data.value.isActive ? 'ok' : 'off']" aria-hidden="true" />{{
-              user.data.value.isActive ? t("common.active") : t("common.disabled")
-            }}
-          </span>
-          <span class="sep" aria-hidden="true">·</span>
-          <span dir="auto">{{ user.data.value.displayName }}</span>
-          <span v-if="user.data.value.isAdministrator" class="badge">{{ t("admin.user.administrator") }}</span>
-          <span v-if="user.data.value.mfaEnabled" class="badge ok" :title="t('admin.user.mfaOnTitle')">{{ t("admin.user.mfaOn") }}</span>
-          <span v-if="provider" class="badge" data-testid="user-provider">{{ t("admin.user.signsInWith", { name: provider.name }) }}</span>
-          <span v-if="isSelf" class="badge">{{ t("admin.user.you") }}</span>
-          <span
-            v-if="user.data.value.signInStatus !== 'ready'"
-            :class="['badge', user.data.value.signInStatus === 'person_missing' ? 'danger' : 'warn']"
-            :title="user.data.value.signInStatus === 'person_missing' ? t('people.users.incompleteTitle') : t('people.users.emailRequiredTitle')"
-            data-testid="user-sign-in-status"
-          >
-            {{ signInStatusLabel(user.data.value.signInStatus) }}
-          </span>
-          <span class="sep" aria-hidden="true">·</span>
-          <time v-if="user.data.value.lastLoginAt" :datetime="user.data.value.lastLoginAt" :title="formatDateTime(user.data.value.lastLoginAt)">
-            {{ t("admin.user.lastSignIn", { when: formatRelative(user.data.value.lastLoginAt) }) }}
-          </time>
-          <span v-else>{{ t("admin.user.neverSignedIn") }}</span>
-        </p>
-      </div>
-      <div v-if="user.data.value && !isNew" class="actions">
-        <RouterLink class="btn" :to="{ path: '/admin/api-tokens', query: { userId: user.data.value.id } }">{{ t("admin.users.row.tokens") }}</RouterLink>
-        <RouterLink v-if="session.can('audit.view')" class="btn" :to="{ path: '/admin/audit', query: { actorId: user.data.value.id } }">
-          {{ t("admin.users.row.audit") }}
-        </RouterLink>
-        <RowMenu v-if="moreActions.length > 0" :label="t('record.actions.more')" :items="moreActions" large />
+        <div v-if="user.data.value && !isNew" class="actions">
+          <RouterLink class="btn" :to="{ path: '/admin/api-tokens', query: { userId: user.data.value.id } }">{{ t("admin.users.row.tokens") }}</RouterLink>
+          <RouterLink v-if="session.can('audit.view')" class="btn" :to="{ path: '/admin/audit', query: { actorId: user.data.value.id } }">
+            {{ t("admin.users.row.audit") }}
+          </RouterLink>
+          <RowMenu v-if="moreActions.length > 0" :label="t('record.actions.more')" :items="moreActions" large />
+        </div>
       </div>
     </div>
 

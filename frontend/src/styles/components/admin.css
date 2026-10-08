@@ -16,6 +16,14 @@
   align-items: start;
 }
 
+/* Beside the in-page navigation the head band (.list-head, .record-head) cannot run to the content edge:
+   it stands as a card in the page column instead. */
+.admin-with-nav :is(.list-head, .record-head) {
+  margin: 0 0 var(--space-4);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+}
+
 /* ---------- Section navigation ---------- */
 .admin-nav-group {
   display: flex;
@@ -107,7 +115,11 @@
   margin-left: var(--space-1);
 }
 
-/* ---------- Edit pages (audit A3): the record title row and save bar, see record.css ---------- */
+/* ---------- Edit pages (audit A3): the record head band and save bar, see record.css ---------- */
+/* An admin record has no tabs on the band's lower edge, so the band closes with its own padding. */
+.record-head.record-head-plain {
+  padding-bottom: var(--space-1);
+}
 /* The permission matrix (A7): Read and Change column groups, the class column and both header rows kept
    in view while the matrix scrolls inside its panel. */
 .matrix-wrap {
