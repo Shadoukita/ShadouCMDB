@@ -613,6 +613,7 @@ pub(crate) mod tests {
             |_| {},
             imports,
             Default::default(),
+            None,
         )
     }
 
@@ -628,6 +629,20 @@ pub(crate) mod tests {
             |_| {},
             Default::default(),
             limits,
+            None,
+        )
+    }
+
+    /// The real router with this inventory export cap (else derived from the pool's size).
+    pub(crate) fn app_with_exports(pool: sqlx::PgPool, exports: crate::config::ExportConfig) -> Router {
+        build_app_full(
+            pool,
+            CookieSecure::Never,
+            crate::http::Capacity::new(512, StdDuration::from_secs(10)),
+            |_| {},
+            Default::default(),
+            Default::default(),
+            Some(exports),
         )
     }
 
@@ -637,7 +652,7 @@ pub(crate) mod tests {
         capacity: crate::http::Capacity,
         configure: impl FnOnce(&mut AuthConfig),
     ) -> Router {
-        build_app_full(pool, cookie_secure, capacity, configure, Default::default(), Default::default())
+        build_app_full(pool, cookie_secure, capacity, configure, Default::default(), Default::default(), None)
     }
 
     fn build_app_full(
@@ -647,6 +662,7 @@ pub(crate) mod tests {
         configure: impl FnOnce(&mut AuthConfig),
         imports: crate::config::ImportConfig,
         business_services: crate::config::BusinessServiceConfig,
+        exports: Option<crate::config::ExportConfig>,
     ) -> Router {
         let mut auth = AuthConfig {
             session_idle: StdDuration::from_secs(3600),
@@ -695,10 +711,14 @@ pub(crate) mod tests {
             impact: Default::default(),
             imports: imports.clone(),
             business_services,
+            exports: Default::default(),
         };
-        let state = AppState::new(pool, auth, crate::secrets::Keyring::for_tests())
+        let mut state = AppState::new(pool, auth, crate::secrets::Keyring::for_tests())
             .importing(&imports)
             .with_business_services(business_services);
+        if let Some(exports) = exports {
+            state = state.with_exports(exports);
+        }
         router(AppState { capacity, ..state }, &cfg)
     }
 
