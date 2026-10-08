@@ -4,59 +4,205 @@
  * Below them the layout's sections and the save bar, shared with the edit and create pages (audit R3, R4, R11).
  */
 
-/* ---------- Title row ---------- */
+/* ---------- Page head (design §0 step 12d) ----------
+ * A surface band across the content area, as on the inventory: the breadcrumb, the class tile, the name in the
+ * data font, the chips and the meta line, the actions, then the fact chips and the tabs on the band's edge. */
+.record-head {
+  margin: calc(-1 * var(--space-4)) calc(-1 * var(--space-4)) var(--space-4);
+  padding: var(--space-3) var(--space-4) 0;
+  background: var(--c-surface);
+  border-bottom: 1px solid var(--c-border);
+}
+.record-head .page-header {
+  margin: var(--space-3) 0 var(--space-3);
+}
 .record-header {
   align-items: flex-start;
 }
 .record-heading {
   display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  min-width: 0;
+}
+.record-title {
+  display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--space-1_5);
   min-width: 0;
 }
 .record-heading .title {
   gap: var(--space-2);
 }
-.record-heading h1 {
-  overflow-wrap: anywhere;
-}
-/* A hostname-like name in the data font, at the heading's size (.mono alone would set the table's). */
+/* The name in the data font at the heading's size (.mono alone would set the table's). */
+.record-heading h1,
 .record-heading h1.mono {
   font-family: var(--font-mono);
   font-size: var(--fs-h1);
   font-weight: var(--fw-medium);
-}
-.record-heading h1 .mono {
-  font-family: var(--font-mono);
-  font-size: inherit;
-  font-weight: var(--fw-medium);
-}
-.record-heading .class-icon {
-  width: 20px;
-  height: 20px;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
 }
 
-/* Status, ident, class, criticality and the last update, separated by middle dots. */
+/* ---------- Class tile: the class icon on a tint of the class colour (decorative, aria-hidden) ---------- */
+.class-tile {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-md);
+  background: var(--c-surface-alt);
+  background: color-mix(in srgb, var(--tile-c, var(--c-neutral)) 12%, var(--c-surface));
+}
+.class-tile .class-icon {
+  width: 18px;
+  height: 18px;
+}
+.class-tile .class-swatch {
+  width: 12px;
+  height: 12px;
+}
+.class-tile-lg {
+  width: 52px;
+  height: 52px;
+  border-radius: var(--radius-lg);
+}
+.class-tile-lg .class-icon {
+  width: 26px;
+  height: 26px;
+}
+
+/* Class, state and criticality as chips, then "ident · Updated … by …". */
 .record-meta {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: var(--space-1) var(--space-2);
+  gap: var(--space-1_5) var(--space-2);
   margin: 0;
   font-size: var(--fs-sm);
   color: var(--c-text-secondary);
 }
+.record-meta .badge,
+.record-meta .muted {
+  height: 24px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-full);
+  font-size: var(--fs-sm);
+}
+.record-meta .muted {
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+}
+.record-meta .badge .status-dot {
+  width: 6px;
+  height: 6px;
+  background: currentColor;
+}
+/* The class chip links to the class's inventory: squarer than the state pills, in the text colour. */
+.record-meta a.record-class-chip {
+  border-radius: var(--radius-sm);
+  color: var(--c-text);
+  text-decoration: none;
+}
+.record-meta a.record-class-chip:hover {
+  background: var(--c-row-hover);
+  text-decoration: underline;
+}
+.record-meta a.record-class-chip:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: 1px;
+}
+.record-meta-line {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1_5);
+}
 .record-meta .sep {
   color: var(--c-text-tertiary);
-}
-.record-meta .status {
-  color: var(--c-text);
-  font-weight: var(--fw-medium);
 }
 .record-meta .ident {
   font-family: var(--font-mono);
   font-size: var(--fs-mono);
-  color: var(--c-text);
+}
+.record-head .fact-chips {
+  margin: 0 0 var(--space-3);
+}
+
+/* ---------- Tabs on the band's lower edge, each with its count ---------- */
+.record-head .tabs.record-tabs {
+  margin: 0;
+  border-bottom: 0;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+}
+.record-tabs button {
+  min-height: 40px;
+  padding: 0 var(--space-3);
+  margin-bottom: 0;
+}
+.record-tabs .tab-count::after {
+  content: " " attr(data-count);
+}
+.record-tabs .tab-count {
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-regular);
+  color: var(--c-text-secondary);
+}
+
+/* ---------- The built-in arrangement (the default layout): fields beside relationships ---------- */
+.record-overview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  align-items: flex-start;
+  margin-bottom: var(--space-4);
+}
+.record-overview > .record-fields {
+  flex: 1 1 420px;
+  min-width: 0;
+}
+.record-overview > .record-side {
+  flex: 1.5 1 560px;
+  min-width: 0;
+}
+.record-side > .panel:last-child {
+  margin-bottom: 0;
+}
+/* The stacked field card: one card, each section under an overline heading and a rule. */
+.lp-stacked > .layout-panels {
+  display: block;
+  padding: var(--space-1) var(--panel-p) var(--space-2);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+}
+.lp-stacked > .layout-panels > .panel {
+  margin: 0;
+  border: 0;
+  border-bottom: 1px solid var(--c-divider);
+  border-radius: 0;
+  background: none;
+}
+.lp-stacked > .layout-panels > .panel:last-child {
+  border-bottom: 0;
+}
+.lp-stacked > .layout-panels > .panel > .panel-header {
+  min-height: 0;
+  padding: var(--space-4) 0 var(--space-2);
+  border: 0;
+}
+.lp-stacked > .layout-panels > .panel > .panel-header h2 {
+  font-size: var(--fs-overline);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--ls-overline);
+  text-transform: uppercase;
+  color: var(--c-text-secondary);
+}
+.lp-stacked > .layout-panels > .panel .panel-body {
+  padding: 0 0 var(--space-3);
 }
 
 /* ---------- Fact chips: lookup values, each a link to the inventory filtered by it ---------- */
@@ -408,22 +554,134 @@ ol.impact-path a {
   font-size: var(--fs-sm);
 }
 
-/* ---------- Relationships (audit R5) ---------- */
-.rel-edge,
-.rel-ci {
+/* ---------- Relationships (design §0 step 12d, audit R5): grouped rows with a type pill ---------- */
+.panel-header h2 .count,
+.rel-group-head .count {
+  margin-left: var(--space-1);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-regular);
+  letter-spacing: 0;
+  color: var(--c-text-secondary);
+}
+.rel-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-3) var(--panel-p) var(--space-1);
+}
+.rel-search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1 1 200px;
+  max-width: 280px;
+  min-height: var(--control-h-sm);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--c-border-control);
+  border-radius: var(--radius-md);
+  background: var(--c-surface);
+  color: var(--c-text-secondary);
+}
+.rel-search:focus-within {
+  outline: 2px solid var(--c-focus);
+  outline-offset: 1px;
+}
+.rel-search input {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  font: inherit;
+  color: var(--c-text);
+}
+.rel-partial,
+.rel-none {
+  margin: var(--space-2) var(--panel-p) 0;
+}
+.rel-group {
+  padding: var(--space-3) var(--panel-p) 0;
+}
+.rel-group:last-of-type {
+  padding-bottom: var(--space-2);
+}
+.rel-group-head {
+  margin: 0;
+  padding: 0 0 var(--space-1_5);
+  border-bottom: 1px solid var(--c-border);
+  font-size: var(--fs-overline);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--ls-overline);
+  text-transform: uppercase;
+  color: var(--c-text-secondary);
+}
+.rel-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.rel-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--c-divider);
+}
+.rel-row:last-child {
+  border-bottom: 0;
+}
+.rel-main {
+  flex: 1 1 200px;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.rel-name {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1_5);
+  min-width: 0;
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+}
+.rel-name a {
+  color: var(--c-text);
+}
+.rel-name a:hover {
+  color: var(--c-link);
+}
+.rel-sub {
+  overflow: hidden;
+  font-size: var(--fs-sm);
+  color: var(--c-text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rel-type {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1_5);
+  height: 24px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--badge-neutral-bg);
+  color: var(--badge-neutral-fg);
+  white-space: nowrap;
+}
+.rel-type .mono {
+  font-size: var(--fs-xs);
 }
 .rel-dir {
   flex: none;
-  color: var(--c-text-secondary);
 }
-table.rel-table td.rel-notes {
-  max-width: 320px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: var(--c-text-secondary);
+.rel-actions {
+  flex: none;
+  min-width: 28px;
 }
 .rel-sentence {
   margin-top: 0;
@@ -458,7 +716,7 @@ table.rel-table td.rel-notes {
   flex-basis: 100%;
 }
 
-/* ---------- History as the event stream (audit R8) ---------- */
+/* ---------- History as a timeline (design §0 step 12d, audit R8) ---------- */
 .event-stream-head {
   display: flex;
   flex-wrap: wrap;
@@ -467,6 +725,7 @@ table.rel-table td.rel-notes {
   gap: var(--space-2);
   padding: var(--space-2) var(--panel-p);
   font-size: var(--fs-sm);
+  border-bottom: 1px solid var(--c-divider);
 }
 .event-sources {
   display: flex;
@@ -492,27 +751,127 @@ table.rel-table td.rel-notes {
   margin: 0;
   padding: var(--space-3) var(--panel-p);
 }
-table.event-table td {
-  vertical-align: top;
+.event-timeline {
+  margin: 0;
+  padding: var(--space-3) var(--panel-p) var(--space-1);
+  list-style: none;
 }
-table.event-table td.event-time {
-  font-size: var(--fs-mono);
+/* A dot on a rail, the actor and the event with the change under them, the time at the end. */
+.event-timeline > .event {
+  position: relative;
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  column-gap: var(--space-3);
+  padding-bottom: var(--space-4);
 }
-table.event-table .event-change {
-  width: 100%;
-  white-space: normal;
+.event-timeline > .event:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  top: 17px;
+  bottom: 2px;
+  left: 6px;
+  width: 1.5px;
+  background: var(--c-border);
+}
+.event-dot {
+  width: 10px;
+  height: 10px;
+  margin: 5px 0 0 2px;
+  border-radius: var(--radius-full);
+  background: var(--c-primary);
+}
+.event[data-tone="ok"] .event-dot {
+  background: var(--c-success);
+}
+.event[data-tone="danger"] .event-dot {
+  background: var(--c-danger-solid);
+}
+.event[data-tone="warn"] .event-dot {
+  background: var(--c-warning);
+}
+.event[data-tone="info"] .event-dot {
+  background: var(--c-viz-5, var(--c-info));
+}
+.event-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.event-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-2);
+  margin: 0;
+}
+.event-head .actor {
+  font-weight: var(--fw-semibold);
+}
+.event-action {
+  color: var(--c-text-secondary);
 }
 .chip.event-source {
-  min-height: 20px;
+  min-height: 18px;
+  padding: 0 var(--space-1_5);
   font-family: var(--font-mono);
-  font-size: var(--fs-mono);
+  font-size: var(--fs-xs);
 }
-/* The template's line breaks between the key and the values are condensed away. */
-.diff li > code:first-child {
-  margin-right: var(--space-2);
+.event-change {
+  margin: 0;
+}
+.event-time {
+  font-size: var(--fs-sm);
+  color: var(--c-text-secondary);
+  white-space: nowrap;
+}
+/* The diff: the key, the old value struck through on red, an arrow, the new one on green. */
+.event-timeline ul.diff {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+.event-timeline ul.diff > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+}
+.event-timeline ul.diff code {
+  padding: 0;
+  background: none;
+  color: var(--c-text-secondary);
+}
+.event-timeline ul.diff del,
+.event-timeline ul.diff ins,
+.diff-none {
+  padding: 1px var(--space-1_5);
+  border-radius: var(--radius-sm);
+  text-decoration-thickness: 1px;
+}
+.event-timeline ul.diff del,
+.diff-none {
+  background: var(--badge-danger-bg);
+  color: var(--badge-danger-fg);
+}
+.diff-none {
+  text-decoration: none;
+}
+.event-timeline ul.diff ins {
+  background: var(--badge-ok-bg);
+  color: var(--badge-ok-fg);
+  text-decoration: none;
 }
 .diff-arrow {
-  margin: 0 var(--space-1);
+  margin: 0;
   color: var(--c-text-tertiary);
   vertical-align: -1px;
+}
+.event-preview .panel-header h2 .count {
+  margin-left: var(--space-1);
 }
