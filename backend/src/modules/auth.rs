@@ -1272,9 +1272,33 @@ pub(crate) mod tests {
         // A writer holding ROW EXCLUSIVE on users, as a sign-in does mid-transaction.
         let mut writer = pool.begin().await.unwrap();
         writer.execute("UPDATE users SET last_login_at = last_login_at WHERE false").await.unwrap();
-        let late = tokio::time::timeout(Duration::from_secs(5), setup(pool, &auth, &headers, &anon(), body("late")))
-            .await
-            .expect("setup waited on a lock held by a users writer");
+        let writer_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()").fetch_one(&mut *writer).await.unwrap();
+        // Watch for the lock wait itself rather than timing the call (GH#736):
+        // under CPU load the 409 path can be slow without waiting on anything,
+        // while a real lock wait lasts as long as the writer stays open.
+        let ctx = anon();
+        let late = {
+            let call = setup(pool, &auth, &headers, &ctx, body("late"));
+            tokio::pin!(call);
+            let watch = async {
+                loop {
+                    tokio::select! {
+                        done = &mut call => break done,
+                        () = tokio::time::sleep(Duration::from_millis(20)) => {
+                            let blocked: bool = sqlx::query_scalar(
+                                "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)))",
+                            )
+                            .bind(writer_pid)
+                            .fetch_one(pool)
+                            .await
+                            .unwrap();
+                            assert!(!blocked, "setup waited on a lock held by a users writer");
+                        }
+                    }
+                }
+            };
+            tokio::time::timeout(Duration::from_secs(120), watch).await.expect("setup hung")
+        };
         assert_eq!(late.err().map(|e| e.code), Some(ErrorCode::Conflict));
         writer.rollback().await.unwrap();
         db.drop().await;
