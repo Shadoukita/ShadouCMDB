@@ -30,7 +30,7 @@ test("CI detail: page head, tab counts, grouped relationships and the history ti
 
   // Tabs with counts: the count is in the accessible name, not in the tab's text.
   const tabs = page.getByRole("tablist", { name: "CI sections" }).getByRole("tab");
-  await expect(tabs).toHaveText(["Overview", "Relationship map", "Impact", "History"]);
+  await expect(tabs).toHaveText(["Overview", "Relationship map", "Impact", "Notes", "History"]);
   await expect(page.getByRole("tab", { name: `Relationship map ${relTotal}`, exact: true })).toBeVisible();
   await expect(page.getByRole("tab", { name: `History ${historyTotal}`, exact: true })).toBeVisible();
 
@@ -72,7 +72,7 @@ test("CI detail: the new texts come from the German catalog", async ({ page, req
   const { ci } = await firstServer(request);
   await page.addInitScript(() => ((window as unknown as { __shadoucmdbTestLocale: string }).__shadoucmdbTestLocale = "de"));
   await page.goto(`/cis/${ci.id}`);
-  await expect(page.getByRole("tablist", { name: "CI-Bereiche" }).getByRole("tab")).toHaveText(["Übersicht", "Beziehungskarte", "Auswirkung", "Verlauf"]);
+  await expect(page.getByRole("tablist", { name: "CI-Bereiche" }).getByRole("tab")).toHaveText(["Übersicht", "Beziehungskarte", "Auswirkung", "Notizen", "Verlauf"]);
   await expect(page.getByTestId("record-meta").locator("time")).toHaveText(/^Geändert .+ von .+$/);
   const rel = page.getByRole("region", { name: /^Beziehungen/ });
   await expect(rel.getByRole("radiogroup", { name: "Richtung" }).getByRole("radio", { name: "Alle" })).toBeChecked();
