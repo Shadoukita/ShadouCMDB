@@ -33,7 +33,7 @@ import AttributesEditor from "./AttributesEditor.vue";
 /**
  * Create or edit a CI class (a type): name, area and technical name (both fixed
  * after creation: they place the class's table, e.g. bestand.netzwerk), parent,
- * abstract, icon, colour and title attribute; archive, restore or purge it. Every change is
+ * abstract, icon, colour, title attribute and the data-quality owner and end-of-life fields; archive, restore or purge it. Every change is
  * previewed as DDL first. Title row, `⋯` menu and save bar as on the other admin
  * edit pages (design §2.7, audit A3). Below the form, the class's attribute editor
  * (existing classes only).
@@ -66,6 +66,9 @@ const icon = ref("");
 const color = ref("");
 /** The attribute whose value labels the class's CIs; "" labels them by their ident. */
 const titleAttributeId = ref("");
+/** Data quality: the fields holding a CI's owner and end of life; "" takes the parent's setting. */
+const ownerAttributeId = ref("");
+const endOfLifeAttributeId = ref("");
 const error = ref<unknown>(null);
 const local = ref<Record<string, string>>({});
 
@@ -80,6 +83,8 @@ function seed(c: CiClass | undefined) {
   icon.value = c?.icon ?? "";
   color.value = c?.color ?? "";
   titleAttributeId.value = c?.titleAttributeId ?? "";
+  ownerAttributeId.value = c?.ownerAttributeId ?? "";
+  endOfLifeAttributeId.value = c?.endOfLifeAttributeId ?? "";
   initial = c ? formBody() : {};
   baseline.value = { id: c?.id, body: formBody() };
 }
@@ -96,6 +101,8 @@ function formBody(): ClassUpdateBody {
     icon: icon.value || null,
     color: color.value || null,
     titleAttributeId: titleAttributeId.value || null,
+    ownerAttributeId: ownerAttributeId.value || null,
+    endOfLifeAttributeId: endOfLifeAttributeId.value || null,
   };
 }
 const changes = computed(() => (baseline.value ? Object.keys(changedFields(formBody(), baseline.value.body)).length : 0));
@@ -140,8 +147,41 @@ const TITLE_TYPES = new Set(["text", "enum", "number", "integer", "date", "datet
 const attrs = useClassAttributes(id);
 const titleOptions = computed(() => (attrs.data.value ?? []).filter((a) => TITLE_TYPES.has(a.dataType) && (a.isActive || a.id === titleAttributeId.value)));
 
+/** Data quality (the dashboard's "Needs attention" checks): the field types each setting accepts, as the API's. */
+const OWNER_TYPES = new Set(["text", "enum", "lookup", "reference"]);
+const END_OF_LIFE_TYPES = new Set(["date", "datetime"]);
+const ownerOptions = computed(() => (attrs.data.value ?? []).filter((a) => OWNER_TYPES.has(a.dataType) && (a.isActive || a.id === ownerAttributeId.value)));
+const endOfLifeOptions = computed(() =>
+  (attrs.data.value ?? []).filter((a) => END_OF_LIFE_TYPES.has(a.dataType) && (a.isActive || a.id === endOfLifeAttributeId.value)),
+);
+/**
+ * What applies while the class has no setting of its own: the nearest ancestor's (of the parent chosen in the
+ * form), with the field's label when this class inherits it; undefined when no ancestor sets one.
+ */
+function inheritedSetting(field: "ownerAttributeId" | "endOfLifeAttributeId") {
+  const list = classes.data.value ?? [];
+  const seen = new Set<string>();
+  let c = list.find((x) => x.id === parentId.value);
+  while (c && !seen.has(c.id)) {
+    seen.add(c.id);
+    const attrId = c[field];
+    if (attrId) {
+      const a = attrs.data.value?.find((x) => x.id === attrId);
+      return { from: c.name, field: a ? `${a.label} (${a.key})` : t("dm.class.field.qualityUnknownField") };
+    }
+    c = list.find((x) => x.id === c!.parentId);
+  }
+  return undefined;
+}
+const ownerInherited = computed(() => inheritedSetting("ownerAttributeId"));
+const endOfLifeInherited = computed(() => inheritedSetting("endOfLifeAttributeId"));
+/** The empty choice: the parent's setting (named in full below the select), or the check left off for this class. */
+function noneLabel(inherited: { from: string; field: string } | undefined) {
+  return inherited ? t("dm.class.field.qualityInheritedShort", inherited) : t("dm.class.field.qualityNone");
+}
+
 const fieldErrors = computed(() => ({ ...(error.value instanceof ApiError ? error.value.fieldErrors() : {}), ...local.value }));
-const FIELDS = ["name", "key", "areaId", "description", "parentId", "isAbstract", "icon", "color", "titleAttributeId"];
+const FIELDS = ["name", "key", "areaId", "description", "parentId", "isAbstract", "icon", "color", "titleAttributeId", "ownerAttributeId", "endOfLifeAttributeId"];
 const unplaced = computed(() => (error.value instanceof ApiError ? error.value.details.filter((d) => !FIELDS.includes(d.field)) : []));
 
 async function submit() {
@@ -160,8 +200,10 @@ async function submit() {
     return;
   }
   const body = formBody();
-  // A new class has no attributes to be labelled by yet.
+  // A new class has no attributes to be labelled by (or to check) yet.
   delete body.titleAttributeId;
+  delete body.ownerAttributeId;
+  delete body.endOfLifeAttributeId;
   if (isNew.value) {
     // New classes go to the end of the menu.
     const last = Math.max(0, ...(classes.data.value ?? []).map((c) => c.sortOrder));
@@ -402,6 +444,53 @@ const notFound = computed(() => {
               {{ t("dm.class.field.titleCurrent") }}
             </option>
           </select>
+        </FormField>
+        <FormField
+          v-if="!isNew"
+          id="class-owner"
+          v-slot="p"
+          :label="t('dm.class.field.owner')"
+          :error="fieldErrors.ownerAttributeId"
+          :hint="t('dm.class.field.ownerHint')"
+        >
+          <select :id="p.id" v-model="ownerAttributeId" :disabled="attrs.isLoading.value" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy">
+            <option value="">{{ noneLabel(ownerInherited) }}</option>
+            <option v-for="a in ownerOptions" :key="a.id" :value="a.id">
+              {{ a.label }} ({{ a.key }}){{ a.inherited ? ` · ${t("dm.class.field.titleFrom", { name: a.definedOn.name })}` : "" }}{{
+                a.isActive ? "" : ` ${t("dm.class.field.titleRetired")}`
+              }}
+            </option>
+            <option v-if="ownerAttributeId && attrs.data.value && !ownerOptions.some((a) => a.id === ownerAttributeId)" :value="ownerAttributeId">
+              {{ t("dm.class.field.titleCurrent") }}
+            </option>
+          </select>
+          <span v-if="!ownerAttributeId && ownerInherited" class="hint" data-testid="owner-inherited">{{ t("dm.class.field.qualityInherited", ownerInherited) }}</span>
+          <span v-if="attrs.data.value && ownerOptions.length === 0" class="hint">{{ t("dm.class.field.ownerNoFields") }}</span>
+        </FormField>
+        <FormField
+          v-if="!isNew"
+          id="class-end-of-life"
+          v-slot="p"
+          :label="t('dm.class.field.endOfLife')"
+          :error="fieldErrors.endOfLifeAttributeId"
+          :hint="t('dm.class.field.endOfLifeHint')"
+        >
+          <select :id="p.id" v-model="endOfLifeAttributeId" :disabled="attrs.isLoading.value" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy">
+            <option value="">{{ noneLabel(endOfLifeInherited) }}</option>
+            <option v-for="a in endOfLifeOptions" :key="a.id" :value="a.id">
+              {{ a.label }} ({{ a.key }}){{ a.inherited ? ` · ${t("dm.class.field.titleFrom", { name: a.definedOn.name })}` : "" }}{{
+                a.isActive ? "" : ` ${t("dm.class.field.titleRetired")}`
+              }}
+            </option>
+            <option
+              v-if="endOfLifeAttributeId && attrs.data.value && !endOfLifeOptions.some((a) => a.id === endOfLifeAttributeId)"
+              :value="endOfLifeAttributeId"
+            >
+              {{ t("dm.class.field.titleCurrent") }}
+            </option>
+          </select>
+          <span v-if="!endOfLifeAttributeId && endOfLifeInherited" class="hint" data-testid="end-of-life-inherited">{{ t("dm.class.field.qualityInherited", endOfLifeInherited) }}</span>
+          <span v-if="attrs.data.value && endOfLifeOptions.length === 0" class="hint">{{ t("dm.class.field.endOfLifeNoFields") }}</span>
         </FormField>
         <FormField id="class-description" v-slot="p" :label="t('dm.class.field.description')" wide :error="fieldErrors.description">
           <textarea :id="p.id" v-model="description" rows="2" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy" />
