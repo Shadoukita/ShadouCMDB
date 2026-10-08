@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from "../../../i18n";
+
 /** Picks any number of keys (classes, lookup values) with checkboxes. */
 defineProps<{ options: { key: string; label: string }[]; legend: string; hint?: string }>();
 const model = defineModel<string[]>({ required: true });
@@ -16,6 +18,6 @@ function toggle(key: string, on: boolean) {
       <input type="checkbox" :checked="model.includes(o.key)" @change="toggle(o.key, ($event.target as HTMLInputElement).checked)" />
       {{ o.label }}
     </label>
-    <p v-if="options.length === 0" class="muted">Nothing to choose from yet.</p>
+    <p v-if="options.length === 0" class="muted">{{ t("customization.checklist.empty") }}</p>
   </fieldset>
 </template>

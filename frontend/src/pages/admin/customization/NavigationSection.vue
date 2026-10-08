@@ -10,6 +10,7 @@ import { suggestKey } from "../../../lib/keys";
 import { moveItem } from "../../../lib/reorder";
 import { completeNavEntries, pageLabel } from "../../../lib/uiSettings";
 import Icon from "../../../components/Icon.vue";
+import { t, tAround } from "../../../i18n";
 
 /**
  * Customization › Navigation: the main menu's order, names, sections and
@@ -34,20 +35,22 @@ function edit(change: (entries: UiNavEntry[]) => void) {
 
 function className(key: string | undefined): string {
   const c = classes.data.value?.find((k) => k.key === key);
-  if (!c) return `${key} (no such class)`;
-  return `${c.name}${c.isActive ? "" : " (archived)"}${c.isAbstract ? " (incl. subclasses)" : ""}`;
+  if (!c) return t("customization.nav.noSuchClass", { key });
+  const name = c.isActive ? c.name : t("customization.archivedName", { name: c.name });
+  return c.isAbstract ? t("customization.nav.withSubclasses", { name }) : name;
 }
 function areaName(key: string | undefined): string {
   const c = classes.data.value?.find((k) => k.key === key);
   const a = c && areas.data.value?.find((x) => x.id === c.areaId);
-  return a ? `${a.name}${a.isActive ? "" : " (archived)"}` : "";
+  return a ? (a.isActive ? a.name : t("customization.archivedName", { name: a.name })) : "";
 }
 function defaultName(e: UiNavEntry): string {
   if (e.type === "page") return pageLabel(e.page!);
   if (e.type === "class") return className(e.classKey);
   return e.key ?? "";
 }
-const kindLabel = (e: UiNavEntry) => (e.type === "page" ? "Page" : e.type === "class" ? "Class" : "Section");
+const kindLabel = (e: UiNavEntry) => t(e.type === "page" ? "customization.nav.kindPage" : e.type === "class" ? "customization.nav.kindClass" : "customization.nav.kindSection");
+const hint = computed(() => tAround("customization.nav.hint", "link"));
 const rowId = (e: UiNavEntry) => `${e.type}:${e.page ?? e.classKey ?? e.key}`;
 
 const setLabel = (i: number, v: string) => edit((n) => (n[i].label = v.trim() ? v : null));
@@ -100,17 +103,17 @@ function resetMenu() {
   <ErrorAlert v-else-if="classes.isError.value" :error="classes.error.value" :on-retry="() => classes.refetch()" />
   <section v-else class="panel nav-editor">
     <div class="panel-header">
-      <h2>Main menu</h2>
-      <span class="muted">The menu on the left shows your changes as you make them</span>
+      <h2>{{ t("customization.nav.title") }}</h2>
+      <span class="muted">{{ t("customization.nav.subtitle") }}</span>
     </div>
     <div class="panel-body flush">
       <table class="data">
         <thead>
           <tr>
-            <th scope="col">Entry</th>
-            <th scope="col">Shown as</th>
-            <th scope="col">Visible</th>
-            <th scope="col"><span class="sr-only">Actions</span></th>
+            <th scope="col">{{ t("customization.nav.colEntry") }}</th>
+            <th scope="col">{{ t("customization.nav.colShownAs") }}</th>
+            <th scope="col">{{ t("customization.nav.colVisible") }}</th>
+            <th scope="col"><span class="sr-only">{{ t("customization.actions") }}</span></th>
           </tr>
         </thead>
         <tbody>
@@ -118,16 +121,16 @@ function resetMenu() {
             <tr :class="{ 'nav-section': e.type === 'section' }">
               <td>
                 <span class="badge">{{ kindLabel(e) }}</span> {{ e.type === "section" ? e.label : defaultName(e) }}
-                <span v-if="e.type === 'class' && areaName(e.classKey)" class="muted">· tab {{ areaName(e.classKey) }}</span>
-                <span v-if="e.type === 'section'" class="muted">({{ e.items?.length ?? 0 }} classes)</span>
+                <span v-if="e.type === 'class' && areaName(e.classKey)" class="muted">{{ t("customization.nav.tab", { area: areaName(e.classKey) }) }}</span>
+                <span v-if="e.type === 'section'" class="muted">{{ t("customization.nav.sectionCount", { n: e.items?.length ?? 0 }) }}</span>
               </td>
               <td>
-                <label class="sr-only" :for="`nav-label-${i}`">Name for {{ defaultName(e) }}</label>
+                <label class="sr-only" :for="`nav-label-${i}`">{{ t("customization.nav.nameFor", { name: defaultName(e) }) }}</label>
                 <input
                   :id="`nav-label-${i}`"
                   type="text"
                   maxlength="100"
-                  :placeholder="e.type === 'section' ? 'Section heading' : defaultName(e)"
+                  :placeholder="e.type === 'section' ? t('customization.nav.sectionPlaceholder') : defaultName(e)"
                   :value="e.label ?? ''"
                   @change="setLabel(i, ($event.target as HTMLInputElement).value)"
                 />
@@ -135,41 +138,41 @@ function resetMenu() {
               <td>
                 <label class="check">
                   <input type="checkbox" :checked="!e.hidden" @change="setShown(i, ($event.target as HTMLInputElement).checked)" />
-                  <span class="sr-only">Show {{ defaultName(e) }}</span>
+                  <span class="sr-only">{{ t("customization.nav.show", { name: defaultName(e) }) }}</span>
                 </label>
               </td>
               <td class="row-actions">
-                <button type="button" class="btn btn-sm btn-icon" :disabled="i === 0" :aria-label="`Move ${defaultName(e)} up`" @click="move(i, i - 1)"><Icon name="arrow-up" /></button>
-                <button type="button" class="btn btn-sm btn-icon" :disabled="i === rows.length - 1" :aria-label="`Move ${defaultName(e)} down`" @click="move(i, i + 1)"><Icon name="arrow-down" /></button>
+                <button type="button" class="btn btn-sm btn-icon" :disabled="i === 0" :aria-label="t('customization.moveUp', { name: defaultName(e) })" @click="move(i, i - 1)"><Icon name="arrow-up" /></button>
+                <button type="button" class="btn btn-sm btn-icon" :disabled="i === rows.length - 1" :aria-label="t('customization.moveDown', { name: defaultName(e) })" @click="move(i, i + 1)"><Icon name="arrow-down" /></button>
                 <select
                   v-if="e.type === 'class' && sections.length > 0"
                   class="inline-select"
-                  :aria-label="`Move ${defaultName(e)} into a section`"
+                  :aria-label="t('customization.nav.intoSectionOf', { name: defaultName(e) })"
                   value=""
                   @change="moveToSection(i, ($event.target as HTMLSelectElement).value)"
                 >
-                  <option value="">Into section…</option>
+                  <option value="">{{ t("customization.nav.intoSection") }}</option>
                   <option v-for="s in sections" :key="s.key" :value="s.key">{{ s.label }}</option>
                 </select>
-                <button v-if="e.type === 'section'" type="button" class="btn btn-sm" @click="removeSection(i)">Remove section</button>
+                <button v-if="e.type === 'section'" type="button" class="btn btn-sm" @click="removeSection(i)">{{ t("customization.nav.removeSection") }}</button>
               </td>
             </tr>
             <tr v-for="(it, j) in e.items ?? []" :key="`${rowId(e)}/${it.classKey}`" class="nav-item">
-              <td><span class="badge">Class</span> {{ className(it.classKey) }}</td>
+              <td><span class="badge">{{ t("customization.nav.kindClass") }}</span> {{ className(it.classKey) }}</td>
               <td>
-                <label class="sr-only" :for="`nav-label-${i}-${j}`">Name for {{ className(it.classKey) }}</label>
+                <label class="sr-only" :for="`nav-label-${i}-${j}`">{{ t("customization.nav.nameFor", { name: className(it.classKey) }) }}</label>
                 <input :id="`nav-label-${i}-${j}`" type="text" maxlength="100" :placeholder="className(it.classKey)" :value="it.label ?? ''" @change="setItemLabel(i, j, ($event.target as HTMLInputElement).value)" />
               </td>
               <td>
                 <label class="check">
                   <input type="checkbox" :checked="!it.hidden" @change="setItemShown(i, j, ($event.target as HTMLInputElement).checked)" />
-                  <span class="sr-only">Show {{ className(it.classKey) }}</span>
+                  <span class="sr-only">{{ t("customization.nav.show", { name: className(it.classKey) }) }}</span>
                 </label>
               </td>
               <td class="row-actions">
-                <button type="button" class="btn btn-sm btn-icon" :disabled="j === 0" :aria-label="`Move ${className(it.classKey)} up`" @click="moveItemIn(i, j, j - 1)"><Icon name="arrow-up" /></button>
-                <button type="button" class="btn btn-sm btn-icon" :disabled="j === (e.items?.length ?? 0) - 1" :aria-label="`Move ${className(it.classKey)} down`" @click="moveItemIn(i, j, j + 1)"><Icon name="arrow-down" /></button>
-                <button type="button" class="btn btn-sm" @click="moveOut(i, j)">Out of section</button>
+                <button type="button" class="btn btn-sm btn-icon" :disabled="j === 0" :aria-label="t('customization.moveUp', { name: className(it.classKey) })" @click="moveItemIn(i, j, j - 1)"><Icon name="arrow-up" /></button>
+                <button type="button" class="btn btn-sm btn-icon" :disabled="j === (e.items?.length ?? 0) - 1" :aria-label="t('customization.moveDown', { name: className(it.classKey) })" @click="moveItemIn(i, j, j + 1)"><Icon name="arrow-down" /></button>
+                <button type="button" class="btn btn-sm" @click="moveOut(i, j)">{{ t("customization.nav.outOfSection") }}</button>
               </td>
             </tr>
           </template>
@@ -178,16 +181,14 @@ function resetMenu() {
     </div>
     <div class="panel-body">
       <form class="inline-control" @submit.prevent="addSection">
-        <label for="nav-new-section">New section</label>
-        <input id="nav-new-section" v-model="newSection" type="text" maxlength="100" placeholder="e.g. Network" />
-        <button type="submit" class="btn" :disabled="!newSection.trim()">Add section</button>
+        <label for="nav-new-section">{{ t("customization.nav.newSection") }}</label>
+        <input id="nav-new-section" v-model="newSection" type="text" maxlength="100" :placeholder="t('customization.nav.newSectionPlaceholder')" />
+        <button type="submit" class="btn" :disabled="!newSection.trim()">{{ t("customization.nav.addSection") }}</button>
         <span style="flex: 1" />
-        <button type="button" class="btn" :disabled="doc.navigation.entries.length === 0" @click="resetMenu">Reset to the built-in menu</button>
+        <button type="button" class="btn" :disabled="doc.navigation.entries.length === 0" @click="resetMenu">{{ t("customization.nav.reset") }}</button>
       </form>
       <p class="hint">
-        Classes appear under their area's tab; the tabs themselves are ordered, renamed and archived in
-        <RouterLink to="/admin/areas">Administration › Areas</RouterLink>. A section takes classes out of their tab and
-        groups them under its own heading. Classes created later join their area's tab until you place them. Entries a user may not open (Administration, Audit log) stay hidden from them whatever this says.
+        {{ hint[0] }}<RouterLink to="/admin/areas">{{ t("customization.nav.hintLink") }}</RouterLink>{{ hint[1] }}
       </p>
     </div>
   </section>

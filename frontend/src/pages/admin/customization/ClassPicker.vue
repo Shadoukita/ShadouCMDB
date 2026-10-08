@@ -2,13 +2,15 @@
 import { computed, watchEffect } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useCiClasses, type CiClass } from "../../../api/queries";
+import { t } from "../../../i18n";
 import { flattenTree } from "../../../lib/tree";
 
 /**
  * Picks the class a per-class section edits. The choice lives in the URL
- * (?class=<key>), so it survives a reload and switching sections.
+ * (?class=<key>), so it survives a reload and switching sections. `ownLabel` marks a customized class
+ * in the list ("own list view"), `ownCount` says how many there are; both come translated from the section.
  */
-const props = defineProps<{ customized: string[]; noun: string }>();
+const props = defineProps<{ customized: string[]; ownLabel: string; ownCount: string }>();
 const route = useRoute();
 const router = useRouter();
 const classes = useCiClasses();
@@ -24,21 +26,26 @@ function pick(key: string) {
 // Keep the parent's selected class in step with the URL.
 const sync = computed(() => classes.data.value?.find((c) => c.key === selectedKey.value));
 watchEffect(() => (selected.value = sync.value));
+
+function optionLabel(c: CiClass): string {
+  const name = props.customized.includes(c.key) ? t("customization.classPicker.own", { name: c.name, own: props.ownLabel }) : c.name;
+  return c.isActive ? name : t("customization.archivedName", { name });
+}
 </script>
 
 <template>
   <div class="inline-control class-picker">
-    <label for="cust-class">Class</label>
+    <label for="cust-class">{{ t("customization.classPicker.class") }}</label>
     <select id="cust-class" :value="selectedKey" style="max-width: 360px" @change="pick(($event.target as HTMLSelectElement).value)">
-      <option value="">Choose a class…</option>
+      <option value="">{{ t("customization.classPicker.choose") }}</option>
       <option v-for="n in tree" :key="n.item.id" :value="n.item.key">
-        {{ "  ".repeat(n.depth) }}{{ n.item.name }}{{ customized.includes(n.item.key) ? ` — own ${noun}` : "" }}{{ n.item.isActive ? "" : " (archived)" }}
+        {{ "  ".repeat(n.depth) }}{{ optionLabel(n.item) }}
       </option>
     </select>
-    <span class="muted">{{ customized.length }} class{{ customized.length === 1 ? " has its" : "es have their" }} own {{ noun }}</span>
+    <span class="muted">{{ ownCount }}</span>
   </div>
   <p v-if="unknown.length > 0" class="hint">
-    Also stored for classes that do not exist here (kept in case they come back, e.g. from an import):
+    {{ t("customization.classPicker.unknown") }}
     <code v-for="k in unknown" :key="k" style="margin-right: 6px">{{ k }}</code>
   </p>
 </template>

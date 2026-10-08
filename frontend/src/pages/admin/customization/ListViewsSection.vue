@@ -5,6 +5,7 @@ import type { UiSettingsDocument } from "../../../api/uiSettings";
 import CiCell from "../../../components/CiCell.vue";
 import ErrorAlert from "../../../components/ErrorAlert.vue";
 import LoadingState from "../../../components/LoadingState.vue";
+import { t } from "../../../i18n";
 import {
   ATTRIBUTE_PREFIX,
   attributeSortFields,
@@ -33,7 +34,7 @@ const attrs = useClassAttributes(() => cls.value?.id);
 const attrDefs = computed(() => (attrs.data.value ?? []).filter((d) => d.isActive));
 const columnOptions = computed(() => [
   ...BUILTIN_FIELDS.map((f) => ({ key: f.key, label: f.label })),
-  ...attrDefs.value.map((d) => ({ key: `${ATTRIBUTE_PREFIX}${d.key}`, label: `${d.label} (attribute)` })),
+  ...attrDefs.value.map((d) => ({ key: `${ATTRIBUTE_PREFIX}${d.key}`, label: t("customization.lists.attributeName", { label: d.label }) })),
 ]);
 /** The built-in sorts and the class's attributes (not references: the API cannot sort by them). */
 const sortOptions = computed(() => [...SORT_FIELDS, ...attributeSortFields(attrDefs.value)]);
@@ -89,72 +90,76 @@ const columns = computed(() => listColumns(view.value?.columns));
 
 <template>
   <section class="panel">
-    <div class="panel-header"><h2>List views</h2><span class="muted">The inventory of one class: columns, sort, filters, page size</span></div>
+    <div class="panel-header"><h2>{{ t("customization.lists.title") }}</h2><span class="muted">{{ t("customization.lists.subtitle") }}</span></div>
     <div class="panel-body">
-      <ClassPicker v-model:selected="cls" :customized="doc.listViews.map((v) => v.classKey)" noun="list view" />
+      <ClassPicker
+        v-model:selected="cls"
+        :customized="doc.listViews.map((v) => v.classKey)"
+        :own-label="t('customization.lists.ownView')"
+        :own-count="t('customization.lists.ownCount', { n: doc.listViews.length })"
+      />
     </div>
     <div v-if="cls" class="panel-body">
       <template v-if="!view">
-        <p>{{ cls.name }} uses the default list: every built-in column, sorted by label, no filters, 50 rows a page.</p>
-        <button type="button" class="btn btn-primary" @click="customize">Customize the {{ cls.name }} list</button>
+        <p>{{ t("customization.lists.defaultList", { class: cls.name }) }}</p>
+        <button type="button" class="btn btn-primary" @click="customize">{{ t("customization.lists.customize", { class: cls.name }) }}</button>
       </template>
       <template v-else>
-        <LoadingState v-if="attrs.isLoading.value" label="Loading attributes…" />
-        <ErrorAlert v-if="attrs.isError.value" :error="attrs.error.value" title="Could not load the class's attributes" :on-retry="() => attrs.refetch()" />
+        <LoadingState v-if="attrs.isLoading.value" :label="t('customization.lists.loadingAttributes')" />
+        <ErrorAlert v-if="attrs.isError.value" :error="attrs.error.value" :title="t('customization.lists.attributesError')" :on-retry="() => attrs.refetch()" />
         <div class="editor-row">
           <div class="field">
-            <span class="label">Columns, in order</span>
-            <FieldListEditor v-model="editorColumns" :options="columnOptions" label="Columns" id-prefix="lv-col" />
-            <p v-if="!view.columns?.length" class="hint">No columns chosen: the default columns are shown.</p>
+            <span class="label">{{ t("customization.lists.columnsInOrder") }}</span>
+            <FieldListEditor v-model="editorColumns" :options="columnOptions" :label="t('customization.lists.columns')" id-prefix="lv-col" />
+            <p v-if="!view.columns?.length" class="hint">{{ t("customization.lists.noColumns") }}</p>
             <p v-else-if="!view.columns.includes('label')" class="hint">
-              Label is not chosen: it is shown as the first column anyway, as it is the link that opens each CI.
+              {{ t("customization.lists.labelNotChosen") }}
             </p>
           </div>
           <div class="form-grid" style="grid-template-columns: 1fr">
             <div class="field">
-              <label for="lv-sort">Default sort</label>
+              <label for="lv-sort">{{ t("customization.lists.defaultSort") }}</label>
               <div class="inline-control">
                 <select id="lv-sort" :value="view.defaultSort?.field ?? ''" @change="setSortField(($event.target as HTMLSelectElement).value)">
-                  <option value="">Default (label, ascending)</option>
+                  <option value="">{{ t("customization.sortDefault") }}</option>
                   <option v-for="s in sortOptions" :key="s.field" :value="s.field">{{ s.label }}</option>
                   <option v-if="staleSort" :value="view.defaultSort!.field">{{ staleSort }}</option>
                 </select>
-                <select v-if="view.defaultSort" v-model="view.defaultSort.direction" aria-label="Sort direction">
-                  <option value="asc">Ascending</option>
-                  <option value="desc">Descending</option>
+                <select v-if="view.defaultSort" v-model="view.defaultSort.direction" :aria-label="t('customization.lists.sortDirection')">
+                  <option value="asc">{{ t("customization.ascending") }}</option>
+                  <option value="desc">{{ t("customization.descending") }}</option>
                 </select>
               </div>
               <p v-if="staleSort" class="alert alert-warn" role="alert">
-                {{ cls.name }} cannot be sorted by {{ view.defaultSort!.field }} (no such attribute, or it is archived or a reference): the list is sorted by label until another sort is chosen.
+                {{ t("customization.lists.staleSort", { class: cls.name, field: view.defaultSort!.field }) }}
               </p>
             </div>
             <div class="field">
-              <label for="lv-size">Rows per page (10-200)</label>
+              <label for="lv-size">{{ t("customization.lists.pageSize") }}</label>
               <input id="lv-size" type="number" min="10" max="200" placeholder="50" :value="pageSizeText" @input="pageSizeText = ($event.target as HTMLInputElement).value" @change="setPageSize(pageSizeText)" />
             </div>
             <div class="field">
-              <label for="lv-q">Default search text</label>
+              <label for="lv-q">{{ t("customization.lists.defaultSearch") }}</label>
               <input id="lv-q" type="text" maxlength="200" :value="view.defaultFilters!.q ?? ''" @input="view.defaultFilters!.q = ($event.target as HTMLInputElement).value || null" />
             </div>
-            <LookupFilterEditor :filters="view.defaultFilters!" legend-prefix="Default: " />
+            <LookupFilterEditor :filters="view.defaultFilters!" :legend-prefix="t('customization.lists.defaultPrefix')" />
             <p class="hint">
-              Default filters are filled in when an operator opens the {{ cls.name }} list without filters of their own;
-              they can change or clear them there.
+              {{ t("customization.lists.filtersHint", { class: cls.name }) }}
             </p>
           </div>
         </div>
         <div style="margin-top: var(--sp-4)">
-          <button type="button" class="btn" @click="removeView">Use the default list for {{ cls.name }}</button>
+          <button type="button" class="btn" @click="removeView">{{ t("customization.lists.useDefault", { class: cls.name }) }}</button>
         </div>
       </template>
     </div>
   </section>
 
-  <section v-if="cls" class="preview-frame" style="margin-top: var(--sp-4)" aria-label="List preview">
-    <p class="preview-label">Preview: the first {{ cls.name }} CIs with these columns</p>
+  <section v-if="cls" class="preview-frame" style="margin-top: var(--sp-4)" :aria-label="t('customization.lists.preview')">
+    <p class="preview-label">{{ t("customization.lists.previewLabel", { class: cls.name }) }}</p>
     <LoadingState v-if="preview.isLoading.value" />
     <ErrorAlert v-else-if="preview.isError.value" :error="preview.error.value" :on-retry="() => preview.refetch()" />
-    <p v-else-if="preview.data.value?.data.length === 0" class="muted">No {{ cls.name }} CIs yet.</p>
+    <p v-else-if="preview.data.value?.data.length === 0" class="muted">{{ t("customization.lists.noCis", { class: cls.name }) }}</p>
     <div v-else class="table-wrap">
       <table class="data">
         <thead>
