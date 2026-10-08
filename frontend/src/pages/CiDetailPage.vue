@@ -274,7 +274,7 @@ const classTile = computed(() => (cls.value?.color ? { "--tile-c": cls.value.col
 const self = computed<TrailStep | undefined>(() => (c.value ? { id: c.value.id, name: c.value.label } : undefined));
 const crumbs = computed<Crumb[]>(() => {
   if (!c.value) return [];
-  const out: Crumb[] = [{ label: "Inventory", to: "/cis" }];
+  const out: Crumb[] = [{ label: t("inventory.crumb"), to: "/cis" }];
   if (trail.value.length > 0) {
     trail.value.forEach((s, i) => out.push({ label: s.name, to: { path: `/cis/${s.id}`, state: { trail: trail.value.slice(0, i) } } }));
   } else {
@@ -290,7 +290,7 @@ const crumbs = computed<Crumb[]>(() => {
 <template>
   <LoadingState v-if="ci.isLoading.value || serviceSettings.isLoading.value || redirecting" label="Loading configuration item…" />
   <template v-else-if="ci.isError.value">
-    <Breadcrumbs :items="[{ label: 'Inventory', to: '/cis' }, { label: forbidden ? 'Permission denied' : notFound ? 'Not found' : 'Error' }]" />
+    <Breadcrumbs :items="[{ label: t('inventory.crumb'), to: '/cis' }, { label: forbidden ? 'Permission denied' : notFound ? 'Not found' : 'Error' }]" />
     <EmptyState v-if="forbidden" title="Permission denied">
       None of your permission profiles allows viewing this configuration item's class, so it cannot be shown.
       <template #actions><RouterLink class="btn" to="/cis">Back to inventory</RouterLink></template>
