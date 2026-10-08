@@ -131,27 +131,23 @@ const newClassTo = computed(() => ({ path: "/admin/classes/new", query: areaFilt
 </script>
 
 <template>
-  <Breadcrumbs :items="adminCrumbs('classes')" />
-  <div class="page-header">
-    <div class="title">
-      <h1>{{ t("dm.classes.title") }}</h1>
-      <span v-if="classes.data.value" class="muted count">{{ t("common.total", { n: formatNumber(classes.data.value.length) }) }}</span>
-      <span
-        v-if="reorder.isPending.value || patch.isPending.value || (classes.isFetching.value && !classes.isLoading.value)"
-        class="spinner"
-        :aria-label="t('common.saving')"
-      />
+  <div class="list-head">
+    <Breadcrumbs :items="adminCrumbs('classes')" />
+    <div class="page-header">
+      <div class="title">
+        <h1>{{ t("dm.classes.title") }}</h1>
+        <span v-if="classes.data.value" class="count mono">{{ t("common.total", { n: formatNumber(classes.data.value.length) }) }}</span>
+        <span
+          v-if="reorder.isPending.value || patch.isPending.value || (classes.isFetching.value && !classes.isLoading.value)"
+          class="spinner"
+          :aria-label="t('common.saving')"
+        />
+      </div>
+      <div class="actions">
+        <RouterLink class="btn btn-primary" :to="newClassTo"><Icon name="plus" />{{ t("dm.classes.create") }}</RouterLink>
+      </div>
     </div>
-    <div class="actions">
-      <RouterLink class="btn btn-primary" :to="newClassTo"><Icon name="plus" />{{ t("dm.classes.create") }}</RouterLink>
-    </div>
-  </div>
-  <p class="page-intro">{{ t("dm.classes.intro") }}</p>
-
-  <ErrorAlert v-if="reorder.isError.value" :error="reorder.error.value" :title="t('dm.classes.reorderFailed')" />
-  <ErrorAlert v-if="failure" :error="failure" :title="t('dm.classes.notSaved')" />
-
-  <section class="panel explorer" :aria-label="t('dm.classes.title')">
+    <p class="page-intro">{{ t("dm.classes.intro") }}</p>
     <div class="toolbar">
       <label class="checkbox-row">
         <input type="checkbox" :checked="showArchived" @change="lq.update({ archived: ($event.target as HTMLInputElement).checked ? 'show' : undefined })" />
@@ -166,6 +162,12 @@ const newClassTo = computed(() => ({ path: "/admin/classes/new", query: areaFilt
       </label>
       <p class="toolbar-hint">{{ t("dm.classes.reorderHint") }}</p>
     </div>
+  </div>
+
+  <ErrorAlert v-if="reorder.isError.value" :error="reorder.error.value" :title="t('dm.classes.reorderFailed')" />
+  <ErrorAlert v-if="failure" :error="failure" :title="t('dm.classes.notSaved')" />
+
+  <section class="panel explorer" :aria-label="t('dm.classes.title')">
     <div v-if="classes.isError.value" class="panel-body">
       <ErrorAlert :error="classes.error.value" :on-retry="() => classes.refetch()" />
     </div>
@@ -194,7 +196,7 @@ const newClassTo = computed(() => ({ path: "/admin/classes/new", query: areaFilt
     </EmptyState>
 
     <div v-if="rows.length > 0" class="table-wrap">
-      <table class="data reorderable">
+      <table class="data list-table reorderable">
         <thead>
           <tr>
             <th scope="col" class="drag-col"><span class="sr-only">{{ t("dm.classes.drag") }}</span></th>
@@ -213,7 +215,7 @@ const newClassTo = computed(() => ({ path: "/admin/classes/new", query: areaFilt
             <td class="drag-handle" aria-hidden="true" :title="t('dm.classes.drag')"><Icon name="grip-vertical" /></td>
             <td>
               <span :style="{ paddingLeft: `${depth * 18}px` }">
-                <RouterLink :to="`/admin/classes/${c.id}`"><ClassBadge :icon="c.icon" :color="c.color" :name="c.name" /></RouterLink>
+                <RouterLink class="list-name" :to="`/admin/classes/${c.id}`" dir="auto"><ClassBadge :icon="c.icon" :color="c.color" :name="c.name" /></RouterLink>
               </span>
             </td>
             <td>
@@ -232,8 +234,8 @@ const newClassTo = computed(() => ({ path: "/admin/classes/new", query: areaFilt
               <span v-else class="muted">{{ t("dm.classes.concrete") }}</span>
             </td>
             <td>
-              <span v-if="c.isActive" class="badge ok">{{ t("common.active") }}</span>
-              <span v-else class="badge off">{{ t("dm.class.archivedBadge") }}</span>
+              <span v-if="c.isActive" class="badge ok"><span class="status-dot" aria-hidden="true" />{{ t("common.active") }}</span>
+              <span v-else class="badge off"><span class="status-dot" aria-hidden="true" />{{ t("dm.class.archivedBadge") }}</span>
             </td>
             <td class="order-buttons">
               <button

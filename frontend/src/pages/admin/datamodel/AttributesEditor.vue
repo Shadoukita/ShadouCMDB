@@ -217,7 +217,7 @@ function defaultText(d: AttributeDefinition): string {
       </template>
     </EmptyState>
     <div v-else class="table-wrap">
-      <table class="data reorderable attributes">
+      <table class="data list-table reorderable attributes">
         <thead>
           <tr>
             <th scope="col" class="drag-col"><span class="sr-only">{{ t("dm.attr.dragToReorder") }}</span></th>
@@ -243,7 +243,7 @@ function defaultText(d: AttributeDefinition): string {
             <td class="drag-handle" aria-hidden="true" :title="t('dm.attr.dragToReorder')"><Icon name="grip-vertical" /></td>
             <td>
               <button type="button" class="btn-link" :title="t('dm.attr.editTitle', { name: d.label })" @click="openEdit(d)">{{ d.label }}</button>
-              <span v-if="!d.isActive" class="badge off" :title="t('dm.attr.archivedTitle')">{{ t("dm.attr.archived") }}</span>
+              <span v-if="!d.isActive" class="badge off" :title="t('dm.attr.archivedTitle')"><span class="status-dot" aria-hidden="true" />{{ t("dm.attr.archived") }}</span>
               <span v-if="d.systemRole" class="badge" :title="t('people.datamodel.systemTitle')" data-testid="system-attribute">{{ t("people.datamodel.system") }}</span>
               <span v-if="d.isIdentifying" class="badge" :title="t('dm.attr.identifyingTitle')">{{ t("dm.attr.f.identifying") }}</span>
               <div v-if="d.helpText" class="muted cell-note">{{ d.helpText }}</div>
@@ -277,7 +277,7 @@ function defaultText(d: AttributeDefinition): string {
       <span class="meta">{{ t("dm.attr.inherited.hint") }}</span>
     </div>
     <div class="table-wrap">
-      <table class="data">
+      <table class="data list-table">
         <thead>
           <tr>
             <th scope="col">{{ t("dm.attr.col.label") }}</th>
@@ -295,7 +295,7 @@ function defaultText(d: AttributeDefinition): string {
             <td>{{ typeName(d.dataType) }}<span v-if="typeDetail(d)" class="muted"> · {{ typeDetail(d) }}</span></td>
             <td>{{ d.groupName ?? GENERAL_SECTION }}</td>
             <td><span v-if="d.isRequired" class="badge warn">{{ t("common.required") }}</span></td>
-            <td><RouterLink :to="`/admin/classes/${d.definedOn.id}`">{{ d.definedOn.name }}</RouterLink></td>
+            <td><RouterLink class="list-name" :to="`/admin/classes/${d.definedOn.id}`" dir="auto">{{ d.definedOn.name }}</RouterLink></td>
           </tr>
         </tbody>
       </table>
