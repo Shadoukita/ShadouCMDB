@@ -30,10 +30,11 @@ each, grouped by class, criticality and distance, and exportable as CSV. New API
   `systemRole` on lookup lists); files of versions 1 to 3 still import, and leave the impact
   direction of existing types unchanged.
 
-**Upgrade:** migrations 0029 to 0031 run on start; they are additive and need no downtime. On
-upgrade, the starter types *runs on*, *depends on* and *located in* are set to propagate impact
-(target to source) if their labels are still the starter template's; every other type starts at
-`none`. **Review your relationship types after upgrading** (*Data model → Relationship types*),
-otherwise impact analysis finds nothing across them. If a lookup list keyed `criticality` already
-exists, the new system list is keyed `criticality_2`. Going back to 0.2.x after the migrations
-is not supported: restore the backup taken before the upgrade.
+**Upgrade:** migrations 0029 to 0031 are additive and need no downtime; to apply them, run
+`shadoucmdb migrate` before starting the new release (`serve` does not migrate). On upgrade, the
+starter types *runs on*, *depends on* and *located in* are set to propagate impact (target to
+source) if their labels are still the starter template's; every other type starts at `none`.
+**Review your relationship types after upgrading** (*Data model → Relationship types*), otherwise
+impact analysis finds nothing across them. If a lookup list keyed `criticality` already exists, the
+new system list is keyed `criticality_2`. Going back to 0.2.x after the migrations is not supported:
+restore the backup taken before the upgrade.

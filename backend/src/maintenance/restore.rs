@@ -195,12 +195,16 @@ pub async fn run(
     match delivery {
         None => {}
         Some(Ok(RestoreDelivery::Sent)) => println!("Sent the backup.restore entry to AUDIT_EXPORT"),
-        Some(Ok(RestoreDelivery::Skipped(why))) => {
-            println!("Not sent to AUDIT_EXPORT now ({why}); the server sends it when it starts")
-        }
+        Some(Ok(RestoreDelivery::Skipped(why))) => println!(
+            "  warning: the backup.restore entry was not sent to AUDIT_EXPORT now ({why}). The server sends it at \
+             every start until a later restore sends its own; until the collector shows chainSeq {}, tell whoever \
+             reviews it about this restore",
+            report.entry.chain_seq
+        ),
         Some(Err(e)) => println!(
-            "  warning: sending the backup.restore entry to AUDIT_EXPORT failed: {e:#}. The server sends it when it \
-             starts; until the collector shows chainSeq {}, tell whoever reviews it about this restore",
+            "  warning: sending the backup.restore entry to AUDIT_EXPORT failed: {e:#}. The server sends it at every \
+             start until a later restore sends its own; until the collector shows chainSeq {}, tell whoever reviews \
+             it about this restore",
             report.entry.chain_seq
         ),
     }
@@ -432,6 +436,14 @@ pub async fn restore<R: Read>(
     )
     .await?;
     let (restored_head, entry) = record(&mut tx, checked, wipe).await?;
+    // Until `restore` has sent it itself, the server's export sends the entry
+    // at every start, whatever the API role lists as sent (GH#716). What the
+    // backup listed belongs to the database it was taken from.
+    exec(&mut tx, "DELETE FROM cmdb.audit_export_restore_pending".into()).await?;
+    sqlx::query("INSERT INTO cmdb.audit_export_restore_pending (chain_seq) VALUES ($1)")
+        .bind(entry.chain_seq)
+        .execute(&mut *tx)
+        .await?;
 
     if commit {
         tx.commit().await?;

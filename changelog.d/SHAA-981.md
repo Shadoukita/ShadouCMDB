@@ -11,6 +11,7 @@ with its final counts once the current batch is written. A queued commit, an ana
 run still stop at once. API clients that expected `cancelled` in the response to a stop of a
 running commit should poll the job until it ends.
 
-**Upgrade:** migration `0035` adds a column to the import job table; it runs on start as usual.
+**Upgrade:** migration `0035` adds a column to the import job table; to apply it, run `shadoucmdb
+migrate` before starting the new release (`serve` does not migrate).
 
 [GH#359]: https://github.com/Shadoukita/ShadouCMDB/issues/359
