@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useQuery } from "@tanstack/vue-query";
-import { computed } from "vue";
-import { RouterLink } from "vue-router";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { RouterLink, useRoute, useRouter } from "vue-router";
 import { useLookupLists } from "../api/datamodel";
 import { ciCountQuery, useCiClasses } from "../api/queries";
 import type { UiWidget } from "../api/uiSettings";
@@ -12,25 +12,47 @@ import EmptyState from "../components/EmptyState.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
 import Icon from "../components/Icon.vue";
 import LoadingState from "../components/LoadingState.vue";
-import { t } from "../i18n";
+import { currentLocale, t } from "../i18n";
 import { useAppSettings } from "../lib/appSettings";
 import { useDocumentTitle } from "../lib/composables";
+import { DEFAULT_PERIOD, PERIODS, parsePeriod, partOfDay, type Period } from "../lib/dashboard";
 import { builtInWidgets } from "../lib/uiSettings";
 import { useSessionStore } from "../stores/session";
 import { useBrandingStore } from "../stores/branding";
-import DashboardStats from "./dashboard/DashboardStats.vue";
+import ChangesChart from "./dashboard/ChangesChart.vue";
+import DashboardKpis from "./dashboard/DashboardKpis.vue";
 import DashboardWidgets from "./dashboard/DashboardWidgets.vue";
 
 /**
- * Operational overview: stat tiles, then one widget grid. Counts are server-side (each is a limit=1 list
- * request reading page.total), so they stay correct at any inventory size. Customization › Dashboard can
- * replace the built-in widgets with its own; both render through the same grid (audit D1).
+ * Operational overview (design §0 step 12e): the date and a greeting, the period switch, the KPI cards, then
+ * one widget grid that starts with the changes chart. Every figure is counted by the server, so it stays
+ * correct at any inventory size. The period is in the URL (`?period=24h|14d|90d`), so a view can be shared.
+ * Customization › Dashboard can replace the built-in widgets with its own; both render through the same grid.
+ * The dark "Needs attention" panel (gap G3, SHAA-2351) joins the grid once its data-quality endpoint ships.
  */
 useDocumentTitle(() => t("dashboard.title"));
 const session = useSessionStore();
 const branding = useBrandingStore();
 const settings = useAppSettings();
+const route = useRoute();
+const router = useRouter();
 const total = useQuery(ciCountQuery({}));
+
+const period = computed(() => parsePeriod(route.query.period));
+function setPeriod(p: Period) {
+  void router.replace({ query: { ...route.query, period: p === DEFAULT_PERIOD ? undefined : p } });
+}
+
+// The windows move with the clock: re-read it every minute, so a new hour or day joins the figures.
+const now = ref(Date.now());
+let clock: ReturnType<typeof setInterval> | undefined;
+onMounted(() => (clock = setInterval(() => (now.value = Date.now()), 60_000)));
+onBeforeUnmount(() => clearInterval(clock));
+
+const today = computed(() =>
+  new Intl.DateTimeFormat(currentLocale() === "de" ? "de" : undefined, { weekday: "long", day: "numeric", month: "long" }).format(now.value),
+);
+const greeting = computed(() => t(`dashboard.greeting.${partOfDay(new Date(now.value).getHours())}`));
 
 const classes = useCiClasses();
 /** A fresh install: no classes but the built-in ones yet, so the first step is the data model, not a CI. */
@@ -51,19 +73,20 @@ const widgets = computed<UiWidget[] | null>(() => {
 
 <template>
   <Breadcrumbs :items="[]" />
-  <template v-if="total.isError.value">
-    <div class="page-header"><h1>{{ t("dashboard.title") }}</h1></div>
-    <ErrorAlert :error="total.error.value" :on-retry="() => total.refetch()" />
-  </template>
-  <template v-else>
-    <div class="page-header">
-      <div class="title"><h1>{{ t("dashboard.title") }}</h1></div>
-      <div class="actions">
-        <RouterLink class="btn" to="/cis">{{ t("dashboard.openInventory") }}</RouterLink>
-        <RouterLink v-if="session.canOnAnyClass('create') && !noClasses" class="btn btn-primary" to="/cis/new"><Icon name="plus" :size="16" />{{ t("shell.newCi") }}</RouterLink>
-      </div>
+  <div class="page-header dash-head">
+    <div class="title">
+      <p class="overline">{{ today }}</p>
+      <h1 class="display">{{ greeting }}</h1>
     </div>
+    <div v-if="hasCis" class="segmented period-switch" role="radiogroup" :aria-label="t('dashboard.period')">
+      <label v-for="p in PERIODS" :key="p">
+        <input type="radio" name="dashboard-period" :value="p" :checked="period === p" @change="setPeriod(p)" />{{ t(`dashboard.period.${p}`) }}
+      </label>
+    </div>
+  </div>
 
+  <ErrorAlert v-if="total.isError.value" :error="total.error.value" :on-retry="() => total.refetch()" />
+  <template v-else>
     <LoadingState v-if="total.isLoading.value" />
     <section v-if="noClasses" class="panel callout">
       <DataModelEmpty />
@@ -77,16 +100,25 @@ const widgets = computed<UiWidget[] | null>(() => {
       </EmptyState>
     </section>
     <template v-if="hasCis">
-      <DashboardStats />
-      <DashboardWidgets v-if="widgets && widgets.length > 0" :widgets="widgets" />
-      <section v-else-if="widgets" class="panel">
-        <EmptyState :title="t('dashboard.noWidgets.title')" icon="layout-dashboard">
-          {{ t("dashboard.noWidgets.body") }}
-          <template v-if="session.can('customization.manage')" #actions>
-            <RouterLink class="btn" to="/admin/customization/dashboard">{{ t("dashboard.noWidgets.add") }}</RouterLink>
-          </template>
-        </EmptyState>
-      </section>
+      <DashboardKpis :period="period" :now="now" />
+      <DashboardWidgets v-if="widgets && widgets.length > 0" :widgets="widgets">
+        <template v-if="session.can('audit.view')" #lead>
+          <div class="widget widget-medium" data-widget="changes"><ChangesChart :period="period" :now="now" /></div>
+        </template>
+      </DashboardWidgets>
+      <template v-else-if="widgets">
+        <div v-if="session.can('audit.view')" class="widgets">
+          <div class="widget widget-large" data-widget="changes"><ChangesChart :period="period" :now="now" /></div>
+        </div>
+        <section class="panel">
+          <EmptyState :title="t('dashboard.noWidgets.title')" icon="layout-dashboard">
+            {{ t("dashboard.noWidgets.body") }}
+            <template v-if="session.can('customization.manage')" #actions>
+              <RouterLink class="btn" to="/admin/customization/dashboard">{{ t("dashboard.noWidgets.add") }}</RouterLink>
+            </template>
+          </EmptyState>
+        </section>
+      </template>
       <LoadingState v-else />
     </template>
   </template>

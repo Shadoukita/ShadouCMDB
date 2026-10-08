@@ -416,8 +416,9 @@ export function widgetLabel(type: UiWidgetType): string {
 export function builtInWidgets(statusListKey: string | undefined): UiWidget[] {
   return [
     { id: "by_class", type: "count_by_class", title: null, size: "medium" },
+    // Beside the status counts when there are some (the dashboard's two-column rows, design §0 step 12e).
+    { id: "recent", type: "recent_changes", title: null, size: statusListKey ? "medium" : "large", limit: 8 },
     ...(statusListKey ? [{ id: "by_status", type: "count_by_lookup", title: null, size: "medium", lookupListKey: statusListKey } as UiWidget] : []),
-    { id: "recent", type: "recent_changes", title: null, size: "large", limit: 12 },
   ];
 }
 

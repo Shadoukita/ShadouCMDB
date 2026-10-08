@@ -81,3 +81,312 @@ table.count-table td.share {
   font-variant-numeric: tabular-nums;
   color: var(--c-text-tertiary);
 }
+
+/* ---------- Step 12e (design §0): greeting, period switch, KPI cards, chart, class bars, activity ---------- */
+.dash-head {
+  align-items: flex-end;
+  margin-bottom: var(--space-4);
+}
+.page-header.dash-head .title {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+}
+.dash-head .overline {
+  margin: 0;
+  color: var(--c-text-secondary);
+}
+.dash-head h1 {
+  margin: var(--space-1) 0 0;
+  font-size: var(--fs-display);
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+}
+/* The period switch: a pill group on the canvas; the checked segment is a raised surface in 600. */
+.segmented.period-switch {
+  padding: 3px;
+  gap: 2px;
+  border-radius: var(--radius-md);
+  background: var(--c-surface-sunken);
+}
+.segmented.period-switch label {
+  border: 0;
+  border-radius: calc(var(--radius-md) - 2px);
+  background: transparent;
+  color: var(--c-text-body);
+}
+.segmented.period-switch label:has(input:checked) {
+  background: var(--c-surface);
+  color: var(--c-text);
+  font-weight: var(--fw-semibold);
+  box-shadow: var(--shadow-xs);
+}
+
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-4);
+  margin: 0 0 var(--space-4);
+}
+.kpi {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-4) var(--space-5);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+}
+.kpi .label {
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+  color: var(--c-text-secondary);
+}
+.kpi-figure {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-height: 36px;
+}
+.kpi .value {
+  font-size: var(--fs-kpi);
+  line-height: 36px;
+  font-weight: var(--fw-semibold);
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--c-text);
+}
+.kpi .skeleton-line {
+  display: block;
+  width: 96px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  background: var(--c-surface-alt);
+}
+.delta-chip {
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-full);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.delta-chip.tone-ok {
+  background: var(--badge-ok-bg);
+  color: var(--badge-ok-fg);
+}
+.delta-chip.tone-warn {
+  background: var(--badge-warn-bg);
+  color: var(--badge-warn-fg);
+}
+.delta-chip.tone-neutral {
+  background: var(--badge-neutral-bg);
+  color: var(--badge-neutral-fg);
+}
+/* Mini bars: decoration under the figure (aria-hidden); the newest bar in the primary series colour. */
+.kpi-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 28px;
+}
+.kpi-bars > span {
+  flex: 1;
+  min-width: 2px;
+  border-radius: 2px;
+  background: var(--c-surface-sunken);
+}
+.kpi-bars > span.current {
+  background: var(--c-viz-1);
+}
+.kpi-meter {
+  display: block;
+  height: 8px;
+  margin: 10px 0;
+  border-radius: var(--radius-full);
+  background: var(--c-surface-sunken);
+  overflow: hidden;
+}
+.kpi-meter > span {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--c-viz-1);
+}
+.kpi .note {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: var(--fs-sm);
+  color: var(--c-text-tertiary);
+}
+
+/* A dashboard card: the panel at the card radius, its link at the header's end. */
+.dash-card {
+  height: 100%;
+  border-radius: var(--radius-lg);
+}
+.dash-card .panel-header {
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.widgets {
+  align-items: stretch;
+}
+
+/* Changes chart */
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-sm);
+  color: var(--c-text-secondary);
+}
+.chart-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1_5);
+}
+.legend-key {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+.legend-key.s-updated {
+  background: var(--c-viz-1);
+}
+.legend-key.s-created {
+  background: var(--c-viz-2);
+}
+.legend-key.s-statusChanged {
+  background: var(--c-viz-3);
+}
+.changes-plot {
+  position: relative;
+}
+.changes-plot svg {
+  display: block;
+}
+.changes-slot {
+  fill: transparent;
+}
+.changes-plot g:hover .changes-slot {
+  fill: var(--c-surface-alt);
+}
+.changes-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--c-text-secondary);
+}
+.changes-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  font-size: var(--fs-sm);
+}
+
+/* CIs by class (or by lookup value): key, name, bar, count; the series colour by rank (classColours.ts). */
+.count-bars {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.count-bars li {
+  display: grid;
+  grid-template-columns: minmax(0, 160px) minmax(0, 1fr) 72px;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 30px;
+}
+.count-bars.has-actions li {
+  grid-template-columns: minmax(0, 160px) minmax(0, 1fr) 72px 28px;
+}
+.count-name {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--c-text);
+  overflow-wrap: anywhere;
+}
+.count-name:hover {
+  color: var(--c-link);
+}
+.key {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--viz);
+}
+.count-track {
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--c-surface-sunken);
+  overflow: hidden;
+}
+.count-bar {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--viz);
+}
+.count-value {
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--c-text-body);
+}
+.viz-1 {
+  --viz: var(--c-viz-1);
+}
+.viz-2 {
+  --viz: var(--c-viz-2);
+}
+.viz-3 {
+  --viz: var(--c-viz-3);
+}
+.viz-4 {
+  --viz: var(--c-viz-4);
+}
+.viz-5 {
+  --viz: var(--c-viz-5);
+}
+.viz-6 {
+  --viz: var(--c-viz-6);
+}
+.viz-7 {
+  --viz: var(--c-viz-7);
+}
+.viz-8 {
+  --viz: var(--c-viz-8);
+}
+
+/* Recent activity */
+.activity-table td.ci-name a {
+  font-family: var(--font-mono);
+  font-weight: var(--fw-medium);
+}
+.class-key {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1_5);
+}
+.activity-table td.num {
+  white-space: nowrap;
+}
