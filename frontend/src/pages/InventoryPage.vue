@@ -150,13 +150,16 @@ const listFilters = computed(() => {
   const { sort: _sort, limit: _limit, offset: _offset, ...filters } = state.listQuery.value as CiListQuery;
   return filters;
 });
-// The histogram endpoint takes no data-quality check: under one ("Needs attention") the strip says
-// so instead of counting a wider set than the list shows (GH#788).
+// The histogram endpoint takes no data-quality check (`quality`, `endOfLifeWithinDays`): under one
+// ("Needs attention") the strip says so instead of counting a wider set than the list shows (GH#788).
+// The query parser keeps `endOfLifeWithinDays` only with quality=end_of_life; both are checked anyway.
 const histogramFilters = computed(() => {
   const { quality: _quality, endOfLifeWithinDays: _days, ...filters } = listFilters.value;
   return filters;
 });
-const histogramUnavailable = computed(() => (listFilters.value.quality ? t("histogram.unavailable.quality") : undefined));
+const histogramUnavailable = computed(() =>
+  listFilters.value.quality || listFilters.value.endOfLifeWithinDays !== undefined ? t("histogram.unavailable.quality") : undefined,
+);
 // The histogram counts the audit log (audit.view); wide screens only.
 const showHistogram = computed(() => wide.value && session.can("audit.view") && !classDenied.value && rows.value.length > 0);
 
