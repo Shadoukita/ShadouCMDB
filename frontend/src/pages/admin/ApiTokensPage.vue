@@ -128,20 +128,19 @@ const rowMenu = (tok: ApiToken): RowMenuItem[] => [
 </script>
 
 <template>
-  <Breadcrumbs :items="adminCrumbs('api-tokens')" />
-  <div class="page-header">
-    <div class="title">
-      <h1>{{ t("admin.section.apiTokens") }}</h1>
-      <span v-if="list.data.value" class="muted count">{{ t("common.total", { n: formatNumber(total) }) }}</span>
-      <span v-if="list.isFetching.value && !list.isPending.value" class="spinner" :aria-label="t('common.refreshing')" />
+  <div class="list-head">
+    <Breadcrumbs :items="adminCrumbs('api-tokens')" />
+    <div class="page-header">
+      <div class="title">
+        <h1>{{ t("admin.section.apiTokens") }}</h1>
+        <span v-if="list.data.value" class="count mono">{{ t("common.total", { n: formatNumber(total) }) }}</span>
+        <span v-if="list.isFetching.value && !list.isPending.value" class="spinner" :aria-label="t('common.refreshing')" />
+      </div>
+      <div class="actions">
+        <button type="button" class="btn btn-primary" @click="creating = true"><Icon name="plus" />{{ t("admin.tokens.new") }}</button>
+      </div>
     </div>
-    <div class="actions">
-      <button type="button" class="btn btn-primary" @click="creating = true"><Icon name="plus" />{{ t("admin.tokens.new") }}</button>
-    </div>
-  </div>
-  <p class="page-intro">{{ t("admin.tokens.intro") }}</p>
-
-  <section class="panel explorer" :aria-label="t('admin.section.apiTokens')">
+    <p class="page-intro">{{ t("admin.tokens.intro") }}</p>
     <form class="toolbar" role="search" @submit.prevent>
       <div class="field search">
         <label for="t-q">{{ t("admin.search") }}</label>
@@ -173,7 +172,9 @@ const rowMenu = (tok: ApiToken): RowMenuItem[] => [
       </div>
       <button v-if="filtered" type="button" class="btn btn-ghost" @click="clearFilters"><Icon name="x" />{{ t("admin.filter.clear") }}</button>
     </form>
+  </div>
 
+  <section class="panel explorer" :aria-label="t('admin.section.apiTokens')">
     <div v-if="list.isError.value" class="panel-body">
       <ErrorAlert :error="list.error.value" :on-retry="() => list.refetch()" />
     </div>
@@ -195,7 +196,7 @@ const rowMenu = (tok: ApiToken): RowMenuItem[] => [
 
     <template v-if="rows.length > 0 && !list.isError.value">
       <div class="table-wrap table-scroll">
-        <table :class="['data', 'token-table', { loading: list.isPlaceholderData.value }]" aria-describedby="tokens-keys">
+        <table :class="['data', 'list-table', 'token-table', { loading: list.isPlaceholderData.value }]" aria-describedby="tokens-keys">
           <thead>
             <tr>
               <th v-for="c in COLUMNS" :key="c.key" scope="col" :aria-sort="c.sort ? lq.ariaSort(c.sort) : undefined">
@@ -213,7 +214,7 @@ const rowMenu = (tok: ApiToken): RowMenuItem[] => [
               <td><code>{{ tok.tokenPrefix }}…</code></td>
               <td>
                 <span class="name-badges">
-                  <RouterLink :to="`/admin/users/${tok.userId}`" class="mono">{{ tok.username }}</RouterLink>
+                  <RouterLink :to="`/admin/users/${tok.userId}`" class="list-name">{{ tok.username }}</RouterLink>
                   <span v-if="!tok.ownerIsActive" class="badge off" :title="t('admin.tokens.ownerDisabledTitle')">{{ t("admin.tokens.ownerDisabled") }}</span>
                 </span>
               </td>
@@ -223,7 +224,7 @@ const rowMenu = (tok: ApiToken): RowMenuItem[] => [
               </td>
               <td :title="revokedTitle(tok)">
                 <span class="name-badges">
-                  <span :class="['badge', statusBadge(tok.status).badge]">{{ statusBadge(tok.status).label }}</span>
+                  <span :class="['badge', statusBadge(tok.status).badge]"><span class="status-dot" aria-hidden="true" />{{ statusBadge(tok.status).label }}</span>
                   <span v-if="tok.status === 'revoked' && tok.revokedBy" class="muted">{{ t("admin.tokens.by", { name: tok.revokedBy }) }}</span>
                   <span v-if="tok.refusedForMfa" class="badge danger" :title="REFUSED_TITLE">{{ t("admin.tokens.refused") }}</span>
                 </span>
@@ -246,7 +247,9 @@ const rowMenu = (tok: ApiToken): RowMenuItem[] => [
           </tbody>
         </table>
       </div>
-      <PaginationBar :total="total" :limit="limit" :offset="offset" @change="lq.onPage" />
+      <div class="table-footer">
+        <PaginationBar numbered :total="total" :limit="limit" :offset="offset" @change="lq.onPage" />
+      </div>
       <KeyboardHints id="tokens-keys" />
     </template>
   </section>

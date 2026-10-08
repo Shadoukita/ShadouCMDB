@@ -232,7 +232,7 @@ async function copySecret() {
       </div>
     </form>
 
-    <div v-else>
+    <template v-else>
       <h2 id="token-dialog-title">{{ t("admin.token.createdTitle", { name: created.token.name }) }}</h2>
       <div class="body stack">
         <div class="alert alert-warn" role="alert">
@@ -254,7 +254,7 @@ async function copySecret() {
         </div>
         <dl class="props">
           <dt>{{ t("admin.token.owner") }}</dt>
-          <dd>{{ created.token.username }}</dd>
+          <dd class="mono">{{ created.token.username }}</dd>
           <dt>{{ t("admin.token.profileShort") }}</dt>
           <dd>{{ created.token.profile?.name }}</dd>
           <dt>{{ t("admin.token.expires") }}</dt>
@@ -264,6 +264,6 @@ async function copySecret() {
       <div class="footer">
         <button type="button" class="btn btn-primary" @click="close()">{{ t("admin.token.done") }}</button>
       </div>
-    </div>
+    </template>
   </dialog>
 </template>
