@@ -2,6 +2,7 @@
 
 #[cfg(test)]
 mod data_quality_tests;
+pub mod export;
 pub mod facets;
 pub mod kpis;
 pub mod plan;
@@ -17,9 +18,9 @@ use crate::auth::permissions::GlobalPermission;
 use crate::api::route::{CheckedBody, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, Query, Route, route};
 use crate::http::error::ErrorCode;
 use schemas::{
-    ChangeHistogramQuery, CompletenessQuery, CreateItemBody, DataQualityQuery, FacetsQuery, GraphQuery,
-    ItemCompletenessQuery, ItemCountHistoryQuery, ListItemsQuery, RelationshipCountHistoryQuery, SearchQuery,
-    UpdateItemBody,
+    ChangeHistogramQuery, CompletenessQuery, CreateItemBody, DataQualityQuery, ExportItemsQuery, FacetsQuery,
+    GraphQuery, ItemCompletenessQuery, ItemCountHistoryQuery, ListItemsQuery, RelationshipCountHistoryQuery,
+    SearchQuery, UpdateItemBody,
 };
 
 const TAG: &str = "Configuration items";
@@ -46,6 +47,17 @@ pub fn routes() -> Vec<Route> {
             .requires(GlobalPermission::AuditView)
             .handle(|api, In(NoPath, Query(q), NoBody): In<NoPath, Query<ChangeHistogramQuery>, NoBody>| async move {
                 Ok(Json(service::change_histogram(&api.pool, &api.ctx, &q).await?))
+            }),
+        route(Method::GET, "/api/v1/configuration-items/export", "exportConfigurationItems")
+            .tag(TAG)
+            .summary("Inventory list as CSV: the current query's filters, sort and columns, streamed")
+            .description(
+                "The CIs `listConfigurationItems` returns for the same filters and sort, all of them (no page), as a CSV file (`Content-Disposition: attachment`) with the columns in `columns`. Only CIs of classes the caller may view; a reference to a CI the caller may not view is left empty. The file starts with a UTF-8 byte order mark and a header row: the built-in fields in snake case (id, label, ident, class, criticality, valid_from, valid_until, active, created_at, updated_at) and attributes by key, so a bulk import maps them by itself. Lookups show the value name, references the referenced CI's label, booleans true/false, dates and times ISO 8601 (UTC). Every field is quoted; a value starting with a tab or a line break, or with =, +, -, @ or their full-width forms after any leading spaces, is prefixed with ' so spreadsheets do not run it as a formula (a value already starting with ' gets a second one). The rows are read from one consistent snapshot and streamed, so the file may be large; a download cut short (the database failed, the client stopped reading for 30 s, or it took more than 30 minutes) ends with a broken connection, never with a file that looks complete. Each export is recorded in the audit log before the first byte (action `export`, entity type `inventory`, nil entity id, with the columns, sort, filters and row count, never the rows), so a signed-in session must send X-CSRF-Token as on a write. 400 on `columns` for an unknown column (`unknown_column`), a column listed twice (`duplicate`), more than 50 (`too_big`), an attribute column without classId (`class_required`) or an attribute that is not an active attribute of every class in classId (`unknown_attribute`); `sort` and the filters are checked as on the list. 429 RATE_LIMITED when the caller already runs 2 exports, 503 SERVER_BUSY when the server runs 4.",
+            )
+            .errors(&[ErrorCode::RateLimited, ErrorCode::ServerBusy])
+            .csrf_on_read()
+            .handle(|api, In(NoPath, Query(q), NoBody): In<NoPath, Query<ExportItemsQuery>, NoBody>| async move {
+                export::export(&api.pool, &api.ctx, &q).await
             }),
         route(Method::GET, "/api/v1/configuration-items/facets", "getConfigurationItemFacets")
             .tag(TAG)

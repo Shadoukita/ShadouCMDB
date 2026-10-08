@@ -445,6 +445,49 @@ pub async fn count_capped(conn: &mut PgConnection, f: &ItemFilters, cap: i64) ->
     qb.build_query_scalar::<i64>().fetch_one(conn).await
 }
 
+/// The cursor [`declare_list_cursor`] opens.
+const EXPORT_CURSOR: &str = "inventory_export";
+
+/// Opens a cursor over the whole list (no page), in the list's order, for
+/// [`fetch_list_cursor`]. Needs a transaction; the cursor ends with it.
+pub async fn declare_list_cursor(
+    conn: &mut PgConnection,
+    f: &ItemFilters,
+    sort: &ListSort<'_>,
+    desc: bool,
+) -> sqlx::Result<()> {
+    let (join, order) = list_order(sort, if desc { "DESC" } else { "ASC" });
+    let mut q = QueryBuilder::<Postgres>::new(format!(
+        "DECLARE {EXPORT_CURSOR} NO SCROLL CURSOR FOR SELECT {} FROM {SUMMARY_FROM}{join}",
+        summary_columns()
+    ));
+    push_filters(&mut Where::new(&mut q), f);
+    q.push(format!(" ORDER BY {order}"));
+    q.build().persistent(false).execute(conn).await?;
+    Ok(())
+}
+
+/// The next `n` rows of the cursor [`declare_list_cursor`] opened; fewer at the end.
+pub async fn fetch_list_cursor(conn: &mut PgConnection, n: u32) -> sqlx::Result<Vec<SummaryRow>> {
+    sqlx::query_as(AssertSqlSafe(format!("FETCH FORWARD {n} FROM {EXPORT_CURSOR}")))
+        .persistent(false)
+        .fetch_all(conn)
+        .await
+}
+
+/// Lookup value names by id, for the values of these lists.
+pub async fn lookup_value_names(conn: &mut PgConnection, list_ids: &[Uuid]) -> sqlx::Result<HashMap<Uuid, String>> {
+    if list_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows: Vec<(Uuid, String)> =
+        sqlx::query_as("SELECT id, name FROM cmdb.lookup_list_values WHERE list_id = ANY($1)")
+            .bind(list_ids)
+            .fetch_all(conn)
+            .await?;
+    Ok(rows.into_iter().collect())
+}
+
 /// Global search: same predicate as the list, ranked by exact / prefix / trigram similarity.
 pub async fn search(
     conn: &mut PgConnection,

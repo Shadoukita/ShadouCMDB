@@ -20,7 +20,7 @@ use super::schemas::{
 };
 use crate::api::context::{Caller, RequestContext};
 use crate::api::route::InvalidBody;
-use crate::api::schemas::{KEY_PATTERN, LookupRef, Page, Paged};
+use crate::api::schemas::{KEY_PATTERN, LookupRef, Page, Paged, Sort, UuidList};
 use crate::api::validate;
 use crate::auth::permissions::ClassOp;
 use crate::data::classes as class_data;
@@ -358,11 +358,15 @@ fn sort_error(message: String, code: &str) -> AppError {
 /// `attributes.<key>` sorts on the field of that key that every requested
 /// class has (its own or inherited), so it needs `classId`. CIs of
 /// subclasses have a row in that field's table too.
-fn list_sort<'m>(model: &'m Model, q: &ListItemsQuery) -> Result<ListSort<'m>, AppError> {
-    let Some(key) = q.sort.field.strip_prefix(ATTRIBUTE_SORT_PREFIX) else {
-        return Ok(ListSort::Core(SORT_FIELDS.iter().find(|f| **f == q.sort.field).copied().unwrap_or("label")));
+pub(super) fn list_sort<'m>(
+    model: &'m Model,
+    sort: &Sort,
+    class_ids: Option<&UuidList>,
+) -> Result<ListSort<'m>, AppError> {
+    let Some(key) = sort.field.strip_prefix(ATTRIBUTE_SORT_PREFIX) else {
+        return Ok(ListSort::Core(SORT_FIELDS.iter().find(|f| **f == sort.field).copied().unwrap_or("label")));
     };
-    let Some(class_ids) = q.class_id() else {
+    let Some(class_ids) = class_ids else {
         return Err(sort_error("Sorting by an attribute needs classId".into(), "class_required"));
     };
     let mut found: Option<&Field> = None;
@@ -402,7 +406,7 @@ pub async fn list(
 ) -> Result<Page<ConfigurationItem>, AppError> {
     let mut conn = pool.acquire().await?;
     let model = Model::load(&mut conn).await?;
-    let sort = list_sort(&model, q)?;
+    let sort = list_sort(&model, &q.sort, q.class_id())?;
     let own_layout = q.own_layout.map(bool::from);
     let f =
         inventory_filters(&mut conn, ctx, &model, q, q.q.as_deref(), own_layout, q.layout_template.as_deref()).await?;

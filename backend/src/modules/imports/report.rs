@@ -14,17 +14,17 @@
 //! - Each stream holds a blocking thread, so they are capped per process and
 //!   per user, and a client that stops reading is cut off (GH#351).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::ops::ControlFlow;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock};
 use std::task::Poll;
 use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
 use sqlx::PgPool;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
+use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use super::MAX_COLUMNS;
@@ -37,8 +37,9 @@ use crate::api::context::RequestContext;
 use crate::api::route::CsvDownload;
 use crate::config::ImportConfig;
 use crate::data::crud;
-use crate::http::error::{AppError, ErrorCode};
+use crate::http::error::AppError;
 use crate::modules::csv_safe;
+use crate::modules::download_slots::Slots;
 
 /// Bytes collected before a piece of the report is sent.
 const FLUSH_BYTES: usize = 64 * 1024;
@@ -51,78 +52,8 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long one download may take in all.
 const STREAM_DEADLINE: Duration = Duration::from_secs(15 * 60);
 
-static STREAMS: LazyLock<Streams> = LazyLock::new(|| Streams::new(MAX_STREAMS, MAX_STREAMS_PER_USER));
-
-/// The report downloads in progress in this process.
-struct Streams {
-    global: Arc<Semaphore>,
-    per_user: Arc<Mutex<HashMap<Uuid, usize>>>,
-    max_per_user: usize,
-}
-
-/// A download in progress; gives its places back when dropped, that is when
-/// the writer on the blocking thread has finished.
-struct StreamPermit {
-    _global: OwnedSemaphorePermit,
-    _user: UserSlot,
-}
-
-/// One of a user's places; given back when dropped.
-struct UserSlot {
-    per_user: Arc<Mutex<HashMap<Uuid, usize>>>,
-    user: Uuid,
-}
-
-impl Drop for UserSlot {
-    fn drop(&mut self) {
-        if let Ok(mut m) = self.per_user.lock()
-            && let Some(n) = m.get_mut(&self.user)
-        {
-            *n -= 1;
-            if *n == 0 {
-                m.remove(&self.user);
-            }
-        }
-    }
-}
-
-impl Streams {
-    fn new(max: usize, max_per_user: usize) -> Self {
-        Streams { global: Arc::new(Semaphore::new(max)), per_user: Arc::default(), max_per_user }
-    }
-
-    /// Never waits. The route is session-only, so there is always a user; a
-    /// caller without one shares the nil user's places.
-    fn acquire(&self, user: Option<Uuid>) -> Result<StreamPermit, AppError> {
-        let user = user.unwrap_or(Uuid::nil());
-        {
-            let mut m = self.per_user.lock().map_err(|_| AppError::internal())?;
-            let n = m.entry(user).or_insert(0);
-            if *n >= self.max_per_user {
-                let mut err = AppError::new(
-                    ErrorCode::RateLimited,
-                    format!(
-                        "You already have {} error report downloads in progress; retry when one has finished",
-                        self.max_per_user
-                    ),
-                );
-                err.retry_after = Some(1);
-                return Err(err);
-            }
-            *n += 1;
-        }
-        // Refused below, the user's place goes back with `slot`.
-        let slot = UserSlot { per_user: self.per_user.clone(), user };
-        let global = self.global.clone().try_acquire_owned().map_err(|_| {
-            tracing::warn!("import error report refused: too many downloads in progress");
-            let mut err =
-                AppError::new(ErrorCode::ServerBusy, "The server is sending too many error reports; retry shortly");
-            err.retry_after = Some(1);
-            err
-        })?;
-        Ok(StreamPermit { _global: global, _user: slot })
-    }
-}
+static STREAMS: LazyLock<Slots> =
+    LazyLock::new(|| Slots::new(MAX_STREAMS, MAX_STREAMS_PER_USER, "error report downloads"));
 
 /// Where the writer sends the pieces: each send waits at most `timeout`, and
 /// all of them together at most until `deadline`.
@@ -401,20 +332,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn downloads_past_the_user_cap_or_the_server_cap_are_refused() {
-        let streams = Streams::new(2, 1);
-        let (alice, bob, carol) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
-        let first = streams.acquire(Some(alice)).unwrap();
-        assert_eq!(streams.acquire(Some(alice)).err().map(|e| e.code), Some(ErrorCode::RateLimited));
-        let _second = streams.acquire(Some(bob)).unwrap();
-        assert_eq!(streams.acquire(Some(carol)).err().map(|e| e.code), Some(ErrorCode::ServerBusy));
-        // Carol's refusal gave her place back, and a finished download gives both back.
-        drop(first);
-        let _third = streams.acquire(Some(carol)).unwrap();
-        assert_eq!(streams.acquire(Some(alice)).err().map(|e| e.code), Some(ErrorCode::ServerBusy));
-    }
-
     /// Sends until the sink gives up; the number of pieces sent.
     fn fill(sink: Sink) -> usize {
         let mut sent = 0;
@@ -426,7 +343,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn a_download_nobody_reads_gives_its_place_back_within_the_timeout() {
-        let streams = Streams::new(1, 1);
+        let streams = Slots::new(1, 1, "downloads");
         let permit = streams.acquire(Some(Uuid::new_v4())).unwrap();
         let (sink, _rx) = Sink::new(Duration::from_millis(200), Duration::from_secs(600));
         let failed = sink.failed.clone();

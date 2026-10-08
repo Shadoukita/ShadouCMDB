@@ -1961,3 +1961,171 @@ async fn inventory_facets_count_each_facet_without_its_own_filter() {
         call(&w.app, "GET", "/api/v1/configuration-items/facets?valueLimit=0&classId=nope", &admin, None).await;
     assert_eq!((status, code(&v)), (400, "VALIDATION_ERROR"), "{v}");
 }
+
+// ---------------------------------------------------------------------------
+// Inventory export (SHAA-2353)
+// ---------------------------------------------------------------------------
+
+/// The data rows of an exported file, each split into its unquoted fields
+/// (the test values hold no delimiter or line break).
+fn csv_rows(body: &str) -> Vec<Vec<String>> {
+    body.trim_start_matches('\u{feff}')
+        .split("\r\n")
+        .filter(|l| !l.is_empty())
+        .map(|l| l.split("\",\"").map(|f| f.trim_matches('"').replace("\"\"", "\"")).collect())
+        .collect()
+}
+
+/// Same rows as the list for the same query, columns as asked, lookups by
+/// name, references hidden past the caller's view, CSV-injection safe, one
+/// audit row without data, the restricted caller's view only.
+#[tokio::test]
+async fn inventory_export_is_the_list_query_as_csv() {
+    let Some(db) = scratch::database("inventory_export").await else { return };
+    let mut w = World::new(&db, BusinessServiceConfig::default()).await;
+    let admin = w.admin.clone();
+    let list_id: Uuid = sqlx::query_scalar("INSERT INTO lookup_lists (key, name) VALUES ('env', 'Env') RETURNING id")
+        .fetch_one(&w.pool)
+        .await
+        .unwrap();
+    let prod: Uuid = sqlx::query_scalar(
+        "INSERT INTO lookup_list_values (list_id, key, name, sort_order) VALUES ($1, 'prod', 'Production', 0) RETURNING id",
+    )
+    .bind(list_id)
+    .fetch_one(&w.pool)
+    .await
+    .unwrap();
+    for field in [
+        json!({ "classId": w.classes["server"], "key": "env", "label": "Env", "dataType": "lookup", "lookupListId": list_id }),
+        json!({ "classId": w.classes["server"], "key": "store", "label": "Store", "dataType": "reference", "referenceClassId": w.classes["datastore"] }),
+    ] {
+        let (status, f, _) = call(&w.app, "POST", "/api/v1/attribute-definitions", &admin, Some(field)).await;
+        assert_eq!(status, 201, "{f}");
+    }
+    let d1 = w.ci("datastore", "d1", "Datastore one").await;
+    w.ci_with("server", "s1", json!({ "attributes": { "name": "=HYPERLINK(\"x\")", "env": prod, "store": d1 } })).await;
+    w.ci_with("server", "s2", json!({ "attributes": { "name": "beta" } })).await;
+    w.ci("server", "s3", "-alpha").await;
+
+    let server = w.classes["server"];
+    let path = format!(
+        "/api/v1/configuration-items/export?classId={server}&sort=-ident&columns=ident,label,attributes.env,attributes.store,active"
+    );
+    let (status, headers, body) = raw(&w.app, "GET", &path, &admin, None).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(headers[header::CONTENT_TYPE], "text/csv; charset=utf-8");
+    let disposition = headers[header::CONTENT_DISPOSITION].to_str().unwrap();
+    assert!(disposition.starts_with("attachment; filename=\"inventory-"), "{disposition}");
+    assert!(body.starts_with('\u{feff}'), "byte order mark");
+    assert!(body.contains("\"'=HYPERLINK(\"\"x\"\")\""), "formula neutralised: {body}");
+    assert!(body.contains("\"'-alpha\""), "{body}");
+    let rows = csv_rows(&body);
+    assert_eq!(rows[0], ["ident", "label", "env", "store", "active"]);
+    let idents: Vec<&str> = rows[1..].iter().map(|r| r[0].as_str()).collect();
+    assert_eq!(idents, ["s3", "s2", "s1"], "the list's sort");
+    assert_eq!(rows[3][2..], ["Production", "Datastore one", "true"]);
+    assert_eq!(rows[2][2..], ["", "", "true"]);
+    // The list answers the same CIs in the same order.
+    let (_, list) = w.get(&admin, &format!("/api/v1/configuration-items?classId={server}&sort=-ident")).await;
+    let listed: Vec<&str> = list["data"].as_array().unwrap().iter().map(|c| c["ident"].as_str().unwrap()).collect();
+    assert_eq!(listed, idents);
+
+    let audit: Vec<(String, Uuid, Value)> =
+        sqlx::query_as("SELECT entity_type, entity_id, new_value FROM audit_log WHERE action = 'export'")
+            .fetch_all(&w.pool)
+            .await
+            .unwrap();
+    assert_eq!(audit.len(), 1);
+    let (entity_type, entity_id, value) = &audit[0];
+    assert_eq!((entity_type.as_str(), *entity_id), ("inventory", Uuid::nil()));
+    assert_eq!(value["rowCount"], 3);
+    assert_eq!(value["sort"], "-ident");
+    assert_eq!(value["filters"]["classId"], json!([server]));
+    assert_eq!(value["columns"], json!(["ident", "label", "attributes.env", "attributes.store", "active"]));
+    assert!(!value.to_string().contains("HYPERLINK"), "no row data: {value}");
+
+    // A user who may view servers only: no datastores, and the reference into one is empty.
+    let (_, viewer) = w.user("viewer", &[("server", false)], &[]).await;
+    let (status, _, body) = raw(&w.app, "GET", &path, &viewer, None).await;
+    assert_eq!(status, 200, "{body}");
+    let rows = csv_rows(&body);
+    assert_eq!(rows[3][..4], ["s1", "'=HYPERLINK(\"x\")", "Production", ""]);
+    let (status, _, body) = raw(&w.app, "GET", "/api/v1/configuration-items/export?columns=ident", &viewer, None).await;
+    assert_eq!(status, 200, "{body}");
+    let mut idents: Vec<String> = csv_rows(&body)[1..].iter().map(|r| r[0].clone()).collect();
+    idents.sort();
+    assert_eq!(idents, ["s1", "s2", "s3"], "only classes the caller may view");
+    // An attribute column of a class they may not view is refused like an unknown one.
+    let datastore = w.classes["datastore"];
+    let path = format!("/api/v1/configuration-items/export?classId={datastore}&columns=attributes.name");
+    let (status, _, body) = raw(&w.app, "GET", &path, &viewer, None).await;
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        details(&serde_json::from_str(&body).unwrap()),
+        [("columns".to_owned(), "unknown_attribute".to_owned())]
+    );
+    db.drop().await;
+}
+
+/// Parameter errors are 400 with the field, before anything is recorded; a
+/// session needs the CSRF token; a semicolon file for Excel.
+#[tokio::test]
+async fn inventory_export_checks_its_parameters() {
+    let Some(db) = scratch::database("inventory_export_parameters").await else { return };
+    let mut w = World::new(&db, BusinessServiceConfig::default()).await;
+    let admin = w.admin.clone();
+    w.ci("server", "s1", "one").await;
+    for (query, field, code) in [
+        ("columns=nope", "columns", "unknown_column"),
+        ("columns=label,label", "columns", "duplicate"),
+        ("columns=attributes.name", "columns", "class_required"),
+        ("sort=attributes.name", "sort", "class_required"),
+        ("delimiter=tab", "delimiter", ""),
+    ] {
+        let (status, _, body) =
+            raw(&w.app, "GET", &format!("/api/v1/configuration-items/export?{query}"), &admin, None).await;
+        assert_eq!(status, 400, "{query}: {body}");
+        let found = details(&serde_json::from_str(&body).unwrap());
+        assert_eq!(found[0].0, field, "{query}: {body}");
+        if !code.is_empty() {
+            assert_eq!(found[0].1, code, "{query}: {body}");
+        }
+    }
+    let no_csrf = Creds { csrf: None, ..admin.clone() };
+    let (status, _, body) = raw(&w.app, "GET", "/api/v1/configuration-items/export", &no_csrf, None).await;
+    assert_eq!(status, 403, "{body}");
+    let exports: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM audit_log WHERE action = 'export'").fetch_one(&w.pool).await.unwrap();
+    assert_eq!(exports, 0, "a refused export is not recorded");
+
+    let path = format!(
+        "/api/v1/configuration-items/export?classId={}&columns=ident,label&delimiter=semicolon",
+        w.classes["server"]
+    );
+    let (status, _, body) = raw(&w.app, "GET", &path, &admin, None).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body, "\u{feff}\"ident\";\"label\"\r\n\"s1\";\"one\"\r\n");
+    db.drop().await;
+}
+
+/// More CIs than one cursor batch: every one, once, in the list's order.
+#[tokio::test]
+async fn inventory_export_streams_past_one_batch() {
+    let Some(db) = scratch::database("inventory_export_batches").await else { return };
+    let w = World::new(&db, BusinessServiceConfig::default()).await;
+    let server = w.classes["server"];
+    sqlx::query(
+        "INSERT INTO configuration_items (class_id, label) SELECT $1, 'bulk-' || lpad(g::text, 5, '0') FROM generate_series(1, 1234) g",
+    )
+    .bind(server)
+    .execute(&w.pool)
+    .await
+    .unwrap();
+    let path = format!("/api/v1/configuration-items/export?classId={server}&columns=label&sort=label");
+    let (status, _, body) = raw(&w.app, "GET", &path, &w.admin, None).await;
+    assert_eq!(status, 200, "{body}");
+    let labels: Vec<String> = csv_rows(&body)[1..].iter().map(|r| r[0].clone()).collect();
+    let expected: Vec<String> = (1..=1234).map(|i| format!("bulk-{i:05}")).collect();
+    assert_eq!(labels, expected);
+    db.drop().await;
+}
