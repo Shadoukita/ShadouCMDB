@@ -2,13 +2,16 @@
 import { computed } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import { useAreas } from "../api/datamodel";
-import { useCiClasses, useClassAttributes } from "../api/queries";
+import { useCi, useCiClasses, useClassAttributes } from "../api/queries";
+import { useCiWorkflows } from "../api/workflowRuntime";
 import { t } from "../i18n";
+import { cloneClearedKeys, type CloneSource } from "../lib/ciClone";
 import { dataModelEmpty } from "../lib/dataModel";
 import Breadcrumbs, { type Crumb } from "../components/Breadcrumbs.vue";
 import ClassBadge from "../components/ClassBadge.vue";
 import DataModelEmpty from "../components/DataModelEmpty.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
+import LoadingState from "../components/LoadingState.vue";
 import EditLayoutButton from "../components/layoutEdit/EditLayoutButton.vue";
 import { useDocumentTitle } from "../lib/composables";
 import { groupByArea } from "../lib/areas";
@@ -22,7 +25,6 @@ const router = useRouter();
 const classId = computed(() => (typeof route.query.classId === "string" ? route.query.classId : ""));
 const classes = useCiClasses();
 const cls = computed(() => classes.data.value?.find((c) => c.id === classId.value));
-useDocumentTitle(() => (cls.value ? `New ${cls.value.name}` : "New CI"));
 
 const session = useSessionStore();
 const concrete = computed(() =>
@@ -52,6 +54,23 @@ const attrs = useClassAttributes(() => cls.value?.id);
 const editor = useLayoutEditor({ classKey: () => cls.value?.key, attrs: () => attrs.data.value?.filter((d) => d.isActive) });
 
 const unknownClass = computed(() => new Error(`Class ${classId.value} does not exist.`));
+
+// Clone (?cloneFrom=<id>, gap G11): the form starts from that CI's values (lib/ciClone). The source is read through
+// the API like any CI the user may view; the new CI is created through the normal create path.
+const cloneFrom = computed(() => (typeof route.query.cloneFrom === "string" ? route.query.cloneFrom : ""));
+const source = useCi(cloneFrom);
+const sourceWorkflows = useCiWorkflows(() => (source.data.value ? cloneFrom.value : undefined));
+const sourceOtherClass = computed(() => !!source.data.value && source.data.value.classId !== classId.value);
+const cleared = computed(() => cloneClearedKeys(attrs.data.value?.filter((d) => d.isActive) ?? [], cls.value?.titleAttributeId, source.data.value?.attributeReferences));
+const clearedLabels = computed(() => cleared.value.map((k) => attrs.data.value?.find((d) => d.key === k)?.label ?? k));
+/** The clone's source once everything it needs has loaded (a failed workflow lookup resets nothing; the API reports a refused value). */
+const clone = computed<(CloneSource & { ci: NonNullable<typeof source.data.value> }) | undefined>(() => {
+  const ci = source.data.value;
+  if (!ci || sourceOtherClass.value || !attrs.data.value || sourceWorkflows.isLoading.value) return undefined;
+  return { ci, attributes: ci.attributes, cleared: new Set(cleared.value), reset: new Set(sourceWorkflows.data.value?.controlledFields ?? []) };
+});
+const cloneLoading = computed(() => !!cloneFrom.value && !sourceOtherClass.value && !source.isError.value && !clone.value);
+useDocumentTitle(() => (clone.value ? t("clone.title", { name: clone.value.ci.label }) : cls.value ? `New ${cls.value.name}` : "New CI"));
 
 function pickClass(e: Event) {
   const value = (e.target as HTMLSelectElement).value;
@@ -108,6 +127,39 @@ function pickClass(e: Event) {
       </div>
     </div>
   </section>
-  <CiForm v-if="classId && cls && ((!denied && !closed) || editor.active)" :key="classId" mode="create" :class-id="classId" :class-name="cls.name" :editor="editor" />
+  <template v-if="cloneFrom && !denied && !closed && !editor.active">
+    <ErrorAlert v-if="source.isError.value" :error="source.error.value" :title="t('clone.loadFailed')" :on-retry="() => source.refetch()" />
+    <div v-else-if="sourceOtherClass" class="alert alert-warn" role="alert">{{ t("clone.otherClass", { class: source.data.value?.class.name ?? "" }) }}</div>
+    <div v-else-if="clone" class="alert clone-notice" role="status" data-testid="clone-notice">
+      <p>
+        <strong>{{ t("clone.source") }}</strong>
+        <RouterLink :to="`/cis/${clone.ci.id}`" dir="auto">{{ clone.ci.label }}</RouterLink>
+        <span class="mono">({{ clone.ci.ident }})</span>
+      </p>
+      <p>
+        {{ t("clone.notice", { class: cls?.name ?? "", name: clone.ci.label }) }}
+        <template v-if="clearedLabels.length > 0">{{ t("clone.noticeFields", { fields: clearedLabels.join(", ") }) }}</template>
+      </p>
+    </div>
+  </template>
+  <LoadingState v-if="cloneLoading && !denied && !closed" label="Loading the CI to clone…" />
+  <CiForm
+    v-else-if="classId && cls && ((!denied && !closed) || editor.active) && (!cloneFrom || !!clone || sourceOtherClass || source.isError.value || editor.active)"
+    :key="`${classId}:${clone?.ci.id ?? ''}`"
+    mode="create"
+    :class-id="classId"
+    :class-name="cls.name"
+    :editor="editor"
+    :clone="clone"
+  />
   <ErrorAlert v-if="classId && classes.data.value && !cls" :error="unknownClass" />
 </template>
+
+<style scoped>
+.clone-notice p {
+  margin: 0;
+}
+.clone-notice p + p {
+  margin-top: var(--space-1);
+}
+</style>

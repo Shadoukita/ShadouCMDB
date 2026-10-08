@@ -9,6 +9,7 @@ import LoadingState from "../../components/LoadingState.vue";
 import { useAppSettings } from "../../lib/appSettings";
 import { toApiValue } from "../../lib/attributeValues";
 import { coreToApi } from "../../lib/ciEdits";
+import type { CloneSource } from "../../lib/ciClone";
 import type { LayoutEditor } from "../../lib/layoutEditor";
 import { asClassLayout } from "../../lib/layoutTemplates";
 import {
@@ -54,8 +55,10 @@ import FormErrorBanner from "./FormErrorBanner.vue";
  *
  * In layout edit mode (`editor` active, see lib/layoutEditor) the form's fields
  * are shown on the layout canvas instead, inert, with what has been typed so far.
+ *
+ * A clone (create mode, `clone`) starts from another CI's values (lib/ciClone) and is saved like any new CI.
  */
-const props = defineProps<{ mode: "create" | "edit"; classId: string; className: string; ci?: Ci; editor?: LayoutEditor }>();
+const props = defineProps<{ mode: "create" | "edit"; classId: string; className: string; ci?: Ci; editor?: LayoutEditor; clone?: CloneSource & { ci: Ci } }>();
 
 const router = useRouter();
 const route = useRoute();
@@ -83,6 +86,7 @@ const draft = useCiDraft({
   ci: () => props.ci,
   attrs: () => attrs.data.value,
   readOnlyFields: () => layout.value?.readOnlyFields,
+  clone: () => props.clone,
 });
 const pending = computed(() => (props.mode === "create" ? create.isPending.value : draft.pending));
 const activeAttrs = computed(() => attrs.data.value?.filter((d) => d.isActive));
@@ -229,7 +233,7 @@ async function onSubmit() {
       </div>
     </div>
     <SaveBar :label="t('record.save.region')" :dirty="mode === 'edit' && draft.dirty" :changes="draft.changeCount">
-      <RouterLink class="btn" :to="ci ? `/cis/${ci.id}` : fromServices ? '/services' : '/cis'">{{ t("common.cancel") }}</RouterLink>
+      <RouterLink class="btn" :to="ci ? `/cis/${ci.id}` : clone ? `/cis/${clone.ci.id}` : fromServices ? '/services' : '/cis'">{{ t("common.cancel") }}</RouterLink>
       <button type="submit" class="btn btn-primary" :disabled="pending || attrs.isLoading.value || attrs.isError.value">
         {{ pending ? t("common.saving") : mode === "create" ? `Create ${className}` : "Save changes" }}
       </button>

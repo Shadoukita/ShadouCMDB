@@ -4,6 +4,7 @@ import { ApiError } from "../../api/client";
 import { useCriticalityValues, useUpdateCi, type Ci, type CiUpdateBody, type EffectiveAttribute } from "../../api/queries";
 import { useCiWorkflows } from "../../api/workflowRuntime";
 import { t } from "../../i18n";
+import { clonedValue, type CloneSource } from "../../lib/ciClone";
 import { hintFor, nowFormValue, toFormValue, type FormValue } from "../../lib/attributeValues";
 import { ciEdits, type CoreValues } from "../../lib/ciEdits";
 import { HIDDEN_CI } from "../../lib/format";
@@ -27,6 +28,8 @@ export interface CiDraftOptions {
   readOnlyFields: MaybeRefOrGetter<readonly string[] | undefined>;
   /** Nothing can be changed: no edit right on the class, or a deleted CI. */
   locked?: MaybeRefOrGetter<boolean>;
+  /** A new CI cloned from `ci` (create mode, lib/ciClone): its values start from the source's. Read when the draft starts. */
+  clone?: MaybeRefOrGetter<(CloneSource & { ci: Ci }) | undefined>;
 }
 
 /**
@@ -66,16 +69,19 @@ export function useCiDraft(opts: CiDraftOptions) {
     () => !!criticalityId.value && !!criticality.data.value && !criticalityOptions.value.some((v) => v.id === criticalityId.value),
   );
 
-  /** Starts the draft over from `ci` (a new CI: empty, valid from now, attributes at their defaults). */
+  /** The source of a clone (create mode). */
+  const cloneOf = shallowRef<CloneSource & { ci: Ci }>();
+  /** Starts the draft over from `ci` (a new CI: empty, valid from now, attributes at their defaults or a clone's values). */
   function reset(ci?: Ci) {
+    cloneOf.value = create ? toValue(opts.clone) : undefined;
     base.value = ci;
     initialCore.value = ci
       ? { ident: ci.ident, validFrom: toFormValue(DATETIME, ci.validFrom), validUntil: toFormValue(DATETIME, ci.validUntil) }
       : { ident: "", validFrom: nowFormValue("datetime"), validUntil: "" };
     core.value = { ...initialCore.value };
-    initialCriticality.value = ci?.criticality?.id ?? "";
+    initialCriticality.value = (ci ?? cloneOf.value?.ci)?.criticality?.id ?? "";
     criticalityId.value = initialCriticality.value;
-    refNames.value = referenceNames(ci);
+    refNames.value = referenceNames(ci ?? cloneOf.value?.ci);
     initialValues.value = {};
     values.value = {};
     error.value = null;
@@ -87,9 +93,11 @@ export function useCiDraft(opts: CiDraftOptions) {
     const data = toValue(opts.attrs);
     if (!data) return;
     const ci = base.value;
+    const src = cloneOf.value;
     const add: Record<string, FormValue> = {};
     for (const d of data) {
-      if (!(d.key in initialValues.value)) add[d.key] = toFormValue(d, ci ? ci.attributes[d.key] : d.isActive ? d.defaultValue : undefined);
+      if (d.key in initialValues.value) continue;
+      add[d.key] = toFormValue(d, ci ? ci.attributes[d.key] : !d.isActive ? undefined : src ? clonedValue(src, d) : d.defaultValue);
     }
     if (Object.keys(add).length === 0) return;
     initialValues.value = { ...initialValues.value, ...add };

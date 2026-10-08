@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import qrcode from "qrcode-generator";
 import { computed } from "vue";
+import { qrMatrix } from "../lib/qr";
 
 /**
  * A QR code drawn as one SVG path, rendered in the browser (the value never
@@ -8,17 +8,8 @@ import { computed } from "vue";
  * phone cameras read it.
  */
 const props = withDefaults(defineProps<{ value: string; label: string; size?: number }>(), { size: 200 });
-const QUIET = 4;
 
-const code = computed(() => {
-  const qr = qrcode(0, "M");
-  qr.addData(props.value);
-  qr.make();
-  const n = qr.getModuleCount();
-  let d = "";
-  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (qr.isDark(r, c)) d += `M${c + QUIET} ${r + QUIET}h1v1h-1z`;
-  return { d, extent: n + 2 * QUIET };
-});
+const code = computed(() => qrMatrix(props.value));
 </script>
 
 <template>
