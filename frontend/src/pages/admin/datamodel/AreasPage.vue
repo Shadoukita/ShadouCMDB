@@ -159,29 +159,24 @@ function openEdit(a: Area) {
 </script>
 
 <template>
-  <Breadcrumbs :items="adminCrumbs('areas')" />
-  <div class="page-header">
-    <div class="title">
-      <h1>{{ t("dm.areas.title") }}</h1>
-      <span v-if="areas.data.value" class="muted count">{{ t("common.total", { n: formatNumber(areas.data.value.length) }) }}</span>
-      <span v-if="reorder.isPending.value || (areas.isFetching.value && !areas.isLoading.value)" class="spinner" :aria-label="t('common.saving')" />
+  <div class="list-head">
+    <Breadcrumbs :items="adminCrumbs('areas')" />
+    <div class="page-header">
+      <div class="title">
+        <h1>{{ t("dm.areas.title") }}</h1>
+        <span v-if="areas.data.value" class="count mono">{{ t("common.total", { n: formatNumber(areas.data.value.length) }) }}</span>
+        <span v-if="reorder.isPending.value || (areas.isFetching.value && !areas.isLoading.value)" class="spinner" :aria-label="t('common.saving')" />
+      </div>
+      <div class="actions">
+        <button type="button" class="btn btn-primary" @click="openNew"><Icon name="plus" />{{ t("dm.areas.create") }}</button>
+      </div>
     </div>
-    <div class="actions">
-      <button type="button" class="btn btn-primary" @click="openNew"><Icon name="plus" />{{ t("dm.areas.create") }}</button>
-    </div>
-  </div>
-
-  <p class="page-intro">
-    <template v-for="(part, i) in intro" :key="i">
-      <code v-if="part.code">{{ part.code }}</code>
-      <template v-else>{{ part.text }}</template>
-    </template>
-  </p>
-
-  <ErrorAlert v-if="failure" :error="failure" />
-  <ErrorAlert v-if="reorder.isError.value" :error="reorder.error.value" :title="t('dm.areas.orderFailed')" />
-
-  <section class="panel explorer" :aria-label="t('dm.areas.title')">
+    <p class="page-intro">
+      <template v-for="(part, i) in intro" :key="i">
+        <code v-if="part.code">{{ part.code }}</code>
+        <template v-else>{{ part.text }}</template>
+      </template>
+    </p>
     <div class="toolbar">
       <label class="checkbox-row">
         <input type="checkbox" :checked="showArchived" @change="lq.update({ archived: ($event.target as HTMLInputElement).checked ? 'show' : undefined })" />
@@ -189,6 +184,12 @@ function openEdit(a: Area) {
       </label>
       <p class="toolbar-hint">{{ t("dm.areas.reorderHint") }}</p>
     </div>
+  </div>
+
+  <ErrorAlert v-if="failure" :error="failure" />
+  <ErrorAlert v-if="reorder.isError.value" :error="reorder.error.value" :title="t('dm.areas.orderFailed')" />
+
+  <section class="panel explorer" :aria-label="t('dm.areas.title')">
     <div v-if="areas.isError.value" class="panel-body">
       <ErrorAlert :error="areas.error.value" :on-retry="() => areas.refetch()" />
     </div>
@@ -208,7 +209,7 @@ function openEdit(a: Area) {
     </EmptyState>
 
     <div v-if="rows.length > 0" class="table-wrap">
-      <table class="data reorderable">
+      <table class="data list-table reorderable">
         <thead>
           <tr>
             <th scope="col" class="drag-col"><span class="sr-only">{{ t("dm.areas.dragToReorder") }}</span></th>
@@ -224,7 +225,7 @@ function openEdit(a: Area) {
           <tr v-for="(a, i) in rows" :key="a.id" v-bind="dnd.row(a.id)" :data-id="a.id" :class="{ disabled: !a.isActive }">
             <td class="drag-handle" aria-hidden="true" :title="t('dm.areas.dragToReorder')"><Icon name="grip-vertical" /></td>
             <td>
-              <button type="button" class="btn-link" :title="t('dm.areas.editName', { name: a.name })" @click="openEdit(a)">
+              <button type="button" class="btn-link list-name" dir="auto" :title="t('dm.areas.editName', { name: a.name })" @click="openEdit(a)">
                 <ClassBadge :icon="a.icon" :color="a.color" :name="a.name" />
               </button>
               <div v-if="a.description" class="muted cell-note">{{ a.description }}</div>
@@ -233,15 +234,15 @@ function openEdit(a: Area) {
             <td class="wrap">
               <span v-if="typesOf(a).length === 0" class="muted">{{ t("dm.areas.noClasses") }}</span>
               <template v-for="(c, j) in typesOf(a)" :key="c.id">
-                <RouterLink :to="`/admin/classes/${c.id}`" :class="{ muted: !c.isActive }">{{ c.name }}</RouterLink><template v-if="j < typesOf(a).length - 1">, </template>
+                <RouterLink class="list-name" :to="`/admin/classes/${c.id}`" dir="auto" :class="{ muted: !c.isActive }">{{ c.name }}</RouterLink><template v-if="j < typesOf(a).length - 1">, </template>
               </template>
               <div>
                 <RouterLink class="cell-note area-new-class" :to="{ path: '/admin/classes/new', query: { areaId: a.id } }"><Icon name="plus" :size="14" />{{ t("dm.areas.classIn", { name: a.name }) }}</RouterLink>
               </div>
             </td>
             <td>
-              <span v-if="a.isActive" class="badge ok">{{ t("common.active") }}</span>
-              <span v-else class="badge off">{{ t("dm.areas.archived") }}</span>
+              <span v-if="a.isActive" class="badge ok"><span class="status-dot" aria-hidden="true" />{{ t("common.active") }}</span>
+              <span v-else class="badge off"><span class="status-dot" aria-hidden="true" />{{ t("dm.areas.archived") }}</span>
             </td>
             <td class="order-buttons">
               <button type="button" class="btn btn-sm btn-icon" :disabled="reorder.isPending.value || i === 0" :aria-label="t('dm.areas.moveUp', { name: a.name })" @click="step(a, -1)"><Icon name="arrow-up" /></button>
