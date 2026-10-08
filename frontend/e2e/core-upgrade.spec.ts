@@ -109,7 +109,7 @@ test("the CI is labelled by its former name in the inventory, search and referen
   // The application's relationship and the server's reference field name each other by label.
   const app = oldCi(snapshot.ids.cis.application!);
   await page.goto(`/cis/${app.id}`);
-  await expect(page.locator("table").getByRole("link", { name: server().name, exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: /^Relationships/ }).getByRole("link", { name: server().name, exact: true })).toBeVisible();
   await page.goto(`/cis/${server().id}`);
   await expect.poll(() => shownValue(page, "primary app")).toBe(app.name!);
 });
