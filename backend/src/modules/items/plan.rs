@@ -543,7 +543,7 @@ pub fn plan_create<'d>(
     }
     let key = class_key(model, input.class_id)?;
     let prepared = prepare_new(model, defs, input.attributes.as_ref(), key, resolver)?;
-    state.check_create(model, input.class_id, defs, input.attributes.as_ref())?;
+    state.check_create(ctx, model, input.class_id, defs, input.attributes.as_ref())?;
     Ok(Plan {
         registry: Registry::Create {
             id: None,
@@ -634,7 +634,7 @@ pub fn plan_update<'d>(
 
     let class_id = new_class_id.unwrap_or(old_class_id);
     let prepared = prepare_changed(model, defs, &before, class_id, input.attributes.as_ref(), resolver)?;
-    state.check_update(model, class_id, defs, &before.attributes, &prepared.set, &prepared.clear)?;
+    state.check_update(ctx, model, class_id, defs, &before.attributes, &prepared.set, &prepared.clear)?;
 
     if new_class_id.is_some() {
         // Values the new class does not define must be cleared in the same request.
