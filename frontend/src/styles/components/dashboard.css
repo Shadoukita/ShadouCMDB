@@ -390,3 +390,126 @@ table.count-table td.share {
 .activity-table td.num {
   white-space: nowrap;
 }
+
+/*
+ * "Needs attention" (gap G3): the dark panel family of §0.3 in both themes ([data-theme-scope="dark"] on the
+ * panel). It takes a third of its row beside the recent activity, which takes the other two (DashboardWidgets).
+ */
+.widget-beside-aside {
+  grid-column: span 4;
+}
+.widget-aside {
+  grid-column: span 2;
+}
+@media (max-width: 1100px) {
+  .widget-beside-aside,
+  .widget-aside {
+    grid-column: span 6;
+  }
+}
+.attention {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  height: 100%;
+  padding: var(--space-5);
+  border-radius: var(--radius-lg);
+  background: var(--gray-950);
+  color: var(--c-text);
+}
+/* On the dark canvas the panel is a raised surface with a rule, as the other cards. */
+:root[data-theme="dark"] .attention {
+  background: var(--c-surface);
+  box-shadow: inset 0 0 0 1px var(--c-border);
+}
+.attention-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-3);
+}
+.attention-head h2 {
+  margin: 0;
+  font-size: var(--fs-h2);
+  font-weight: 600;
+  color: var(--c-sidebar-text-strong);
+}
+.attention-n {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--c-text-tertiary);
+}
+.attention-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.attention-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--c-surface-alt);
+  color: var(--c-text);
+  text-decoration: none;
+}
+.attention-row:hover {
+  background: var(--c-row-selected);
+  color: var(--c-text);
+}
+.attention-row:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: 2px;
+}
+.attention-count {
+  flex: none;
+  display: grid;
+  place-items: center;
+  min-width: 44px;
+  height: 28px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-md);
+  font-family: var(--font-mono);
+  font-size: var(--fs-md);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.attention-count.tone-no_owner {
+  background: var(--badge-warn-bg);
+  color: var(--badge-warn-fg);
+}
+.attention-count.tone-end_of_life {
+  background: var(--badge-danger-bg);
+  color: var(--badge-danger-fg);
+}
+.attention-count.tone-no_relationships {
+  background: var(--c-primary-subtle);
+  color: var(--cyan-300);
+}
+.attention-count.tone-pending_approval,
+.attention-count.tone-none {
+  background: var(--badge-neutral-bg);
+  color: var(--badge-neutral-fg);
+}
+.attention-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0_5);
+  min-width: 0;
+}
+.attention-title {
+  font-weight: 500;
+  color: var(--c-sidebar-text-strong);
+}
+.attention-desc,
+.attention-off {
+  font-size: var(--fs-sm);
+  color: var(--c-text-secondary);
+}
+.attention-off {
+  margin: 0;
+}

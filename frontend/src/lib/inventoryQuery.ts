@@ -19,16 +19,19 @@ export type QueryContext = "inventory" | "search";
 
 /** URL parameters that make up a list's state (not the page: `offset`). Any of them means "the URL says". */
 export const STATE_KEYS = {
-  inventory: ["q", "classId", "includeSubclasses", "lookupValueId", "criticalityValueId", "active", "deleted", "ipWithin", "ownLayout", "layoutTemplate", "sort", "limit", "columns"],
+  inventory: ["q", "classId", "includeSubclasses", "lookupValueId", "criticalityValueId", "active", "deleted", "ipWithin", "ownLayout", "layoutTemplate", "quality", "endOfLifeWithinDays", "sort", "limit", "columns"],
   search: ["q", "classId", "includeSubclasses", "lookupValueId", "criticalityValueId", "active", "deleted", "ipWithin", "limit"],
 } as const satisfies Record<QueryContext, readonly string[]>;
 
 /**
  * Filters, which "Clear filters" removes (sort, page size and columns stay).
  * `ownLayout` and `layoutTemplate` (CIs with a layout of their own, from Customization ›
- * Layouts) are inventory only: the search endpoint does not take them.
+ * Layouts) and `quality` (a data-quality check from the dashboard's "Needs attention", with its
+ * `endOfLifeWithinDays`) are inventory only: the search endpoint does not take them.
  */
-export const FILTER_KEYS = ["q", "classId", "lookupValueId", "criticalityValueId", "active", "deleted", "ipWithin", "ownLayout", "layoutTemplate"] as const;
+export const FILTER_KEYS = ["q", "classId", "lookupValueId", "criticalityValueId", "active", "deleted", "ipWithin", "ownLayout", "layoutTemplate", "quality"] as const;
+/** Filters the search page does not apply. */
+export const INVENTORY_ONLY_FILTERS: readonly string[] = ["ownLayout", "layoutTemplate", "quality"];
 
 export const DEFAULT_LIMIT = 50;
 export const DEFAULT_SORT = "label";
@@ -86,6 +89,19 @@ export function clampInt(raw: string, fallback: number, min: number, max: number
 
 export const parseActive = (raw: string): Active => (raw === "all" ? "all" : raw === "false" ? "false" : undefined);
 export const parseDeleted = (raw: string): Deleted => (raw === "include" ? "include" : raw === "only" ? "only" : undefined);
+
+/** The data-quality checks the inventory filters by (`quality`, GET /configuration-items/data-quality). */
+export const QUALITY_CHECKS = ["no_owner", "end_of_life", "no_relationships", "pending_approval"] as const;
+export type QualityCheck = (typeof QUALITY_CHECKS)[number];
+/** The API's bounds and default of `endOfLifeWithinDays`. */
+export const END_OF_LIFE_DAYS = { min: 0, max: 3650, default: 90 } as const;
+
+export const parseQuality = (raw: string): QualityCheck | undefined => ((QUALITY_CHECKS as readonly string[]).includes(raw) ? (raw as QualityCheck) : undefined);
+/** `endOfLifeWithinDays`, only with the end_of_life check (undefined: the API's default). */
+export function parseEndOfLifeDays(quality: QualityCheck | undefined, raw: string): number | undefined {
+  if (quality !== "end_of_life" || !/^\d+$/.test(raw)) return undefined;
+  return clampInt(raw, END_OF_LIFE_DAYS.default, END_OF_LIFE_DAYS.min, END_OF_LIFE_DAYS.max);
+}
 
 export const isAttributeSort = (sort: string) => attributeKey(sort.replace(/^-/, "")) !== null;
 
