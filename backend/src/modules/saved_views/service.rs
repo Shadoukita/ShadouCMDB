@@ -502,6 +502,12 @@ pub const COUNT_CAP: i64 = 10_000;
 /// Time for all counts of one request together; views not reached by then are `timed_out`.
 const COUNT_BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// Count requests that may count at once (GH#780): a quarter of `DATABASE_POOL_MAX`, at least one. Impact analysis
+/// may take up to half the pool, so the rest of the API keeps at least a quarter while the rail counts.
+pub fn count_slots(pool_max: u32) -> usize {
+    (pool_max as usize / 4).max(1)
+}
+
 #[derive(Debug, Deserialize, IntoParams)]
 #[serde(rename_all = "camelCase")]
 #[into_params(parameter_in = Query)]
@@ -626,9 +632,14 @@ impl crate::modules::items::schemas::ItemFilterQuery for ViewFilter {
 /// Counts what each view shows the caller: the view resolved as `listSavedViews` resolves it, run as a list (or, for
 /// a search view, a search) request with the caller's class rights. Read-only, so not audited. Each count runs in a
 /// savepoint under what is left of [`COUNT_BUDGET`], so one slow view cannot hold the page.
+///
+/// Counting takes one of `slots` ([`count_slots`]) first, waiting for it within the budget; a request that gets none
+/// in time only lists its views (one short query) and answers them `timed_out`, so however many batches the rail
+/// sends at once, they never hold more pool connections than there are slots.
 pub async fn counts_of(
     pool: &PgPool,
     ctx: &RequestContext,
+    slots: &tokio::sync::Semaphore,
     q: &SavedViewCountsQuery,
 ) -> Result<SavedViewCounts, AppError> {
     use crate::modules::impact::engine::{is_query_canceled, remaining_ms};
@@ -644,6 +655,7 @@ pub async fn counts_of(
         }]));
     }
     let deadline = tokio::time::Instant::now() + COUNT_BUDGET;
+    let slot = tokio::time::timeout_at(deadline, slots.acquire()).await.ok().and_then(Result::ok);
     let mut tx = pool.begin().await?;
     let cat = Catalogue::load(&mut tx).await?;
     let viewer = Viewer::of(ctx);
@@ -671,7 +683,10 @@ pub async fn counts_of(
     let truncated = q.ids.is_none() && views.len() > MAX_COUNTED;
     views.truncate(MAX_COUNTED);
 
-    let model = crate::schema::model::Model::load(&mut tx).await?;
+    let model = match slot {
+        Some(_) => Some(crate::schema::model::Model::load(&mut tx).await?),
+        None => None,
+    };
     let mut data = Vec::with_capacity(views.len());
     for (view_id, query) in views {
         let Some(query) = query else {
@@ -679,12 +694,12 @@ pub async fn counts_of(
             continue;
         };
         let timed_out = SavedViewCount { view_id, status: SavedViewCountStatus::TimedOut, count: None };
-        let Some(ms) = remaining_ms(deadline) else {
+        let (Some(model), Some(ms)) = (&model, remaining_ms(deadline)) else {
             data.push(timed_out);
             continue;
         };
         let filter = ViewFilter::of(&query);
-        let f = crate::modules::items::service::list_filters(&mut tx, ctx, &model, &filter, query.q.as_deref()).await?;
+        let f = crate::modules::items::service::list_filters(&mut tx, ctx, model, &filter, query.q.as_deref()).await?;
         let mut sp = tx.begin().await?;
         crate::data::impact::set_statement_timeout(&mut sp, ms).await?;
         let counted = crate::data::items::count_capped(&mut sp, &f, COUNT_CAP).await;
@@ -704,6 +719,7 @@ pub async fn counts_of(
         }
     }
     tx.rollback().await?;
+    drop(slot);
     Ok(SavedViewCounts { data, cap: COUNT_CAP, truncated })
 }
 

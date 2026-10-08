@@ -65,6 +65,8 @@ pub struct AppState {
     pub imports: Arc<crate::config::ImportConfig>,
     /// Business service limits (`BUSINESS_SERVICE_*`).
     pub business_services: crate::config::BusinessServiceConfig,
+    /// Saved-view count requests running at once (GH#780).
+    pub view_counts: Arc<tokio::sync::Semaphore>,
 }
 
 /// The start-up step for encrypted secrets ([`crate::secrets::sealed::prepare`]):
@@ -82,7 +84,6 @@ pub struct SealedState {
 impl AppState {
     pub fn new(pool: PgPool, auth: AuthConfig, keyring: Arc<crate::secrets::Keyring>) -> Self {
         AppState {
-            pool,
             auth: Arc::new(AuthState::new(auth, keyring)),
             capture: ClientCapture { ip: true, user_agent: true },
             schema: Arc::default(),
@@ -92,6 +93,10 @@ impl AppState {
             impact: Arc::default(),
             imports: Arc::default(),
             business_services: Default::default(),
+            view_counts: Arc::new(tokio::sync::Semaphore::new(crate::modules::saved_views::service::count_slots(
+                pool.options().get_max_connections(),
+            ))),
+            pool,
         }
     }
 
