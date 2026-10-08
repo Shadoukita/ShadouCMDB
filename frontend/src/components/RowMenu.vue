@@ -2,6 +2,7 @@
 import { nextTick, onBeforeUnmount, ref, useId } from "vue";
 import { RouterLink, type RouteLocationRaw } from "vue-router";
 import Icon from "./Icon.vue";
+import type { IconName } from "../icons/lucide";
 
 export interface RowMenuItem {
   label: string;
@@ -26,6 +27,12 @@ const props = defineProps<{
    * instead of opening the menu, and Enter or Space opens it.
    */
   rowFocus?: boolean;
+  /** A text button (a page header's Export) instead of the ellipsis icon: its text, and an icon before it. */
+  text?: string;
+  icon?: IconName;
+  disabled?: boolean;
+  /** Shown as the button's tooltip, e.g. why it is disabled. */
+  title?: string;
 }>();
 const open = ref(false);
 const button = ref<HTMLButtonElement>();
@@ -111,16 +118,19 @@ function run(item: RowMenuItem) {
     <button
       ref="button"
       type="button"
-      :class="['btn', 'btn-icon', { 'btn-sm': !large }]"
+      :class="['btn', { 'btn-icon': !text, 'btn-sm': !large }]"
       aria-haspopup="menu"
       :aria-expanded="open"
       :aria-controls="open ? menuId : undefined"
-      :aria-label="label"
+      :aria-label="text ? undefined : label"
+      :disabled="disabled"
+      :title="title"
       :data-row-focus="rowFocus || undefined"
       @click="open ? hide(false) : show()"
       @keydown="onButtonKey"
     >
-      <Icon name="ellipsis" />
+      <template v-if="text"><Icon v-if="icon" :name="icon" />{{ text }}<Icon name="chevron-down" /></template>
+      <Icon v-else name="ellipsis" />
     </button>
     <Teleport to="body">
       <ul v-if="open" :id="menuId" ref="menu" class="row-menu-list" role="menu" :aria-label="label" :style="place" @keydown="onMenuKey">

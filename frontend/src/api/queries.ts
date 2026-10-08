@@ -4,7 +4,9 @@
 import { keepPreviousData, useMutation, useQueries, useQuery, useQueryClient, type QueryClient } from "@tanstack/vue-query";
 import { computed, toValue, type MaybeRefOrGetter } from "vue";
 import { ApiError, api, unwrap, type Schemas } from "./client";
+import { saveDownload } from "./download";
 import type { paths } from "./schema";
+import type { InventoryExportQuery } from "../lib/inventoryExport";
 import { bySortOrder, flattenTree } from "../lib/tree";
 
 export type CiSummary = Schemas["ConfigurationItemSummary"];
@@ -431,20 +433,17 @@ export function useImpact(id: MaybeRefOrGetter<string>, params: MaybeRefOrGetter
  * audited by the server), saved under the file name the server gives (or `fallbackName`).
  */
 export async function downloadImpactCsv(id: string, params: ImpactParams, fallbackName: string): Promise<void> {
-  const { data, error, response } = await api.GET("/api/v1/configuration-items/{id}/impact/export", {
-    params: { path: { id }, query: params },
-    parseAs: "blob",
-  });
-  if (!response.ok) await unwrap(Promise.resolve({ data: undefined, error, response }));
-  // The header is unreadable when the API is on another origin and does not expose it.
-  const name = /filename="?([^";]+)"?/.exec(response.headers.get("Content-Disposition") ?? "")?.[1] ?? fallbackName;
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(data as Blob);
-  a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  const request = () => api.GET("/api/v1/configuration-items/{id}/impact/export", { params: { path: { id }, query: params }, parseAs: "blob" });
+  return saveDownload(request, fallbackName);
+}
+
+/**
+ * The inventory query as CSV from GET /configuration-items/export (all matching CIs, no page; neutralised against
+ * spreadsheet formulas and audited by the server), saved under the file name the server gives (or `fallbackName`).
+ */
+export async function downloadInventoryCsv(query: InventoryExportQuery, fallbackName: string): Promise<void> {
+  const request = () => api.GET("/api/v1/configuration-items/export", { params: { query }, parseAs: "blob" });
+  return saveDownload(request, fallbackName);
 }
 
 /** The values of the system lookup list `criticality`, most critical first (the CI form, filters and badges). */
