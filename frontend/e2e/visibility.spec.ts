@@ -131,7 +131,7 @@ test("audit log: a class-limited auditor's list and total leave out CIs they may
   const page = await signInUi(browser, AUDITOR);
   await page.goto(`/admin/audit?actorName=${WRITER}&entityType=configuration_items`);
   const log = page.getByRole("region", { name: "Audit log" });
-  await expect(page.locator(".page-header .muted")).toHaveText("2 entries");
+  await expect(page.locator(".list-head .count")).toHaveText("2 entries");
   await expect(log.locator("tbody tr")).toHaveCount(2);
   for (const name of PUB_CIS) await expect(log.getByRole("link", { name })).toBeVisible();
   await expect(log).not.toContainText(SEC_CI);
@@ -141,7 +141,7 @@ test("audit log: a class-limited auditor's list and total leave out CIs they may
   // The administrator sees all three.
   const admin = await browser.newPage();
   await admin.goto(`/admin/audit?actorName=${WRITER}&entityType=configuration_items`);
-  await expect(admin.locator(".page-header .muted")).toHaveText("3 entries");
+  await expect(admin.locator(".list-head .count")).toHaveText("3 entries");
   await expect(admin.getByRole("region", { name: "Audit log" }).getByRole("link", { name: SEC_CI })).toBeVisible();
   await snap(admin, "vis-02-audit-admin");
   await admin.close();
