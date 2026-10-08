@@ -3677,6 +3677,8 @@ export interface components {
             isRequired: boolean;
             /** @description Counts towards completeness: a live CI without a value is incomplete. Not enforced on writes. */
             isExpected: boolean;
+            /** @description Identifies one CI (serial number, asset tag, ...): not copied when a CI is cloned. Uniqueness is not enforced on writes. */
+            isIdentifying: boolean;
             /** @description Allowed values when dataType is "enum" */
             enumValues: string[] | null;
             /**
@@ -4171,7 +4173,7 @@ export interface components {
             format: "shadoucmdb.config";
             /**
              * Format: int32
-             * @description File format version; this server writes version 11 and reads 1 to 11
+             * @description File format version; this server writes version 12 and reads 1 to 12
              */
             formatVersion: number;
             exportedAt?: string | null;
@@ -4507,6 +4509,11 @@ export interface components {
                  *     new one is not expected
                  */
                 isExpected?: boolean | null;
+                /**
+                 * @description Identifies one CI: not copied when a CI is cloned. Left out (files before version 12): an existing field
+                 *     keeps its value, a new one is not identifying
+                 */
+                isIdentifying?: boolean | null;
                 enumValues?: string[] | null;
                 referenceClass?: string | null;
                 lookupList?: string | null;
@@ -4622,6 +4629,8 @@ export interface components {
             isRequired: boolean;
             /** @description Counts towards completeness: a live CI without a value is incomplete. Not enforced on writes. */
             isExpected: boolean;
+            /** @description Identifies one CI (serial number, asset tag, ...): not copied when a CI is cloned. Uniqueness is not enforced on writes. */
+            isIdentifying: boolean;
             /** @description Allowed values when dataType is "enum" */
             enumValues: string[] | null;
             /**
@@ -16839,6 +16848,7 @@ export interface operations {
                 isActive?: "true" | "false";
                 isRequired?: "true" | "false";
                 isExpected?: "true" | "false";
+                isIdentifying?: "true" | "false";
             };
             header?: never;
             path?: never;
@@ -16935,6 +16945,8 @@ export interface operations {
                     isRequired?: boolean;
                     /** @description Counts towards completeness: a live CI without a value is incomplete. Not enforced on writes. */
                     isExpected?: boolean;
+                    /** @description Identifies one CI (serial number, asset tag, ...): not copied when a CI is cloned. Uniqueness is not enforced on writes. */
+                    isIdentifying?: boolean;
                     enumValues?: string[] | null;
                     validation?: {
                         /** @description number/integer: minimum */
@@ -17272,6 +17284,8 @@ export interface operations {
                     isRequired?: boolean;
                     /** @description Counts towards completeness: a live CI without a value is incomplete. Not enforced on writes. */
                     isExpected?: boolean;
+                    /** @description Identifies one CI (serial number, asset tag, ...): not copied when a CI is cloned. Uniqueness is not enforced on writes. */
+                    isIdentifying?: boolean;
                     enumValues?: string[] | null;
                     validation?: {
                         /** @description number/integer: minimum */
@@ -27769,7 +27783,7 @@ export interface operations {
                     format: "shadoucmdb.config";
                     /**
                      * Format: int32
-                     * @description File format version; this server writes version 11 and reads 1 to 11
+                     * @description File format version; this server writes version 12 and reads 1 to 12
                      */
                     formatVersion: number;
                     exportedAt?: string | null;
