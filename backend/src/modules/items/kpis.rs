@@ -265,9 +265,11 @@ mod tests {
     use serde_json::{Value, json};
     use uuid::Uuid;
 
-    use super::super::schemas::{CountActive, CountBucket, ItemCountHistoryQuery};
+    use super::super::schemas::{
+        ActiveQuery, CompletenessBasis, CompletenessQuery, CountActive, CountBucket, ItemCountHistoryQuery,
+    };
     use crate::api::context::RequestContext;
-    use crate::api::schemas::{QueryBool, UuidList};
+    use crate::api::schemas::{Deleted, QueryBool, UuidList};
     use crate::auth::permissions::{ClassRights, Permissions};
     use crate::auth::{Credential, Principal};
     use crate::db::scratch;
@@ -391,6 +393,34 @@ mod tests {
             call(&app, "GET", &format!("/api/v1/configuration-items/{}/completeness", Uuid::new_v4()), &admin, None)
                 .await;
         assert_eq!((status, code(&v)), (404, "NOT_FOUND"), "{v}");
+
+        // A viewer of srv alone: vm is left out of completeness though subclasses are
+        // included, and a vm CI's completeness is "not found", as its detail is.
+        let basis = CompletenessBasis::Expected;
+        let q = CompletenessQuery {
+            basis,
+            q: None,
+            class_id: Some(UuidList(vec![srv])),
+            include_subclasses: QueryBool::True,
+            active: ActiveQuery::True,
+            lookup_value_id: None,
+            ip_within: None,
+            criticality_value_id: None,
+            deleted: Deleted::Exclude,
+            own_layout: None,
+            layout_template: None,
+            kind: None,
+            business_service_id: None,
+        };
+        let c = super::completeness(pool, &viewer(&[srv]), &q).await.unwrap();
+        let counted: Vec<Uuid> = c.classes.iter().map(|r| r.class.id).collect();
+        assert_eq!(counted, [srv], "{c:?}");
+        assert_eq!(
+            (c.overall.items, c.overall.complete_items, c.overall.expected_values, c.overall.filled_values),
+            (2, 1, 2, 1)
+        );
+        let hidden = super::item_completeness(pool, &viewer(&[srv]), vm1, basis).await.unwrap_err();
+        assert_eq!(hidden.code, crate::http::error::ErrorCode::NotFound, "{hidden:?}");
 
         // Unmarking a field is an audited change and leaves it out of the count.
         let body = json!({ "isExpected": false });
