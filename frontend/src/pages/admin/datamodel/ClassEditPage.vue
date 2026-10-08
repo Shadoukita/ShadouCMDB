@@ -124,6 +124,8 @@ watch(id, () => {
 });
 const activeAreas = computed(() => (areas.data.value ?? []).filter((a) => a.isActive));
 const area = computed(() => areas.data.value?.find((a) => a.id === (cls.data.value?.areaId ?? areaId.value)));
+/** The head tile on a tint of the class colour, as on the CI page. */
+const classTile = computed(() => (!isNew.value && cls.data.value?.color ? { "--tile-c": cls.data.value.color } : undefined));
 // A new class goes into its parent's area unless the administrator chose another; a root class into the first area.
 watch(
   () => [parentId.value, classes.data.value, areas.data.value] as const,
@@ -312,7 +314,7 @@ const notFound = computed(() => {
 </script>
 
 <template>
-  <Breadcrumbs :items="crumbs" />
+  <Breadcrumbs v-if="!isNew && (cls.isLoading.value || cls.isError.value)" :items="crumbs" />
   <LoadingState v-if="!isNew && cls.isLoading.value" :label="t('dm.class.loading')" />
   <template v-else-if="!isNew && cls.isError.value">
     <EmptyState v-if="notFound" icon="search" :title="t('dm.class.notFound.title')">
@@ -322,34 +324,37 @@ const notFound = computed(() => {
     <ErrorAlert v-else :error="cls.error.value" :on-retry="() => cls.refetch()" />
   </template>
   <template v-else>
-    <div class="page-header record-header">
-      <div class="record-heading">
-        <div class="title">
-          <ClassBadge v-if="!isNew && cls.data.value && (cls.data.value.icon || cls.data.value.color)" :icon="cls.data.value.icon" :color="cls.data.value.color" />
-          <Icon v-else name="layers" class="class-icon" />
-          <h1 dir="auto">{{ isNew ? t("dm.class.new") : cls.data.value?.name }}</h1>
+    <div class="record-head record-head-plain">
+      <Breadcrumbs :items="crumbs" />
+      <div class="page-header record-header">
+        <div class="record-heading">
+          <span class="class-tile class-tile-lg" :style="classTile" aria-hidden="true">
+            <ClassBadge v-if="!isNew && cls.data.value && (cls.data.value.icon || cls.data.value.color)" :icon="cls.data.value.icon" :color="cls.data.value.color" />
+            <Icon v-else name="layers" class="class-icon" />
+          </span>
+          <div class="record-title">
+            <div class="title">
+              <h1 dir="auto">{{ isNew ? t("dm.class.new") : cls.data.value?.name }}</h1>
+            </div>
+            <p v-if="cls.data.value && !isNew" class="record-meta" data-testid="record-meta">
+              <RouterLink v-if="area" class="badge record-class-chip" :to="{ path: '/admin/classes', query: { areaId: area.id } }" dir="auto">{{ area.name }}</RouterLink>
+              <span v-if="cls.data.value.isAbstract" class="badge warn" :title="t('dm.class.abstractTitle')">{{ t("dm.class.abstract") }}</span>
+              <span v-if="cls.data.value.isActive" class="badge ok"><span class="status-dot" aria-hidden="true" />{{ t("common.active") }}</span>
+              <span v-else class="badge off"><span class="status-dot" aria-hidden="true" />{{ t("dm.class.archivedBadge") }}</span>
+              <span class="record-meta-line">
+                <span class="ident">{{ cls.data.value.tableName }}</span>
+                <span class="sep" aria-hidden="true">·</span>
+                <time :datetime="cls.data.value.updatedAt" :title="formatDateTime(cls.data.value.updatedAt)">
+                  {{ t("record.meta.updated", { when: formatRelative(cls.data.value.updatedAt) }) }}
+                </time>
+              </span>
+            </p>
+          </div>
         </div>
-        <p v-if="cls.data.value && !isNew" class="record-meta" data-testid="record-meta">
-          <span v-if="area">{{ area.name }}</span>
-          <span v-if="area" class="sep" aria-hidden="true">·</span>
-          <span class="ident">{{ cls.data.value.tableName }}</span>
-          <template v-if="cls.data.value.isAbstract">
-            <span class="sep" aria-hidden="true">·</span>
-            <span class="badge warn" :title="t('dm.class.abstractTitle')">{{ t("dm.class.abstract") }}</span>
-          </template>
-          <template v-if="!cls.data.value.isActive">
-            <span class="sep" aria-hidden="true">·</span>
-            <span class="badge off">{{ t("dm.class.archivedBadge") }}</span>
-          </template>
-          <span class="sep" aria-hidden="true">·</span>
-          <time :datetime="cls.data.value.updatedAt" :title="formatDateTime(cls.data.value.updatedAt)">
-            {{ t("record.meta.updated", { when: formatRelative(cls.data.value.updatedAt) }) }}
-          </time>
-        </p>
-      </div>
-      <div v-if="cls.data.value && !isNew" class="actions">
-        <RouterLink class="btn" :to="`/cis?classId=${cls.data.value.id}`">{{ t("dm.class.openInventory") }}</RouterLink>
-        <RowMenu :label="t('record.actions.more')" :items="moreActions" large />
+        <div v-if="cls.data.value && !isNew" class="actions">
+          <RouterLink class="btn" :to="`/cis?classId=${cls.data.value.id}`">{{ t("dm.class.openInventory") }}</RouterLink>
+          <RowMenu :label="t('record.actions.more')" :items="moreActions" large />
+        </div>
       </div>
     </div>
     <div v-if="cls.data.value && !cls.data.value.isActive" class="alert alert-warn" role="note">
