@@ -45531,7 +45531,7 @@
           },
           "label": {
             "type": "string",
-            "description": "e.g. `field server.owner`, `technical owner pal of business service Shop`, `technical owners of business\nservice Shop`"
+            "description": "e.g. `field server.owner`, `technical owner pal of business service Shop`, `technical owners of business\nservice Shop`. A caller who may not view business services gets `technical owners of the CI's business\nservices` instead, without service or owner names (GH#717)"
           },
           "reason": {
             "type": "string",
@@ -45543,11 +45543,11 @@
           },
           "message": {
             "type": "string",
-            "description": "The reason, in words"
+            "description": "The reason, in words; generic, as `label`, for a caller who may not view business services"
           },
           "fieldLastChanged": {
             "$ref": "#/components/schemas/WorkflowFieldChange",
-            "description": "The audited change that named the approvers: the field's, the owner's or the membership's"
+            "description": "The audited change that named the approvers: the field's, the owner's or the membership's. For a caller who\nmay not view business services, a service owner's or membership's change has no actor id, name, token\ncreators or approval requesters"
           }
         },
         "additionalProperties": false
@@ -47510,6 +47510,14 @@
               "format": "uuid"
             },
             "description": "A change made with an API token (`api_client`): the user who minted that token for its owner, when it\nwas not the owner (GH#709). Several when the token's `token.use` row was pruned: then every user who\nminted one of the owner's tokens before the change counts. Left out when there is none."
+          },
+          "approvalRequestedBy": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "A change an approval applied (its final approval writes as the decider): the users that request excluded,\nits requester and the creator of the token it was made with (GH#715). Left out when there is none."
           }
         },
         "additionalProperties": false

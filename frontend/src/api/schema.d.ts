@@ -7002,7 +7002,8 @@ export interface components {
             source: "profile" | "group" | "user" | "ci_attribute" | "service_owner";
             /**
              * @description e.g. `field server.owner`, `technical owner pal of business service Shop`, `technical owners of business
-             *     service Shop`
+             *     service Shop`. A caller who may not view business services gets `technical owners of the CI's business
+             *     services` instead, without service or owner names (GH#717)
              */
             label: string;
             /**
@@ -7010,9 +7011,13 @@ export interface components {
              * @enum {string}
              */
             reason: "field_set_by_requester" | "field_set_by_unattributed";
-            /** @description The reason, in words */
+            /** @description The reason, in words; generic, as `label`, for a caller who may not view business services */
             message: string;
-            /** @description The audited change that named the approvers: the field's, the owner's or the membership's */
+            /**
+             * @description The audited change that named the approvers: the field's, the owner's or the membership's. For a caller who
+             *     may not view business services, a service owner's or membership's change has no actor id, name, token
+             *     creators or approval requesters
+             */
             fieldLastChanged: components["schemas"]["WorkflowFieldChange"];
         };
         /** @description Whether the caller may decide the active step now, and why not */
@@ -7683,6 +7688,11 @@ export interface components {
              *     minted one of the owner's tokens before the change counts. Left out when there is none.
              */
             tokenCreatedBy?: string[];
+            /**
+             * @description A change an approval applied (its final approval writes as the decider): the users that request excluded,
+             *     its requester and the creator of the token it was made with (GH#715). Left out when there is none.
+             */
+            approvalRequestedBy?: string[];
         };
         /** @description The profiles that may run one transition */
         WorkflowGrant: {

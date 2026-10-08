@@ -319,6 +319,10 @@ pub async fn list(
         redact(&mut rows, &classes, &changes, &fields, &visible);
         hide_path_ids(&mut rows, &classes, &edges, &visible);
         withhold_writer_counts(&mut rows, ctx.principal().map(|p| p.user_id.to_string()).as_deref());
+        let service_class = crate::data::service_owners::service_class_id(&mut *pool.acquire().await?).await?;
+        if !visible.contains(&service_class) {
+            hide_dropped_service_names(&mut rows);
+        }
         if rows.iter().any(|e| e.entity_type == "saved_views") {
             let ids: Vec<Uuid> = visible.iter().copied().collect();
             let keys: Vec<String> = sqlx::query_scalar("SELECT key FROM cmdb.ci_classes WHERE id = ANY($1)")
@@ -633,6 +637,25 @@ fn redact(
                 e.old_value = None;
                 e.new_value = None;
                 e.redacted = true;
+            }
+        }
+    }
+}
+
+/// An approval request's dropped approver sources name business services, their
+/// owners and who changed them; a caller who may not view business services
+/// gets them in general words, as getWorkflowApprovalRequest shows them (GH#717).
+fn hide_dropped_service_names(rows: &mut [AuditEntry]) {
+    use crate::modules::workflows::approvers::hide_service_names_in;
+    for e in rows.iter_mut().filter(|e| e.entity_type == "configuration_items") {
+        for v in e.old_value.iter_mut().chain(e.new_value.iter_mut()) {
+            if let Some(d) = v.get_mut("droppedSources") {
+                hide_service_names_in(d);
+            }
+            for step in v.get_mut("steps").and_then(Value::as_array_mut).into_iter().flatten() {
+                if let Some(d) = step.get_mut("droppedSources") {
+                    hide_service_names_in(d);
+                }
             }
         }
     }

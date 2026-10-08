@@ -1417,9 +1417,14 @@ async fn view(
     .bind(req.id)
     .fetch_all(&mut *conn)
     .await?;
+    let sees_services = approvers::sees_services(&mut *conn, ctx).await?;
     let steps = states
         .iter()
         .map(|st| {
+            let mut dropped_sources = st.dropped_sources.0.clone();
+            if !sees_services {
+                approvers::hide_service_names(&mut dropped_sources);
+            }
             let pinned = p.steps_of(t.id).find(|s| s.step_no == st.step_no);
             let decided: Vec<WorkflowApprovalDecision> =
                 decisions.iter().filter(|d| d.step_no == st.step_no).cloned().collect();
@@ -1439,7 +1444,7 @@ async fn view(
                 eligible_count: st.eligible_count,
                 understaffed: st.status == WorkflowApprovalStepStatus::Active
                     && st.eligible_count.is_some_and(|n| i64::from(n) < i64::from(required) - approvals),
-                dropped_sources: st.dropped_sources.0.clone(),
+                dropped_sources,
                 decisions: decided,
             }
         })
