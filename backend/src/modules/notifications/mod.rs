@@ -2,7 +2,7 @@
 //!
 //! Nothing leaves the server: no e-mail, webhook or push; the bell polls
 //! `unread-count`. The rows are written by database triggers in the
-//! transaction of the event they report (migration 0072), so every code path
+//! transaction of the event they report (migration 0071), so every code path
 //! notifies and a rolled-back action notifies no one. Every route needs a
 //! browser session: a notification belongs to a person, and an API token has
 //! no inbox.
