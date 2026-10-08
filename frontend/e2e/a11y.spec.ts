@@ -53,9 +53,10 @@ test("CI detail page (built-in layout), its delete dialog and the edit form", as
   const ci = (await apiGet<{ data: { id: string; label: string }[] }>(request, `/configuration-items?classId=${serverId}&sort=label&limit=1`)).data[0];
   await page.goto(`/cis/${ci.id}`);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(ci.label);
-  await expect(page.getByRole("region", { name: "Relationships" }).getByRole("columnheader", { name: "Related CI" })).toBeVisible();
-  // The record header (design §2.7): the stat tiles have loaded before the scan.
-  await expect(page.getByRole("region", { name: "Summary" }).locator("[data-stat=relationships] .value")).toHaveText(/^\d+$/);
+  await expect(page.getByRole("region", { name: "Relationships" }).getByRole("searchbox", { name: "Filter relationships" })).toBeVisible();
+  // The record header (design §0 step 12d): the tab counts and the history have loaded before the scan.
+  await expect(page.getByRole("tab", { name: /^Relationship map \d+$/ })).toBeVisible();
+  await expect(page.locator("ol.event-timeline > li").first()).toBeVisible();
   await checkA11y(page, testInfo, "ci-detail");
 
   await page.getByRole("button", { name: "More actions" }).click();

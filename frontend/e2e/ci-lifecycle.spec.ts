@@ -149,7 +149,7 @@ test("edit: the CI opens editable; Save appears once something changed and the p
 
   // Source chips filter on the server: the edits above came through the UI, none through an API token.
   const sources = page.getByRole("group", { name: "Filter by source" });
-  const events = page.locator("table.event-table tbody tr");
+  const events = page.locator("ol.event-timeline > li");
   await expect(events.first().locator(".event-source")).toHaveText("UI");
   const api = sources.getByRole("button", { name: "API", exact: true });
   await api.click();
@@ -243,11 +243,27 @@ test("relationships: add in both directions; illegal pairs offer no type", async
   await page.getByRole("button", { name: "Add relationship" }).click();
   await expect(page.getByRole("status").filter({ hasText: `Added: ${name} hosts CRM` })).toBeVisible();
 
-  await expect(panel.getByRole("row")).toHaveCount(3); // header + 2
-  await expect(panel.getByRole("row", { name: /is located in\s+FRA1 Rack A01/ })).toBeVisible();
+  // Grouped by how the edge reads from this CI (design §0 step 12d, gap G15).
+  await expect(panel.getByRole("listitem")).toHaveCount(2);
+  const locatedIn = panel.getByRole("list", { name: /^is located in/ }).getByRole("listitem").filter({ hasText: "FRA1 Rack A01" });
+  await expect(locatedIn).toBeVisible();
   // The direction is an icon named for assistive technology (audit R5).
-  await expect(panel.getByRole("row", { name: /is located in\s+FRA1 Rack A01/ }).getByRole("img", { name: "Outgoing" })).toBeVisible();
-  await expect(panel.getByRole("row", { name: /hosts\s+CRM/ }).getByRole("img", { name: "Incoming" })).toBeVisible();
+  await expect(locatedIn.getByRole("img", { name: "Outgoing" })).toBeVisible();
+  const hosts = panel.getByRole("list", { name: /^hosts/ }).getByRole("listitem").filter({ hasText: "CRM" });
+  await expect(hosts.getByRole("img", { name: "Incoming" })).toBeVisible();
+  // All / Outgoing / Incoming and the text filter narrow the list.
+  const direction = panel.getByRole("radiogroup", { name: "Direction" });
+  await direction.getByRole("radio", { name: "Outgoing · 1" }).check();
+  await expect(panel.getByRole("listitem")).toHaveCount(1);
+  await expect(locatedIn).toBeVisible();
+  await direction.getByRole("radio", { name: "Incoming · 1" }).check();
+  await expect(hosts).toBeVisible();
+  await expect(locatedIn).toHaveCount(0);
+  await direction.getByRole("radio", { name: "All" }).check();
+  await panel.getByRole("searchbox", { name: "Filter relationships" }).fill("rack");
+  await expect(panel.getByRole("listitem")).toHaveCount(1);
+  await panel.getByRole("searchbox", { name: "Filter relationships" }).fill("");
+  await expect(panel.getByRole("listitem")).toHaveCount(2);
 
   await pickCi(page, "#rel-target", "Customer Relationship", "Customer Relationship Management");
   // A fresh install's template services are the built-in business service type (migration 0033).

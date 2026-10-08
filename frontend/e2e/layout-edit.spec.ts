@@ -441,7 +441,7 @@ test("content blocks: a note and built-in panels placed in the editor, on the de
   await expect(page.locator("#rel-title")).toHaveCount(0);
   await tabs.filter({ hasText: "Links" }).click();
   await expect(heads).toHaveText(["Relationships", "Audit trail"]);
-  await expect(page.getByRole("columnheader", { name: "Related CI" })).toBeVisible();
+  await expect(page.getByRole("searchbox", { name: "Filter relationships" })).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "Request id" })).toBeVisible();
   await snap(page, "layout-blocks-detail");
 

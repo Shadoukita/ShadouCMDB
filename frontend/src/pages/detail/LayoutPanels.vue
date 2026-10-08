@@ -24,6 +24,9 @@ import CoreFieldValue from "./CoreFieldValue.vue";
  * (`archived`) are listed there too, apart and labelled. The sections the layout
  * does not place follow below the windows at the full width.
  *
+ * `stacked` (the built-in arrangement, design §0 step 12d): the sections share one card, each under an
+ * overline heading and a rule, as the default layout's field groups.
+ *
  * The fields are the CI's form (SHAA-1644, ciDraft.ts): each field the draft may change is an
  * input bound to it; the others (the class, the timestamps, a read-only or managed field, or every
  * field of a CI the user may not edit) show their value in the same place, read-only.
@@ -39,6 +42,8 @@ const props = defineProps<{
   archived?: EffectiveAttribute[];
   /** The CI's values being edited. */
   draft: CiDraft;
+  /** The sections in one card (the built-in arrangement). */
+  stacked?: boolean;
 }>();
 const values = computed(() => props.ci.attributes as Record<string, unknown>);
 const refs = computed(() => props.ci.attributeReferences);
@@ -62,7 +67,7 @@ const orphanKeys = computed(() => {
 </script>
 
 <template>
-  <div class="layout-container">
+  <div :class="['layout-container', { 'lp-stacked': stacked }]">
     <div v-for="g in groups" :key="String(g.free)" :class="g.free ? 'lg-free' : 'layout-panels'" :style="g.free ? freeAreaStyle(g.items) : undefined">
       <RecordSection
         v-for="p in g.items"

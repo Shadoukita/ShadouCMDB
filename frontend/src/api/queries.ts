@@ -233,6 +233,7 @@ export function useAuditLog(
   entityId: MaybeRefOrGetter<string>,
   paging: MaybeRefOrGetter<{ limit: number; offset: number }> = { limit: 50, offset: 0 },
   actorTypes: MaybeRefOrGetter<readonly AuditEntry["actorType"][]> = [],
+  enabled: MaybeRefOrGetter<boolean> = true,
 ) {
   return useQuery(() => {
     const id = toValue(entityId);
@@ -240,6 +241,7 @@ export function useAuditLog(
     const actorType = [...toValue(actorTypes)].sort().join(",") || undefined;
     return {
       queryKey: [...keys.audit(id), "page", limit, offset, actorType ?? ""] as const,
+      enabled: toValue(enabled),
       queryFn: ({ signal }: { signal: AbortSignal }) =>
         unwrap(api.GET("/api/v1/audit-log", { params: { query: { entityId: id, actorType, sort: "-occurredAt", limit, offset } }, signal })),
       // Keep the page on screen while the next one loads, but never another record's entries.

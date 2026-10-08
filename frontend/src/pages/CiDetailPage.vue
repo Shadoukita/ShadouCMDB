@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { onBeforeRouteLeave, onBeforeRouteUpdate, RouterLink, useRoute, useRouter, type RouteLocationNormalized } from "vue-router";
 import { ApiError } from "../api/client";
 import { useAreas } from "../api/datamodel";
-import { useCi, useCiClasses, useClassAttributes } from "../api/queries";
+import { useAuditLog, useCi, useCiClasses, useClassAttributes, useRelationships } from "../api/queries";
 import { useServiceSettings } from "../api/services";
 import { useCiWorkflows } from "../api/workflowRuntime";
 import { useCiLayout } from "../api/uiSettings";
@@ -23,7 +23,7 @@ import { useAppSettings } from "../lib/appSettings";
 import { useDocumentTitle } from "../lib/composables";
 import { useLayoutEditor } from "../lib/layoutEditor";
 import { asClassLayout } from "../lib/layoutTemplates";
-import { formatDateTime, formatRelative, isHostLike } from "../lib/format";
+import { formatDateTime, formatRelative } from "../lib/format";
 import { useTrail, type TrailStep } from "../lib/trail";
 import { attributeKey, builtInLayout, cellClass, DETAIL_CORE, DETAIL_RECORD, fieldLabel, gridClass, layoutFor, normalizeLayout, placedPanels, resolveLayout, withoutKinds } from "../lib/uiSettings";
 import { useFlashStore } from "../stores/flash";
@@ -39,7 +39,6 @@ import HistoryPanel from "./detail/HistoryPanel.vue";
 import ImpactPanel from "./detail/ImpactPanel.vue";
 import LayoutPanels from "./detail/LayoutPanels.vue";
 import PartOfServicesPanel from "./detail/PartOfServicesPanel.vue";
-import RecordStats from "./detail/RecordStats.vue";
 import RelationshipGraphPanel from "./detail/RelationshipGraphPanel.vue";
 import RelationshipsPanel from "./detail/RelationshipsPanel.vue";
 import SignInAccountPanel from "./detail/SignInAccountPanel.vue";
@@ -54,6 +53,11 @@ import CiWorkflowsPanel from "./workflows/CiWorkflowsPanel.vue";
  * The class layout's tabs (`layout:<key>`; a single one is "overview"), then the relationship map, the
  * impact analysis and the history. The Impact tab has its own URL (/cis/:id/impact, with its options
  * in the query); the others are chosen on the page.
+ *
+ * The page head (design §0 step 12d) is a surface band: the breadcrumb, the class tile, the name in the data
+ * font, the class, state and criticality chips, "ident · Updated … by …", the actions, and the tabs with their
+ * counts. A class without a layout of its own shows the built-in arrangement as the default layout: the field
+ * sections in one card beside the relationships and the newest history entries.
  */
 type Tab = string;
 
@@ -147,15 +151,26 @@ const recordFields = computed(() =>
 // The Workflows tab, once the CI has run a workflow or the user may start one on it.
 const ciWorkflows = useCiWorkflows(() => (c.value ? id.value : undefined));
 const hasWorkflows = computed(() => !!ciWorkflows.data.value && (ciWorkflows.data.value.data.length > 0 || ciWorkflows.data.value.startable.length > 0));
-const TABS = computed<[Tab, string][]>(() => [
-  ...(layoutTabs.value.length > 1 ? layoutTabs.value.map((t): [Tab, string] => [`layout:${t.key}`, t.label]) : [["overview", "Overview"] as [Tab, string]]),
-  ["graph", "Relationship map"],
+// The tabs' counts: the direct relationships on the map, the workflow instances, the history's entries (the
+// newest of them also show on the built-in Overview and give "Updated … by …").
+const rels = useRelationships(() => id.value, () => !!c.value);
+const canAudit = computed(() => session.can("audit.view"));
+const recent = useAuditLog(id, { limit: 5, offset: 0 }, [], () => canAudit.value && !!c.value);
+const historyTotal = computed(() => (canAudit.value ? recent.data.value?.page.total : undefined));
+/** Who made the newest change of the record itself, when the history is visible (gap G16). */
+const lastActor = computed(() => {
+  const e = canAudit.value ? recent.data.value?.data[0] : undefined;
+  return e && (e.action === "update" || e.action === "create") ? (e.actorName ?? undefined) : undefined;
+});
+const TABS = computed<[Tab, string, number?][]>(() => [
+  ...(layoutTabs.value.length > 1 ? layoutTabs.value.map((l): [Tab, string] => [`layout:${l.key}`, l.label]) : [["overview", t("record.tab.overview")] as [Tab, string]]),
+  ["graph", t("record.actions.map"), rels.data.value?.page.total],
   // A deleted CI has no live relationships to analyse.
-  ...(c.value?.deletedAt ? [] : [["impact", "Impact"] as [Tab, string]]),
+  ...(c.value?.deletedAt ? [] : [["impact", t("record.tab.impact")] as [Tab, string]]),
   // Its running and recent workflow instances (a deleted CI keeps their history).
-  ...(hasWorkflows.value ? [["workflows", "Workflows"] as [Tab, string]] : []),
+  ...(hasWorkflows.value ? [["workflows", t("record.tab.workflows"), ciWorkflows.data.value?.data.length] as [Tab, string, number?]] : []),
   // The history is the audit log, which needs audit.view.
-  ...(session.can("audit.view") && !placed.value.has("history") ? [["history", "History"] as [Tab, string]] : []),
+  ...(canAudit.value && !placed.value.has("history") ? [["history", t("record.actions.history"), historyTotal.value] as [Tab, string, number?]] : []),
 ]);
 /** The tab shown: Impact on its URL, else the chosen one while it exists (a layout can change under the page), else the first. */
 const current = computed<Tab>(() => {
@@ -254,11 +269,12 @@ const moreActions = computed<RowMenuItem[]>(() =>
   c.value && session.canOnClass(c.value.classId, "delete") ? [{ label: t("common.delete"), danger: true, action: () => (deleting.value = true) }] : [],
 );
 const hasTab = (key: Tab) => TABS.value.some(([k]) => k === key);
+const classTile = computed(() => (cls.value?.color ? { "--tile-c": cls.value.color } : undefined));
 
 const self = computed<TrailStep | undefined>(() => (c.value ? { id: c.value.id, name: c.value.label } : undefined));
 const crumbs = computed<Crumb[]>(() => {
   if (!c.value) return [];
-  const out: Crumb[] = [{ label: "Inventory", to: "/cis" }];
+  const out: Crumb[] = [{ label: t("inventory.crumb"), to: "/cis" }];
   if (trail.value.length > 0) {
     trail.value.forEach((s, i) => out.push({ label: s.name, to: { path: `/cis/${s.id}`, state: { trail: trail.value.slice(0, i) } } }));
   } else {
@@ -274,7 +290,7 @@ const crumbs = computed<Crumb[]>(() => {
 <template>
   <LoadingState v-if="ci.isLoading.value || serviceSettings.isLoading.value || redirecting" label="Loading configuration item…" />
   <template v-else-if="ci.isError.value">
-    <Breadcrumbs :items="[{ label: 'Inventory', to: '/cis' }, { label: forbidden ? 'Permission denied' : notFound ? 'Not found' : 'Error' }]" />
+    <Breadcrumbs :items="[{ label: t('inventory.crumb'), to: '/cis' }, { label: forbidden ? 'Permission denied' : notFound ? 'Not found' : 'Error' }]" />
     <EmptyState v-if="forbidden" title="Permission denied">
       None of your permission profiles allows viewing this configuration item's class, so it cannot be shown.
       <template #actions><RouterLink class="btn" to="/cis">Back to inventory</RouterLink></template>
@@ -286,47 +302,65 @@ const crumbs = computed<Crumb[]>(() => {
     <ErrorAlert v-else :error="ci.error.value" :on-retry="() => ci.refetch()" />
   </template>
   <template v-else-if="c && self">
-    <Breadcrumbs :items="crumbs" />
-    <div class="page-header record-header">
-      <div class="record-heading">
-        <div class="title">
-          <ClassBadge :icon="cls?.icon" :color="cls?.color" />
-          <h1 dir="auto" :class="{ mono: isHostLike(c.label) }">{{ c.label }}</h1>
-          <span v-if="ownLayout" class="badge ci-own-layout" data-testid="ci-own-layout" :title="ownLayout.title">{{ ownLayout.label }}</span>
+    <div class="record-head">
+      <Breadcrumbs :items="crumbs" />
+      <div class="page-header record-header">
+        <div class="record-heading">
+          <span class="class-tile class-tile-lg" :style="classTile" aria-hidden="true"><ClassBadge :icon="cls?.icon" :color="cls?.color" /></span>
+          <div class="record-title">
+            <div class="title">
+              <h1 dir="auto" class="mono">{{ c.label }}</h1>
+              <span v-if="ownLayout" class="badge ci-own-layout" data-testid="ci-own-layout" :title="ownLayout.title">{{ ownLayout.label }}</span>
+            </div>
+            <p class="record-meta" data-testid="record-meta">
+              <RouterLink class="badge record-class-chip" :to="`/cis?classId=${c.classId}`" dir="auto">{{ c.class.name }}</RouterLink>
+              <span v-if="c.deletedAt" class="badge danger">Deleted {{ formatDateTime(c.deletedAt) }}</span>
+              <template v-else>
+                <span v-if="c.active" class="badge ok"><span class="status-dot ok" aria-hidden="true" />{{ t("ciState.active") }}</span>
+                <CiStateBadge :ci="c" />
+              </template>
+              <CriticalityBadge v-if="c.criticality" :value="c.criticality" />
+              <span class="record-meta-line">
+                <span class="ident" :title="t('record.meta.ident')">{{ c.ident }}</span>
+                <span class="sep" aria-hidden="true">·</span>
+                <time :datetime="c.updatedAt" :title="formatDateTime(c.updatedAt)">{{
+                  lastActor ? t("record.meta.updatedBy", { when: formatRelative(c.updatedAt), actor: lastActor }) : t("record.meta.updated", { when: formatRelative(c.updatedAt) })
+                }}</time>
+              </span>
+            </p>
+          </div>
         </div>
-        <p class="record-meta" data-testid="record-meta">
-          <span v-if="c.deletedAt" class="badge danger">Deleted {{ formatDateTime(c.deletedAt) }}</span>
-          <template v-else>
-            <span v-if="c.active" class="status"><span class="status-dot ok" aria-hidden="true" />{{ t("ciState.active") }}</span>
-            <CiStateBadge :ci="c" />
+        <div v-if="!c.deletedAt" class="actions">
+          <!-- QR label and Clone slots: built in the browser on SHAA-2358 (gaps G11, G12). -->
+          <EditLayoutButton v-if="editor.allowed && !editor.active" :editor="editor" />
+          <template v-if="!editor.active">
+            <RouterLink v-if="!onImpactRoute" class="btn" :to="`/cis/${c.id}/impact`">{{ t("record.actions.impact") }}</RouterLink>
+            <button v-if="current !== 'graph'" type="button" class="btn" @click="selectTab('graph')">{{ t("record.actions.map") }}</button>
+            <button v-if="hasTab('history') && current !== 'history'" type="button" class="btn" @click="selectTab('history')">{{ t("record.actions.history") }}</button>
           </template>
-          <span class="sep" aria-hidden="true">·</span>
-          <span class="ident" :title="t('record.meta.ident')">{{ c.ident }}</span>
-          <span class="sep" aria-hidden="true">·</span>
-          <RouterLink :to="`/cis?classId=${c.classId}`" dir="auto">{{ c.class.name }}</RouterLink>
-          <template v-if="c.criticality">
-            <span class="sep" aria-hidden="true">·</span>
-            <CriticalityBadge :value="c.criticality" />
-          </template>
-          <span class="sep" aria-hidden="true">·</span>
-          <time :datetime="c.updatedAt" :title="formatDateTime(c.updatedAt)">{{ t("record.meta.updated", { when: formatRelative(c.updatedAt) }) }}</time>
-        </p>
+          <RowMenu v-if="moreActions.length > 0" :label="t('record.actions.more')" :items="moreActions" large />
+          <DeleteCiDialog v-if="moreActions.length > 0" v-model:open="deleting" :ci="c" />
+        </div>
       </div>
-      <div v-if="!c.deletedAt" class="actions">
-        <EditLayoutButton v-if="editor.allowed && !editor.active" :editor="editor" />
-        <template v-if="!editor.active">
-          <RouterLink v-if="!onImpactRoute" class="btn" :to="`/cis/${c.id}/impact`">{{ t("record.actions.impact") }}</RouterLink>
-          <button v-if="current !== 'graph'" type="button" class="btn" @click="selectTab('graph')">{{ t("record.actions.map") }}</button>
-          <button v-if="hasTab('history') && current !== 'history'" type="button" class="btn" @click="selectTab('history')">{{ t("record.actions.history") }}</button>
-        </template>
-        <RowMenu v-if="moreActions.length > 0" :label="t('record.actions.more')" :items="moreActions" large />
-        <DeleteCiDialog v-if="moreActions.length > 0" v-model:open="deleting" :ci="c" />
+      <FactChips v-if="!editor.active" :ci="c" :defs="defs" />
+      <div v-if="!editor.active" class="tabs record-tabs" role="tablist" :aria-label="t('record.tabs')">
+        <button
+          v-for="[key, label, n] in TABS"
+          :id="`tab-${tabId(key)}`"
+          :key="key"
+          type="button"
+          role="tab"
+          :aria-selected="current === key"
+          :aria-controls="`panel-${tabId(key)}`"
+          :tabindex="current === key ? 0 : -1"
+          @click="selectTab(key)"
+          @keydown="onTabKey"
+        >
+          <!-- The count is generated content: part of the tab's accessible name, not of its text (the tab is named by its label). -->
+          {{ label }}<span v-if="n !== undefined" class="tab-count mono" :data-count="n.toLocaleString()" /><span v-if="tabErrorCount(key) > 0" class="badge danger tab-errors">{{ tabErrorCount(key) }} error{{ tabErrorCount(key) === 1 ? "" : "s" }}</span>
+        </button>
       </div>
     </div>
-    <template v-if="!editor.active">
-      <FactChips :ci="c" :defs="defs" />
-      <RecordStats :ci="c" />
-    </template>
     <FormErrorBanner v-if="draft.error != null && draft.dirty && !editor.active" :error="draft.error" :unplaced="draft.unplaced" :on-reload="loadCurrent" />
     <div v-if="c.deletedAt" class="alert alert-warn">
       This CI was deleted on {{ formatDateTime(c.deletedAt) }}. It is kept read-only for history; its relationships were
@@ -356,23 +390,6 @@ const crumbs = computed<Crumb[]>(() => {
       </template>
     </LayoutEditView>
 
-    <div v-if="!editor.active" class="tabs" role="tablist" aria-label="CI sections">
-      <button
-        v-for="[key, label] in TABS"
-        :id="`tab-${tabId(key)}`"
-        :key="key"
-        type="button"
-        role="tab"
-        :aria-selected="current === key"
-        :aria-controls="`panel-${tabId(key)}`"
-        :tabindex="current === key ? 0 : -1"
-        @click="selectTab(key)"
-        @keydown="onTabKey"
-      >
-        {{ label }}<span v-if="tabErrorCount(key) > 0" class="badge danger tab-errors">{{ tabErrorCount(key) }} error{{ tabErrorCount(key) === 1 ? "" : "s" }}</span>
-      </button>
-    </div>
-
     <div v-if="!editor.active" :id="`panel-${tabId(current)}`" role="tabpanel" :aria-labelledby="`tab-${tabId(current)}`">
       <template v-if="layoutIndex >= 0">
         <LoadingState v-if="attrs.isLoading.value || layoutLoading" label="Loading attribute definitions…" />
@@ -382,21 +399,42 @@ const crumbs = computed<Crumb[]>(() => {
           title="Could not load this class's attribute definitions"
           :on-retry="() => attrs.refetch()"
         />
-        <LayoutPanels
-          v-else
-          :ci="c"
-          :sections="layoutTabs[layoutIndex]?.sections ?? []"
-          :defs="defs"
-          :archived="archivedDefs"
-          :self="self"
-          :trail="trail"
-          :orphans="layoutIndex === 0"
-          :draft="draft"
-        />
-        <SignInAccountPanel v-if="layoutIndex === 0" :ci="c" />
-        <PartOfServicesPanel v-if="layoutIndex === 0" :ci="c" :self="self" :trail="trail" />
-        <template v-if="layoutIndex === 0 && builtInArrangement">
-          <RelationshipsPanel :ci="c" :self="self" :trail="trail" />
+        <!-- The built-in arrangement, the default layout: the field sections in one card beside the relationships and the newest history. -->
+        <template v-else-if="layoutIndex === 0 && builtInArrangement">
+          <div class="record-overview">
+            <LayoutPanels
+              class="record-fields"
+              :ci="c"
+              :sections="layoutTabs[0]?.sections ?? []"
+              :defs="defs"
+              :archived="archivedDefs"
+              :self="self"
+              :trail="trail"
+              orphans
+              stacked
+              :draft="draft"
+            />
+            <div class="record-side">
+              <RelationshipsPanel :ci="c" :self="self" :trail="trail" />
+              <SignInAccountPanel :ci="c" />
+              <PartOfServicesPanel :ci="c" :self="self" :trail="trail" />
+              <HistoryPanel v-if="canAudit" :ci="c" :preview="5" @more="selectTab('history')" />
+            </div>
+          </div>
+        </template>
+        <template v-else>
+          <LayoutPanels
+            :ci="c"
+            :sections="layoutTabs[layoutIndex]?.sections ?? []"
+            :defs="defs"
+            :archived="archivedDefs"
+            :self="self"
+            :trail="trail"
+            :orphans="layoutIndex === 0"
+            :draft="draft"
+          />
+          <SignInAccountPanel v-if="layoutIndex === 0" :ci="c" />
+          <PartOfServicesPanel v-if="layoutIndex === 0" :ci="c" :self="self" :trail="trail" />
         </template>
       </template>
       <RelationshipGraphPanel v-else-if="current === 'graph'" :ci="c" :self="self" :trail="trail" />
