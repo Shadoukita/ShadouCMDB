@@ -625,6 +625,25 @@ async function main() {
   );
   await get(`/api/v1/configuration-items/${server.id}/graph?depth=9`, 400);
 
+  // --- Notes (SHAA-2355) ----------------------------------------------------------
+  console.log('\n# Notes');
+  const notePolicy = (await get('/api/v1/ci-note-settings')).json;
+  await call('PUT', '/api/v1/ci-note-settings', { editWindowMinutes: notePolicy.editWindowMinutes, retentionDays: 10 }, 400); // under 30 days
+  const notesUrl = `/api/v1/configuration-items/${server.id}/notes`;
+  const note = (await post(notesUrl, { body: `  Smoke note ${RUN}  ` }, 201)).json;
+  check(note.body === `Smoke note ${RUN}` && note.version === 1 && note.canEdit && note.canDelete && note.author.name === ADMIN_USERNAME,
+    'a note is trimmed, signed by its author and editable by them');
+  await post(notesUrl, { body: '   ' }, 400);
+  const edited = (await patch(`${notesUrl}/${note.id}`, { version: 1, body: `Smoke note ${RUN} (edited)` })).json;
+  check(edited.version === 2 && edited.editedAt, 'an edited note has a new version and its edit time');
+  await patch(`${notesUrl}/${note.id}`, { version: 1, body: 'stale' }, 409);
+  const notes = (await get(`${notesUrl}?limit=10`)).json;
+  check(notes.data[0]?.id === note.id && notes.page.total >= 1, 'the note stream lists the newest note first');
+  await del(`${notesUrl}/${note.id}?version=2`);
+  await del(`${notesUrl}/${note.id}?version=2`, 404);
+  const samePolicy = (await call('PUT', '/api/v1/ci-note-settings', { editWindowMinutes: notePolicy.editWindowMinutes, retentionDays: notePolicy.retentionDays })).json;
+  check(samePolicy.editWindowMinutes === notePolicy.editWindowMinutes && samePolicy.retentionDays === notePolicy.retentionDays, 'the note policy is saved unchanged');
+
   // --- Impact analysis ----------------------------------------------------------
   console.log('\n# Impact analysis');
   const impactSettings = (await get('/api/v1/settings/impact')).json;

@@ -7,7 +7,7 @@
 // script signs in to the running server as the scan's administrator, reads one id per resource from
 // its list endpoint (demo data from `seed --demo`), creates the objects the scan may damage (a user,
 // a profile, a group, an identity provider, an API token, an import job, a saved mapping, a saved view,
-// a workflow definition, a running workflow instance, a pending approval request), and writes the
+// a workflow definition, a running workflow instance, a pending approval request, a CI note), and writes the
 // spec with those ids as examples.
 //
 //   DAST_USERNAME=... DAST_PASSWORD=... node tools/dast/path-examples.mjs <openapi.json> <out.json> [<examples.json>]
@@ -45,7 +45,7 @@ export const LISTED = [
  * Objects created for the scan. The scan changes, disables and deletes what it is given, so it gets
  * objects of its own: never its own account (a password change would end its session) or token.
  */
-export const CREATED = ["admin/profiles", "admin/groups", "admin/users", "admin/identity-providers", "admin/api-tokens", "imports", "import-mappings", "saved-views", "admin/workflow-definitions", "workflow-instances", "workflow-approval-requests"];
+export const CREATED = ["admin/profiles", "admin/groups", "admin/users", "admin/identity-providers", "admin/api-tokens", "imports", "import-mappings", "saved-views", "admin/workflow-definitions", "workflow-instances", "workflow-approval-requests", "ci-notes"];
 
 /**
  * Resources that may have no row yet; any well-formed value still reaches the handler (404). The
@@ -62,6 +62,8 @@ export const ALIASES = {
   "business-services/{id}/members": "configuration-items",
   // GET /admin/workflow-definitions/{id}/versions/{no}: a version number, not an id.
   "admin/workflow-definitions/{id}/versions": "admin/workflow-definitions/versions",
+  // PATCH/DELETE /configuration-items/{id}/notes/{noteId}: a note of the example CI.
+  "configuration-items/{id}/notes": "ci-notes",
 };
 
 /** The resource a path parameter names: the path between /api/v1/ and the parameter. */
@@ -229,6 +231,9 @@ async function collect(request) {
   const instance = (await request("POST", "workflow-instances", { definitionId: gated.id, ciId: server.id })).instance;
   const pending = await request("POST", `workflow-instances/${instance.id}/transitions`, { transitionKey: "close", expectedVersion: instance.version });
   examples["workflow-approval-requests"] = pending.pendingApproval.requestId;
+  // A note on the example CI, written by the scan's administrator: the note is looked up by CI and
+  // note id together, and the scan may edit and delete it.
+  examples["ci-notes"] = (await request("POST", `configuration-items/${examples["configuration-items"]}/notes`, { body: name })).id;
   return examples;
 }
 
