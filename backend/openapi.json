@@ -3258,6 +3258,554 @@
         ]
       }
     },
+    "/api/v1/configuration-items/completeness": {
+      "get": {
+        "tags": [
+          "Configuration items"
+        ],
+        "summary": "Completeness of the CIs of an inventory query: overall and per class",
+        "description": "Takes the filters of `listConfigurationItems` and counts how complete the matching CIs are. A field is counted when it is active and, with `basis=expected` (the default), required or marked `isExpected` on its attribute definition; with `basis=all`, every active field counts. A CI is complete when it holds a value in every counted field of its class (inherited ones included); a CI of a class with no counted field is complete. Records complete is `overall.completeItems / overall.items`, values filled `overall.filledValues / overall.expectedValues`. Counts cover only CIs in classes the caller may view, like the list, and are read from one snapshot so the classes add up to `overall`.",
+        "operationId": "getConfigurationItemCompleteness",
+        "parameters": [
+          {
+            "name": "basis",
+            "in": "query",
+            "description": "Fields counted: expected (active fields that are required or marked `isExpected`) or all (every active field of the CI's class and its ancestors)",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "expected",
+              "enum": [
+                "expected",
+                "all"
+              ]
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Search label, ident and attribute values",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 200,
+              "minLength": 1
+            }
+          },
+          {
+            "name": "classId",
+            "in": "query",
+            "description": "Filter by class (includes subclasses unless includeSubclasses=false)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "includeSubclasses",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "true",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          },
+          {
+            "name": "active",
+            "in": "query",
+            "description": "true: only CIs inside their validity period (validFrom <= now < validUntil); false: only those outside it; all: both",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "true",
+              "enum": [
+                "true",
+                "false",
+                "all"
+              ]
+            }
+          },
+          {
+            "name": "lookupValueId",
+            "in": "query",
+            "description": "Lookup list value ids, comma-separated: CIs holding one of them in a lookup attribute. Values of different lists must all match (status A or B, and environment C).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "ipWithin",
+            "in": "query",
+            "description": "Only CIs with a value of an IP attribute inside this CIDR, e.g. 10.20.0.0/16",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "cidrv4"
+                },
+                {
+                  "type": "string",
+                  "format": "cidrv6"
+                }
+              ]
+            }
+          },
+          {
+            "name": "criticalityValueId",
+            "in": "query",
+            "description": "Criticality value ids, comma-separated: CIs holding one of them",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "deleted",
+            "in": "query",
+            "description": "Soft-deleted CIs: exclude (default), include, or only",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "exclude",
+              "enum": [
+                "exclude",
+                "include",
+                "only"
+              ]
+            }
+          },
+          {
+            "name": "ownLayout",
+            "in": "query",
+            "description": "true: only CIs with a layout of their own (another template or a custom layout, see /configuration-items/{id}/layout); false: only CIs that show their class's default template",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          },
+          {
+            "name": "layoutTemplate",
+            "in": "query",
+            "description": "Only CIs that show this layout template (`layoutTemplates[].key`) as their own layout, not as their class's default",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{0,62}$"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "CIs by the kind of their type: asset, process (records such as change requests) or any. Without it, process records are left out unless their type is named in classId.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "asset",
+                "process",
+                "any"
+              ]
+            }
+          },
+          {
+            "name": "businessServiceId",
+            "in": "query",
+            "description": "Business service ids (CI ids), comma-separated: CIs that are a direct member of one of them. A service the caller may not view, or a deleted one, has no members here.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Completeness"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/configuration-items/count-history": {
+      "get": {
+        "tags": [
+          "Configuration items"
+        ],
+        "summary": "How many CIs there were per day or week",
+        "description": "Returns the CI count at `from` and, per bucket, the count at its end with how many CIs started (`added`) and stopped (`removed`) counting in it, every bucket of the range included. A CI counts from its creation until it is deleted and, with `active=true` (the default), only inside its validity period. The history is derived from the CIs' own timestamps (`createdAt`, `deletedAt`, `validFrom`, `validUntil`): a restored CI counts as if it had never been deleted, and a purged one is gone from the past too. Buckets are UTC days or ISO weeks (Monday 00:00 UTC); `from` is rounded down to the start of its bucket. 400 `invalid_range` when `from` is not before `to`, `range_too_large` beyond 366 days or 260 weeks. Only CIs in classes the caller may view; process records only when `classId` names their type.",
+        "operationId": "getConfigurationItemCountHistory",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Start of the range (ISO 8601), rounded down to the start of its bucket. Default: 30 days before `to` for day buckets, 12 weeks before for week buckets.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "End of the range (ISO 8601, exclusive). Default: now.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "bucket",
+            "in": "query",
+            "description": "Bucket width: UTC days (at most 366 per request) or ISO weeks from Monday 00:00 UTC (at most 260)",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "day",
+              "enum": [
+                "day",
+                "week"
+              ]
+            }
+          },
+          {
+            "name": "classId",
+            "in": "query",
+            "description": "Only CIs of these classes (comma-separated ids), subclasses included unless includeSubclasses=false. Process records are left out unless their type is named here.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "includeSubclasses",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "true",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          },
+          {
+            "name": "active",
+            "in": "query",
+            "description": "true: a CI counts while it is registered (created, not deleted) and inside its validity period, as the inventory list counts by default; all: while it is registered, whatever its validity",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "true",
+              "enum": [
+                "true",
+                "all"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CountHistory"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/relationships/count-history": {
+      "get": {
+        "tags": [
+          "Relationships"
+        ],
+        "summary": "How many relationships there were per day or week",
+        "description": "Like `getConfigurationItemCountHistory` for relationships: a relationship counts from its creation until it is deleted (deleting a CI deletes its relationships). Derived from `createdAt` and `deletedAt`. Only relationships whose both CIs are in classes the caller may view, as `listRelationships` shows them; `relationshipTypeId` limits the count to those types.",
+        "operationId": "getRelationshipCountHistory",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Start of the range (ISO 8601), rounded down to the start of its bucket. Default: 30 days before `to` for day buckets, 12 weeks before for week buckets.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "End of the range (ISO 8601, exclusive). Default: now.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "bucket",
+            "in": "query",
+            "description": "Bucket width: UTC days (at most 366 per request) or ISO weeks from Monday 00:00 UTC (at most 260)",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "day",
+              "enum": [
+                "day",
+                "week"
+              ]
+            }
+          },
+          {
+            "name": "relationshipTypeId",
+            "in": "query",
+            "description": "Only relationships of these types (comma-separated ids)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CountHistory"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
     "/api/v1/configuration-items/{id}": {
       "get": {
         "tags": [
@@ -3766,6 +4314,131 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RelationshipGraph"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/configuration-items/{id}/completeness": {
+      "get": {
+        "tags": [
+          "Configuration items"
+        ],
+        "summary": "Which counted fields of a CI hold a value",
+        "description": "The fields `getConfigurationItemCompleteness` counts for this CI (same `basis`), in form order, each with whether it holds a value. Needs view on the CI's class.",
+        "operationId": "getConfigurationItemCompletenessDetail",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "basis",
+            "in": "query",
+            "description": "Fields counted: expected (active fields that are required or marked `isExpected`) or all (every active field of the CI's class and its ancestors)",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "expected",
+              "enum": [
+                "expected",
+                "all"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemCompleteness"
                 }
               }
             }
@@ -12145,6 +12818,18 @@
                 "false"
               ]
             }
+          },
+          {
+            "name": "isExpected",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
           }
         ],
         "responses": {
@@ -12326,6 +13011,10 @@
                   },
                   "isRequired": {
                     "type": "boolean"
+                  },
+                  "isExpected": {
+                    "type": "boolean",
+                    "description": "Counts towards completeness: a live CI without a value is incomplete. Not enforced on writes."
                   },
                   "enumValues": {
                     "anyOf": [
@@ -12860,6 +13549,10 @@
                   },
                   "isRequired": {
                     "type": "boolean"
+                  },
+                  "isExpected": {
+                    "type": "boolean",
+                    "description": "Counts towards completeness: a live CI without a value is incomplete. Not enforced on writes."
                   },
                   "enumValues": {
                     "anyOf": [
@@ -28460,8 +29153,8 @@
                   "formatVersion": {
                     "type": "integer",
                     "format": "int32",
-                    "description": "File format version; this server writes version 9 and reads 1 to 9",
-                    "maximum": 9,
+                    "description": "File format version; this server writes version 10 and reads 1 to 10",
+                    "maximum": 10,
                     "minimum": 1
                   },
                   "exportedAt": {
@@ -35135,6 +35828,7 @@
           "description",
           "dataType",
           "isRequired",
+          "isExpected",
           "enumValues",
           "referenceClassId",
           "lookupListId",
@@ -35188,6 +35882,10 @@
           },
           "isRequired": {
             "type": "boolean"
+          },
+          "isExpected": {
+            "type": "boolean",
+            "description": "Counts towards completeness: a live CI without a value is incomplete. Not enforced on writes."
           },
           "enumValues": {
             "type": [
@@ -36125,6 +36823,28 @@
         },
         "additionalProperties": false
       },
+      "ClassCompleteness": {
+        "type": "object",
+        "required": [
+          "class",
+          "countedFields",
+          "counts"
+        ],
+        "properties": {
+          "class": {
+            "$ref": "#/components/schemas/LookupRef"
+          },
+          "countedFields": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Fields counted for CIs of this class (its own and inherited)"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/CompletenessCounts"
+          }
+        },
+        "additionalProperties": false
+      },
       "ClassPermission": {
         "type": "object",
         "description": "Rights on one CI class, or on every class when `classId` is null.",
@@ -36220,6 +36940,98 @@
         },
         "additionalProperties": false
       },
+      "Completeness": {
+        "type": "object",
+        "required": [
+          "basis",
+          "overall",
+          "classes"
+        ],
+        "properties": {
+          "basis": {
+            "type": "string",
+            "description": "Which fields a complete CI holds a value for.",
+            "enum": [
+              "expected",
+              "all"
+            ]
+          },
+          "overall": {
+            "$ref": "#/components/schemas/CompletenessCounts",
+            "description": "Every CI matching the filters. Records complete is `completeItems / items`; the share of values filled is\n`filledValues / expectedValues` (treat both as complete when the divisor is 0)."
+          },
+          "classes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClassCompleteness"
+            },
+            "description": "Per exact class (subclasses separately), only classes with a matching CI, most CIs first"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CompletenessCounts": {
+        "type": "object",
+        "description": "Completeness of a set of CIs.",
+        "required": [
+          "items",
+          "completeItems",
+          "expectedValues",
+          "filledValues"
+        ],
+        "properties": {
+          "items": {
+            "type": "integer",
+            "format": "int64",
+            "description": "CIs counted"
+          },
+          "completeItems": {
+            "type": "integer",
+            "format": "int64",
+            "description": "CIs holding a value in every counted field. A CI of a class with no counted field is complete."
+          },
+          "expectedValues": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Values a complete set would hold: per CI, the number of counted fields of its class"
+          },
+          "filledValues": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Of those, the values held"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CompletenessField": {
+        "type": "object",
+        "description": "A counted field of a CI.",
+        "required": [
+          "key",
+          "label",
+          "isRequired",
+          "isExpected",
+          "filled"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "isRequired": {
+            "type": "boolean"
+          },
+          "isExpected": {
+            "type": "boolean"
+          },
+          "filled": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
       "ConfigFile": {
         "type": "object",
         "description": "A whole configuration: data model, lookups, permission profiles, UI settings, saved import mappings, shared saved views and workflows (no users, passwords, CIs, personal views or workflow instances)",
@@ -36238,8 +37050,8 @@
           "formatVersion": {
             "type": "integer",
             "format": "int32",
-            "description": "File format version; this server writes version 9 and reads 1 to 9",
-            "maximum": 9,
+            "description": "File format version; this server writes version 10 and reads 1 to 10",
+            "maximum": 10,
             "minimum": 1
           },
           "exportedAt": {
@@ -37034,6 +37846,82 @@
         },
         "additionalProperties": false
       },
+      "CountHistory": {
+        "type": "object",
+        "required": [
+          "from",
+          "to",
+          "bucket",
+          "countAtFrom",
+          "buckets"
+        ],
+        "properties": {
+          "from": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Start of the first bucket (`from` rounded down)"
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time",
+            "description": "End of the range (exclusive), as sent or defaulted"
+          },
+          "bucket": {
+            "type": "string",
+            "description": "Width of a count history bucket: UTC days, or ISO weeks starting Monday 00:00 UTC.",
+            "enum": [
+              "day",
+              "week"
+            ]
+          },
+          "countAtFrom": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many there were at `from`; each bucket's `count` is this plus the `added` minus the `removed` so far"
+          },
+          "buckets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CountHistoryBucket"
+            },
+            "description": "Every bucket of the range in order, empty ones included"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CountHistoryBucket": {
+        "type": "object",
+        "description": "One bucket of a count history.",
+        "required": [
+          "start",
+          "count",
+          "added",
+          "removed"
+        ],
+        "properties": {
+          "start": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Start of the bucket (UTC)"
+          },
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many there were at the end of the bucket (at `to` for the last one)"
+          },
+          "added": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many started counting in the bucket (created, or entered their validity period)"
+          },
+          "removed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many stopped counting in the bucket (deleted, or left their validity period)"
+          }
+        },
+        "additionalProperties": false
+      },
       "CreatedApiToken": {
         "type": "object",
         "description": "A new token and its secret. The secret is shown here only: store it now.",
@@ -37334,6 +38222,13 @@
                 },
                 "isRequired": {
                   "type": "boolean"
+                },
+                "isExpected": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ],
+                  "description": "Counts towards completeness. Left out (files before version 10): an existing field keeps its value, a\nnew one is not expected"
                 },
                 "enumValues": {
                   "anyOf": [
@@ -37675,6 +38570,7 @@
           "description",
           "dataType",
           "isRequired",
+          "isExpected",
           "enumValues",
           "referenceClassId",
           "lookupListId",
@@ -37730,6 +38626,10 @@
           },
           "isRequired": {
             "type": "boolean"
+          },
+          "isExpected": {
+            "type": "boolean",
+            "description": "Counts towards completeness: a live CI without a value is incomplete. Not enforced on writes."
           },
           "enumValues": {
             "type": [
@@ -40406,6 +41306,51 @@
           },
           "message": {
             "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ItemCompleteness": {
+        "type": "object",
+        "required": [
+          "id",
+          "basis",
+          "complete",
+          "countedFields",
+          "filledFields",
+          "fields"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "basis": {
+            "type": "string",
+            "description": "Which fields a complete CI holds a value for.",
+            "enum": [
+              "expected",
+              "all"
+            ]
+          },
+          "complete": {
+            "type": "boolean",
+            "description": "True when every counted field holds a value (also when none is counted)"
+          },
+          "countedFields": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "filledFields": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CompletenessField"
+            },
+            "description": "The counted fields in form order, filled or not"
           }
         },
         "additionalProperties": false
@@ -48606,6 +49551,10 @@
       "description": "CIs: the tracked assets. Includes the relationship graph around a CI."
     },
     {
+      "name": "Relationships",
+      "description": "Typed, directional edges between CIs. Removal is a soft delete."
+    },
+    {
       "name": "Search",
       "description": "Global search across CIs and their attribute values."
     },
@@ -48620,10 +49569,6 @@
     {
       "name": "Bulk import",
       "description": "Import CIs from CSV and Excel files: upload, map columns, dry run, commit. Session only; needs the switch on, cis.import, and the class rights for every row."
-    },
-    {
-      "name": "Relationships",
-      "description": "Typed, directional edges between CIs. Removal is a soft delete."
     },
     {
       "name": "Areas"

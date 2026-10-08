@@ -1269,6 +1269,7 @@ mod tests {
             data_type: AttributeDataType::Date,
             enum_values: None,
             is_required: false,
+            is_expected: false,
             is_active: true,
             sort_order: 0,
             lookup_list_id: None,

@@ -35,6 +35,8 @@ pub struct Field {
     pub data_type: AttributeDataType,
     pub enum_values: Option<Json<Vec<String>>>,
     pub is_required: bool,
+    /// Counts towards completeness without being enforced (migration 0067)
+    pub is_expected: bool,
     pub is_active: bool,
     pub sort_order: i32,
     pub lookup_list_id: Option<Uuid>,
@@ -67,6 +69,11 @@ impl Field {
     /// A required, active field is NOT NULL in its table.
     pub fn not_null(&self) -> bool {
         self.is_required && self.is_active
+    }
+
+    /// An active field a complete CI holds a value for: required or expected.
+    pub fn counts_for_completeness(&self) -> bool {
+        self.is_active && (self.is_required || self.is_expected)
     }
 
     pub fn column(&self) -> Ident {
@@ -137,8 +144,9 @@ impl Model {
 
     pub async fn load_fields(conn: &mut PgConnection) -> sqlx::Result<Vec<Field>> {
         sqlx::query_as::<_, Field>(
-            "SELECT id, class_id, key, label, data_type, enum_values, is_required, is_active, sort_order, lookup_list_id,
-                    to_jsonb(d) ->> 'system_role' AS system_role
+            "SELECT id, class_id, key, label, data_type, enum_values, is_required,
+                    coalesce((to_jsonb(d) ->> 'is_expected')::boolean, false) AS is_expected, is_active, sort_order,
+                    lookup_list_id, to_jsonb(d) ->> 'system_role' AS system_role
              FROM cmdb.ci_attribute_definitions d ORDER BY sort_order, key",
         )
         .fetch_all(&mut *conn)

@@ -943,3 +943,274 @@ pub struct GraphQuery {
     #[param(required = false, default = 250, minimum = 1, maximum = 1000)]
     pub max_nodes: i32,
 }
+
+// ---------------------------------------------------------------------------
+// Completeness and count history (dashboard KPIs, SHAA-2350)
+// ---------------------------------------------------------------------------
+
+/// Which fields a complete CI holds a value for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum CompletenessBasis {
+    /// Active fields that are required or expected (`isRequired`, `isExpected`)
+    Expected,
+    /// Every active field
+    All,
+}
+
+fn basis_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .enum_values(Some(["expected", "all"]))
+        .default(Some("expected".into()))
+        .description(Some(
+            "Fields counted: expected (active fields that are required or marked `isExpected`) or all (every active \
+             field of the CI's class and its ancestors)",
+        ))
+        .into()
+}
+
+/// The filters of the inventory list (`listConfigurationItems`), without paging and sort, plus the basis.
+#[derive(Debug, Clone, Deserialize, IntoParams)]
+#[serde(rename_all = "camelCase")]
+#[into_params(parameter_in = Query)]
+pub struct CompletenessQuery {
+    #[param(required = false, schema_with = basis_schema)]
+    pub basis: CompletenessBasis,
+    #[param(schema_with = list_q_schema)]
+    #[serde(default, deserialize_with = "schemas::trimmed_opt")]
+    pub q: Option<String>,
+    #[param(schema_with = class_filter_schema)]
+    pub class_id: Option<UuidList>,
+    #[param(required = false, schema_with = include_subclasses_schema)]
+    pub include_subclasses: QueryBool,
+    #[param(required = false, schema_with = active_schema)]
+    pub active: ActiveQuery,
+    #[param(schema_with = lookup_value_filter_schema)]
+    pub lookup_value_id: Option<UuidList>,
+    #[param(schema_with = ip_within_schema)]
+    pub ip_within: Option<String>,
+    #[param(schema_with = criticality_filter_schema)]
+    pub criticality_value_id: Option<UuidList>,
+    #[param(required = false, schema_with = deleted_items_schema)]
+    pub deleted: Deleted,
+    #[param(schema_with = own_layout_schema)]
+    pub own_layout: Option<QueryBool>,
+    #[param(schema_with = layout_template_schema)]
+    pub layout_template: Option<String>,
+    #[param(schema_with = kind_schema)]
+    pub kind: Option<KindQuery>,
+    #[param(schema_with = business_service_filter_schema)]
+    pub business_service_id: Option<UuidList>,
+}
+item_filters!(CompletenessQuery);
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[serde(rename_all = "camelCase")]
+#[into_params(parameter_in = Query)]
+pub struct ItemCompletenessQuery {
+    #[param(required = false, schema_with = basis_schema)]
+    pub basis: CompletenessBasis,
+}
+
+/// Completeness of a set of CIs.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompletenessCounts {
+    /// CIs counted
+    pub items: i64,
+    /// CIs holding a value in every counted field. A CI of a class with no counted field is complete.
+    pub complete_items: i64,
+    /// Values a complete set would hold: per CI, the number of counted fields of its class
+    pub expected_values: i64,
+    /// Of those, the values held
+    pub filled_values: i64,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ClassCompleteness {
+    pub class: LookupRef,
+    /// Fields counted for CIs of this class (its own and inherited)
+    pub counted_fields: i64,
+    pub counts: CompletenessCounts,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Completeness {
+    #[schema(inline)]
+    pub basis: CompletenessBasis,
+    /// Every CI matching the filters. Records complete is `completeItems / items`; the share of values filled is
+    /// `filledValues / expectedValues` (treat both as complete when the divisor is 0).
+    pub overall: CompletenessCounts,
+    /// Per exact class (subclasses separately), only classes with a matching CI, most CIs first
+    pub classes: Vec<ClassCompleteness>,
+}
+
+/// A counted field of a CI.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompletenessField {
+    pub key: String,
+    pub label: String,
+    pub is_required: bool,
+    pub is_expected: bool,
+    pub filled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ItemCompleteness {
+    pub id: Uuid,
+    #[schema(inline)]
+    pub basis: CompletenessBasis,
+    /// True when every counted field holds a value (also when none is counted)
+    pub complete: bool,
+    pub counted_fields: i64,
+    pub filled_fields: i64,
+    /// The counted fields in form order, filled or not
+    pub fields: Vec<CompletenessField>,
+}
+
+/// Width of a count history bucket: UTC days, or ISO weeks starting Monday 00:00 UTC.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum CountBucket {
+    Day,
+    Week,
+}
+
+impl CountBucket {
+    /// The bucket width, and the longest range one request may cover.
+    pub fn width_and_cap(self) -> (chrono::TimeDelta, chrono::TimeDelta) {
+        match self {
+            CountBucket::Day => (chrono::TimeDelta::days(1), chrono::TimeDelta::days(366)),
+            CountBucket::Week => (chrono::TimeDelta::weeks(1), chrono::TimeDelta::weeks(260)),
+        }
+    }
+}
+
+fn count_bucket_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .enum_values(Some(["day", "week"]))
+        .default(Some("day".into()))
+        .description(Some(
+            "Bucket width: UTC days (at most 366 per request) or ISO weeks from Monday 00:00 UTC (at most 260)",
+        ))
+        .into()
+}
+
+fn count_from_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .format(Some(SchemaFormat::KnownFormat(KnownFormat::DateTime)))
+        .description(Some(
+            "Start of the range (ISO 8601), rounded down to the start of its bucket. Default: 30 days before `to` \
+             for day buckets, 12 weeks before for week buckets.",
+        ))
+        .into()
+}
+
+/// What a CI count includes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum CountActive {
+    #[serde(rename = "true")]
+    True,
+    #[serde(rename = "all")]
+    All,
+}
+
+fn count_active_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .enum_values(Some(["true", "all"]))
+        .default(Some("true".into()))
+        .description(Some(
+            "true: a CI counts while it is registered (created, not deleted) and inside its validity period, as the \
+             inventory list counts by default; all: while it is registered, whatever its validity",
+        ))
+        .into()
+}
+
+fn count_class_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .description(Some(
+            "Only CIs of these classes (comma-separated ids), subclasses included unless includeSubclasses=false. \
+             Process records are left out unless their type is named here.",
+        ))
+        .into()
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[serde(rename_all = "camelCase")]
+#[into_params(parameter_in = Query)]
+pub struct ItemCountHistoryQuery {
+    #[param(schema_with = count_from_schema)]
+    pub from: Option<DateTime<Utc>>,
+    #[param(schema_with = histogram_to_schema)]
+    pub to: Option<DateTime<Utc>>,
+    #[param(required = false, schema_with = count_bucket_schema)]
+    pub bucket: CountBucket,
+    #[param(schema_with = count_class_schema)]
+    pub class_id: Option<UuidList>,
+    #[param(required = false, schema_with = include_subclasses_schema)]
+    pub include_subclasses: QueryBool,
+    #[param(required = false, schema_with = count_active_schema)]
+    pub active: CountActive,
+}
+
+fn count_type_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .description(Some("Only relationships of these types (comma-separated ids)"))
+        .into()
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[serde(rename_all = "camelCase")]
+#[into_params(parameter_in = Query)]
+pub struct RelationshipCountHistoryQuery {
+    #[param(schema_with = count_from_schema)]
+    pub from: Option<DateTime<Utc>>,
+    #[param(schema_with = histogram_to_schema)]
+    pub to: Option<DateTime<Utc>>,
+    #[param(required = false, schema_with = count_bucket_schema)]
+    pub bucket: CountBucket,
+    #[param(schema_with = count_type_schema)]
+    pub relationship_type_id: Option<UuidList>,
+}
+
+/// One bucket of a count history.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CountHistoryBucket {
+    /// Start of the bucket (UTC)
+    #[serde(serialize_with = "ts::serialize")]
+    pub start: DateTime<Utc>,
+    /// How many there were at the end of the bucket (at `to` for the last one)
+    pub count: i64,
+    /// How many started counting in the bucket (created, or entered their validity period)
+    pub added: i64,
+    /// How many stopped counting in the bucket (deleted, or left their validity period)
+    pub removed: i64,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CountHistory {
+    /// Start of the first bucket (`from` rounded down)
+    #[serde(serialize_with = "ts::serialize")]
+    pub from: DateTime<Utc>,
+    /// End of the range (exclusive), as sent or defaulted
+    #[serde(serialize_with = "ts::serialize")]
+    pub to: DateTime<Utc>,
+    #[schema(inline)]
+    pub bucket: CountBucket,
+    /// How many there were at `from`; each bucket's `count` is this plus the `added` minus the `removed` so far
+    pub count_at_from: i64,
+    /// Every bucket of the range in order, empty ones included
+    pub buckets: Vec<CountHistoryBucket>,
+}

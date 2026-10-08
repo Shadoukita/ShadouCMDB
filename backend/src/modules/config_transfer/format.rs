@@ -46,8 +46,9 @@ pub const FORMAT: &str = "shadoucmdb.config";
 /// version 6 shared saved views, version 7 layout templates in the UI settings (`layoutTemplates`, and
 /// `layouts[].templateKey`; versions 1 to 6 have class layouts, which become templates), version 8 workflows
 /// (the current published version of each), version 9 approval policies on workflow transitions and each
-/// workflow's approvers; versions 1 to 8 are still read.
-pub const FORMAT_VERSION: i32 = 9;
+/// workflow's approvers, version 10 expected fields (`isExpected`, counted by the completeness metric); versions
+/// 1 to 9 are still read.
+pub const FORMAT_VERSION: i32 = 10;
 
 fn yes() -> bool {
     true
@@ -167,6 +168,10 @@ pub struct AttributeSpec {
     pub data_type: AttributeDataType,
     #[serde(default)]
     pub is_required: bool,
+    /// Counts towards completeness. Left out (files before version 10): an existing field keeps its value, a
+    /// new one is not expected
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_expected: Option<bool>,
     #[schema(schema_with = crate::modules::classes::enum_values_schema)]
     #[serde(default)]
     pub enum_values: Option<Vec<String>>,
@@ -748,8 +753,8 @@ fn exported_at_schema() -> Schema {
 pub struct ConfigFile {
     #[schema(schema_with = format_schema)]
     pub format: String,
-    /// File format version; this server writes version 9 and reads 1 to 9
-    #[schema(minimum = 1, maximum = 9)]
+    /// File format version; this server writes version 10 and reads 1 to 10
+    #[schema(minimum = 1, maximum = 10)]
     pub format_version: i32,
     /// When and by which server version the file was written (informational)
     #[schema(schema_with = exported_at_schema)]

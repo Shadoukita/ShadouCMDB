@@ -364,6 +364,7 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
                 description: a.description.clone(),
                 data_type: a.data_type,
                 is_required: a.is_required,
+                is_expected: Some(a.is_expected),
                 enum_values: a.enum_values.as_ref().map(|v| v.0.clone()),
                 reference_class: a.reference_class_id.and_then(|id| class_key.get(&id).cloned()),
                 lookup_list: a.lookup_list_id.and_then(|id| list_key.get(&id).cloned()),
@@ -1568,6 +1569,7 @@ async fn run(
             c.opt("label", Some(a.label.clone()))
                 .opt("description", Some(a.description.clone()))
                 .opt("is_required", Some(a.is_required))
+                .opt("is_expected", Some(a.is_expected.unwrap_or_default()))
                 .opt(
                     "enum_values",
                     Some(a.enum_values.as_ref().map(|v| Value::Array(v.iter().cloned().map(Value::String).collect()))),
@@ -2009,12 +2011,25 @@ fn keep_current_parents(file: &ConfigFile, current: &ConfigFile) -> ConfigFile {
     file
 }
 
-/// What a file leaves out keeps its current value: the impact direction of an
-/// existing relationship type (files before version 4, or a hand-written
-/// one), which a new type gets as none. The system role of a list is never
+/// What a file leaves out keeps its current value: whether an existing field
+/// is expected (files before version 10), which a new field is not, and the
+/// impact direction of an existing relationship type (files before version 4,
+/// or a hand-written one), which a new type gets as none. The system role of a list is never
 /// imported, so the file's is replaced with the current one.
 fn keep_current_settings(mut file: ConfigFile, current: &ConfigFile) -> ConfigFile {
     if let Some(dm) = file.data_model.as_mut() {
+        let cur: HashMap<(&str, &str), &AttributeSpec> = current
+            .data_model
+            .iter()
+            .flat_map(|d| d.attributes.iter())
+            .map(|a| ((a.class.as_str(), a.key.as_str()), a))
+            .collect();
+        for a in &mut dm.attributes {
+            if a.is_expected.is_none() {
+                let old = cur.get(&(a.class.as_str(), a.key.as_str())).and_then(|o| o.is_expected);
+                a.is_expected = Some(old.unwrap_or_default());
+            }
+        }
         let cur: HashMap<&str, &RelationshipTypeSpec> =
             current.data_model.iter().flat_map(|d| d.relationship_types.iter()).map(|t| (t.key.as_str(), t)).collect();
         for t in &mut dm.relationship_types {
@@ -2707,7 +2722,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(format!("{err:?}").contains("versions 1 to 9"), "{err:?}");
+        assert!(format!("{err:?}").contains("versions 1 to 10"), "{err:?}");
         let v3 = ConfigFile { format_version: 3, import_mappings: None, ..changed };
         import(&dst.pool, &system, &v3, ImportMode::DryRun).await.unwrap();
 
