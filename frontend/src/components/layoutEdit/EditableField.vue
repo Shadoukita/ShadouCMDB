@@ -182,7 +182,7 @@ function onResizeStart(e: PointerEvent) {
 .le-grip {
   border: 0;
   background: none;
-  padding: 0 2px;
+  padding: 0 var(--space-0_5);
   color: var(--c-text-secondary);
   cursor: grab;
   font: inherit;
@@ -193,7 +193,7 @@ function onResizeStart(e: PointerEvent) {
 }
 .req {
   color: var(--c-danger-text);
-  margin-left: 2px;
+  margin-left: var(--space-0_5);
 }
 /* The toolbar floats above the field's top edge while the field is hovered or holds the keyboard focus. */
 .le-toolbar {
@@ -203,8 +203,8 @@ function onResizeStart(e: PointerEvent) {
   z-index: var(--z-handle);
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding: 2px;
+  gap: var(--space-0_5);
+  padding: var(--space-0_5);
   border: 1px solid var(--c-primary);
   border-radius: var(--radius-sm);
   background: var(--c-surface);
@@ -221,11 +221,11 @@ function onResizeStart(e: PointerEvent) {
 .le-toolbar select {
   max-width: 150px;
   font-size: var(--fs-sm);
-  padding: 1px 4px;
+  padding: var(--space-px) var(--space-1);
 }
 .le-ro {
   font-size: var(--fs-sm);
-  padding: 0 4px;
+  padding: 0 var(--space-1);
 }
 .le-field-body {
   pointer-events: none;

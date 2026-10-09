@@ -391,7 +391,7 @@ a.fact-chip:focus-visible {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 1px;
+  gap: var(--space-px);
   height: 40px;
   padding: 0 var(--space-2);
   overflow: hidden;
@@ -511,7 +511,7 @@ a.topology-node:hover {
   list-style: none;
 }
 .graph-tree li[role="treeitem"] {
-  padding: 2px var(--space-1) 2px calc(var(--space-1) + (var(--level, 1) - 1) * 20px);
+  padding: var(--space-0_5) var(--space-1) var(--space-0_5) calc(var(--space-1) + (var(--level, 1) - 1) * 20px);
   border-radius: var(--radius-md);
 }
 .graph-tree li[role="treeitem"]:hover {
@@ -861,7 +861,8 @@ ol.impact-path a {
 .event-dot {
   width: 10px;
   height: 10px;
-  margin: 5px 0 0 2px;
+  /* token-lint-allow: geometry; centres the 10 px dot on the event's first 20 px line. */
+  margin: 5px 0 0 var(--space-0_5);
   border-radius: var(--radius-full);
   background: var(--c-primary);
 }
@@ -935,7 +936,7 @@ ol.impact-path a {
 .event-timeline ul.diff del,
 .event-timeline ul.diff ins,
 .diff-none {
-  padding: 1px var(--space-1_5);
+  padding: var(--space-px) var(--space-1_5);
   border-radius: var(--radius-sm);
   text-decoration-thickness: 1px;
 }
