@@ -32,8 +32,8 @@ watch(
 );
 const ci = ref<{ id: string; name: string } | null>(null);
 const requester = ref<{ id: string; name: string } | null>(null);
-const requesterByName = ref(false);
-const requesterName = ref("");
+/** /principals refused: the requester can only be picked by an admin who may look up users (GH#839). */
+const requesterForbidden = ref(false);
 
 const result = ref<WorkflowApproverPreview | null>(null);
 const error = ref<unknown>(null);
@@ -57,7 +57,7 @@ async function run() {
   loading.value = true;
   error.value = null;
   try {
-    const requestedBy = requesterByName.value ? requesterName.value.trim() || undefined : requester.value?.id;
+    const requestedBy = requesterForbidden.value ? undefined : requester.value?.id;
     const res = await previewApprovers(props.workflowId, { transition, step, ciId: ci.value?.id, requestedBy }, c.signal);
     if (!c.signal.aborted) result.value = res;
   } catch (e) {
@@ -97,9 +97,9 @@ const shortfall = computed(() => {
           <CiPicker id="wf-preview-ci" :class-id="classId" :selected="ci" :placeholder="t('wfPreview.ciPlaceholder')" described-by="wf-preview-ci-hint" @select="pickCi" />
           <span id="wf-preview-ci-hint" class="hint">{{ t("wfPreview.ciHint") }}</span>
         </div>
-        <div v-if="requesterByName" class="field">
-          <label for="wf-preview-requester">{{ t("wfPreview.requesterName") }}</label>
-          <input id="wf-preview-requester" v-model="requesterName" type="text" maxlength="200" autocomplete="off" />
+        <div v-if="requesterForbidden" class="field">
+          <span class="label">{{ t("wfPreview.requester") }}</span>
+          <span class="hint">{{ t("wfPreview.requesterForbidden") }}</span>
         </div>
         <PrincipalCombobox
           v-else
@@ -107,13 +107,13 @@ const shortfall = computed(() => {
           kind="user"
           :hint="requester ? t('wfApprovers.picked', { name: requester.name }) : t('wfPreview.requesterHint')"
           @select="pickRequester"
-          @forbidden="requesterByName = true"
+          @forbidden="requesterForbidden = true"
         />
         <div class="inline-actions wf-preview-actions">
           <button type="submit" class="btn btn-primary btn-sm" :disabled="!stepId || loading" data-testid="wf-preview-run">
             {{ loading ? t("wfPreview.running") : t("wfPreview.run") }}
           </button>
-          <button v-if="requester && !requesterByName" type="button" class="btn btn-sm" @click="requester = null">{{ t("wfPreview.clearRequester") }}</button>
+          <button v-if="requester && !requesterForbidden" type="button" class="btn btn-sm" @click="requester = null">{{ t("wfPreview.clearRequester") }}</button>
         </div>
       </form>
 
@@ -151,7 +151,8 @@ const shortfall = computed(() => {
             </tbody>
           </table>
         </div>
-        <p v-if="result.users.length === 0" class="muted no-margin">{{ t("wfPreview.nobody") }}</p>
+        <p v-if="result.usersHidden" class="muted no-margin" data-testid="wf-preview-users-hidden">{{ t("wfPreview.usersHidden") }}</p>
+        <p v-else-if="result.users.length === 0" class="muted no-margin">{{ t("wfPreview.nobody") }}</p>
         <div v-else class="table-wrap">
           <table class="data" data-testid="wf-preview-users">
             <caption class="sr-only">{{ t("wfPreview.usersCaption") }}</caption>

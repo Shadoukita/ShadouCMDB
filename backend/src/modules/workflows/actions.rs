@@ -45,6 +45,7 @@ use crate::auth::permissions::ClassOp;
 use crate::data::auth as auth_data;
 use crate::data::crud::{self, AuditAction, AuditEntry};
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
+use crate::modules::business_services::service::may_browse_directory;
 
 /// Actions per (trigger, transition) of one definition; also the database's limit (0073).
 pub const MAX_PER_TRIGGER: usize = 10;
@@ -999,6 +1000,19 @@ pub async fn replace(
         let by_id = validate::is_uuid(given).then(|| given.parse::<Uuid>().ok()).flatten();
         list.iter().find(|(id, name)| Some(*id) == by_id || name.to_lowercase() == given.to_lowercase()).map(|r| r.0)
     };
+    // Users and groups by name only for who may look them up (GH#839).
+    let directory = may_browse_directory(&mut tx, ctx).await?;
+    let old = load(&mut tx, id).await?;
+    let kept = |source: WorkflowActionRecipientSource| -> HashSet<String> {
+        old.iter()
+            .flat_map(|a| a.recipients.iter())
+            .filter(|r| r.source == source)
+            .filter_map(|r| r.group.as_ref().or(r.user.as_ref()))
+            .map(|p| p.name.to_lowercase())
+            .collect()
+    };
+    let (kept_groups, kept_users) =
+        (kept(WorkflowActionRecipientSource::Group), kept(WorkflowActionRecipientSource::User));
 
     let mut errors = Vec::new();
     let mut resolved: Vec<Vec<Resolved>> = Vec::with_capacity(b.actions.len());
@@ -1047,12 +1061,23 @@ pub async fn replace(
                 _ => (&users, r.user.as_deref(), "user"),
             };
             let given = given.unwrap_or_default();
+            let field = match r.source {
+                WorkflowActionRecipientSource::Profile => "profile",
+                WorkflowActionRecipientSource::Group => "group",
+                _ => "user",
+            };
+            let checked = match r.source {
+                WorkflowActionRecipientSource::Profile => Ok(()),
+                WorkflowActionRecipientSource::Group => {
+                    service::directory_ref(directory, &kept_groups, given, format!("{rpath}.{field}"), what)
+                }
+                _ => service::directory_ref(directory, &kept_users, given, format!("{rpath}.{field}"), what),
+            };
+            if let Err(e) = checked {
+                errors.push(e);
+                continue;
+            }
             let Some(found) = find(list_of, given) else {
-                let field = match r.source {
-                    WorkflowActionRecipientSource::Profile => "profile",
-                    WorkflowActionRecipientSource::Group => "group",
-                    _ => "user",
-                };
                 errors.push(body_error(format!("{rpath}.{field}"), "not_found", format!("No {what} \"{given}\"")));
                 continue;
             };
@@ -1073,7 +1098,6 @@ pub async fn replace(
         return Err(AppError::validation(errors));
     }
 
-    let old = load(&mut tx, id).await?;
     let version = store(&mut tx, ctx, &before, &old, &b.actions, &resolved).await?;
     let actions = load(&mut tx, id).await?;
     let problems = problems(&mut tx, &before, &actions, max_recipients).await?;
@@ -1305,6 +1329,9 @@ pub struct WorkflowActionPreview {
     pub users: Vec<WorkflowActionPreviewUser>,
     /// More users than listed
     pub truncated: bool,
+    /// `users` is left empty because the caller may not look up users (the edit permission on business services or
+    /// `users.manage`, as for `GET /principals`); `included` is still given
+    pub users_hidden: bool,
     /// Whoever runs the event is left out as well (`excludeActor`, the default)
     pub excludes_actor: bool,
 }
@@ -1359,6 +1386,11 @@ pub async fn preview(
     users.sort_by(|a, b| a.reason.cmp(&b.reason).then_with(|| a.username.cmp(&b.username)));
     let truncated = users.len() > PREVIEW_USERS;
     users.truncate(PREVIEW_USERS);
+    // The count only for a caller who may not look up users (GH#839).
+    let users_hidden = !may_browse_directory(&mut conn, ctx).await?;
+    if users_hidden {
+        users.clear();
+    }
     Ok(WorkflowActionPreview {
         key: action.key,
         kind: action.kind,
@@ -1366,6 +1398,7 @@ pub async fn preview(
         included: i64::try_from(included).unwrap_or(i64::MAX),
         users,
         truncated,
+        users_hidden,
         excludes_actor: action.settings.exclude_actor.unwrap_or(true),
     })
 }

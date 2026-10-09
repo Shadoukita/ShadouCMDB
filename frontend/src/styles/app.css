@@ -1689,8 +1689,12 @@ table.data.wf-approver-table {
   min-width: 10rem;
 }
 .wf-approver-add > .combobox,
-.wf-preview-form .combobox {
+.wf-preview-form .combobox,
+.wf-approver-add > .wf-approver-add-note {
   flex: 1 1 18rem;
+}
+.wf-approver-add-note {
+  margin: 0;
 }
 .wf-approver-add > .field.wf-approver-add-action {
   flex: 1 1 14rem;

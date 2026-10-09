@@ -3397,7 +3397,7 @@ export interface paths {
         get: operations["getWorkflowApprovers"];
         /**
          * Replace who may decide each step of the workflow's approval policies
-         * @description Requires `workflows.manage`. `approvers` is the complete new set. Send the workflow's `version`: 409 VERSION_CONFLICT if it changed in between. Exactly the field `source` names is set (400 `required` or `source_mismatch`); profiles, groups and users are given by id or by name (a user by username), a field by id or by key. 400 VALIDATION_ERROR: `unknown_step` on `approvers[i].stepKey` for a step that no version and not the draft has, `not_found` for an unknown profile, group or user, `unknown_attribute` or `attribute_type` on `approvers[i].attribute` unless it is a reference field of the workflow's type (own or inherited) to the Person type, and `duplicate`. A change bumps the workflow's version and is audited as an `update` with the assignments before and after, by name. The response carries the lint's warnings (`problems`). Assignments of a step that only the draft had are dropped (audited the same way) when the draft is deleted or saved without it. After the change is saved, the active steps of the workflow's pending approval requests are resolved again from the new assignments (up to 200 at once; the approval sweep finishes the rest), each change of a step's approvers audited on its CI as `workflow.approval_refresh` with actor `system`. Decisions already cast stand. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `workflows.manage`. `approvers` is the complete new set. Send the workflow's `version`: 409 VERSION_CONFLICT if it changed in between. Exactly the field `source` names is set (400 `required` or `source_mismatch`); profiles, groups and users are given by id or by name (a user by username), a field by id or by key. 400 VALIDATION_ERROR: `unknown_step` on `approvers[i].stepKey` for a step that no version and not the draft has, `not_found` for an unknown profile, group or user, `directory_lookup_forbidden` for a group or user given by name by a caller who may not look up users and groups (the edit permission on business services or `users.manage`, as for `GET /principals`) unless the workflow already has it under that name, whether or not it exists, `unknown_attribute` or `attribute_type` on `approvers[i].attribute` unless it is a reference field of the workflow's type (own or inherited) to the Person type, and `duplicate`. A change bumps the workflow's version and is audited as an `update` with the assignments before and after, by name. The response carries the lint's warnings (`problems`). Assignments of a step that only the draft had are dropped (audited the same way) when the draft is deleted or saved without it. After the change is saved, the active steps of the workflow's pending approval requests are resolved again from the new assignments (up to 200 at once; the approval sweep finishes the rest), each change of a step's approvers audited on its CI as `workflow.approval_refresh` with actor `system`. Decisions already cast stand. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         put: operations["replaceWorkflowApprovers"];
         post?: never;
@@ -3416,7 +3416,7 @@ export interface paths {
         };
         /**
          * Who could decide one approval step, and why each user is in or out
-         * @description Requires `workflows.manage`. Resolves the step's assignments to users, for the CI `ciId` or, without it, in general (the field and service owner sources are then not resolved). Each user is `eligible`, or out with a reason: `inactive` (the account is disabled), `no_view_right` (no profile of theirs lets them view the CI's type, so they would never see the request), `excluded` (the `requestedBy` user: four-eyes), or `escalation_only`. Each source tells how many users it resolved to, and why none when it is empty. With `ciId` and `requestedBy`, the sources and parts a request by that user would not use are marked: `dropped` on a field source (or on a service owner source none of whose owners is left), and `droppedParts` listing each service owner or membership left out, with who made the change. Membership is read now; a running request reads it when each decision is made. 400 `unknown_step` for a step no version or draft has; 400 `not_covered` when the workflow does not run on the CI's type; 404 for a CI that does not exist or that the caller may not view.
+         * @description Requires `workflows.manage`. Resolves the step's assignments to users, for the CI `ciId` or, without it, in general (the field and service owner sources are then not resolved). Each user is `eligible`, or out with a reason: `inactive` (the account is disabled), `no_view_right` (no profile of theirs lets them view the CI's type, so they would never see the request), `excluded` (the `requestedBy` user: four-eyes), or `escalation_only`. Each source tells how many users it resolved to, and why none when it is empty. A caller who may not look up users (as for `GET /principals`) gets the counts with `users` empty and `usersHidden: true`. With `ciId` and `requestedBy`, the sources and parts a request by that user would not use are marked: `dropped` on a field source (or on a service owner source none of whose owners is left), and `droppedParts` listing each service owner or membership left out, with who made the change. Membership is read now; a running request reads it when each decision is made. 400 `unknown_step` for a step no version or draft has; 400 `not_covered` when the workflow does not run on the CI's type; 404 for a CI that does not exist or that the caller may not view.
          */
         get: operations["previewWorkflowApprovers"];
         put?: never;
@@ -3441,7 +3441,7 @@ export interface paths {
         get: operations["getWorkflowActions"];
         /**
          * Replace the workflow's notification actions
-         * @description Requires `workflows.manage`. `actions` is the complete new set, in order; an action keeps its id and its delivery history by `key`. Send the workflow's `version`: 409 VERSION_CONFLICT if it changed in between. A change bumps the workflow's version and is audited as an `update` with the actions before and after, recipients by name. 400 VALIDATION_ERROR: `required` / `not_applicable` / `source_mismatch` for fields the kind, trigger or source needs or does not take; `unknown_transition` for a transition no version and not the draft has; `not_found` for an unknown profile, group or user; `duplicate`; `too_many_actions` beyond 10 per trigger and transition; `unknown_placeholder` in an e-mail text; `kind_unavailable` for `email` and `webhook`, and `source_unavailable` for sources other than `profile`, `group` and `user`, until the release that delivers them. Runs already queued for a removed or disabled action are cancelled. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `workflows.manage`. `actions` is the complete new set, in order; an action keeps its id and its delivery history by `key`. Send the workflow's `version`: 409 VERSION_CONFLICT if it changed in between. A change bumps the workflow's version and is audited as an `update` with the actions before and after, recipients by name. 400 VALIDATION_ERROR: `required` / `not_applicable` / `source_mismatch` for fields the kind, trigger or source needs or does not take; `unknown_transition` for a transition no version and not the draft has; `not_found` for an unknown profile, group or user; `directory_lookup_forbidden` for a group or user given by name by a caller who may not look up users and groups (the edit permission on business services or `users.manage`, as for `GET /principals`) unless the workflow already has it under that name, whether or not it exists; `duplicate`; `too_many_actions` beyond 10 per trigger and transition; `unknown_placeholder` in an e-mail text; `kind_unavailable` for `email` and `webhook`, and `source_unavailable` for sources other than `profile`, `group` and `user`, until the release that delivers them. Runs already queued for a removed or disabled action are cancelled. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         put: operations["replaceWorkflowActions"];
         post?: never;
@@ -3460,7 +3460,7 @@ export interface paths {
         };
         /**
          * Who an action would notify now, and why each user is in or out
-         * @description Requires `workflows.manage`. Resolves the action's recipient sources to users as a run would now: `included`, or out with a reason (`inactive`, `no_view`: may not view the type of the CI `ciId`, or of the workflow without it, `truncated`: beyond `WORKFLOW_ACTIONS_MAX_RECIPIENTS`). Whoever runs the event is left out too unless the action sets `excludeActor: false`. Nothing is sent. 404 for an unknown action, and for a CI that does not exist or that the caller may not view.
+         * @description Requires `workflows.manage`. Resolves the action's recipient sources to users as a run would now: `included`, or out with a reason (`inactive`, `no_view`: may not view the type of the CI `ciId`, or of the workflow without it, `truncated`: beyond `WORKFLOW_ACTIONS_MAX_RECIPIENTS`). Whoever runs the event is left out too unless the action sets `excludeActor: false`. Nothing is sent. A caller who may not look up users (as for `GET /principals`) gets `included` with `users` empty and `usersHidden: true`. 404 for an unknown action, and for a CI that does not exist or that the caller may not view.
          */
         get: operations["previewWorkflowAction"];
         put?: never;
@@ -7931,6 +7931,11 @@ export interface components {
             users: components["schemas"]["WorkflowActionPreviewUser"][];
             /** @description More users than listed */
             truncated: boolean;
+            /**
+             * @description `users` is left empty because the caller may not look up users (the edit permission on business services or
+             *     `users.manage`, as for `GET /principals`); `included` is still given
+             */
+            usersHidden: boolean;
             /** @description Whoever runs the event is left out as well (`excludeActor`, the default) */
             excludesActor: boolean;
         };
@@ -8431,6 +8436,11 @@ export interface components {
             users: components["schemas"]["WorkflowApproverPreviewUser"][];
             /** @description More users were resolved than are listed */
             truncated: boolean;
+            /**
+             * @description `users` is left empty because the caller may not look up users (the edit permission on business services
+             *     or `users.manage`, as for `GET /principals`); the counts are still given
+             */
+            usersHidden: boolean;
             sources: components["schemas"]["WorkflowApproverPreviewSource"][];
         };
         /** @description One assignment of the step and what it resolved to */

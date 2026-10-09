@@ -26,6 +26,8 @@ mod approvals_tests;
 pub mod approvers;
 pub mod archive;
 pub mod condition;
+#[cfg(test)]
+mod directory_tests;
 pub mod eval;
 pub mod graph;
 pub mod migration;
@@ -416,8 +418,11 @@ pub fn routes() -> Vec<Route> {
                  changed in between. Exactly the field `source` names is set (400 `required` or `source_mismatch`); \
                  profiles, groups and users are given by id or by name (a user by username), a field by id or by \
                  key. 400 VALIDATION_ERROR: `unknown_step` on `approvers[i].stepKey` for a step that no version and \
-                 not the draft has, `not_found` for an unknown profile, group or user, `unknown_attribute` or \
-                 `attribute_type` on `approvers[i].attribute` unless it is a reference field of the workflow's type \
+                 not the draft has, `not_found` for an unknown profile, group or user, \
+                 `directory_lookup_forbidden` for a group or user given by name by a caller who may not look up \
+                 users and groups (the edit permission on business services or `users.manage`, as for \
+                 `GET /principals`) unless the workflow already has it under that name, whether or not it exists, \
+                 `unknown_attribute` or `attribute_type` on `approvers[i].attribute` unless it is a reference field of the workflow's type \
                  (own or inherited) to the Person type, and `duplicate`. A change bumps the workflow's version and \
                  is audited as an `update` with the assignments before and after, by name. The response carries the \
                  lint's warnings (`problems`). Assignments of a step that only the draft had are dropped (audited \
@@ -450,6 +455,8 @@ pub fn routes() -> Vec<Route> {
                  `inactive` (the account is disabled), `no_view_right` (no profile of theirs lets them view the CI's \
                  type, so they would never see the request), `excluded` (the `requestedBy` user: four-eyes), or \
                  `escalation_only`. Each source tells how many users it resolved to, and why none when it is empty. \
+                 A caller who may not look up users (as for `GET /principals`) gets the counts with `users` empty \
+                 and `usersHidden: true`. \
                  With `ciId` and `requestedBy`, the sources and parts a request by that user would not use are \
                  marked: `dropped` on a field source (or on a service owner source none of whose owners is left), \
                  and `droppedParts` listing each service owner or membership left out, with who made the change. \
@@ -493,7 +500,10 @@ pub fn routes() -> Vec<Route> {
                  the workflow's version and is audited as an `update` with the actions before and after, recipients \
                  by name. 400 VALIDATION_ERROR: `required` / `not_applicable` / `source_mismatch` for fields the kind, \
                  trigger or source needs or does not take; `unknown_transition` for a transition no version and not \
-                 the draft has; `not_found` for an unknown profile, group or user; `duplicate`; `too_many_actions` \
+                 the draft has; `not_found` for an unknown profile, group or user; `directory_lookup_forbidden` for \
+                 a group or user given by name by a caller who may not look up users and groups (the edit \
+                 permission on business services or `users.manage`, as for `GET /principals`) unless the workflow \
+                 already has it under that name, whether or not it exists; `duplicate`; `too_many_actions` \
                  beyond 10 per trigger and transition; `unknown_placeholder` in an e-mail text; `kind_unavailable` \
                  for `email` and `webhook`, and `source_unavailable` for sources other than `profile`, `group` and \
                  `user`, until the release that delivers them. Runs already queued for a removed or disabled action \
@@ -514,8 +524,9 @@ pub fn routes() -> Vec<Route> {
                 "Resolves the action's recipient sources to users as a run would now: `included`, or out with a \
                  reason (`inactive`, `no_view`: may not view the type of the CI `ciId`, or of the workflow without \
                  it, `truncated`: beyond `WORKFLOW_ACTIONS_MAX_RECIPIENTS`). Whoever runs the event is left out too \
-                 unless the action sets `excludeActor: false`. Nothing is sent. 404 for an unknown action, and for a \
-                 CI that does not exist or that the caller may not view.",
+                 unless the action sets `excludeActor: false`. Nothing is sent. A caller who may not look up users \
+                 (as for `GET /principals`) gets `included` with `users` empty and `usersHidden: true`. 404 for an \
+                 unknown action, and for a CI that does not exist or that the caller may not view.",
             )
             .requires(manage)
             .class_checked()

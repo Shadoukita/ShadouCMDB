@@ -856,13 +856,20 @@ pub async fn part_of(
 // Owner picker and settings
 // ---------------------------------------------------------------------------
 
+/// Who may look up users and groups, for messages.
+pub const DIRECTORY_RIGHT: &str = "the edit permission on business services or the users.manage permission";
+
+/// Whether the caller may look up users and groups: the owner picker's right,
+/// and also what resolving them by name or listing them anywhere else needs
+/// (workflow approvers and action recipients, GH#839).
+pub async fn may_browse_directory(conn: &mut PgConnection, ctx: &RequestContext) -> Result<bool, AppError> {
+    Ok(ctx.require(GlobalPermission::UsersManage).is_ok() || may(ctx, roles(conn).await?, ClassOp::Edit))
+}
+
 pub async fn principals(pool: &PgPool, ctx: &RequestContext, q: &PrincipalQuery) -> Result<PrincipalList, AppError> {
     let mut conn = pool.acquire().await?;
-    let roles = roles(&mut conn).await?;
-    if !may(ctx, roles, ClassOp::Edit) && ctx.require(GlobalPermission::UsersManage).is_err() {
-        return Err(forbidden(
-            "Looking up owners needs the edit permission on business services or the users.manage permission",
-        ));
+    if !may_browse_directory(&mut conn, ctx).await? {
+        return Err(forbidden(format!("Looking up owners needs {DIRECTORY_RIGHT}")));
     }
     let Some(text) = q.q.as_deref().map(str::trim) else {
         return Err(AppError::validation(vec![query_error("q", "Required", "required")]));
