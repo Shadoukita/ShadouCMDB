@@ -42,14 +42,14 @@ use super::super::runtime_schemas::WorkflowBlockedReason;
 use super::super::schemas::{
     WorkflowApprovalDroppedSource, WorkflowApprovalOverdue, WorkflowApproverRole, WorkflowApproverSource,
 };
-use super::delegations;
 use super::{
     CANCEL_KEY, InstanceRow, NewEvent, Pinned, PinnedStep, PinnedTransition, as_transition_fields, check_active,
     condition_values, current_values, granted, insert_event, instance, is_set, may_edit, may_manage, move_to, pinned,
     starter, state_value, write_ci,
 };
+use super::{actions, delegations};
 use crate::api::context::{Caller, RequestContext, forbidden};
-use crate::auth::permissions::{ClassOp, ClassRights, Permissions};
+use crate::auth::permissions::ClassOp;
 use crate::auth::{Credential, Principal};
 use crate::data::auth as auth_data;
 use crate::data::crud::{self, AuditAction, AuditEntry};
@@ -1084,22 +1084,7 @@ fn problem(field: String, message: String, code: &str) -> FieldError {
 /// refused, as a PATCH would refuse it). Never the system scope: the item
 /// write path validates every value and applies every write rule.
 fn narrowed(ctx: &RequestContext, decider: &Decider, class_id: Uuid) -> RequestContext {
-    let own = ctx.principal().map(|p| &p.permissions);
-    let view = ClassRights { view: true, ..ClassRights::default() };
-    let mut permissions = Permissions {
-        all_classes: if own.is_some_and(|p| p.administrator || p.all_classes.view) {
-            view
-        } else {
-            ClassRights::default()
-        },
-        ..Permissions::default()
-    };
-    for (class, rights) in own.map(|p| &p.classes).into_iter().flatten() {
-        if rights.view {
-            permissions.classes.insert(*class, view);
-        }
-    }
-    permissions.classes.insert(class_id, ClassRights { view: true, edit: true, ..ClassRights::default() });
+    let permissions = actions::write_permissions(ctx.principal().map(|p| &p.permissions), class_id);
     let credential = ctx.principal().map(|p| p.credential.clone()).unwrap_or(Credential::Token {
         profile_id: None,
         creator_id: None,
@@ -1210,6 +1195,9 @@ async fn apply(
             let e = as_transition_fields(e);
             if e.code == ErrorCode::ValidationError { stale(t, e.details.unwrap_or_default()) } else { e }
         })?;
+    // The attribute actions, with the decider as actor (actions design §7.1).
+    let run = actions::Run { row, transition: t, actor: Some(decider.user_id), note };
+    let changes = actions::merge(changes, actions::apply(&mut *conn, &writer, p, run).await?);
     move_to(&mut *conn, row.id, to).await?;
     insert_event(
         &mut *conn,

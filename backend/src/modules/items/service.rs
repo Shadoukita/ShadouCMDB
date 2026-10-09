@@ -1000,6 +1000,38 @@ pub(crate) async fn update_for_workflow(
     apply: bool,
     note: Option<&Map<String, Value>>,
 ) -> Result<WorkflowWrite, AppError> {
+    // The workflow's own write of its state field: the one write the guard lets through.
+    write_for_workflow(conn, ctx, id, class_id, attributes, apply, StateFields::WorkflowWrite, Some(note)).await
+}
+
+/// Sets the values of a transition's attribute actions (actions design
+/// SHAA-2725 §7) on a live CI the caller already locked, with the rules of
+/// `update_for_workflow` but none of its bypass: a workflow state field is
+/// refused as on a PATCH. Writes no audit row: the caller writes one that
+/// names the action.
+pub(crate) async fn update_for_action(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    id: Uuid,
+    class_id: Uuid,
+    attributes: Map<String, Value>,
+) -> Result<WorkflowWrite, AppError> {
+    let state = StateFields::load(conn).await?;
+    write_for_workflow(conn, ctx, id, class_id, attributes, true, state, None).await
+}
+
+/// `audit`: None writes no audit row, Some(note) the CI's `update` row with `note`.
+#[allow(clippy::too_many_arguments)]
+async fn write_for_workflow(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    id: Uuid,
+    class_id: Uuid,
+    attributes: Map<String, Value>,
+    apply: bool,
+    state: StateFields,
+    audit: Option<Option<&Map<String, Value>>>,
+) -> Result<WorkflowWrite, AppError> {
     let model = Model::load(conn).await?;
     let before = must_detail(conn, &model, id, None).await?;
     if attributes.is_empty() {
@@ -1018,14 +1050,13 @@ pub(crate) async fn update_for_workflow(
     let visible = ctx.class_scope(ClassOp::View);
     let needs = Needs::for_update(&defs, input.attributes.as_ref(), &before.attributes);
     let resolver = DbResolver::load(conn, visible.as_deref(), &needs).await?;
-    // The workflow's own write of its state field: the one write the guard lets through.
-    let state = StateFields::WorkflowWrite;
     let plan = plan::plan_update(ctx, &model, &defs, before.clone(), &input, &resolver, None, &state)?;
     if !apply {
         return Ok(WorkflowWrite { after: before.clone(), before });
     }
     plan::apply(conn, &model, &plan).await?;
     let after = must_detail(conn, &model, id, None).await?;
+    let Some(note) = audit else { return Ok(WorkflowWrite { before, after }) };
     let old = plan.before.as_ref().map(crud::json);
     let mut new = crud::json(&after);
     if old.as_ref() != Some(&new) {

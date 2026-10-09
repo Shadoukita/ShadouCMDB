@@ -31,6 +31,7 @@
 //! migration and a CI deletion close it. The lock order gains a third link:
 //! CI row → instance row → approval request row.
 
+pub mod actions;
 pub mod approval_lists;
 pub mod approvals;
 pub mod delegations;
@@ -145,6 +146,8 @@ pub(super) struct Pinned {
     fields: Vec<PinnedField>,
     /// Approval steps, in step order per transition.
     steps: Vec<PinnedStep>,
+    /// Attribute actions, in their order per transition.
+    set_attributes: Vec<graph::SetAttributeRow>,
 }
 
 impl Pinned {
@@ -229,7 +232,8 @@ pub(super) async fn pinned(conn: &mut PgConnection, version_id: Uuid) -> Result<
     .bind(version_id)
     .fetch_all(&mut *conn)
     .await?;
-    let p = Arc::new(Pinned { initial_state_id, states, transitions, fields, steps });
+    let set_attributes = graph::load_set_attributes(&mut *conn, version_id).await?;
+    let p = Arc::new(Pinned { initial_state_id, states, transitions, fields, steps, set_attributes });
     // A draft can still change: never cached (no instance runs on one).
     if status != "draft"
         && let Ok(mut c) = cache().lock()
@@ -1414,6 +1418,8 @@ async fn transition_in(
     attributes.extend(state_value(&model, row.state_attribute_id, to));
     let changes =
         write_ci(&mut *tx, ctx, row.ci_id, row.class_id, attributes, None).await.map_err(as_transition_fields)?;
+    let run = actions::Run { row: &row, transition: t, actor: ctx.principal().map(|p| p.user_id), note: Map::new() };
+    let changes = actions::merge(changes, actions::apply(&mut *tx, ctx, &p, run).await?);
     move_to(&mut *tx, id, to).await?;
     insert_event(
         &mut *tx,

@@ -49,8 +49,9 @@ pub const FORMAT: &str = "shadoucmdb.config";
 /// workflow's approvers, version 10 expected fields (`isExpected`, counted by the completeness metric), version 11
 /// the owner and end-of-life fields of a class (`ownerAttribute`, `endOfLifeAttribute`, for the data-quality
 /// checks), version 12 identifying fields (`isIdentifying`, not copied when a CI is cloned), version 13 the subtitle
-/// field of a class (`subtitleAttribute`) and the category of relationship types; versions 1 to 13 are read.
-pub const FORMAT_VERSION: i32 = 13;
+/// field of a class (`subtitleAttribute`) and the category of relationship types, version 14 attribute actions on
+/// workflow transitions (`setAttributes`, part of the graph); versions 1 to 14 are read.
+pub const FORMAT_VERSION: i32 = 14;
 
 fn yes() -> bool {
     true
@@ -784,8 +785,8 @@ fn exported_at_schema() -> Schema {
 pub struct ConfigFile {
     #[schema(schema_with = format_schema)]
     pub format: String,
-    /// File format version; this server writes version 13 and reads 1 to 13
-    #[schema(minimum = 1, maximum = 13)]
+    /// File format version; this server writes version 14 and reads 1 to 14
+    #[schema(minimum = 1, maximum = 14)]
     pub format_version: i32,
     /// When and by which server version the file was written (informational)
     #[schema(schema_with = exported_at_schema)]

@@ -9,6 +9,8 @@
 //! routes are [`runtime_routes`].
 
 pub mod actions;
+#[cfg(test)]
+mod actions_tests;
 pub mod adopt;
 #[cfg(test)]
 mod adopt_tests;
