@@ -2,6 +2,7 @@
 import { computed, ref } from "vue";
 import { startGridResize } from "../../lib/gridResize";
 import { cellClass } from "../../lib/uiSettings";
+import { t } from "../../i18n";
 import Icon from "../Icon.vue";
 
 /**
@@ -50,7 +51,12 @@ const emit = defineEmits<{
 const el = ref<HTMLElement>();
 const tabs = computed(() => [...new Set(props.sections.map((s) => s.tab))]);
 const describe = computed(() =>
-  [`${props.label}`, props.auto ? "not placed by the layout" : `${props.width} of ${props.columns} columns`, props.core ? "core field" : "", props.readOnly ? "read-only on the form" : ""]
+  [
+    props.label,
+    props.auto ? t("layoutEditor.field.notPlaced") : t("layoutEditor.field.width", { width: props.width, columns: props.columns }),
+    props.core ? t("layoutEditor.field.core") : "",
+    props.readOnly ? t("layoutEditor.field.readOnlyOnForm") : "",
+  ]
     .filter(Boolean)
     .join(", "),
 );
@@ -99,36 +105,36 @@ function onResizeStart(e: PointerEvent) {
     @dragend="emit('dragend')"
   >
     <div class="le-field-head">
-      <button :id="`le-field-${field}`" type="button" class="le-grip" :aria-label="describe" aria-describedby="le-keys" title="Drag to move" @keydown="onKey"><Icon name="grip-vertical" /></button>
+      <button :id="`le-field-${field}`" type="button" class="le-grip" :aria-label="describe" aria-describedby="le-keys" :title="t('layoutEditor.dragToMove')" @keydown="onKey"><Icon name="grip-vertical" /></button>
       <span v-if="showLabel" class="le-field-label">{{ label }}<span v-if="required" class="req" aria-hidden="true">*</span></span>
-      <span v-if="core" class="badge">core</span>
-      <span v-if="readOnly" class="badge">read-only</span>
+      <span v-if="core" class="badge">{{ t("layoutEditor.field.coreBadge") }}</span>
+      <span v-if="readOnly" class="badge">{{ t("layoutEditor.field.readOnlyBadge") }}</span>
     </div>
-    <div class="le-toolbar" role="toolbar" :aria-label="`${label}: layout`">
+    <div class="le-toolbar" role="toolbar" :aria-label="t('layoutEditor.field.toolbar', { field: label })">
       <template v-if="!auto">
-        <button type="button" class="btn btn-sm btn-icon" :aria-label="`Move ${label} earlier`" title="Move earlier" @click="emit('move', -1)"><Icon name="arrow-up" /></button>
-        <button type="button" class="btn btn-sm btn-icon" :aria-label="`Move ${label} later`" title="Move later" @click="emit('move', 1)"><Icon name="arrow-down" /></button>
-        <button type="button" class="btn btn-sm btn-icon" :aria-label="`Make ${label} narrower`" title="Narrower" :disabled="width <= 1" @click="emit('resize', width - 1)"><Icon name="chevron-left" /></button>
-        <button type="button" class="btn btn-sm" :aria-label="`Make ${label} wider`" title="Wider" :disabled="width >= columns" @click="emit('resize', width + 1)"><Icon name="chevron-right" /></button>
+        <button type="button" class="btn btn-sm btn-icon" :aria-label="t('layoutEditor.field.moveEarlier', { field: label })" :title="t('layoutEditor.moveEarlier')" @click="emit('move', -1)"><Icon name="arrow-up" /></button>
+        <button type="button" class="btn btn-sm btn-icon" :aria-label="t('layoutEditor.field.moveLater', { field: label })" :title="t('layoutEditor.moveLater')" @click="emit('move', 1)"><Icon name="arrow-down" /></button>
+        <button type="button" class="btn btn-sm btn-icon" :aria-label="t('layoutEditor.field.makeNarrower', { field: label })" :title="t('layoutEditor.field.narrower')" :disabled="width <= 1" @click="emit('resize', width - 1)"><Icon name="chevron-left" /></button>
+        <button type="button" class="btn btn-sm" :aria-label="t('layoutEditor.field.makeWider', { field: label })" :title="t('layoutEditor.field.wider')" :disabled="width >= columns" @click="emit('resize', width + 1)"><Icon name="chevron-right" /></button>
       </template>
-      <select :aria-label="`Move ${label} to section`" :value="section ?? ''" @change="emit('place', ($event.target as HTMLSelectElement).value)">
-        <option v-if="auto" value="" disabled>Place in…</option>
+      <select :aria-label="t('layoutEditor.field.moveToSection', { field: label })" :value="section ?? ''" @change="emit('place', ($event.target as HTMLSelectElement).value)">
+        <option v-if="auto" value="" disabled>{{ t("layoutEditor.field.placeIn") }}</option>
         <optgroup v-for="t in tabs" :key="t" :label="t">
           <option v-for="s in sections.filter((x) => x.tab === t)" :key="s.key" :value="s.key">{{ s.label }}</option>
         </optgroup>
       </select>
       <label v-if="canReadOnly" class="check le-ro">
         <input type="checkbox" :checked="readOnly" @change="emit('readOnly', ($event.target as HTMLInputElement).checked)" />
-        Read-only
+        {{ t("layoutEditor.field.readOnly") }}
       </label>
-      <button type="button" class="btn btn-sm" :aria-label="`Hide ${label}`" :disabled="core" :title="core ? 'Core field of every CI: it can be moved, not hidden' : 'Hide'" @click="emit('hide')">
-        Hide
+      <button type="button" class="btn btn-sm" :aria-label="t('layoutEditor.field.hideField', { field: label })" :disabled="core" :title="core ? t('layoutEditor.field.coreCannotHide') : t('layoutEditor.field.hide')" @click="emit('hide')">
+        {{ t("layoutEditor.field.hide") }}
       </button>
     </div>
     <div class="le-field-body" inert>
       <slot />
     </div>
-    <span v-if="!auto" class="resize-handle" aria-hidden="true" title="Drag to resize (snaps to the section's columns)" @pointerdown="onResizeStart" @click.stop />
+    <span v-if="!auto" class="resize-handle" aria-hidden="true" :title="t('layoutEditor.field.resizeTitle')" @pointerdown="onResizeStart" @click.stop />
     <span v-if="guide !== null" class="lg-size-guide" role="status">{{ guide }} / {{ columns }}</span>
   </div>
 </template>
