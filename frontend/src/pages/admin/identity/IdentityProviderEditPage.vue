@@ -181,6 +181,8 @@ watch(
 );
 
 const p = computed(() => provider.data.value);
+/** The issuer or directory URL, shown in mono on the head band's meta line. */
+const endpoint = computed(() => p.value?.oidc?.issuerUrl ?? p.value?.ldap?.url ?? "");
 const isOidc = computed(() => form.value.kind === "oidc");
 /** StartTLS follows the URL's scheme (the API refuses the other combinations): shown, never asked. */
 const transport = computed(() => {
@@ -393,7 +395,7 @@ const notFound = computed(() => {
 </script>
 
 <template>
-  <Breadcrumbs :items="crumbs" />
+  <Breadcrumbs v-if="!isNew && (provider.isLoading.value || provider.isError.value)" :items="crumbs" />
   <LoadingState v-if="!isNew && provider.isLoading.value" :label="t('idp.edit.loading')" />
   <template v-else-if="!isNew && provider.isError.value">
     <EmptyState v-if="notFound" :title="t('idp.edit.notFound.title')">
@@ -403,27 +405,33 @@ const notFound = computed(() => {
     <ErrorAlert v-else :error="provider.error.value" :on-retry="() => provider.refetch()" />
   </template>
   <template v-else>
-    <div class="page-header record-header">
-      <div class="record-heading">
-        <div class="title">
-          <Icon name="key-round" class="class-icon" />
-          <h1 dir="auto">{{ isNew ? t("idp.edit.new") : p?.name }}</h1>
+    <div class="record-head record-head-plain">
+      <Breadcrumbs :items="crumbs" />
+      <div class="page-header record-header">
+        <div class="record-heading">
+          <span class="class-tile class-tile-lg" aria-hidden="true"><Icon name="key-round" class="class-icon" /></span>
+          <div class="record-title">
+            <div class="title">
+              <h1 dir="auto">{{ isNew ? t("idp.edit.new") : p?.name }}</h1>
+            </div>
+            <p v-if="p && !isNew" class="record-meta" data-testid="record-meta">
+              <span :class="['badge', p.isEnabled ? 'ok' : 'off']"
+                ><span class="status-dot" aria-hidden="true" />{{ p.isEnabled ? t("idp.enabled") : t("common.disabled") }}</span
+              >
+              <span class="badge">{{ providerKindLabel(p.kind) }}</span>
+              <span v-if="p.oidc?.mfaAssurance === 'trustProvider'" class="badge warn" :title="t('idp.mfaNotVerifiedTitle')">{{ t("idp.mfaNotVerified") }}</span>
+              <span class="badge">{{ t("idp.edit.accounts", { n: p.userCount }) }}</span>
+              <span class="record-meta-line">
+                <span v-if="endpoint" class="mono" dir="ltr">{{ endpoint }}</span>
+                <span v-if="endpoint" class="sep" aria-hidden="true">·</span>
+                <time :datetime="p.updatedAt" :title="formatDateTime(p.updatedAt)">{{ t("idp.edit.updated", { when: formatRelative(p.updatedAt) }) }}</time>
+              </span>
+            </p>
+          </div>
         </div>
-        <p v-if="p && !isNew" class="record-meta" data-testid="record-meta">
-          <span class="status">
-            <span :class="['status-dot', p.isEnabled ? 'ok' : 'off']" aria-hidden="true" />{{ p.isEnabled ? t("idp.enabled") : t("common.disabled") }}
-          </span>
-          <span class="sep" aria-hidden="true">·</span>
-          <span>{{ providerKindLabel(p.kind) }}</span>
-          <span v-if="p.oidc?.mfaAssurance === 'trustProvider'" class="badge warn" :title="t('idp.mfaNotVerifiedTitle')">{{ t("idp.mfaNotVerified") }}</span>
-          <span class="sep" aria-hidden="true">·</span>
-          <span>{{ t("idp.edit.accounts", { n: p.userCount }) }}</span>
-          <span class="sep" aria-hidden="true">·</span>
-          <time :datetime="p.updatedAt" :title="formatDateTime(p.updatedAt)">{{ t("idp.edit.updated", { when: formatRelative(p.updatedAt) }) }}</time>
-        </p>
-      </div>
-      <div v-if="p && !isNew" class="actions">
-        <RowMenu :label="t('record.actions.more')" :items="moreActions" large />
+        <div v-if="p && !isNew" class="actions">
+          <RowMenu :label="t('record.actions.more')" :items="moreActions" large />
+        </div>
       </div>
     </div>
 
