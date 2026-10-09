@@ -96,7 +96,7 @@ function download() {
   flex: none;
   width: 14px;
   height: 14px;
-  margin-top: 1px;
+  margin-top: var(--space-px);
   background: currentColor;
   mask: var(--icon-circle-alert) center / contain no-repeat;
 }

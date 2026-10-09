@@ -975,7 +975,7 @@ function onHiddenDrop(e: DragEvent) {
 .le-sep .le-grip {
   border: 0;
   background: none;
-  padding: 0 2px;
+  padding: 0 var(--space-0_5);
   color: var(--c-text-secondary);
   cursor: grab;
 }
@@ -990,8 +990,8 @@ function onHiddenDrop(e: DragEvent) {
   z-index: var(--z-handle);
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding: 2px;
+  gap: var(--space-0_5);
+  padding: var(--space-0_5);
   border: 1px solid var(--c-primary);
   border-radius: var(--radius-sm);
   background: var(--c-surface);
@@ -1080,7 +1080,7 @@ function onHiddenDrop(e: DragEvent) {
   display: inline-flex;
   align-items: center;
   gap: var(--space-0_5);
-  padding: 2px 2px 2px var(--space-1);
+  padding: var(--space-0_5) var(--space-0_5) var(--space-0_5) var(--space-1);
   border: 1px solid var(--c-border);
   border-radius: var(--radius-sm);
   background: var(--c-surface);
@@ -1097,7 +1097,7 @@ function onHiddenDrop(e: DragEvent) {
 .le-tab {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-0_5);
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
 }
@@ -1158,7 +1158,7 @@ function onHiddenDrop(e: DragEvent) {
 .le-section-tools {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-0_5);
 }
 .le-section .panel-header {
   gap: var(--space-2);
@@ -1176,7 +1176,7 @@ function onHiddenDrop(e: DragEvent) {
 }
 .le-section-tools select {
   font-size: var(--fs-sm);
-  padding: 1px 4px;
+  padding: var(--space-px) var(--space-1);
 }
 .le-section-tools [aria-pressed="true"] {
   border-color: var(--c-primary);
@@ -1202,7 +1202,7 @@ function onHiddenDrop(e: DragEvent) {
 }
 .le-grid {
   min-height: 56px;
-  padding: 2px;
+  padding: var(--space-0_5);
   row-gap: var(--space-4);
   padding-top: var(--space-3);
 }
