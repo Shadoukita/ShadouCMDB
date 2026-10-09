@@ -30,6 +30,11 @@
 .panel-body.flush {
   padding: 0;
 }
+/* A form's footer as the panel's last row (Account password, import steps): it keeps the panel's lower corners. */
+.panel > .form-footer:last-child,
+.panel > form:last-child > .form-footer:last-child {
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+}
 .grid-2 {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr));

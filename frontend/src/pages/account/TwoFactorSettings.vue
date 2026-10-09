@@ -330,7 +330,8 @@ function codesSaved() {
   border-radius: var(--radius);
 }
 .mfa-confirm h3 {
-  font-size: var(--fs-md);
+  font-size: var(--fs-h2);
+  font-weight: var(--fw-semibold);
 }
 .error-text {
   color: var(--c-danger-text);

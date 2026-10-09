@@ -577,6 +577,7 @@ export const en = {
   "auth.password.tooShort": "Too short",
   "auth.password.mismatch": "The passwords do not match",
   "account.title": "My account",
+  "account.localAccount": "Local account",
   "account.password.title": "Password",
   "account.password.provider": "You sign in through {provider} and have no password in ShadouCMDB. Change your password there.",
   "account.password.intro":
