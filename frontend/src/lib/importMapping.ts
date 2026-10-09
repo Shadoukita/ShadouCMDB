@@ -5,6 +5,7 @@
 // the API's field errors belong in the mapping table.
 import type { ApiErrorDetail, Schemas } from "../api/client";
 import type { ImportColumnTarget, ImportJobMapping, ImportMappingDefinition } from "../api/imports";
+import { formatNumber, t } from "../i18n";
 
 type Attribute = Schemas["AttributeDefinition"];
 type CiClass = Schemas["CiClass"];
@@ -19,10 +20,26 @@ type Direction = Schemas["ImportRelationshipDirection"];
 /** Attribute types a CI can be found by (§2.2): the same list as the server's `matchable`. */
 export const MATCHABLE_TYPES: ReadonlySet<Attribute["dataType"]> = new Set(["text", "integer", "ip", "cidr"]);
 
-export const MODES: { value: ImportMode; label: string }[] = [
-  { value: "create_or_update", label: "Create new and update existing CIs" },
-  { value: "create_only", label: "Only create new CIs" },
-  { value: "update_only", label: "Only update existing CIs" },
+/** The import modes; `label` is read in the active locale each time. */
+export const MODES: { readonly value: ImportMode; readonly label: string }[] = [
+  {
+    value: "create_or_update",
+    get label() {
+      return t("imports.map.mode.createOrUpdate");
+    },
+  },
+  {
+    value: "create_only",
+    get label() {
+      return t("imports.map.mode.createOnly");
+    },
+  },
+  {
+    value: "update_only",
+    get label() {
+      return t("imports.map.mode.updateOnly");
+    },
+  },
 ];
 
 export const DATE_FORMATS: ImportDateFormat[] = ["YYYY-MM-DD", "DD.MM.YYYY", "MM/DD/YYYY"];
@@ -116,9 +133,9 @@ export function targetGroups(input: {
 
   return {
     core: [
-      { value: "ident", label: "Ident" },
-      { value: "validFrom", label: "Valid from" },
-      { value: "validUntil", label: "Valid until" },
+      { value: "ident", label: t("imports.map.ident") },
+      { value: "validFrom", label: t("imports.map.validFrom") },
+      { value: "validUntil", label: t("imports.map.validUntil") },
     ],
     attributes: attributeOptions,
     relationships,
@@ -302,26 +319,26 @@ export function checkMapping(
     if (c.target === "ignore") return;
     const first = firstColumn.get(c.target);
     if (first !== undefined) {
-      problems.push({ column: i, message: `Mapped twice: column ${first + 1} already maps to ${options.get(c.target)?.label ?? c.target}.` });
+      problems.push({ column: i, message: t("imports.map.check.mappedTwice", { column: formatNumber(first + 1), target: options.get(c.target)?.label ?? c.target }) });
     } else {
       firstColumn.set(c.target, i);
     }
     if (c.target === "ident" && form.mode !== "update_only" && !isAdministrator) {
-      problems.push({ column: i, message: "Only administrators can set the ident of new CIs. Map it only to match existing CIs." });
+      problems.push({ column: i, message: t("imports.map.check.identAdminOnly") });
     }
     if (needsMatch(options.get(c.target)) && c.matchBy === "attribute" && !c.matchAttribute) {
-      problems.push({ column: i, message: "Choose the attribute to find the other CI by." });
+      problems.push({ column: i, message: t("imports.map.check.matchAttribute") });
     }
   });
 
   if (form.mode !== "create_only") {
     if (!form.keyField) {
-      problems.push({ control: "import-key", message: "Choose how rows find existing CIs (Match existing CIs by)." });
+      problems.push({ control: "import-key", message: t("imports.map.check.keyMissing") });
     } else {
       const keyTarget = form.keyField === "ident" ? "ident" : `attr:${form.keyField.replace(/^attributes\./, "")}`;
       if (!firstColumn.has(keyTarget)) {
-        const label = form.keyField === "ident" ? "Ident" : (options.get(keyTarget)?.label ?? form.keyField);
-        problems.push({ control: "import-key", message: `The match key ${label} is not mapped to a column.` });
+        const label = form.keyField === "ident" ? t("imports.map.ident") : (options.get(keyTarget)?.label ?? form.keyField);
+        problems.push({ control: "import-key", message: t("imports.map.check.keyUnmapped", { label }) });
       }
     }
   }
@@ -329,7 +346,7 @@ export function checkMapping(
   if (form.mode !== "update_only") {
     for (const a of attributes) {
       if (!a.isActive || !a.isRequired || a.defaultValue != null) continue;
-      if (!firstColumn.has(`attr:${a.key}`)) problems.push({ control: "import-mapping-table", message: `${a.label} is required; map a column to it.` });
+      if (!firstColumn.has(`attr:${a.key}`)) problems.push({ control: "import-mapping-table", message: t("imports.map.check.required", { label: a.label }) });
     }
   }
   return problems;
@@ -358,7 +375,7 @@ export function placeApiErrors(details: ApiErrorDetail[]): MappingProblem[] {
 
 /** "old → new" for a planned change. */
 export function changeText(v: unknown): string {
-  if (v === null || v === undefined || v === "") return "(empty)";
+  if (v === null || v === undefined || v === "") return t("imports.map.emptyValue");
   if (typeof v === "string") return v;
   if (typeof v === "number" || typeof v === "boolean") return String(v);
   return JSON.stringify(v);
@@ -411,21 +428,21 @@ export function remapByHeaders(mapping: ImportJobMapping, oldHeaders: string[], 
 export function matchedText(via: Schemas["ImportMatchVia"] | null | undefined, hint: string | null | undefined): string {
   switch (via) {
     case "key":
-      return "Matched by key";
+      return t("imports.map.status.matchedByKey");
     case "label":
-      return "Matched by name";
+      return t("imports.map.status.matchedByName");
     case "saved_mapping":
-      return "From saved mapping";
+      return t("imports.map.status.fromSaved");
   }
   switch (hint) {
     case "ambiguous_label":
-      return "Not mapped: several fields have this name";
+      return t("imports.map.status.ambiguousLabel");
     case "duplicate_target":
-      return "Not mapped: an earlier column has this field";
+      return t("imports.map.status.duplicateTarget");
     case "ident_admin_only":
-      return "Not mapped: only administrators can set the ident of new CIs";
+      return t("imports.map.status.identAdminOnly");
     case "system_relationship_type":
-      return "Not mapped: business service members are added on the business service. Set this column to ignore in the saved mapping";
+      return t("imports.map.status.systemRelationshipType");
   }
-  return "Not mapped";
+  return t("imports.map.status.notMapped");
 }

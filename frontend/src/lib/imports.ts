@@ -5,7 +5,7 @@ import type { ApiError } from "../api/client";
 import type { ImportJob, ImportLimits, ImportStatus } from "../api/imports";
 import { formatBytes } from "./format";
 import type { IconName } from "../icons/lucide";
-import type { MessageKey } from "../i18n";
+import { formatNumber, t, type MessageKey } from "../i18n";
 
 /** A job in one of these states changes by itself on the server, so the UI polls it. */
 export const RUNNING: ReadonlySet<ImportStatus> = new Set(["uploading", "queued", "analysing", "validating", "committing"]);
@@ -29,11 +29,12 @@ export function pollInterval(job: ImportJob | undefined, failures: number, now =
 
 export type WizardStep = 1 | 2 | 3 | 4;
 
-export const STEPS: { step: WizardStep; label: string }[] = [
-  { step: 1, label: "Upload" },
-  { step: 2, label: "Map columns" },
-  { step: 3, label: "Check" },
-  { step: 4, label: "Import" },
+/** Step names as catalog keys: render them with `t(s.label)`. */
+export const STEPS: { step: WizardStep; label: MessageKey }[] = [
+  { step: 1, label: "imports.step.upload" },
+  { step: 2, label: "imports.step.map" },
+  { step: 3, label: "imports.step.check" },
+  { step: 4, label: "imports.step.import" },
 ];
 
 const PHASE_STEP = { analyse: 1, validate: 3, commit: 4 } as const;
@@ -102,16 +103,14 @@ export type FileFormat = "csv" | "xlsx";
 export function checkFile(file: { name: string; size: number }, limits: ImportLimits): { format: FileFormat } | { error: string } {
   const ext = /\.([^.]+)$/.exec(file.name)?.[1]?.toLowerCase();
   if (ext === "xls" || ext === "xlsm" || ext === "ods") {
-    return { error: `${file.name} is an .${ext} file. Save it as .xlsx (Excel Workbook) or .csv and upload that.` };
+    return { error: t("imports.lib.oldFormat", { file: file.name, ext }) };
   }
   if (ext !== "csv" && ext !== "xlsx") {
-    return { error: `${file.name} is not a CSV or XLSX file. Choose a file ending in .csv or .xlsx.` };
+    return { error: t("imports.lib.notSpreadsheet", { file: file.name }) };
   }
-  if (file.size === 0) return { error: `${file.name} is empty.` };
+  if (file.size === 0) return { error: t("imports.lib.emptyFile", { file: file.name }) };
   if (file.size > limits.maxFileBytes) {
-    return {
-      error: `${file.name} is ${formatBytes(file.size)}. The limit is ${formatBytes(limits.maxFileBytes)}. Split the file and import it in parts.`,
-    };
+    return { error: t("imports.lib.fileTooBig", { file: file.name, size: formatBytes(file.size), limit: formatBytes(limits.maxFileBytes) }) };
   }
   return { format: ext };
 }
@@ -125,25 +124,23 @@ export function refusalCode(e: ApiError): string {
 export function uploadErrorMessage(e: ApiError, limits: ImportLimits | undefined): string {
   switch (refusalCode(e)) {
     case "import_disabled":
-      return "Bulk import is turned off for this instance. An administrator can turn it on under Administration › Import.";
+      return `${t("imports.off.title")} ${t("imports.off.hint")}`;
     case "import_busy":
-      return "Another import of yours is still running. Wait until it finishes, or cancel it under Imports, then upload again.";
+      return t("imports.lib.busy");
     case "import_limit":
-      return "You have too many unfinished imports. Finish or delete some under Imports, then upload again.";
+      return t("imports.lib.tooManyUnfinished");
     case "import_rate":
-      return "You have uploaded too many files in the last hour. Try again later.";
+      return t("imports.lib.rate");
     case "import_storage_full":
-      return "The server has no room for more uploaded files. Delete finished imports or try again later.";
+      return t("imports.lib.storageFull");
     case "workbook_encrypted_or_xls":
-      return "The workbook is password protected or in the old .xls format. Remove the protection, save it as .xlsx and upload it again.";
+      return t("imports.lib.encryptedOrXls");
     case "unsupported_format":
-      return "The file's content does not match its name. Upload a CSV file or an Excel workbook (.xlsx).";
+      return t("imports.lib.unsupportedFormat");
     case "upload_timeout":
-      return "The upload took too long and was stopped. Check the connection and try again.";
+      return t("imports.lib.uploadTimeout");
     case "PAYLOAD_TOO_LARGE":
-      return limits
-        ? `The file is larger than the limit of ${formatBytes(limits.maxFileBytes)}. Split the file and import it in parts.`
-        : "The file is larger than the server accepts. Split the file and import it in parts.";
+      return limits ? t("imports.lib.payloadTooLarge", { limit: formatBytes(limits.maxFileBytes) }) : t("imports.lib.payloadTooLargeUnknown");
     default:
       return e.message;
   }
@@ -151,11 +148,12 @@ export function uploadErrorMessage(e: ApiError, limits: ImportLimits | undefined
 
 /** "Row 12, column C" for a job-level analysis error that points into the file. */
 export function errorPlace(error: { row?: number | null; column?: number | null }): string {
-  const parts: string[] = [];
-  if (error.row != null) parts.push(`row ${error.row.toLocaleString()}`);
-  if (error.column != null) parts.push(`column ${columnLetter(error.column)}`);
-  const s = parts.join(", ");
-  return s ? s[0]!.toUpperCase() + s.slice(1) : "";
+  const row = error.row != null ? formatNumber(error.row) : null;
+  const column = error.column != null ? columnLetter(error.column) : null;
+  if (row !== null && column !== null) return t("imports.lib.placeRowColumn", { row, column });
+  if (row !== null) return t("imports.lib.placeRow", { row });
+  if (column !== null) return t("imports.lib.placeColumn", { column });
+  return "";
 }
 
 /** 0 → "A", 25 → "Z", 26 → "AA": columns as spreadsheets name them. */
@@ -170,17 +168,19 @@ export function columnLetter(index: number): string {
   return s;
 }
 
-export const DELIMITERS: { value: string; label: string }[] = [
-  { value: ",", label: "Comma ( , )" },
-  { value: ";", label: "Semicolon ( ; )" },
-  { value: "\t", label: "Tab" },
-  { value: "|", label: "Pipe ( | )" },
+/** Delimiter choices; `label` is a catalog key, rendered with `t(d.label)`. */
+export const DELIMITERS: { value: string; label: MessageKey }[] = [
+  { value: ",", label: "imports.lib.delimiter.comma" },
+  { value: ";", label: "imports.lib.delimiter.semicolon" },
+  { value: "\t", label: "imports.lib.delimiter.tab" },
+  { value: "|", label: "imports.lib.delimiter.pipe" },
 ];
 
-export const ENCODINGS: { value: "utf-8" | "windows-1252" | "iso-8859-1"; label: string }[] = [
-  { value: "utf-8", label: "UTF-8" },
-  { value: "windows-1252", label: "Windows-1252 (Western European)" },
-  { value: "iso-8859-1", label: "ISO-8859-1 (Latin-1)" },
+/** Encoding choices; `label` is a catalog key, rendered with `t(e.label)`. */
+export const ENCODINGS: { value: "utf-8" | "windows-1252" | "iso-8859-1"; label: MessageKey }[] = [
+  { value: "utf-8", label: "imports.lib.encoding.utf8" },
+  { value: "windows-1252", label: "imports.lib.encoding.windows1252" },
+  { value: "iso-8859-1", label: "imports.lib.encoding.latin1" },
 ];
 
 /** The sheet preselected for a workbook: the one the server read, else the first visible one. */

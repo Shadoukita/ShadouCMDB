@@ -2,6 +2,7 @@
 import { computed, ref } from "vue";
 import { ApiError } from "../../api/client";
 import { newIdempotencyKey, useCreateImport, type ImportJob, type ImportLimits } from "../../api/imports";
+import { t, tAround } from "../../i18n";
 import { formatBytes } from "../../lib/format";
 import { checkFile, uploadErrorMessage, type FileFormat } from "../../lib/imports";
 
@@ -28,8 +29,9 @@ const errorText = computed(() => {
   if (!e) return "";
   return e instanceof ApiError ? uploadErrorMessage(e, props.limits) : String(e);
 });
-const label = computed(
-  () => `Spreadsheet file (CSV or XLSX, up to ${formatBytes(props.limits.maxFileBytes)} and ${props.limits.maxRows.toLocaleString()} rows)`,
+const label = computed(() => t("imports.upload.label", { size: formatBytes(props.limits.maxFileBytes), rows: props.limits.maxRows }));
+const uploadingText = computed(() =>
+  file.value ? tAround("imports.upload.uploading", "file", { size: formatBytes(file.value.size) }) : ["", ""],
 );
 
 function choose(f: File | undefined) {
@@ -89,22 +91,19 @@ function onDrop(e: DragEvent) {
         :aria-describedby="errorText ? 'import-file-error import-file-hint' : 'import-file-hint'"
         @change="onChange"
       />
-      <p id="import-file-hint" class="hint">
-        Or drop the file here. The first row should hold the column names. Uploaded files are kept for 24 hours after
-        the last step, then deleted.
-      </p>
+      <p id="import-file-hint" class="hint">{{ t("imports.upload.hint") }}</p>
       <div v-if="errorText" id="import-file-error" class="alert alert-error" role="alert">
-        <strong>The file cannot be imported.</strong>
+        <strong>{{ t("imports.upload.failed") }}</strong>
         <div>{{ errorText }}</div>
-        <div v-if="serverError?.requestId" class="meta">Request id <code>{{ serverError.requestId }}</code></div>
+        <div v-if="serverError?.requestId" class="meta">{{ t("error.requestId") }} <code>{{ serverError.requestId }}</code></div>
         <button v-if="serverError && (serverError.status === 0 || serverError.status >= 500 || serverError.status === 408) && file" type="button" class="btn btn-sm" @click="upload">
-          Try again
+          {{ t("imports.upload.tryAgain") }}
         </button>
       </div>
     </div>
     <div v-if="create.isPending.value && file" class="import-progress" role="status">
       <div class="import-progress-label">
-        <span>Uploading <em>{{ file.name }}</em> ({{ formatBytes(file.size) }})…</span>
+        <span>{{ uploadingText[0] }}<em>{{ file.name }}</em>{{ uploadingText[1] }}</span>
       </div>
       <div class="import-progress-track"><div class="import-progress-fill indeterminate" /></div>
     </div>

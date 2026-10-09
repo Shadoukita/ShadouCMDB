@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import { formatNumber, t } from "../../i18n";
 
 /**
  * A determinate progress bar for a running phase (§1.4): role=progressbar with the row counts as value text,
@@ -10,7 +11,9 @@ const props = defineProps<{ label: string; done: number; total: number | null; f
 
 const percent = computed(() => (props.total ? Math.min(100, Math.floor((props.done / props.total) * 100)) : null));
 const valueText = computed(() =>
-  props.total ? `${props.done.toLocaleString()} of ${props.total.toLocaleString()} rows` : `${props.done.toLocaleString()} rows so far`,
+  props.total
+    ? t("imports.progress.of", { done: formatNumber(props.done), total: props.total })
+    : t("imports.progress.soFar", { n: props.done }),
 );
 
 const announced = ref("");
@@ -20,7 +23,7 @@ watch(
   (p) => {
     if (p === null) return;
     const decile = Math.floor(p / 10);
-    if (decile > lastDecile && lastDecile >= 0 && p < 100) announced.value = `${props.label}: ${p} %`;
+    if (decile > lastDecile && lastDecile >= 0 && p < 100) announced.value = t("imports.progress.percent", { label: props.label, p: formatNumber(p) });
     lastDecile = Math.max(lastDecile, decile);
   },
   { immediate: true },

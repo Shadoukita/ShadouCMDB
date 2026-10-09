@@ -4,7 +4,6 @@ import { RouterLink, useRoute, useRouter } from "vue-router";
 import { ApiError } from "../../api/client";
 import {
   importDownloads,
-  useCancelImport,
   useCommitImport,
   useImportIssues,
   useStartImportDryRun,
@@ -15,7 +14,7 @@ import { useCiClasses, useClassAttributes } from "../../api/queries";
 import ConfirmDialog from "../../components/ConfirmDialog.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
 import PaginationBar from "../../components/PaginationBar.vue";
-import { plural } from "../../lib/format";
+import { formatNumber, t, type MessageKey } from "../../i18n";
 import { columnLetter, refusalCode } from "../../lib/imports";
 import ChangeValue from "./ChangeValue.vue";
 import ImportProgress from "./ImportProgress.vue";
@@ -23,7 +22,7 @@ import Icon from "../../components/Icon.vue";
 import type { IconName } from "../../icons/lucide";
 
 /**
- * Step 3: the dry run. While it runs: progress, elapsed time and Cancel. Then the counts, a sample of the
+ * Step 3: the dry run. While it runs: progress and elapsed time (stopping it is the page head's Stop import). Then the counts, a sample of the
  * planned changes, and the row problems as a server-paged table whose filters live in the URL, so a reload or a
  * shared link shows the same page.
  */
@@ -36,7 +35,6 @@ const emit = defineEmits<{ committing: [] }>();
 
 const route = useRoute();
 const router = useRouter();
-const cancel = useCancelImport();
 const again = useStartImportDryRun();
 const commit = useCommitImport();
 
@@ -63,12 +61,12 @@ const elapsed = computed(() => {
   const start = Date.parse(props.job.progress.startedAt ?? "");
   if (Number.isNaN(start)) return "";
   const s = Math.max(0, Math.round((now.value - start) / 1000));
-  return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${s % 60} s`;
+  return s < 60 ? t("imports.check.seconds", { s }) : t("imports.check.minutes", { m: Math.floor(s / 60), s: s % 60 });
 });
 const finished = computed(() => {
   if (!checked.value || !summary.value) return undefined;
   const n = summary.value.errorRows;
-  return n === 0 ? "Check finished: no errors" : `Check finished: ${n.toLocaleString()} ${n === 1 ? "row" : "rows"} with errors`;
+  return n === 0 ? t("imports.check.finishedNoErrors") : t("imports.check.finishedErrors", { n });
 });
 
 // ---------- Row problems: filters and page in the URL ----------
@@ -120,16 +118,16 @@ async function startCommit(skipErrorRows: boolean) {
 }
 const commitErrorTitle = computed(() => {
   const e = commitError.value;
-  if (!(e instanceof ApiError)) return "The import did not start";
+  if (!(e instanceof ApiError)) return t("imports.check.commitFailed");
   switch (refusalCode(e)) {
     case "dry_run_stale":
-      return "The check is out of date";
+      return t("imports.check.commitStale");
     case "has_error_rows":
-      return "The check found rows with errors";
+      return t("imports.check.commitErrorRows");
     case "import_busy":
-      return "Another import of yours is running";
+      return t("imports.check.commitBusy");
     default:
-      return "The import did not start";
+      return t("imports.check.commitFailed");
   }
 });
 
@@ -150,11 +148,11 @@ async function download() {
 }
 
 const OUTCOME = {
-  create: { icon: "plus", label: "Create" },
-  update: { icon: "pencil", label: "Update" },
-  unchanged: { icon: "equal", label: "Unchanged" },
-  error: { icon: "circle-alert", label: "Error" },
-} as const satisfies Record<string, { icon: IconName; label: string }>;
+  create: { icon: "plus", label: "imports.check.outcome.create" },
+  update: { icon: "pencil", label: "imports.check.outcome.update" },
+  unchanged: { icon: "equal", label: "imports.check.outcome.unchanged" },
+  error: { icon: "circle-alert", label: "common.error" },
+} as const satisfies Record<string, { icon: IconName; label: MessageKey }>;
 // Changed fields are named by key (`attributes.os`); show the class's labels.
 const classes = useCiClasses();
 const classId = computed(() => classes.data.value?.find((c) => c.key === props.job.classKey)?.id);
@@ -165,91 +163,85 @@ const fieldLabel = (f: string) => {
   const label = attributeDef(f)?.label;
   if (label) return label;
   const key = f.replace(/^attributes\./, "").replace(/^relationships\./, "");
-  if (f === "ident") return "Ident";
-  if (f === "validFrom") return "Valid from";
-  if (f === "validUntil") return "Valid until";
+  if (f === "ident") return t("ciField.ident");
+  if (f === "validFrom") return t("ciField.validFrom");
+  if (f === "validUntil") return t("ciField.validUntil");
   return key;
 };
+
+const plannedCaption = computed(() =>
+  props.job.preview.length < rowsChanging.value
+    ? t("imports.check.plannedSome", { shown: formatNumber(props.job.preview.length), n: rowsChanging.value })
+    : t("imports.check.plannedAll", { n: rowsChanging.value }),
+);
 </script>
 
 <template>
   <section class="panel" aria-labelledby="step-heading">
-    <div class="panel-header"><h2 id="step-heading" tabindex="-1">Check</h2></div>
+    <div class="panel-header"><h2 id="step-heading" tabindex="-1">{{ t("imports.step.check") }}</h2></div>
     <div class="panel-body">
       <p v-if="job.status === 'queued' && job.phase === 'validate'" role="status">
-        Waiting for {{ job.progress.queuePosition ?? 1 }} other {{ (job.progress.queuePosition ?? 1) === 1 ? "import" : "imports" }} to finish…
+        {{ t("imports.step.waiting", { n: job.progress.queuePosition ?? 1 }) }}
       </p>
       <template v-if="checking">
         <ImportProgress
           v-if="job.status === 'validating'"
-          :label="`Checking row ${job.progress.done.toLocaleString()} of ${job.progress.total.toLocaleString()}`"
+          :label="t('imports.check.progress', { done: formatNumber(job.progress.done), total: formatNumber(job.progress.total) })"
           :done="job.progress.done"
           :total="job.progress.total || null"
         />
-        <p v-if="elapsed" class="muted">Elapsed: {{ elapsed }}</p>
-        <div v-if="!readOnly" class="inline-control">
-          <button type="button" class="btn" :disabled="cancel.isPending.value" @click="cancel.mutate(job.id)">Cancel</button>
-          <span class="muted">You can leave this page. The check continues and you can come back from Imports.</span>
-        </div>
-        <ErrorAlert v-if="cancel.isError.value" :error="cancel.error.value" title="Not cancelled" />
+        <p v-if="elapsed" class="muted">{{ t("imports.check.elapsed", { time: elapsed }) }}</p>
+        <p v-if="!readOnly" class="muted">{{ t("imports.check.checkingHint") }}</p>
       </template>
       <!-- Only the end is announced; ImportProgress speaks the 10 % steps while it is shown. -->
       <div class="sr-only" aria-live="polite">{{ finished }}</div>
 
       <template v-if="summary && !checking">
         <div v-if="stale && job.status !== 'expired' && !readOnly" class="alert alert-warn" role="status">
-          <strong>This check is out of date.</strong>
-          {{
-            job.dryRun?.staleReason === "model_changed"
-              ? "The data model changed after the file was checked."
-              : "The check is more than 24 hours old."
-          }}
-          Check the file again before importing.
+          <strong>{{ t("imports.check.staleTitle") }}</strong>
+          {{ t(job.dryRun?.staleReason === "model_changed" ? "imports.check.staleModel" : "imports.check.staleAge") }}
+          {{ t("imports.check.staleAction") }}
         </div>
 
-        <ul class="import-counts" aria-label="Check result">
-          <li><Icon name="plus" /> <strong>Create</strong> {{ summary.create.toLocaleString() }}</li>
-          <li><Icon name="pencil" /> <strong>Update</strong> {{ summary.update.toLocaleString() }}</li>
-          <li><Icon name="equal" /> <strong>Unchanged</strong> {{ summary.unchanged.toLocaleString() }}</li>
+        <ul class="import-counts" :aria-label="t('imports.check.result')">
+          <li><Icon name="plus" /> <strong>{{ t("imports.check.outcome.create") }}</strong> {{ formatNumber(summary.create) }}</li>
+          <li><Icon name="pencil" /> <strong>{{ t("imports.check.outcome.update") }}</strong> {{ formatNumber(summary.update) }}</li>
+          <li><Icon name="equal" /> <strong>{{ t("imports.check.outcome.unchanged") }}</strong> {{ formatNumber(summary.unchanged) }}</li>
           <li :class="{ 'import-count-error': summary.errorRows > 0 }">
-            <Icon name="circle-alert" /> <strong>Errors</strong> {{ summary.errorRows.toLocaleString() }}
-            {{ summary.errorRows === 1 ? "row" : "rows" }}
+            <Icon name="circle-alert" /> <strong>{{ t("imports.check.errors") }}</strong> {{ t("imports.check.rows", { n: summary.errorRows }) }}
           </li>
-          <li><Icon name="arrow-left-right" /> <strong>Relationships to add</strong> {{ summary.relationshipsToAdd.toLocaleString() }}</li>
-          <li><Icon name="triangle-alert" /> <strong>Warnings</strong> {{ summary.warnings.toLocaleString() }}</li>
+          <li><Icon name="arrow-left-right" /> <strong>{{ t("imports.check.relationshipsToAdd") }}</strong> {{ formatNumber(summary.relationshipsToAdd) }}</li>
+          <li><Icon name="triangle-alert" /> <strong>{{ t("imports.check.warnings") }}</strong> {{ formatNumber(summary.warnings) }}</li>
         </ul>
         <p v-if="summary.issuesTotal > 10000" class="muted">
-          Showing the first 10,000 of {{ summary.issuesTotal.toLocaleString() }} problems. Fix the mapping or the file.
+          {{ t("imports.check.issuesTruncated", { limit: formatNumber(10000), n: formatNumber(summary.issuesTotal) }) }}
         </p>
         <div v-if="summary.issuesTotal > 0 && job.status !== 'expired'" class="inline-control">
           <button type="button" class="btn" :disabled="downloading" @click="download">
-            {{ downloading ? "Preparing the report…" : "Download error report" }}
+            {{ downloading ? t("imports.check.reportPreparing") : t("imports.check.reportDownload") }}
           </button>
-          <span class="muted">A CSV file with each problem and the row's original columns, to fix and upload again.</span>
+          <span class="muted">{{ t("imports.check.reportHint") }}</span>
         </div>
-        <ErrorAlert v-if="downloadError" :error="downloadError" title="The error report was not downloaded" />
+        <ErrorAlert v-if="downloadError" :error="downloadError" :title="t('imports.check.reportFailed')" />
       </template>
     </div>
 
     <template v-if="summary && !checking">
       <div v-if="job.preview.length" class="table-wrap import-preview">
         <table class="data">
-          <caption>
-            Planned changes: {{ job.preview.length < rowsChanging ? `showing the first ${job.preview.length} of` : "all" }}
-            {{ rowsChanging.toLocaleString() }} {{ rowsChanging === 1 ? "row" : "rows" }} that create, update or fail
-          </caption>
+          <caption>{{ plannedCaption }}</caption>
           <thead>
             <tr>
-              <th scope="col" class="num">Row</th>
-              <th scope="col">Outcome</th>
-              <th scope="col">CI</th>
-              <th scope="col">Changes</th>
+              <th scope="col" class="num">{{ t("imports.check.col.row") }}</th>
+              <th scope="col">{{ t("imports.check.col.outcome") }}</th>
+              <th scope="col">{{ t("imports.check.col.ci") }}</th>
+              <th scope="col">{{ t("imports.check.col.changes") }}</th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="r in job.preview" :key="r.row">
               <th scope="row" class="num">{{ r.row }}</th>
-              <td><Icon :name="OUTCOME[r.outcome].icon" /> {{ OUTCOME[r.outcome].label }}</td>
+              <td><Icon :name="OUTCOME[r.outcome].icon" /> {{ t(OUTCOME[r.outcome].label) }}</td>
               <td>
                 <RouterLink v-if="r.ciId" :to="`/cis/${r.ciId}`">{{ r.ciLabel ?? r.ciId }}</RouterLink>
                 <template v-else>{{ r.ciLabel ?? "–" }}</template>
@@ -270,37 +262,37 @@ const fieldLabel = (f: string) => {
       </div>
 
       <div v-if="summary.issuesTotal > 0" class="panel-body">
-        <h3 id="import-issues-title">Row problems</h3>
+        <h3 id="import-issues-title">{{ t("imports.check.problems") }}</h3>
         <form class="import-file-options" @submit.prevent="setQuery({ issueCode: codeInput.trim(), issueOffset: undefined })">
           <div class="field">
-            <label for="import-issue-severity">Severity</label>
+            <label for="import-issue-severity">{{ t("imports.check.severity") }}</label>
             <select
               id="import-issue-severity"
               :value="q('issueSeverity')"
               @change="setQuery({ issueSeverity: ($event.target as HTMLSelectElement).value, issueOffset: undefined })"
             >
-              <option value="">Errors and warnings</option>
-              <option value="error">Errors</option>
-              <option value="warning">Warnings</option>
+              <option value="">{{ t("imports.check.severityAll") }}</option>
+              <option value="error">{{ t("imports.check.errors") }}</option>
+              <option value="warning">{{ t("imports.check.warnings") }}</option>
             </select>
           </div>
           <div class="field">
-            <label for="import-issue-column">Column</label>
+            <label for="import-issue-column">{{ t("imports.check.col.column") }}</label>
             <select
               id="import-issue-column"
               :value="q('issueColumn')"
               @change="setQuery({ issueColumn: ($event.target as HTMLSelectElement).value, issueOffset: undefined })"
             >
-              <option value="">All columns</option>
+              <option value="">{{ t("imports.check.allColumns") }}</option>
               <option v-for="c in job.columns" :key="c.index" :value="String(c.index)">{{ columnName(c.index, c.header) }}</option>
             </select>
           </div>
           <div class="field">
-            <label for="import-issue-code">Problem code</label>
-            <input id="import-issue-code" v-model="codeInput" placeholder="e.g. not_found" />
+            <label for="import-issue-code">{{ t("imports.check.code") }}</label>
+            <input id="import-issue-code" v-model="codeInput" :placeholder="t('imports.check.codePlaceholder')" />
           </div>
           <div class="field">
-            <button type="submit" class="btn">Filter</button>
+            <button type="submit" class="btn">{{ t("imports.check.filter") }}</button>
           </div>
           <div v-if="hasIssueFilter" class="field">
             <button
@@ -308,7 +300,7 @@ const fieldLabel = (f: string) => {
               class="btn btn-link"
               @click="setQuery({ issueSeverity: undefined, issueCode: undefined, issueColumn: undefined, issueOffset: undefined })"
             >
-              Clear filters
+              {{ t("imports.check.clearFilters") }}
             </button>
           </div>
         </form>
@@ -317,29 +309,28 @@ const fieldLabel = (f: string) => {
       <div v-else-if="summary.issuesTotal > 0" class="table-wrap import-preview">
         <table class="data" aria-labelledby="import-issues-title">
           <caption>
-            <template v-if="issues.isPending.value">Loading the row problems…</template>
-            <template v-else>Row numbers count like the spreadsheet: row 1 is the header.</template>
+            {{ issues.isPending.value ? t("imports.check.problemsLoading") : t("imports.check.rowNumbers") }}
           </caption>
           <thead>
             <tr>
-              <th scope="col" class="num">Row</th>
-              <th scope="col">Column</th>
-              <th scope="col">Value</th>
-              <th scope="col">Problem</th>
-              <th scope="col">Code</th>
+              <th scope="col" class="num">{{ t("imports.check.col.row") }}</th>
+              <th scope="col">{{ t("imports.check.col.column") }}</th>
+              <th scope="col">{{ t("imports.check.col.value") }}</th>
+              <th scope="col">{{ t("imports.check.col.problem") }}</th>
+              <th scope="col">{{ t("imports.check.col.code") }}</th>
             </tr>
           </thead>
           <tbody>
             <tr v-if="issues.data.value && issues.data.value.data.length === 0">
-              <td colspan="5" class="muted">No problems match these filters.</td>
+              <td colspan="5" class="muted">{{ t("imports.check.noMatch") }}</td>
             </tr>
             <tr v-for="(p, n) in issues.data.value?.data ?? []" :key="`${p.row}-${p.column}-${p.code}-${n}`">
-              <th scope="row" class="num">{{ p.row.toLocaleString() }}</th>
+              <th scope="row" class="num">{{ formatNumber(p.row) }}</th>
               <td>{{ columnName(p.column, p.header) }}</td>
               <td :title="p.value ?? undefined"><span class="cell-clip">{{ p.value ?? "" }}</span></td>
               <td class="wrap">
-                <Icon :name="p.severity === 'error' ? 'circle-x' : 'triangle-alert'" /> 
-                <span class="sr-only">{{ p.severity === "error" ? "Error: " : "Warning: " }}</span>{{ p.message }}
+                <Icon :name="p.severity === 'error' ? 'circle-x' : 'triangle-alert'" />{{ " " }}
+                <span class="sr-only">{{ t(p.severity === "error" ? "imports.check.srError" : "imports.check.srWarning") }}{{ " " }}</span>{{ p.message }}
               </td>
               <td><code>{{ p.code }}</code></td>
             </tr>
@@ -357,47 +348,42 @@ const fieldLabel = (f: string) => {
       <div v-if="job.status === 'validated' && !readOnly" class="form-footer">
         <template v-if="stale">
           <button type="button" class="btn btn-primary" :disabled="again.isPending.value" @click="again.mutate(job.id)">
-            {{ again.isPending.value ? "Starting the check…" : "Check again" }}
+            {{ again.isPending.value ? t("imports.check.starting") : t("imports.check.again") }}
           </button>
         </template>
         <template v-else-if="summary.errorRows === 0">
           <button type="button" class="btn btn-primary" :disabled="commit.isPending.value || validRows === 0" @click="startCommit(false)">
-            {{ commit.isPending.value ? "Starting the import…" : `Import ${validRows.toLocaleString()} ${validRows === 1 ? "row" : "rows"}` }}
+            {{ commit.isPending.value ? t("imports.check.commitStarting") : t("imports.check.importRows", { n: validRows }) }}
           </button>
-          <RouterLink class="btn" :to="{ path: `/imports/${job.id}`, query: { step: '2' } }">Back to mapping</RouterLink>
+          <RouterLink class="btn" :to="{ path: `/imports/${job.id}`, query: { step: '2' } }">{{ t("imports.check.backToMapping") }}</RouterLink>
         </template>
         <template v-else>
-          <RouterLink class="btn btn-primary" :to="{ path: `/imports/${job.id}`, query: { step: '2' } }">Back to mapping</RouterLink>
+          <RouterLink class="btn btn-primary" :to="{ path: `/imports/${job.id}`, query: { step: '2' } }">{{ t("imports.check.backToMapping") }}</RouterLink>
           <RouterLink
             class="btn"
             :to="{ path: '/imports/new', query: { ...(job.classKey ? { classKey: job.classKey } : {}), fromJob: job.id } }"
           >
-            Upload a corrected file
+            {{ t("imports.check.uploadCorrected") }}
           </RouterLink>
           <button v-if="validRows > 0" type="button" class="btn" :disabled="commit.isPending.value" @click="skipping = true">
-            Import {{ validRows.toLocaleString() }} valid {{ validRows === 1 ? "row" : "rows" }} and skip
-            {{ summary.errorRows.toLocaleString() }}…
+            {{ t("imports.check.importValidAndSkip", { n: validRows, errors: formatNumber(summary.errorRows) }) }}
           </button>
         </template>
-        <span v-if="!stale" class="muted">Going back to the mapping discards this check.</span>
+        <span v-if="!stale" class="muted">{{ t("imports.check.backDiscards") }}</span>
       </div>
-      <ErrorAlert v-if="again.isError.value" :error="again.error.value" title="The check did not start" />
+      <ErrorAlert v-if="again.isError.value" :error="again.error.value" :title="t('imports.check.againFailed')" />
       <ErrorAlert v-if="commitError" :error="commitError" :title="commitErrorTitle" />
     </template>
   </section>
 
   <ConfirmDialog
     :open="skipping"
-    :title="`Skip ${plural(summary?.errorRows ?? 0, 'row')} with errors?`"
-    :confirm-label="`Import ${plural(validRows, 'row')}`"
+    :title="t('imports.check.skipDialog.title', { n: summary?.errorRows ?? 0 })"
+    :confirm-label="t('imports.check.importRows', { n: validRows })"
     :busy="commit.isPending.value"
     @cancel="skipping = false"
     @confirm="startCommit(true)"
   >
-    <p>
-      {{ summary?.errorRows.toLocaleString() }} {{ summary?.errorRows === 1 ? "row has errors and" : "rows have errors and" }}
-      will not be imported. They are listed in the error report. The other {{ validRows.toLocaleString() }}
-      {{ validRows === 1 ? "row" : "rows" }} will be imported. Continue?
-    </p>
+    <p>{{ t("imports.check.skipDialog.body", { errors: summary?.errorRows ?? 0, valid: validRows }) }}</p>
   </ConfirmDialog>
 </template>
