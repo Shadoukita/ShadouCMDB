@@ -39,3 +39,10 @@ useDocumentTitle(() => t("notFound.documentTitle"));
     </EmptyState>
   </section>
 </template>
+
+<style scoped>
+/* The title names a state, not a record, so it stays in the UI font; the address in the meta line is the data. */
+.record-heading h1 {
+  font-family: var(--font-sans);
+}
+</style>

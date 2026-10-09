@@ -22,6 +22,8 @@ test("not found: the head band names the address, the panel offers the way back"
   const head = page.locator(".record-head-plain");
   await expect(head.getByRole("heading", { level: 1, name: "Page not found" })).toBeVisible();
   await expect(head.locator(".class-tile")).toBeVisible();
+  // The title names a state, not a record: the UI font, unlike a CI's or user's name.
+  expect(await head.locator("h1").evaluate((el) => getComputedStyle(el).fontFamily)).toMatch(/^"IBM Plex Sans"/);
   await expect(head.getByTestId("record-meta")).toContainText("Error 404");
   const path = head.getByTestId("not-found-path");
   await expect(path).toHaveText(ADDRESS);
