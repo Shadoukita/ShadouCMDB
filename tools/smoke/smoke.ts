@@ -298,6 +298,15 @@ async function main() {
   await post('/api/v1/setup', { username: `late-${RUN}`, email: `late-${RUN}@example.com`, displayName: 'Too late', password: 'correct horse battery', setupToken: SETUP_TOKEN || 'any' }, 409);
   const adminMe = (await get('/api/v1/auth/me')).json;
   check(adminMe.user.username === ADMIN_USERNAME && adminMe.csrfToken === admin.csrf, '/auth/me returns the user and the CSRF token');
+  // The language of the e-mails workflow actions send (SHAA-2731); left as it was found.
+  const localeBefore = adminMe.locale ?? null;
+  check((await call('PATCH', '/api/v1/auth/me', { locale: 'de' })).json.locale === 'de', 'PATCH /auth/me sets the e-mail language');
+  check((await get('/api/v1/auth/me')).json.locale === 'de', '/auth/me returns the e-mail language');
+  check((await call('PATCH', '/api/v1/auth/me', {})).json.locale === 'de', 'a field left out stays as it is');
+  await call('PATCH', '/api/v1/auth/me', { locale: 'fr' }, 400);
+  await call('PATCH', '/api/v1/auth/me', { language: 'de' }, 400);
+  await call('PATCH', '/api/v1/auth/me', { locale: 'en' }, 403, { 'x-csrf-token': '' });
+  check((await call('PATCH', '/api/v1/auth/me', { locale: localeBefore })).json.locale === localeBefore, 'the e-mail language is restored');
 
   // --- Lookups ------------------------------------------------------------------
   // Deprecated since migration 0016: CIs hold lookup list values (same ids) instead of these rows,
@@ -1605,6 +1614,7 @@ async function permissions(x: Json) {
     await call('GET', '/api/v1/admin/users', undefined, 403, readerBearer);
     await call('GET', tokens, undefined, 403, readerBearer, { cover: false }); // token administration needs a session
     await call('GET', '/api/v1/auth/me', undefined, 403, readerBearer);
+    await call('PATCH', '/api/v1/auth/me', { locale: 'de' }, 403, readerBearer);
     await call('GET', '/api/v1/statuses?limit=1', undefined, 401, { authorization: 'Bearer scmdb_not-a-token' });
   });
   // A bad Bearer next to a live session is 401 (the cookie is ignored), not a way around the CSRF check.
