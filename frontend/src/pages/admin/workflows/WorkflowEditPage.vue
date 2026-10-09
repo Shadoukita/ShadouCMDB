@@ -10,6 +10,7 @@ import ErrorAlert from "../../../components/ErrorAlert.vue";
 import LoadingState from "../../../components/LoadingState.vue";
 import { useDocumentTitle } from "../../../lib/composables";
 import { t } from "../../../i18n";
+import WorkflowActions from "./WorkflowActions.vue";
 import WorkflowApprovers from "./WorkflowApprovers.vue";
 import WorkflowDesigner from "./WorkflowDesigner.vue";
 import WorkflowGrantsMatrix from "./WorkflowGrantsMatrix.vue";
@@ -19,7 +20,8 @@ import WorkflowVersions from "./WorkflowVersions.vue";
 /**
  * Administration › Workflows › new / one workflow. Tabs (in the URL as ?tab=): Settings, Designer
  * (the draft graph with its live lint and publishing), Versions (retire), Grants and Approvers (who
- * decides each approval step, with the approvers lint and a preview for one CI).
+ * decides each approval step, with the approvers lint and a preview for one CI) and Notifications (the
+ * workflow's inbox, e-mail and webhook actions, saved at once, with their lint and a recipient preview).
  */
 const route = useRoute();
 const router = useRouter();
@@ -34,6 +36,7 @@ const TABS = [
   ["versions", "Versions"],
   ["grants", "Grants"],
   ["approvers", t("wfApprovers.tab")],
+  ["actions", t("wfActions.tab")],
 ] as const;
 type Tab = (typeof TABS)[number][0];
 const current = computed<Tab>(() => {
@@ -114,6 +117,7 @@ const notFound = computed(() => {
       <WorkflowDesigner v-else-if="current === 'designer'" :workflow="wf.data.value" />
       <WorkflowVersions v-else-if="current === 'versions'" :workflow="wf.data.value" />
       <WorkflowApprovers v-else-if="current === 'approvers'" :workflow="wf.data.value" />
+      <WorkflowActions v-else-if="current === 'actions'" :workflow="wf.data.value" />
       <WorkflowGrantsMatrix v-else :workflow="wf.data.value" />
     </div>
   </template>

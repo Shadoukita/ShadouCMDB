@@ -155,6 +155,7 @@ describe("client-side checks", () => {
       fields: [{ attribute: "" }, { attribute: "a" }, { attribute: "a" }].map((f) => ({ ...f, required: true })),
       conditions: { kind: "group", mode: "all", children: [{ kind: "leaf", field: "risk", op: "eq", value: "" }] },
       approval: [],
+      setAttributes: [],
     });
     const codes = checkDraft(d).map((p) => `${p.target.kind}:${"key" in p.target ? p.target.key : ""}:${p.code}:${p.path}`);
     assert.deepEqual(codes, [

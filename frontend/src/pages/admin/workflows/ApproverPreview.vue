@@ -38,6 +38,9 @@ const requesterName = ref("");
 const result = ref<WorkflowApproverPreview | null>(null);
 const error = ref<unknown>(null);
 const loading = ref(false);
+/** The summary line for screen readers, in a live region that is always in the DOM: a region inserted
+ * together with its text is not announced, so the first run and the run after an error would be silent. */
+const announcement = ref("");
 let controller: AbortController | undefined;
 onBeforeUnmount(() => controller?.abort());
 
@@ -56,10 +59,14 @@ async function run() {
   controller = c;
   loading.value = true;
   error.value = null;
+  announcement.value = "";
   try {
     const requestedBy = requesterByName.value ? requesterName.value.trim() || undefined : requester.value?.id;
     const res = await previewApprovers(props.workflowId, { transition, step, ciId: ci.value?.id, requestedBy }, c.signal);
-    if (!c.signal.aborted) result.value = res;
+    if (!c.signal.aborted) {
+      result.value = res;
+      announcement.value = summary(res);
+    }
   } catch (e) {
     if (!c.signal.aborted) {
       error.value = e;
@@ -71,10 +78,17 @@ async function run() {
 }
 
 const reasonTone: Record<string, string> = { eligible: "ok", escalation_only: "info", excluded: "warn", no_view_right: "danger", inactive: "off" };
-const shortfall = computed(() => {
-  const r = result.value;
+const shortfall = computed(() => isShort(result.value));
+function isShort(r: WorkflowApproverPreview | null): boolean {
   return !!r && r.requiredApprovals !== null && r.eligibleCount < r.requiredApprovals;
-});
+}
+function summary(r: WorkflowApproverPreview): string {
+  const parts = [t("wfPreview.eligible", { n: r.eligibleCount })];
+  if (r.requiredApprovals !== null) parts.push(t("wfPreview.needs", { n: r.requiredApprovals }));
+  if (isShort(r)) parts.push(t("wfPreview.short"));
+  if (!r.ciId) parts.push(t("wfPreview.general"));
+  return parts.join(" · ");
+}
 </script>
 
 <template>
@@ -117,8 +131,9 @@ const shortfall = computed(() => {
         </div>
       </form>
 
+      <p class="sr-only" role="status" aria-live="polite" data-testid="wf-preview-status">{{ announcement }}</p>
       <ErrorAlert v-if="error" :error="error" :title="t('wfPreview.failed')" />
-      <div v-else-if="result" class="stack" aria-live="polite" data-testid="wf-preview-result">
+      <div v-else-if="result" class="stack" data-testid="wf-preview-result">
         <p class="no-margin">
           <strong>{{ t("wfPreview.eligible", { n: result.eligibleCount }) }}</strong>
           <template v-if="result.requiredApprovals !== null"> · {{ t("wfPreview.needs", { n: result.requiredApprovals }) }}</template>
