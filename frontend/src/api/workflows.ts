@@ -23,6 +23,8 @@ export type WorkflowTransitionField = Schemas["WorkflowTransitionField"];
 export type WorkflowValidation = Schemas["WorkflowValidation"];
 export type WorkflowProblem = Schemas["WorkflowProblem"];
 export type WorkflowGrants = Schemas["WorkflowGrants"];
+export type WorkflowApprovers = Schemas["WorkflowApprovers"];
+export type WorkflowApproverPreview = Schemas["WorkflowApproverPreview"];
 export type WorkflowBootstrapResult = Schemas["WorkflowBootstrapResult"];
 export type WorkflowMigrationReport = Schemas["WorkflowInstanceMigrationReport"];
 export type StateCategory = WorkflowState["category"];
@@ -32,6 +34,8 @@ export type WorkflowCreateBody = Body<"/api/v1/admin/workflow-definitions", "pos
 export type WorkflowUpdateBody = Body<"/api/v1/admin/workflow-definitions/{id}", "patch">;
 export type WorkflowDraftBody = Body<"/api/v1/admin/workflow-definitions/{id}/draft", "put">;
 export type WorkflowGrantsBody = Body<"/api/v1/admin/workflow-definitions/{id}/grants", "put">;
+export type WorkflowApproversBody = Body<"/api/v1/admin/workflow-definitions/{id}/approvers", "put">;
+export type WorkflowApproverPreviewQuery = ListQuery<"/api/v1/admin/workflow-definitions/{id}/approvers/preview">;
 export type WorkflowMigrationBody = Body<"/api/v1/admin/workflow-definitions/{id}/instance-migrations", "post">;
 
 export const workflowKeys = {
@@ -42,6 +46,7 @@ export const workflowKeys = {
   versions: (id: string) => ["admin", "workflows", "versions", id] as const,
   version: (id: string, no: number) => ["admin", "workflows", "version", id, no] as const,
   grants: (id: string) => ["admin", "workflows", "grants", id] as const,
+  approvers: (id: string) => ["admin", "workflows", "approvers", id] as const,
 };
 
 const path = (id: string) => ({ params: { path: { id } } });
@@ -192,7 +197,7 @@ export function useDeleteWorkflow() {
   return useMutation({
     mutationFn: (id: string) => unwrap(api.DELETE("/api/v1/admin/workflow-definitions/{id}", path(id))),
     onSuccess: (_r, id) => {
-      for (const key of [workflowKeys.detail(id), workflowKeys.draft(id), workflowKeys.versions(id), workflowKeys.grants(id)]) {
+      for (const key of [workflowKeys.detail(id), workflowKeys.draft(id), workflowKeys.versions(id), workflowKeys.grants(id), workflowKeys.approvers(id)]) {
         qc.removeQueries({ queryKey: key });
       }
       qc.invalidateQueries({ queryKey: [...workflowKeys.all, "list"] });
@@ -258,4 +263,40 @@ export function useSaveGrants() {
       qc.invalidateQueries({ queryKey: workflowKeys.detail(vars.id) });
     },
   });
+}
+
+/** Who decides each approval step (by transition and step key), with the approvers lint's warnings. */
+export function useWorkflowApprovers(id: MaybeRefOrGetter<string | undefined>) {
+  return useQuery(() => {
+    const wid = toValue(id) ?? "";
+    return {
+      queryKey: workflowKeys.approvers(wid),
+      enabled: !!wid,
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        unwrap(api.GET("/api/v1/admin/workflow-definitions/{id}/approvers", { ...path(wid), signal })),
+    };
+  });
+}
+
+export function useSaveApprovers() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: WorkflowApproversBody }) =>
+      unwrap(api.PUT("/api/v1/admin/workflow-definitions/{id}/approvers", { ...path(id), body })),
+    onSuccess: (res, vars) => {
+      qc.setQueryData(workflowKeys.approvers(vars.id), res);
+      // The assignments moved the definition's version on (grants send it too).
+      qc.invalidateQueries({ queryKey: workflowKeys.detail(vars.id) });
+      qc.invalidateQueries({ queryKey: workflowKeys.grants(vars.id) });
+      qc.invalidateQueries({ queryKey: ["audit"] });
+    },
+  });
+}
+
+/**
+ * Who could decide one step, for one CI (or in general), resolved by the API from the stored
+ * assignments: each user eligible or out with the reason. Not cached: the answer reads membership now.
+ */
+export function previewApprovers(id: string, query: WorkflowApproverPreviewQuery, signal?: AbortSignal): Promise<WorkflowApproverPreview> {
+  return unwrap(api.GET("/api/v1/admin/workflow-definitions/{id}/approvers/preview", { params: { path: { id }, query }, signal }));
 }

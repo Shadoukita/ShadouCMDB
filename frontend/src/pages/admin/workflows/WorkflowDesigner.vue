@@ -11,6 +11,7 @@ import {
   useWorkflowDraft,
   useWorkflowGrants,
   useWorkflowVersion,
+  useWorkflowVersions,
   validateDraft,
   type WorkflowDefinitionDetail,
   type WorkflowDraftBody,
@@ -38,6 +39,8 @@ import {
   type PlacedProblem,
   type Position,
 } from "../../../lib/workflowDraft";
+import { t } from "../../../i18n";
+import { changedPolicies, describePolicy } from "../../../lib/workflowApprovals";
 import { useFlashStore } from "../../../stores/flash";
 import StateInspector from "./StateInspector.vue";
 import TransitionInspector from "./TransitionInspector.vue";
@@ -290,7 +293,7 @@ function addTransition() {
   const to = d.states.find((s) => s.key !== from && !d.transitions.some((t) => t.from === from && t.to === s.key))?.key ?? d.states.find((s) => s.key !== from)!.key;
   const toName = d.states.find((s) => s.key === to)?.name ?? to;
   const key = uniqueKey(`to_${to}`.slice(0, 60), d.transitions.map((t) => t.key));
-  d.transitions.push({ key, name: toName, from, to, requiresComment: false, fields: [], conditions: { kind: "group", mode: "all", children: [] } });
+  d.transitions.push({ key, name: toName, from, to, requiresComment: false, fields: [], conditions: { kind: "group", mode: "all", children: [] }, approval: [] });
   selected.value = { kind: "transition", key };
 }
 
@@ -306,6 +309,7 @@ function confirmRemoveState() {
 function removeTransition(key: string) {
   const d = draft.value!;
   d.transitions = d.transitions.filter((t) => t.key !== key);
+  for (const t of d.transitions) for (const s of t.approval) s.excludeActorsOf = s.excludeActorsOf.filter((k) => k !== key);
   selected.value = null;
 }
 
@@ -339,6 +343,12 @@ const changeNote = ref("");
 const canPublish = computed(
   () => !!lint.value?.valid && !dirty.value && !saveError.value && status.value === "idle" && localProblems.value.length === 0 && !!checksum.value && lint.value.checksum === checksum.value,
 );
+const versions = useWorkflowVersions(wid);
+/** Instances running on published versions: they keep their version's rules, approvals included, until migrated. */
+const runningOnOlder = computed(() =>
+  (versions.data.value?.data ?? []).filter((v) => v.status !== "draft").reduce((sum, v) => sum + (v.activeInstanceCount ?? 0), 0),
+);
+const newlyGated = computed(() => (draft.value ? changedPolicies(draft.value.transitions, current.data.value?.transitions) : []));
 const publishWarnings = computed(() => (lint.value?.problems ?? []).filter((p) => p.severity === "warning"));
 
 function openPublish() {
@@ -536,8 +546,9 @@ function confirmPublish() {
                   <span class="cell-clip">
                     <span v-if="t.requiresComment">Comment. </span>
                     <span v-if="t.fields.length">{{ t.fields.length }} {{ t.fields.length === 1 ? "field" : "fields" }}. </span>
-                    <span v-if="t.conditions.children.length">If {{ describeConditions(t.conditions, labelOf) }}</span>
-                    <span v-if="!t.requiresComment && !t.fields.length && !t.conditions.children.length" class="muted">Nothing</span>
+                    <span v-if="t.conditions.children.length">If {{ describeConditions(t.conditions, labelOf) }}. </span>
+                    <span v-if="t.approval.length" class="badge info" data-testid="wf-gated">{{ describePolicy(t.approval) }}</span>
+                    <span v-if="!t.requiresComment && !t.fields.length && !t.conditions.children.length && !t.approval.length" class="muted">Nothing</span>
                   </span>
                 </td>
               </tr>
@@ -592,6 +603,10 @@ function confirmPublish() {
         The version becomes current: new instances start on it. Instances already running stay on their version. A published version
         never changes again, and the fields it uses cannot be archived or retyped while it exists.
       </p>
+      <div v-if="runningOnOlder > 0 && newlyGated.length" class="alert alert-warn" data-testid="wf-publish-running">
+        <strong>{{ t("wfApproval.publish.runningTitle", { n: runningOnOlder }) }}</strong>
+        <div>{{ t("wfApproval.publish.runningBody", { n: runningOnOlder, transitions: newlyGated.join(", ") }) }}</div>
+      </div>
       <div v-if="publishWarnings.length" class="alert alert-warn">
         <strong>{{ publishWarnings.length }} {{ publishWarnings.length === 1 ? "warning" : "warnings" }}</strong>
         <ul class="no-margin">

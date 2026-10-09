@@ -17,8 +17,10 @@ const props = defineProps<{
   disabled?: boolean;
   /** Visible hint under the field, e.g. why it is disabled. */
   hint?: string;
+  /** Only users, or only groups; both when left out. */
+  kind?: Principal["kind"];
 }>();
-const emit = defineEmits<{ select: [principal: Principal] }>();
+const emit = defineEmits<{ select: [principal: Principal]; forbidden: [] }>();
 defineExpose({ focus: () => input.value?.focus() });
 
 const MIN_CHARS = 2;
@@ -68,7 +70,7 @@ async function lookup(q: string) {
   const c = new AbortController();
   controller = c;
   try {
-    const found = await searchPrincipals(q, c.signal);
+    const found = (await searchPrincipals(q, c.signal)).filter((p) => !props.kind || p.kind === props.kind);
     if (c.signal.aborted) return;
     results.value = found;
     open.value = true;
@@ -78,6 +80,7 @@ async function lookup(q: string) {
     if (c.signal.aborted) return;
     results.value = [];
     close();
+    if (e instanceof ApiError && e.status === 403) emit("forbidden");
     error.value = e instanceof ApiError ? e.message : String(e);
     status.value = t("services.owners.searchFailed");
   } finally {
