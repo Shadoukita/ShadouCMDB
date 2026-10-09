@@ -384,7 +384,8 @@ async fn endpoints_are_validated_and_never_show_their_secrets() {
             json!({ "authHeader": { "name": "Authorization", "value": HEADER_VALUE } }),
         )
         .await;
-    assert!(secret.starts_with("whsec_"), "{secret}");
+    // No message: CodeQL treats formatting the secret as writing it to a log.
+    assert!(secret.starts_with("whsec_"));
     let (status, v) = e
         .call("POST", ENDPOINTS, Some(json!({ "key": "itsm", "name": "Again", "url": "https://hook.example.test/" })))
         .await;
@@ -1299,8 +1300,10 @@ async fn an_echoing_receiver_puts_no_payload_or_secret_in_the_error_audit_or_log
     let logged = logs.lines().join("\n");
     let body = String::from_utf8_lossy(&hit.body).into_owned();
     for (place, text) in [("last_error", stored.join("\n")), ("audit", audit.join("\n")), ("log", logged)] {
-        for needle in [&secret, HEADER_VALUE, &mac, &body, "\"environment\":\"prod\"", "\"owner_team\":\"ops\""] {
-            assert!(!text.contains(needle), "{place} holds {needle}: {text}");
+        // The message names the needle by position, never by value, so no secret is printed.
+        let needles = [&secret, HEADER_VALUE, &mac, &body, "\"environment\":\"prod\"", "\"owner_team\":\"ops\""];
+        for (i, needle) in needles.into_iter().enumerate() {
+            assert!(!text.contains(needle), "{place} holds needle #{i}");
         }
     }
     e.db.drop().await;
