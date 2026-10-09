@@ -1,17 +1,25 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
+import { RouterLink } from "vue-router";
 import type { AttributeDefinition } from "../../../api/datamodel";
+import { useWorkflowActions } from "../../../api/workflows";
+import { t } from "../../../i18n";
 import { keyError } from "../../../lib/keys";
+import { describeTrigger } from "../../../lib/workflowActions";
 import type { Draft, DraftTransition, PlacedProblem } from "../../../lib/workflowDraft";
 import ApprovalStepsEditor from "./ApprovalStepsEditor.vue";
 import ConditionGroupEditor from "./ConditionGroupEditor.vue";
 import ProblemList from "./ProblemList.vue";
+import SetAttributesEditor from "./SetAttributesEditor.vue";
 
 /**
- * One transition of the draft: key, name, its two states, whether a comment is required, the
- * fields the operator fills in when running it, and the conditions that must hold.
+ * One transition of the draft, on two tabs. Rules: key, name, its two states, whether a comment is
+ * required, the fields the operator fills in when running it, the conditions that must hold and the
+ * approval steps. Actions: the fields it sets on the CI (in the draft, so they take effect when it is
+ * published), and the workflow's notifications about it (saved on the Notifications tab, at once).
  */
 const props = defineProps<{
+  workflowId: string;
   draft: Draft;
   transition: DraftTransition;
   problems: PlacedProblem[];
@@ -21,6 +29,8 @@ const props = defineProps<{
   stateFieldKey?: string;
   /** Transition keys granted to a profile: renaming one of them loses its grants. */
   grantedKeys: Set<string>;
+  /** The Person type: the only type an attribute action may set a reference to. */
+  personClassIds: Set<string>;
 }>();
 const emit = defineEmits<{ renamed: [key: string]; remove: [] }>();
 
@@ -57,6 +67,24 @@ function addField() {
 }
 const fid = (f: string) => `wf-tr-${f}`;
 const otherTransitions = computed(() => props.draft.transitions.filter((x) => x !== props.transition).map((x) => ({ key: x.key, name: x.name })));
+
+// ---------- Tabs ----------
+
+const tab = ref<"rules" | "actions">("rules");
+const TABS = ["rules", "actions"] as const;
+async function onTabKey(e: KeyboardEvent) {
+  const at = TABS.indexOf(tab.value);
+  const to = { ArrowRight: at + 1, ArrowLeft: at + 1, Home: 0, End: 1 }[e.key];
+  if (to === undefined) return;
+  e.preventDefault();
+  tab.value = TABS[to % 2];
+  await nextTick();
+  document.getElementById(`wf-tr-tab-${tab.value}`)?.focus();
+}
+const actionProblems = computed(() => props.problems.filter((p) => /\.setAttributes(\[|$)/.test(p.path)));
+const actionsQ = useWorkflowActions(() => props.workflowId);
+/** The workflow's notifications that fire on this transition (by key, so a renamed key loses them). */
+const notifications = computed(() => (actionsQ.data.value?.actions ?? []).filter((a) => a.transition === props.transition.key));
 </script>
 
 <template>
@@ -64,7 +92,56 @@ const otherTransitions = computed(() => props.draft.transitions.filter((x) => x 
     <div class="panel-header">
       <h2 id="wf-tr-title">Transition: {{ transition.name || transition.key }}</h2>
     </div>
-    <div class="panel-body stack">
+    <div class="tabs wf-inspector-tabs" role="tablist" :aria-label="t('wfActions.inspector.tabs')">
+      <button
+        v-for="k in TABS"
+        :id="`wf-tr-tab-${k}`"
+        :key="k"
+        type="button"
+        role="tab"
+        :aria-selected="tab === k"
+        aria-controls="wf-tr-panel"
+        :tabindex="tab === k ? 0 : -1"
+        :data-testid="`wf-tr-tab-${k}`"
+        @click="tab = k"
+        @keydown="onTabKey"
+      >
+        {{ t(`wfActions.inspector.tab.${k}`) }}
+        <span v-if="k === 'actions' && transition.setAttributes.length + notifications.length" class="badge spaced">
+          {{ transition.setAttributes.length + notifications.length }}
+        </span>
+        <span v-if="k === 'actions' && actionProblems.some((p) => p.severity === 'error')" class="badge danger spaced">{{ t("wfApproval.error") }}</span>
+      </button>
+    </div>
+    <div v-if="tab === 'actions'" id="wf-tr-panel" class="panel-body stack" role="tabpanel" aria-labelledby="wf-tr-tab-actions">
+      <SetAttributesEditor
+        :list="transition.setAttributes"
+        :transition-key="transition.key"
+        :fields="fields"
+        :state-field-key="stateFieldKey"
+        :transition-fields="transition.fields.map((f) => f.attribute)"
+        :person-class-ids="personClassIds"
+        :problems="actionProblems"
+      />
+      <fieldset class="group" data-testid="wf-tr-notifications">
+        <legend>{{ t("wfActions.inspector.notifications") }}</legend>
+        <p class="hint no-margin">{{ t("wfActions.inspector.notificationsIntro") }}</p>
+        <ul v-if="notifications.length" class="no-margin">
+          <li v-for="a in notifications" :key="a.key">
+            {{ a.name }} <span class="badge spaced">{{ t(`wfActions.kind.${a.kind}`) }}</span>
+            <span class="muted">{{ describeTrigger({ trigger: a.trigger, transition: a.transition ?? null }, () => transition.name) }}</span>
+            <span v-if="!a.enabled" class="badge off spaced">{{ t("wfActions.disabled") }}</span>
+          </li>
+        </ul>
+        <p v-else-if="!actionsQ.isLoading.value" class="muted no-margin">{{ t("wfActions.inspector.noNotifications") }}</p>
+        <div>
+          <RouterLink class="btn btn-sm" :to="{ query: { tab: 'actions', transition: transition.key } }" data-testid="wf-tr-notifications-link">
+            {{ t("wfActions.inspector.manage") }}
+          </RouterLink>
+        </div>
+      </fieldset>
+    </div>
+    <div v-else id="wf-tr-panel" class="panel-body stack" role="tabpanel" aria-labelledby="wf-tr-tab-rules">
       <ProblemList :problems="problems" />
       <div class="form-grid">
         <div class="field">
@@ -149,7 +226,8 @@ const otherTransitions = computed(() => props.draft.transitions.filter((x) => x 
       </fieldset>
 
       <ApprovalStepsEditor :steps="transition.approval" :transition-key="transition.key" :others="otherTransitions" :problems="problems" />
-
+    </div>
+    <div class="panel-body">
       <div class="inline-actions">
         <button type="button" class="btn btn-sm btn-quiet-danger" @click="emit('remove')">Delete transition</button>
       </div>

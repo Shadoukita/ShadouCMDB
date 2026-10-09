@@ -10,6 +10,7 @@ import type {
   WorkflowTransition,
   WorkflowVersion,
 } from "../api/workflows";
+import { checkSetAttributes, setAttributeFromApi, setAttributeToApi, type DraftSetAttribute } from "./workflowActions";
 import { checkSteps, stepFromApi, stepToApi, type DraftApprovalStep } from "./workflowApprovals";
 
 export type ConditionOp = "eq" | "ne" | "in" | "notIn" | "isSet" | "isNotSet" | "gt" | "gte" | "lt" | "lte" | "contains";
@@ -29,13 +30,15 @@ export interface ConditionGroup {
 }
 export type ConditionNode = ConditionLeaf | ConditionGroup;
 
-export interface DraftTransition extends Omit<WorkflowTransition, "conditions" | "fields" | "requiresComment" | "approval"> {
+export interface DraftTransition extends Omit<WorkflowTransition, "conditions" | "fields" | "requiresComment" | "approval" | "setAttributes"> {
   requiresComment: boolean;
   fields: { attribute: string; required: boolean }[];
   /** The root group; no children means no condition. */
   conditions: ConditionGroup;
   /** The approval policy's steps, in order; none means the transition runs without approval. */
   approval: DraftApprovalStep[];
+  /** Attribute actions: fields the transition sets on the CI when it runs; none means it sets nothing. */
+  setAttributes: DraftSetAttribute[];
 }
 export interface DraftState extends Omit<WorkflowState, "terminal" | "stateValue"> {
   terminal: boolean;
@@ -182,6 +185,7 @@ export function draftFromVersion(v: Pick<WorkflowVersion, "initialState" | "stat
       fields: (t.fields ?? []).map((f) => ({ attribute: f.attribute, required: f.required ?? true })),
       conditions: parseConditions(t.conditions),
       approval: (t.approval?.steps ?? []).map(stepFromApi),
+      setAttributes: (t.setAttributes ?? []).map(setAttributeFromApi),
     })),
     positions: layoutPositions(v.layout),
   };
@@ -205,6 +209,7 @@ export function toDraftBody(d: Draft, expectedChecksum?: string | null): Workflo
       // Free-form objects in the spec generate as Record<string, never>.
       if (c) out.conditions = c as WorkflowTransition["conditions"];
       if (t.approval.length) out.approval = { steps: t.approval.map(stepToApi) };
+      if (t.setAttributes.length) out.setAttributes = t.setAttributes.map(setAttributeToApi);
       return out;
     }),
     layout: positions as unknown as WorkflowDraftBody["layout"],
@@ -413,6 +418,7 @@ export function checkDraft(d: Draft): PlacedProblem[] {
     };
     walk(t.conditions, `transitions[${i}].conditions`);
     for (const p of checkSteps(t.approval)) add(target, `transitions[${i}].${p.path}`, p.message, p.code);
+    for (const p of checkSetAttributes(t.setAttributes)) add(target, `transitions[${i}].${p.path}`, p.message, p.code);
   });
   return out;
 }

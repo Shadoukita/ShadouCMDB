@@ -25,6 +25,8 @@ export type WorkflowProblem = Schemas["WorkflowProblem"];
 export type WorkflowGrants = Schemas["WorkflowGrants"];
 export type WorkflowApprovers = Schemas["WorkflowApprovers"];
 export type WorkflowApproverPreview = Schemas["WorkflowApproverPreview"];
+export type WorkflowActions = Schemas["WorkflowActions"];
+export type WorkflowActionPreview = Schemas["WorkflowActionPreview"];
 export type WorkflowBootstrapResult = Schemas["WorkflowBootstrapResult"];
 export type WorkflowMigrationReport = Schemas["WorkflowInstanceMigrationReport"];
 export type StateCategory = WorkflowState["category"];
@@ -35,6 +37,7 @@ export type WorkflowUpdateBody = Body<"/api/v1/admin/workflow-definitions/{id}",
 export type WorkflowDraftBody = Body<"/api/v1/admin/workflow-definitions/{id}/draft", "put">;
 export type WorkflowGrantsBody = Body<"/api/v1/admin/workflow-definitions/{id}/grants", "put">;
 export type WorkflowApproversBody = Body<"/api/v1/admin/workflow-definitions/{id}/approvers", "put">;
+export type WorkflowActionsBody = Body<"/api/v1/admin/workflow-definitions/{id}/actions", "put">;
 export type WorkflowApproverPreviewQuery = ListQuery<"/api/v1/admin/workflow-definitions/{id}/approvers/preview">;
 export type WorkflowMigrationBody = Body<"/api/v1/admin/workflow-definitions/{id}/instance-migrations", "post">;
 
@@ -47,6 +50,7 @@ export const workflowKeys = {
   version: (id: string, no: number) => ["admin", "workflows", "version", id, no] as const,
   grants: (id: string) => ["admin", "workflows", "grants", id] as const,
   approvers: (id: string) => ["admin", "workflows", "approvers", id] as const,
+  actions: (id: string) => ["admin", "workflows", "actions", id] as const,
 };
 
 const path = (id: string) => ({ params: { path: { id } } });
@@ -197,7 +201,7 @@ export function useDeleteWorkflow() {
   return useMutation({
     mutationFn: (id: string) => unwrap(api.DELETE("/api/v1/admin/workflow-definitions/{id}", path(id))),
     onSuccess: (_r, id) => {
-      for (const key of [workflowKeys.detail(id), workflowKeys.draft(id), workflowKeys.versions(id), workflowKeys.grants(id), workflowKeys.approvers(id)]) {
+      for (const key of [workflowKeys.detail(id), workflowKeys.draft(id), workflowKeys.versions(id), workflowKeys.grants(id), workflowKeys.approvers(id), workflowKeys.actions(id)]) {
         qc.removeQueries({ queryKey: key });
       }
       qc.invalidateQueries({ queryKey: [...workflowKeys.all, "list"] });
@@ -261,6 +265,7 @@ export function useSaveGrants() {
       qc.setQueryData(workflowKeys.grants(vars.id), grants);
       // The grants moved the definition's version on.
       qc.invalidateQueries({ queryKey: workflowKeys.detail(vars.id) });
+      qc.invalidateQueries({ queryKey: workflowKeys.actions(vars.id) });
     },
   });
 }
@@ -288,6 +293,7 @@ export function useSaveApprovers() {
       // The assignments moved the definition's version on (grants send it too).
       qc.invalidateQueries({ queryKey: workflowKeys.detail(vars.id) });
       qc.invalidateQueries({ queryKey: workflowKeys.grants(vars.id) });
+      qc.invalidateQueries({ queryKey: workflowKeys.actions(vars.id) });
       qc.invalidateQueries({ queryKey: ["audit"] });
     },
   });
@@ -299,4 +305,44 @@ export function useSaveApprovers() {
  */
 export function previewApprovers(id: string, query: WorkflowApproverPreviewQuery, signal?: AbortSignal): Promise<WorkflowApproverPreview> {
   return unwrap(api.GET("/api/v1/admin/workflow-definitions/{id}/approvers/preview", { params: { path: { id }, query }, signal }));
+}
+
+/**
+ * The workflow's notification actions (inbox, e-mail, webhook; SHAA-2725 §2.1): on the workflow, not in
+ * a version, so a change applies at once. The answer carries the actions lint's warnings.
+ */
+export function useWorkflowActions(id: MaybeRefOrGetter<string | undefined>) {
+  return useQuery(() => {
+    const wid = toValue(id) ?? "";
+    return {
+      queryKey: workflowKeys.actions(wid),
+      enabled: !!wid,
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        unwrap(api.GET("/api/v1/admin/workflow-definitions/{id}/actions", { ...path(wid), signal })),
+    };
+  });
+}
+
+export function useSaveActions() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: WorkflowActionsBody }) =>
+      unwrap(api.PUT("/api/v1/admin/workflow-definitions/{id}/actions", { ...path(id), body })),
+    onSuccess: (res, vars) => {
+      qc.setQueryData(workflowKeys.actions(vars.id), res);
+      // The actions moved the definition's version on (grants and approvers send it too).
+      qc.invalidateQueries({ queryKey: workflowKeys.detail(vars.id) });
+      qc.invalidateQueries({ queryKey: workflowKeys.grants(vars.id) });
+      qc.invalidateQueries({ queryKey: workflowKeys.approvers(vars.id) });
+      qc.invalidateQueries({ queryKey: ["audit"] });
+    },
+  });
+}
+
+/**
+ * Who a stored action would notify now, for one CI (or in general): each user in or out with the API's
+ * reason. Nothing is sent. Not cached: the answer reads membership and rights now.
+ */
+export function previewAction(id: string, key: string, ciId: string | undefined, signal?: AbortSignal): Promise<WorkflowActionPreview> {
+  return unwrap(api.GET("/api/v1/admin/workflow-definitions/{id}/actions/{key}/preview", { params: { path: { id, key }, query: ciId ? { ciId } : {} }, signal }));
 }
