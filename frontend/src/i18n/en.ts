@@ -2351,7 +2351,7 @@ export const en = {
   "dm.schemaChange.refusal.conflict": "Refused: it conflicts with the current data model",
   "dm.schemaChange.refusal.other": "The change cannot be made",
   "dm.schemaChange.loading": "Previewing the database change…",
-  "dm.schemaChange.nothingChanged": "Retry once the problem is fixed. Adjust the change, or resolve what the message names, and try again.",
+  "dm.schemaChange.nothingChanged": "Nothing was changed. Adjust the change, or resolve what the message names, and try again.",
   "dm.schemaChange.what": "What it does",
   "dm.schemaChange.whatNone": "It changes only the data model's settings; no table or column is touched.",
   "dm.schemaChange.impactTitle": "Effect on stored data",

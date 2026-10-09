@@ -2365,7 +2365,7 @@ export const de: { [K in MessageKey]: string } = {
   "dm.schemaChange.refusal.conflict": "Abgelehnt: Es steht im Konflikt mit dem aktuellen Datenmodell",
   "dm.schemaChange.refusal.other": "Die Änderung kann nicht vorgenommen werden",
   "dm.schemaChange.loading": "Vorschau der Datenbankänderung wird erstellt…",
-  "dm.schemaChange.nothingChanged": "Versuchen Sie es erneut, sobald das Problem behoben ist. Passen Sie die Änderung an oder beheben Sie, was die Meldung nennt, und versuchen Sie es erneut.",
+  "dm.schemaChange.nothingChanged": "Es wurde nichts geändert. Passen Sie die Änderung an oder beheben Sie, was die Meldung nennt, und versuchen Sie es erneut.",
   "dm.schemaChange.what": "Was sie bewirkt",
   "dm.schemaChange.whatNone": "Sie ändert nur die Einstellungen des Datenmodells; keine Tabelle und keine Spalte ist betroffen.",
   "dm.schemaChange.impactTitle": "Auswirkung auf gespeicherte Daten",
