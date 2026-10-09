@@ -153,7 +153,7 @@ const sectionName = (s: string) => SECTION_NAMES[s] ?? s;
     </div>
   </section>
 
-  <section class="panel" style="margin-top: var(--sp-4)">
+  <section class="panel" style="margin-top: var(--space-3)">
     <div class="panel-header"><h2>Import</h2></div>
     <div class="panel-body">
       <p>
@@ -280,14 +280,14 @@ const sectionName = (s: string) => SECTION_NAMES[s] ?? s;
 <style scoped>
 .subhead {
   font-size: var(--fs-md);
-  margin: 0 0 var(--sp-3);
+  margin: 0 0 var(--space-2);
 }
 .import-changes + .import-changes {
-  margin-top: var(--sp-3);
+  margin-top: var(--space-2);
 }
 .import-changes summary {
   cursor: pointer;
   font-weight: 600;
-  padding: var(--sp-2) 0;
+  padding: var(--space-1) 0;
 }
 </style>

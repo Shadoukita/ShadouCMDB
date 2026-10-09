@@ -277,7 +277,7 @@ const canLower = computed(() => props.layer.index > 1);
 .le-win {
   position: absolute;
   min-width: 0;
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   touch-action: none;
 }
 .le-win.stacked {
@@ -311,16 +311,16 @@ const canLower = computed(() => props.layer.index > 1);
 .win-grip {
   position: absolute;
   top: -9px;
-  left: var(--sp-5);
+  left: var(--space-4);
   z-index: 3;
   display: inline-flex;
   align-items: center;
   height: 18px;
-  padding: 0 var(--sp-3);
+  padding: 0 var(--space-2);
   border: 1px solid var(--c-border-strong);
   border-radius: 8px;
   background: var(--c-surface);
-  color: var(--c-text-muted);
+  color: var(--c-text-secondary);
   cursor: move;
 }
 .stacked .win-grip {
@@ -405,8 +405,8 @@ const canLower = computed(() => props.layer.index > 1);
   left: 50%;
   transform: translate(-50%, -50%);
   z-index: 5;
-  padding: var(--sp-1) var(--sp-3);
-  border-radius: var(--radius);
+  padding: var(--space-0_5) var(--space-2);
+  border-radius: var(--radius-sm);
   background: var(--c-primary);
   color: var(--c-primary-text);
   font-weight: 600;
@@ -420,17 +420,17 @@ const canLower = computed(() => props.layer.index > 1);
   display: flex;
   flex-direction: column;
   min-width: 220px;
-  padding: var(--sp-1) 0;
+  padding: var(--space-0_5) 0;
   border: 1px solid var(--c-border-strong);
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   background: var(--c-surface);
   box-shadow: var(--shadow-md);
 }
 .win-menu [role="menuitem"] {
   display: flex;
   justify-content: space-between;
-  gap: var(--sp-4);
-  padding: var(--sp-1) var(--sp-3);
+  gap: var(--space-3);
+  padding: var(--space-0_5) var(--space-2);
   border: 0;
   background: none;
   font: inherit;
@@ -444,11 +444,11 @@ const canLower = computed(() => props.layer.index > 1);
   outline: none;
 }
 .win-menu [role="menuitem"]:disabled {
-  color: var(--c-text-muted);
+  color: var(--c-text-secondary);
   cursor: default;
 }
 .win-menu kbd {
-  color: var(--c-text-muted);
+  color: var(--c-text-secondary);
   font-size: var(--fs-sm);
 }
 </style>

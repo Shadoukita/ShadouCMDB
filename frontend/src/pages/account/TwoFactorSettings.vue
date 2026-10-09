@@ -306,7 +306,7 @@ function codesSaved() {
 <style scoped>
 .badges {
   display: inline-flex;
-  gap: var(--sp-2);
+  gap: var(--space-1);
 }
 .flush {
   margin: 0;
@@ -317,7 +317,7 @@ function codesSaved() {
 .enrol {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--sp-5);
+  gap: var(--space-4);
   align-items: flex-start;
 }
 .enrol > .stack {
@@ -325,9 +325,9 @@ function codesSaved() {
   max-width: 420px;
 }
 .mfa-confirm {
-  padding: var(--sp-3);
+  padding: var(--space-2);
   border: 1px solid var(--c-border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
 }
 .mfa-confirm h3 {
   font-size: var(--fs-h2);

@@ -109,5 +109,5 @@ dialog.bulk-edit .bulk-refused > li > ul {
   flex-basis: 100%;
   margin: var(--space-1) 0 0;
   padding-left: var(--space-5);
-  color: var(--c-text-muted);
+  color: var(--c-text-secondary);
 }

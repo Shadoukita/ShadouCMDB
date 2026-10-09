@@ -69,7 +69,7 @@ async function onRestore() {
       <PaginationBar numbered :total="versions.data.value.page.total" :limit="page.limit" :offset="page.offset" @change="(p) => (page = p)" />
     </div>
   </section>
-  <section v-if="shown !== undefined" class="panel" style="margin-top: var(--sp-4)">
+  <section v-if="shown !== undefined" class="panel" style="margin-top: var(--space-3)">
     <div class="panel-header"><h2>{{ t("customization.history.asStored", { n: shown }) }}</h2></div>
     <div class="panel-body">
       <LoadingState v-if="shownVersion.isLoading.value" />

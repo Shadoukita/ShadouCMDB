@@ -137,8 +137,8 @@ function onResizeStart(e: PointerEvent) {
 .le-field {
   position: relative;
   border: 1px solid var(--c-border);
-  border-radius: var(--radius);
-  padding: var(--sp-1) var(--sp-3) var(--sp-2) var(--sp-2);
+  border-radius: var(--radius-sm);
+  padding: var(--space-0_5) var(--space-2) var(--space-1) var(--space-1);
   background: var(--c-surface);
   cursor: grab;
   min-width: 0;
@@ -166,7 +166,7 @@ function onResizeStart(e: PointerEvent) {
 .le-field-head {
   display: flex;
   align-items: center;
-  gap: var(--sp-1);
+  gap: var(--space-0_5);
   font-size: var(--fs-sm);
   font-weight: 600;
   min-width: 0;
@@ -183,7 +183,7 @@ function onResizeStart(e: PointerEvent) {
   border: 0;
   background: none;
   padding: 0 2px;
-  color: var(--c-text-muted);
+  color: var(--c-text-secondary);
   cursor: grab;
   font: inherit;
 }
@@ -206,7 +206,7 @@ function onResizeStart(e: PointerEvent) {
   gap: 2px;
   padding: 2px;
   border: 1px solid var(--c-primary);
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   background: var(--c-surface);
   box-shadow: var(--shadow-md);
   opacity: 0;

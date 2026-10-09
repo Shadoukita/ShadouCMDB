@@ -31,6 +31,6 @@ const code = computed(() => qrMatrix(props.value));
 .qr {
   display: block;
   border: 1px solid var(--c-border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
 }
 </style>

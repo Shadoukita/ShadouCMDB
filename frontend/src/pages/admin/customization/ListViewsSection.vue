@@ -148,14 +148,14 @@ const columns = computed(() => listColumns(view.value?.columns));
             </p>
           </div>
         </div>
-        <div style="margin-top: var(--sp-4)">
+        <div style="margin-top: var(--space-3)">
           <button type="button" class="btn" @click="removeView">{{ t("customization.lists.useDefault", { class: cls.name }) }}</button>
         </div>
       </template>
     </div>
   </section>
 
-  <section v-if="cls" class="preview-frame" style="margin-top: var(--sp-4)" :aria-label="t('customization.lists.preview')">
+  <section v-if="cls" class="preview-frame" style="margin-top: var(--space-3)" :aria-label="t('customization.lists.preview')">
     <p class="preview-label">{{ t("customization.lists.previewLabel", { class: cls.name }) }}</p>
     <LoadingState v-if="preview.isLoading.value" />
     <ErrorAlert v-else-if="preview.isError.value" :error="preview.error.value" :on-retry="() => preview.refetch()" />

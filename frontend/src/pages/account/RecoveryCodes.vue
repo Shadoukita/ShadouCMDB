@@ -103,13 +103,13 @@ function download() {
 .recovery-codes {
   display: grid;
   grid-template-columns: repeat(2, max-content);
-  gap: var(--sp-2) var(--sp-6);
+  gap: var(--space-1) var(--space-6);
   margin: 0;
-  padding: var(--sp-3) var(--sp-4);
+  padding: var(--space-2) var(--space-3);
   list-style: none;
   background: var(--c-surface-alt);
   border: 1px solid var(--c-border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   font-size: var(--fs-md);
 }
 </style>
