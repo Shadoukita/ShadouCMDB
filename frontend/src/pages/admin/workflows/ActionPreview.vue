@@ -35,6 +35,9 @@ const ci = ref<{ id: string; name: string } | null>(null);
 const result = ref<WorkflowActionPreview | null>(null);
 const error = ref<unknown>(null);
 const loading = ref(false);
+/** The summary line for screen readers, in a live region that is always in the DOM: a region inserted
+ * together with its text is not announced, so the first run and the run after an error would be silent. */
+const announcement = ref("");
 let controller: AbortController | undefined;
 onBeforeUnmount(() => controller?.abort());
 
@@ -49,9 +52,13 @@ async function run() {
   controller = c;
   loading.value = true;
   error.value = null;
+  announcement.value = "";
   try {
     const res = await previewAction(props.workflowId, key.value, ci.value?.id, c.signal);
-    if (!c.signal.aborted) result.value = res;
+    if (!c.signal.aborted) {
+      result.value = res;
+      announcement.value = summary(res);
+    }
   } catch (e) {
     if (!c.signal.aborted) {
       error.value = e;
@@ -60,6 +67,13 @@ async function run() {
   } finally {
     if (controller === c) loading.value = false;
   }
+}
+
+function summary(r: WorkflowActionPreview): string {
+  const parts = [t("wfActions.preview.included", { n: r.included })];
+  if (!r.ciId) parts.push(t("wfPreview.general"));
+  if (r.excludesActor) parts.push(t("wfActions.preview.excludesActor"));
+  return parts.join(" · ");
 }
 
 const reasonTone: Record<string, string> = { included: "ok", no_view: "danger", inactive: "off", truncated: "warn" };
@@ -98,8 +112,9 @@ const reasonTone: Record<string, string> = { included: "ok", no_view: "danger", 
         </div>
       </form>
 
+      <p class="sr-only" role="status" aria-live="polite" data-testid="wf-action-preview-status">{{ announcement }}</p>
       <ErrorAlert v-if="error" :error="error" :title="t('wfPreview.failed')" />
-      <div v-else-if="result" class="stack" aria-live="polite" data-testid="wf-action-preview-result">
+      <div v-else-if="result" class="stack" data-testid="wf-action-preview-result">
         <p class="no-margin">
           <strong>{{ t("wfActions.preview.included", { n: result.included }) }}</strong>
           <template v-if="!result.ciId"> · <span class="muted">{{ t("wfPreview.general") }}</span></template>
