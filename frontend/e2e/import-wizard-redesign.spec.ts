@@ -111,3 +111,34 @@ test("import wizard: the page texts come from the German catalog", async ({ page
   await expect(page.getByRole("heading", { level: 2, name: "Hochladen" })).toBeVisible();
   await expect(head.getByRole("button", { name: "Weitere Aktionen" })).toBeVisible();
 });
+
+test("import wizard: delete dialog, done state and Stop dialog in German", async ({ page }) => {
+  await page.addInitScript(() => ((window as unknown as { __shadoucmdbTestLocale: string }).__shadoucmdbTestLocale = "de"));
+  await page.goto(`/imports/${jobId}?step=1`);
+  const head = page.locator(".record-head");
+  await head.getByRole("button", { name: "Weitere Aktionen" }).click();
+  await page.getByRole("menuitem", { name: "Import löschen" }).click();
+  const remove = page.getByRole("dialog", { name: `Import von „${FILE}“ löschen?` });
+  await expect(remove).toContainText("Audit-Protokoll behält seine Einträge");
+  await remove.getByRole("button", { name: "Abbrechen" }).click();
+
+  await page.getByRole("button", { name: "Weiter: Spalten zuordnen" }).click();
+  const steps = page.getByRole("navigation", { name: "Importschritte" });
+  await expect(steps.locator("li[aria-current=step]")).toHaveText(/Spalten zuordnen/);
+  await expect(steps.locator("li.done")).toContainText("Hochladen (erledigt)");
+
+  await page.route(`**/api/v1/imports/${jobId}`, async (route) => {
+    const res = await route.fetch();
+    const job = await res.json();
+    await route.fulfill({
+      response: res,
+      json: { ...job, status: "validating", phase: "validate", progress: { ...job.progress, done: 1, total: 1, startedAt: new Date().toISOString() } },
+    });
+  });
+  await page.reload();
+  await head.getByRole("button", { name: "Import stoppen" }).click();
+  const stop = page.getByRole("dialog", { name: `Import von „${FILE}“ stoppen?` });
+  await expect(stop).toContainText("Es wurde noch nichts importiert");
+  await stop.getByRole("button", { name: "Abbrechen" }).click();
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+});
