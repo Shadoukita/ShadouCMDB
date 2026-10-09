@@ -237,6 +237,7 @@ dl.props .group-title:first-child {
 }
 .bare-card .alert {
   margin-bottom: 0;
+  overflow-wrap: anywhere;
 }
 .bare-card .hint {
   margin: 0;

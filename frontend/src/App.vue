@@ -2,7 +2,6 @@
 import { computed, ref, watch, watchEffect } from "vue";
 import { RouterLink, RouterView, useRoute } from "vue-router";
 import BrandMark from "./components/BrandMark.vue";
-import ErrorAlert from "./components/ErrorAlert.vue";
 import GlobalSearch from "./components/GlobalSearch.vue";
 import LoadingState from "./components/LoadingState.vue";
 import MainNav from "./components/MainNav.vue";
@@ -10,6 +9,7 @@ import NotificationsBell from "./components/NotificationsBell.vue";
 import ReauthenticateDialog from "./components/ReauthenticateDialog.vue";
 import ToastHost from "./components/ToastHost.vue";
 import UserMenu from "./components/UserMenu.vue";
+import BootErrorPage from "./pages/BootErrorPage.vue";
 import { t } from "./i18n";
 import { useMediaQuery } from "./lib/composables";
 import { applyBranding, useBrandingStore } from "./stores/branding";
@@ -56,19 +56,10 @@ function onShellKey(e: KeyboardEvent) {
     document.getElementById("nav-toggle")?.focus();
   }
 }
-
-function retry() {
-  window.location.reload();
-}
 </script>
 
 <template>
-  <div v-if="session.bootError" class="bare">
-    <div class="bare-card wide">
-      <h1>{{ branding.effective.appName }}</h1>
-      <ErrorAlert :error="session.bootError" :on-retry="retry" />
-    </div>
-  </div>
+  <BootErrorPage v-if="session.bootError" :error="session.bootError" />
   <RouterView v-else-if="route.meta.public || route.meta.bare" />
   <div
     v-else-if="session.status === 'signedIn'"
