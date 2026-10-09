@@ -2,6 +2,7 @@
 import { computed } from "vue";
 import { useAllLookupListValues, useLookupLists } from "../../../api/datamodel";
 import type { UiListFilters } from "../../../api/uiSettings";
+import { t } from "../../../i18n";
 import KeyChecklist from "./KeyChecklist.vue";
 
 /**
@@ -14,7 +15,7 @@ const values = useAllLookupListValues();
 const options = computed(() =>
   (lists.data.value ?? []).map((l) => ({
     list: l,
-    values: (values.data.value ?? []).filter((v) => v.listId === l.id).map((v) => ({ key: v.key, label: v.name + (v.isActive ? "" : " (retired)") })),
+    values: (values.data.value ?? []).filter((v) => v.listId === l.id).map((v) => ({ key: v.key, label: v.isActive ? v.name : t("customization.lookupFilter.retired", { name: v.name }) })),
   })),
 );
 
@@ -32,9 +33,9 @@ function set(listKey: string, keys: string[]) {
     :key="o.list.id"
     :model-value="filters.lookups?.[o.list.key] ?? []"
     :legend="`${legendPrefix ?? ''}${o.list.name}`"
-    :hint="`None ticked: any ${o.list.name.toLowerCase()}`"
+    :hint="t('customization.lookupFilter.anyValue', { list: o.list.name })"
     :options="o.values"
     @update:model-value="(v) => set(o.list.key, v)"
   />
-  <p v-if="lists.data.value && lists.data.value.length === 0" class="hint">No lookup lists are defined, so there is nothing else to filter by.</p>
+  <p v-if="lists.data.value && lists.data.value.length === 0" class="hint">{{ t("customization.lookupFilter.noLists") }}</p>
 </template>

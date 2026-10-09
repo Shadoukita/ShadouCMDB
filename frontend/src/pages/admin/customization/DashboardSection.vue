@@ -9,6 +9,7 @@ import DashboardWidgets from "../../dashboard/DashboardWidgets.vue";
 import KeyChecklist from "./KeyChecklist.vue";
 import LookupFilterEditor from "./LookupFilterEditor.vue";
 import Icon from "../../../components/Icon.vue";
+import { t } from "../../../i18n";
 
 /**
  * Customization › Dashboard: the built-in dashboard, or the administrator's
@@ -18,7 +19,7 @@ const props = defineProps<{ doc: UiSettingsDocument }>();
 const widgets = computed(() => props.doc.dashboard.widgets ?? null);
 const classes = useCiClasses();
 const lookupLists = useLookupLists();
-const classOptions = computed(() => (classes.data.value ?? []).map((c) => ({ key: c.key, label: c.name + (c.isAbstract ? " (abstract)" : "") })));
+const classOptions = computed(() => (classes.data.value ?? []).map((c) => ({ key: c.key, label: c.isAbstract ? t("customization.dashboard.abstractName", { name: c.name }) : c.name })));
 /** The built-in dashboard counts by status when there is a lookup list with key "status". */
 const statusListKey = computed(() => lookupLists.data.value?.find((l) => l.key === "status")?.key);
 
@@ -72,14 +73,14 @@ const staleSort = (w: UiWidget) => (classAttrs.value ? unavailableSortLabel(w.se
 
 <template>
   <section class="panel">
-    <div class="panel-header"><h2>Dashboard</h2></div>
+    <div class="panel-header"><h2>{{ t("customization.dashboard.title") }}</h2></div>
     <div class="panel-body">
-      <div class="inline-control" role="radiogroup" aria-label="Dashboard content">
-        <label class="check"><input type="radio" name="dash-mode" :checked="widgets === null" @change="useBuiltIn" /> Built-in dashboard</label>
-        <label class="check"><input type="radio" name="dash-mode" :checked="widgets !== null" @change="useCustom" /> Choose the widgets</label>
+      <div class="inline-control" role="radiogroup" :aria-label="t('customization.dashboard.mode')">
+        <label class="check"><input type="radio" name="dash-mode" :checked="widgets === null" @change="useBuiltIn" /> {{ t("customization.dashboard.builtIn") }}</label>
+        <label class="check"><input type="radio" name="dash-mode" :checked="widgets !== null" @change="useCustom" /> {{ t("customization.dashboard.custom") }}</label>
       </div>
       <p v-if="widgets === null" class="hint">
-        The built-in dashboard shows the number of CIs, counts by class and by status, and the recently changed CIs.
+        {{ t("customization.dashboard.builtInHint") }}
       </p>
     </div>
 
@@ -88,100 +89,100 @@ const staleSort = (w: UiWidget) => (classAttrs.value ? unavailableSortLabel(w.se
         <table class="data">
           <thead>
             <tr>
-              <th scope="col">Widget</th>
-              <th scope="col">Title</th>
-              <th scope="col">Width</th>
-              <th scope="col">Options</th>
-              <th scope="col"><span class="sr-only">Actions</span></th>
+              <th scope="col">{{ t("customization.dashboard.colWidget") }}</th>
+              <th scope="col">{{ t("customization.dashboard.colTitle") }}</th>
+              <th scope="col">{{ t("customization.dashboard.colWidth") }}</th>
+              <th scope="col">{{ t("customization.dashboard.colOptions") }}</th>
+              <th scope="col"><span class="sr-only">{{ t("customization.actions") }}</span></th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="(w, i) in widgets" :key="w.id">
               <td>{{ widgetLabel(w.type) }} <code class="muted">{{ w.id }}</code></td>
               <td>
-                <label class="sr-only" :for="`w-title-${w.id}`">Title of {{ w.id }}</label>
+                <label class="sr-only" :for="`w-title-${w.id}`">{{ t("customization.dashboard.titleOf", { id: w.id }) }}</label>
                 <input :id="`w-title-${w.id}`" type="text" maxlength="100" :placeholder="widgetLabel(w.type)" :value="w.title ?? ''" @input="w.title = ($event.target as HTMLInputElement).value.trim() ? ($event.target as HTMLInputElement).value : null" />
               </td>
               <td>
-                <label class="sr-only" :for="`w-size-${w.id}`">Width of {{ w.id }}</label>
+                <label class="sr-only" :for="`w-size-${w.id}`">{{ t("customization.dashboard.widthOf", { id: w.id }) }}</label>
                 <select :id="`w-size-${w.id}`" v-model="w.size">
-                  <option value="small">A third</option>
-                  <option value="medium">Half</option>
-                  <option value="large">Full width</option>
+                  <option value="small">{{ t("customization.dashboard.sizeSmall") }}</option>
+                  <option value="medium">{{ t("customization.dashboard.sizeMedium") }}</option>
+                  <option value="large">{{ t("customization.dashboard.sizeLarge") }}</option>
                 </select>
               </td>
               <td class="widget-options">
                 <KeyChecklist
                   v-if="w.type === 'count_by_class'"
                   :model-value="w.classKeys ?? []"
-                  legend="Classes"
-                  hint="None ticked: every class"
+                  :legend="t('customization.classes')"
+                  :hint="t('customization.everyClass')"
                   :options="classOptions"
                   @update:model-value="(v) => (w.classKeys = v)"
                 />
                 <div v-if="w.type === 'count_by_lookup'" class="field">
-                  <label :for="`w-list-${w.id}`">Lookup list</label>
+                  <label :for="`w-list-${w.id}`">{{ t("customization.dashboard.lookupList") }}</label>
                   <select :id="`w-list-${w.id}`" v-model="w.lookupListKey">
                     <option v-for="l in lookupLists.data.value ?? []" :key="l.id" :value="l.key">{{ l.name }}</option>
                     <option v-if="w.lookupListKey && !lookupLists.data.value?.some((l) => l.key === w.lookupListKey)" :value="w.lookupListKey">
-                      {{ w.lookupListKey }} (does not exist)
+                      {{ t("customization.dashboard.missingList", { key: w.lookupListKey }) }}
                     </option>
                   </select>
                 </div>
                 <div v-if="w.type === 'recent_changes' || w.type === 'saved_search'" class="field">
-                  <label :for="`w-limit-${w.id}`">Rows (1-50)</label>
+                  <label :for="`w-limit-${w.id}`">{{ t("customization.dashboard.rows") }}</label>
                   <input :id="`w-limit-${w.id}`" type="number" min="1" max="50" :value="w.limit ?? 10" @change="setLimit(w, ($event.target as HTMLInputElement).value)" />
                 </div>
                 <template v-if="w.type === 'saved_search' && w.search">
-                  <KeyChecklist :model-value="w.search.classKeys ?? []" legend="Classes" @update:model-value="(v) => (w.search!.classKeys = v)" hint="None ticked: every class" :options="classOptions" />
-                  <label class="check"><input v-model="w.search.includeSubclasses" type="checkbox" /> Include subclasses</label>
+                  <KeyChecklist :model-value="w.search.classKeys ?? []" :legend="t('customization.classes')" @update:model-value="(v) => (w.search!.classKeys = v)" :hint="t('customization.everyClass')" :options="classOptions" />
+                  <label class="check"><input v-model="w.search.includeSubclasses" type="checkbox" /> {{ t("customization.dashboard.includeSubclasses") }}</label>
                   <div class="field">
-                    <label :for="`w-q-${w.id}`">Search text</label>
+                    <label :for="`w-q-${w.id}`">{{ t("customization.dashboard.searchText") }}</label>
                     <input :id="`w-q-${w.id}`" type="text" maxlength="200" :value="filters(w).q ?? ''" @input="filters(w).q = ($event.target as HTMLInputElement).value || null" />
                   </div>
                   <LookupFilterEditor :filters="filters(w)" />
                   <div class="inline-control">
-                    <label :for="`w-sort-${w.id}`">Sort by</label>
+                    <label :for="`w-sort-${w.id}`">{{ t("customization.dashboard.sortBy") }}</label>
                     <select :id="`w-sort-${w.id}`" :value="w.search.sort?.field ?? ''" @change="setSortField(w, ($event.target as HTMLSelectElement).value)">
-                      <option value="">Default (label, ascending)</option>
+                      <option value="">{{ t("customization.sortDefault") }}</option>
                       <option v-for="s in sortOptions(w)" :key="s.field" :value="s.field">{{ s.label }}</option>
                       <option v-if="staleSort(w)" :value="w.search.sort!.field">{{ staleSort(w) }}</option>
                     </select>
-                    <select v-if="w.search.sort" v-model="w.search.sort.direction" :aria-label="`Sort direction of ${w.id}`">
-                      <option value="asc">Ascending</option>
-                      <option value="desc">Descending</option>
+                    <select v-if="w.search.sort" v-model="w.search.sort.direction" :aria-label="t('customization.dashboard.sortDirectionOf', { id: w.id })">
+                      <option value="asc">{{ t("customization.ascending") }}</option>
+                      <option value="desc">{{ t("customization.descending") }}</option>
                     </select>
                   </div>
                   <p v-if="staleSort(w)" class="alert alert-warn" role="alert">
-                    Sorting by an attribute needs classes that all have it: tick such classes or pick another sort.
+                    {{ t("customization.dashboard.staleSort") }}
                   </p>
-                  <p v-else class="hint">Attribute sorts list the attributes every ticked class has.</p>
+                  <p v-else class="hint">{{ t("customization.dashboard.sortHint") }}</p>
                 </template>
               </td>
               <td class="row-actions">
-                <button type="button" class="btn btn-sm btn-icon" :disabled="i === 0" :aria-label="`Move ${w.id} up`" @click="move(i, i - 1)"><Icon name="arrow-up" /></button>
-                <button type="button" class="btn btn-sm btn-icon" :disabled="i === widgets.length - 1" :aria-label="`Move ${w.id} down`" @click="move(i, i + 1)"><Icon name="arrow-down" /></button>
-                <button type="button" class="btn btn-sm" :aria-label="`Remove ${w.id}`" @click="remove(i)">Remove</button>
+                <button type="button" class="btn btn-sm btn-icon" :disabled="i === 0" :aria-label="t('customization.moveUp', { name: w.id })" @click="move(i, i - 1)"><Icon name="arrow-up" /></button>
+                <button type="button" class="btn btn-sm btn-icon" :disabled="i === widgets.length - 1" :aria-label="t('customization.moveDown', { name: w.id })" @click="move(i, i + 1)"><Icon name="arrow-down" /></button>
+                <button type="button" class="btn btn-sm" :aria-label="t('customization.removeOf', { name: w.id })" @click="remove(i)">{{ t("customization.remove") }}</button>
               </td>
             </tr>
           </tbody>
         </table>
-        <p v-if="widgets.length === 0" class="panel-body muted">No widgets: the dashboard will be empty. Add one below.</p>
+        <p v-if="widgets.length === 0" class="panel-body muted">{{ t("customization.dashboard.empty") }}</p>
       </div>
       <div class="panel-body">
         <form class="inline-control" @submit.prevent="addWidget">
-          <label for="dash-add-type">Add a widget</label>
+          <label for="dash-add-type">{{ t("customization.dashboard.addWidget") }}</label>
           <select id="dash-add-type" v-model="addType" style="max-width: 260px">
-            <option v-for="t in WIDGET_TYPES" :key="t.type" :value="t.type">{{ t.label }} — {{ t.hint }}</option>
+            <option v-for="wt in WIDGET_TYPES" :key="wt.type" :value="wt.type">{{ t("customization.dashboard.widgetOption", { label: widgetLabel(wt.type), hint: t(`customization.dashboard.hint.${wt.type}`) }) }}</option>
           </select>
-          <button type="submit" class="btn" :disabled="widgets.length >= 50">Add</button>
+          <button type="submit" class="btn" :disabled="widgets.length >= 50">{{ t("customization.add") }}</button>
         </form>
       </div>
     </template>
   </section>
 
-  <section v-if="widgets !== null && widgets.length > 0" class="preview-frame" style="margin-top: var(--sp-4)" aria-label="Dashboard preview">
-    <p class="preview-label">Preview with live data</p>
+  <section v-if="widgets !== null && widgets.length > 0" class="preview-frame" style="margin-top: var(--sp-4)" :aria-label="t('customization.dashboard.preview')">
+    <p class="preview-label">{{ t("customization.dashboard.previewLabel") }}</p>
     <DashboardWidgets :widgets="widgets" />
   </section>
 </template>
