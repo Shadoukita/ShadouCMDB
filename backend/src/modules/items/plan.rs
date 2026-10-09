@@ -209,6 +209,32 @@ fn to_stored(def: &EffectiveAttributeRow, v: &Value) -> Option<StoredValue> {
     })
 }
 
+/// What a write of `value` to field `def` would refuse on the value alone:
+/// its type, enum values, bounds and pattern (a workflow's attribute action
+/// is checked with this when it is published). Lookup and reference values
+/// are the caller's to check: they name rows, not values.
+pub fn literal_problems(def: &EffectiveAttributeRow, value: &Value, field: &str) -> Vec<FieldError> {
+    let schema = value_schema(
+        def.data_type,
+        def.enum_values.as_ref().map(|v| v.0.as_slice()),
+        def.validation.as_ref().map(|v| &v.0),
+    );
+    let mut problems = validate::check(&schema, value, FieldLocation::Body, None);
+    let pattern = def.validation.as_ref().and_then(|v| v.0.get("pattern")).and_then(Value::as_str);
+    for p in &mut problems {
+        p.field = field.to_owned();
+        if let (Some(pattern), "invalid_format") = (pattern, p.code.as_str()) {
+            p.message = validate::pattern_message(pattern)
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("Must match {pattern}"));
+        }
+    }
+    if problems.is_empty() && to_stored(def, value).is_none() {
+        problems.push(body_error(field.to_owned(), "Invalid input", "invalid_type"));
+    }
+    problems
+}
+
 /// The CI's reference values by attribute definition id, from its `attributes`.
 /// Resending one of them is no change: it is accepted as is, without the live
 /// and view checks, so it tells nothing about a target the caller may not
@@ -281,27 +307,9 @@ fn prepare_attributes<'d>(
             ));
             continue;
         }
-        let schema = value_schema(
-            def.data_type,
-            def.enum_values.as_ref().map(|v| v.0.as_slice()),
-            def.validation.as_ref().map(|v| &v.0),
-        );
-        let problems = validate::check(&schema, value, FieldLocation::Body, None);
-        if !problems.is_empty() {
-            let pattern = def.validation.as_ref().and_then(|v| v.0.get("pattern")).and_then(Value::as_str);
-            for mut p in problems {
-                p.field = field.clone();
-                if let (Some(pattern), "invalid_format") = (pattern, p.code.as_str()) {
-                    p.message = validate::pattern_message(pattern)
-                        .map(str::to_owned)
-                        .unwrap_or_else(|| format!("Must match {pattern}"));
-                }
-                errors.push(p);
-            }
-            continue;
-        }
-        let Some(mut stored) = to_stored(def, value) else {
-            errors.push(body_error(field, "Invalid input", "invalid_type"));
+        let problems = literal_problems(def, value, &field);
+        let Some(mut stored) = to_stored(def, value).filter(|_| problems.is_empty()) else {
+            errors.extend(problems);
             continue;
         };
         // The Person's Email is stored in the accounts' form (GH#531).

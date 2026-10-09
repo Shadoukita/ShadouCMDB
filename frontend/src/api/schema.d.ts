@@ -4658,7 +4658,7 @@ export interface components {
             format: "shadoucmdb.config";
             /**
              * Format: int32
-             * @description File format version; this server writes version 13 and reads 1 to 13
+             * @description File format version; this server writes version 14 and reads 1 to 14
              */
             formatVersion: number;
             exportedAt?: string | null;
@@ -9065,6 +9065,18 @@ export interface components {
          * @enum {string}
          */
         WorkflowServiceOwnerRole: "technical" | "business";
+        /**
+         * @description One attribute action: when the transition runs, the CI's field `attribute` is set to `value`, or to what
+         *     `valueFrom` names (exactly one of the two). Written with the rights of who runs the transition, validated as a
+         *     CI update is; a value that no longer validates fails the transition (422 WORKFLOW_ACTION_INVALID).
+         */
+        WorkflowSetAttribute: {
+            /** @description Stable machine key, lower_snake_case */
+            attribute: string;
+            /** @description The value to set, in the field's type: text, number, boolean, a date (YYYY-MM-DD), a datetime (RFC 3339), an IP address or CIDR; enum and lookup values by key. Checked against the field's rules when the version is published, and again when the transition runs. Not for reference fields (CI ids do not travel between installs): use `valueFrom: actor` or `clear`. */
+            value?: unknown;
+            valueFrom?: components["schemas"]["WorkflowValueFrom"] | null;
+        };
         /** @description A workflow that can be started on a CI */
         WorkflowStartable: {
             /** Format: uuid */
@@ -9135,6 +9147,14 @@ export interface components {
             /** @description Must hold for the transition to run. A group `{"all": [...]}` or `{"any": [...]}` of conditions, or a leaf `{"field": <field key>, "op": <op>, "value": <value>}`. Ops: eq, ne, in, notIn (value: array of 1-100), isSet, isNotSet (no value), gt, gte, lt, lte (number, integer, date and datetime fields), contains (text fields). The value has the field's type; enum and lookup values are given by key. At most 4 levels deep, 32 leaves and 16 KiB. The field is one of the workflow type's own or inherited fields. */
             conditions?: Record<string, never>;
             approval?: components["schemas"]["WorkflowApproval"] | null;
+            /**
+             * @description Attribute actions: fields of the CI the transition sets when it runs, in the same transaction, after the
+             *     fields sent and before the instance moves on (for a transition with approval: when the final approval
+             *     applies it). Conditions are checked before, never on what the actions set. Left out: none. Part of the
+             *     checksum only when present, so a version without actions keeps the checksum it had before actions
+             *     existed.
+             */
+            setAttributes?: components["schemas"]["WorkflowSetAttribute"][];
         };
         /** @description A field a transition shows, and whether it must be filled in */
         WorkflowTransitionField: {
@@ -9161,6 +9181,11 @@ export interface components {
             checksum: string;
             problems: components["schemas"]["WorkflowProblem"][];
         };
+        /**
+         * @description Where an attribute action takes its value from, instead of a literal `value`
+         * @enum {string}
+         */
+        WorkflowValueFrom: "now" | "today" | "actor" | "clear";
         /** @description One version of a workflow with its whole graph */
         WorkflowVersion: {
             /** Format: int32 */
@@ -30103,7 +30128,7 @@ export interface operations {
                     format: "shadoucmdb.config";
                     /**
                      * Format: int32
-                     * @description File format version; this server writes version 13 and reads 1 to 13
+                     * @description File format version; this server writes version 14 and reads 1 to 14
                      */
                     formatVersion: number;
                     exportedAt?: string | null;

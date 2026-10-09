@@ -31583,8 +31583,8 @@
                   "formatVersion": {
                     "type": "integer",
                     "format": "int32",
-                    "description": "File format version; this server writes version 13 and reads 1 to 13",
-                    "maximum": 13,
+                    "description": "File format version; this server writes version 14 and reads 1 to 14",
+                    "maximum": 14,
                     "minimum": 1
                   },
                   "exportedAt": {
@@ -41242,8 +41242,8 @@
           "formatVersion": {
             "type": "integer",
             "format": "int32",
-            "description": "File format version; this server writes version 13 and reads 1 to 13",
-            "maximum": 13,
+            "description": "File format version; this server writes version 14 and reads 1 to 14",
+            "maximum": 14,
             "minimum": 1
           },
           "exportedAt": {
@@ -54424,6 +54424,34 @@
           "business"
         ]
       },
+      "WorkflowSetAttribute": {
+        "type": "object",
+        "description": "One attribute action: when the transition runs, the CI's field `attribute` is set to `value`, or to what\n`valueFrom` names (exactly one of the two). Written with the rights of who runs the transition, validated as a\nCI update is; a value that no longer validates fails the transition (422 WORKFLOW_ACTION_INVALID).",
+        "required": [
+          "attribute"
+        ],
+        "properties": {
+          "attribute": {
+            "type": "string",
+            "description": "Stable machine key, lower_snake_case",
+            "pattern": "^[a-z][a-z0-9_]{0,62}$"
+          },
+          "value": {
+            "description": "The value to set, in the field's type: text, number, boolean, a date (YYYY-MM-DD), a datetime (RFC 3339), an IP address or CIDR; enum and lookup values by key. Checked against the field's rules when the version is published, and again when the transition runs. Not for reference fields (CI ids do not travel between installs): use `valueFrom: actor` or `clear`."
+          },
+          "valueFrom": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowValueFrom"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "WorkflowStartable": {
         "type": "object",
         "description": "A workflow that can be started on a CI",
@@ -54637,6 +54665,14 @@
                 "type": "null"
               }
             ]
+          },
+          "setAttributes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowSetAttribute"
+            },
+            "description": "Attribute actions: fields of the CI the transition sets when it runs, in the same transaction, after the\nfields sent and before the instance moves on (for a transition with approval: when the final approval\napplies it). Conditions are checked before, never on what the actions set. Left out: none. Part of the\nchecksum only when present, so a version without actions keeps the checksum it had before actions\nexisted.",
+            "maxItems": 20
           }
         },
         "additionalProperties": false
@@ -54731,6 +54767,16 @@
           }
         },
         "additionalProperties": false
+      },
+      "WorkflowValueFrom": {
+        "type": "string",
+        "description": "Where an attribute action takes its value from, instead of a literal `value`",
+        "enum": [
+          "now",
+          "today",
+          "actor",
+          "clear"
+        ]
       },
       "WorkflowVersion": {
         "type": "object",

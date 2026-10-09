@@ -20,12 +20,14 @@ use super::approvers;
 use super::condition::{self, Scope};
 use super::schemas::{
     DueAfter, WorkflowApproval, WorkflowApprovalOverdue, WorkflowApprovalStep, WorkflowDraftReplace, WorkflowProblem,
-    WorkflowProblemSeverity, WorkflowState, WorkflowStateCategory, WorkflowTransition, WorkflowTransitionField,
-    WorkflowVersion, WorkflowVersionStatus,
+    WorkflowProblemSeverity, WorkflowSetAttribute, WorkflowState, WorkflowStateCategory, WorkflowTransition,
+    WorkflowTransitionField, WorkflowValueFrom, WorkflowVersion, WorkflowVersionStatus,
 };
 use super::state_field::Driver;
+use crate::data::classes::{self as class_data, EffectiveAttributeRow};
 use crate::http::error::{AppError, FieldError, FieldLocation};
 use crate::modules::classes::AttributeDataType;
+use crate::modules::items::plan;
 use crate::schema::model::{Field, Model};
 
 // ---------------------------------------------------------------------------
@@ -38,6 +40,7 @@ pub struct LookupValue {
     pub id: Uuid,
     pub list_id: Uuid,
     pub key: String,
+    pub is_active: bool,
 }
 
 /// The fields a workflow on one type may use (the type's own and inherited)
@@ -48,6 +51,10 @@ pub struct Fields {
     pub model: Model,
     pub lineage: Vec<Uuid>,
     pub values: Vec<LookupValue>,
+    /// The type's fields (own and inherited) with their rules, for the attribute actions.
+    pub defs: Vec<EffectiveAttributeRow>,
+    /// The built-in Person type: the only type an attribute action may reference.
+    pub person_class: Option<Uuid>,
 }
 
 impl Fields {
@@ -58,12 +65,21 @@ impl Fields {
         let lists: Vec<Uuid> =
             model.fields.iter().filter(|f| lineage.contains(&f.class_id)).filter_map(|f| f.lookup_list_id).collect();
         let values = sqlx::query_as::<_, LookupValue>(
-            "SELECT id, list_id, key FROM cmdb.lookup_list_values WHERE list_id = ANY($1)",
+            "SELECT id, list_id, key, is_active FROM cmdb.lookup_list_values WHERE list_id = ANY($1)",
         )
         .bind(&lists)
         .fetch_all(&mut *conn)
         .await?;
-        Ok(Fields { class_key, model, lineage, values })
+        let defs = class_data::effective_attributes(conn, class_id).await?;
+        let person_class = sqlx::query_scalar("SELECT id FROM cmdb.ci_classes WHERE system_role = 'person'")
+            .fetch_optional(&mut *conn)
+            .await?;
+        Ok(Fields { class_key, model, lineage, values, defs, person_class })
+    }
+
+    /// A field of the type with its rules, by id.
+    pub fn def(&self, id: Uuid) -> Option<&EffectiveAttributeRow> {
+        self.defs.iter().find(|d| d.id == id)
     }
 
     /// A field of the type (own or inherited) by key.
@@ -120,6 +136,8 @@ fn body_error(field: String, message: impl Into<String>, code: &str) -> FieldErr
 struct ResolvedTransition {
     fields: Vec<(Uuid, bool)>,
     conditions: Option<Value>,
+    /// Attribute actions: field, `value_from` column, literal.
+    set_attributes: Vec<(Uuid, &'static str, Option<Value>)>,
 }
 
 /// A draft body with its field keys, lookup value keys and conditions resolved to ids.
@@ -182,7 +200,36 @@ fn resolve(fields: &Fields, state_attribute: Option<Uuid>, body: &WorkflowDraftR
                 }
             },
         };
-        resolved.push(ResolvedTransition { fields: ids, conditions });
+        let mut set_attributes = Vec::with_capacity(t.set_attributes.len());
+        for (j, a) in t.set_attributes.iter().enumerate() {
+            let path = format!("transitions[{i}].setAttributes[{j}]");
+            let from = match (&a.value, a.value_from) {
+                (Some(_), None) => "literal",
+                (None, Some(from)) => from.as_str(),
+                _ => {
+                    errors.push(body_error(
+                        path.clone(),
+                        "Give either value or valueFrom (now, today, actor or clear)",
+                        "value_or_value_from",
+                    ));
+                    continue;
+                }
+            };
+            match fields.by_key(&a.attribute) {
+                Some(field) if set_attributes.iter().any(|(id, _, _)| *id == field.id) => errors.push(body_error(
+                    format!("{path}.attribute"),
+                    format!("Transition {} sets field {} twice", t.key, a.attribute),
+                    "duplicate",
+                )),
+                Some(field) => set_attributes.push((field.id, from, a.value.clone())),
+                None => errors.push(body_error(
+                    format!("{path}.attribute"),
+                    format!("Type {} has no field {} (own or inherited)", fields.class_key, a.attribute),
+                    "unknown_attribute",
+                )),
+            }
+        }
+        resolved.push(ResolvedTransition { fields: ids, conditions, set_attributes });
     }
     if let Some(layout) = &body.layout
         && serde_json::to_vec(layout).map_or(usize::MAX, |b| b.len()) > 60 * 1024
@@ -327,6 +374,30 @@ pub async fn store_draft(
     .bind(&order)
     .execute(&mut *conn)
     .await?;
+    let (mut tids, mut positions, mut aids, mut from, mut values) =
+        (Vec::new(), Vec::<i16>::new(), Vec::new(), Vec::new(), Vec::<Option<Value>>::new());
+    for (t, r) in body.transitions.iter().zip(&resolved) {
+        for (n, (attribute, value_from, value)) in r.set_attributes.iter().enumerate() {
+            tids.push(transition_id[t.key.as_str()]);
+            positions.push(n as i16 + 1);
+            aids.push(*attribute);
+            from.push(*value_from);
+            values.push(value.clone());
+        }
+    }
+    if !tids.is_empty() {
+        sqlx::query(
+            "INSERT INTO cmdb.workflow_transition_set_attributes (transition_id, position, attribute_id, value_from, value)
+             SELECT * FROM unnest($1::uuid[], $2::smallint[], $3::uuid[], $4::text[], $5::jsonb[])",
+        )
+        .bind(&tids)
+        .bind(&positions)
+        .bind(&aids)
+        .bind(&from)
+        .bind(&values)
+        .execute(&mut *conn)
+        .await?;
+    }
     store_steps(conn, &body.transitions, &transition_id).await
 }
 
@@ -437,6 +508,26 @@ pub struct FieldRow {
     pub is_required: bool,
 }
 
+/// An attribute action of a transition.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct SetAttributeRow {
+    pub transition_id: Uuid,
+    pub attribute_id: Uuid,
+    pub value_from: String,
+    pub value: Option<SqlJson<Value>>,
+}
+
+impl SetAttributeRow {
+    /// The API form, the field named by key.
+    pub fn render(&self, model: &Model) -> WorkflowSetAttribute {
+        WorkflowSetAttribute {
+            attribute: Stored::attribute_key(model, self.attribute_id),
+            value: self.value.as_ref().map(|v| v.0.clone()),
+            value_from: WorkflowValueFrom::parse(&self.value_from),
+        }
+    }
+}
+
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct StepRow {
     pub transition_id: Uuid,
@@ -458,6 +549,8 @@ pub struct Stored {
     pub fields: Vec<FieldRow>,
     /// Approval steps, in step order per transition.
     pub steps: Vec<StepRow>,
+    /// Attribute actions, in their order per transition.
+    pub set_attributes: Vec<SetAttributeRow>,
 }
 
 pub async fn load(conn: &mut PgConnection, version: VersionRow) -> Result<Stored, AppError> {
@@ -495,7 +588,20 @@ pub async fn load(conn: &mut PgConnection, version: VersionRow) -> Result<Stored
     .bind(version.id)
     .fetch_all(&mut *conn)
     .await?;
-    Ok(Stored { version, states, transitions, fields, steps })
+    let set_attributes = load_set_attributes(conn, version.id).await?;
+    Ok(Stored { version, states, transitions, fields, steps, set_attributes })
+}
+
+/// The attribute actions of version `version_id`, in their order per transition.
+pub async fn load_set_attributes(conn: &mut PgConnection, version_id: Uuid) -> Result<Vec<SetAttributeRow>, AppError> {
+    Ok(sqlx::query_as::<_, SetAttributeRow>(
+        "SELECT a.transition_id, a.attribute_id, a.value_from, a.value
+         FROM cmdb.workflow_transition_set_attributes a JOIN cmdb.workflow_transitions t ON t.id = a.transition_id
+         WHERE t.version_id = $1 ORDER BY a.transition_id, a.position",
+    )
+    .bind(version_id)
+    .fetch_all(&mut *conn)
+    .await?)
 }
 
 impl Stored {
@@ -506,6 +612,11 @@ impl Stored {
     /// The approval steps of transition `id`, in order.
     pub fn steps_of(&self, id: Uuid) -> impl Iterator<Item = &StepRow> {
         self.steps.iter().filter(move |s| s.transition_id == id)
+    }
+
+    /// The attribute actions of transition `id`, in order.
+    pub fn set_attributes_of(&self, id: Uuid) -> impl Iterator<Item = &SetAttributeRow> {
+        self.set_attributes.iter().filter(move |s| s.transition_id == id)
     }
 
     fn approval(&self, id: Uuid) -> Option<WorkflowApproval> {
@@ -567,6 +678,7 @@ impl Stored {
                     })
                 }),
                 approval: self.approval(t.id),
+                set_attributes: self.set_attributes_of(t.id).map(|a| a.render(model)).collect(),
             })
             .collect();
         (initial, states, transitions)
@@ -596,10 +708,12 @@ impl Stored {
         }
     }
 
-    /// Every field the version depends on: transition fields and conditions
-    /// (`workflow_version_attribute_refs`); the definition adds its state field.
+    /// Every field the version depends on: transition fields, conditions and
+    /// attribute actions (`workflow_version_attribute_refs`); the definition
+    /// adds its state field.
     pub fn attributes(&self) -> Vec<Uuid> {
         let mut out: Vec<Uuid> = self.fields.iter().map(|f| f.attribute_id).collect();
+        out.extend(self.set_attributes.iter().map(|a| a.attribute_id));
         for t in &self.transitions {
             if let Some(c) = &t.conditions {
                 collect_fields(&c.0, &mut out);
@@ -835,6 +949,7 @@ pub fn lint(g: &Stored, cx: &LintContext<'_>) -> Vec<WorkflowProblem> {
                 Err(problems) => out.extend(problems.into_iter().map(|p| error(p.field, &p.code, p.message))),
             }
         }
+        out.extend(lint_set_attributes(g, t, i, cx));
         if !cx.granted.contains(&t.key) {
             out.push(WorkflowProblem {
                 path: format!("transitions[{i}]"),
@@ -860,6 +975,138 @@ pub fn lint(g: &Stored, cx: &LintContext<'_>) -> Vec<WorkflowProblem> {
     }
     out.extend(cx.approvers.lint(g, &cx.fields.class_key, &|i, j| format!("transitions[{i}].approval.steps[{j}]")));
     out
+}
+
+/// The attribute actions of transition `t` (the `i`th), actions design
+/// SHAA-2725 §3.4. Errors, never warnings, for a target that is (a) a
+/// workflow-managed state field, (b) an identifying field, (c) a field of the
+/// same transition, (d) a reference to another type than Person, (e) a
+/// read-only field (the key fields of the built-in Person type), or (f) not
+/// (or no longer) an active field of the type; then the value is checked
+/// against the field: a literal as a CI write would check it, `valueFrom`
+/// against the field's type.
+fn lint_set_attributes(g: &Stored, t: &TransitionRow, i: usize, cx: &LintContext<'_>) -> Vec<WorkflowProblem> {
+    let fields = cx.fields;
+    let mut out = Vec::new();
+    for (j, s) in g.set_attributes_of(t.id).enumerate() {
+        let path = format!("transitions[{i}].setAttributes[{j}]");
+        let attribute = format!("{path}.attribute");
+        let (a, def) = match (fields.model.field(s.attribute_id), fields.def(s.attribute_id)) {
+            (Some(a), Some(def)) if fields.on_type(a) => (a, def),
+            (Some(a), _) => {
+                out.push(error(
+                    attribute,
+                    "unknown_attribute",
+                    format!("{} is not a field of type {}", a.key, fields.class_key),
+                ));
+                continue;
+            }
+            (None, _) => {
+                out.push(error(attribute, "unknown_attribute", "The field no longer exists"));
+                continue;
+            }
+        };
+        let refused = if !a.is_active {
+            Some(("inactive_attribute", format!("Field {} is archived", a.key)))
+        } else if cx.state_attribute == Some(a.id) {
+            Some((
+                "workflow_managed_attribute",
+                format!("{} is this workflow's state field: its states set it, not attribute actions", a.key),
+            ))
+        } else if let Some(d) = cx.other_drivers.iter().find(|d| d.attribute_id == a.id) {
+            Some((
+                "workflow_managed_attribute",
+                format!("{} is the state field of {}: an attribute action cannot set it", a.key, d.named()),
+            ))
+        } else if def.is_identifying {
+            Some((
+                "identifying_attribute",
+                format!("{} is an identifying field: only a person may change what identifies a CI", a.key),
+            ))
+        } else if g.fields.iter().any(|f| f.transition_id == t.id && f.attribute_id == a.id) {
+            Some((
+                "transition_field",
+                format!(
+                    "{} is also a field of transition {}: either the user enters it or the action sets it",
+                    a.key, t.key
+                ),
+            ))
+        } else if a.system_role.is_some() {
+            Some(("read_only_attribute", format!("{} is a key field of the Person type and cannot be set", a.key)))
+        } else if a.data_type == AttributeDataType::Reference && def.reference_class_id != fields.person_class {
+            Some((
+                "reference_not_person",
+                format!("{} references another type than Person: an attribute action can only name a Person", a.key),
+            ))
+        } else {
+            None
+        };
+        if let Some((code, message)) = refused {
+            out.push(error(attribute, code, message));
+            continue;
+        }
+        let from = WorkflowValueFrom::parse(&s.value_from);
+        let type_name = a.data_type.as_str();
+        let wrong_type = |what: &str| {
+            error(
+                format!("{path}.valueFrom"),
+                "value_from_type",
+                format!("{} is a {type_name} field: valueFrom {} needs {what}", a.key, s.value_from),
+            )
+        };
+        match (from, &s.value) {
+            (Some(WorkflowValueFrom::Now), _)
+                if !matches!(a.data_type, AttributeDataType::Date | AttributeDataType::Datetime) =>
+            {
+                out.push(wrong_type("a date or datetime field"))
+            }
+            (Some(WorkflowValueFrom::Today), _) if a.data_type != AttributeDataType::Date => {
+                out.push(wrong_type("a date field"))
+            }
+            (Some(WorkflowValueFrom::Actor), _) if a.data_type != AttributeDataType::Reference => {
+                out.push(wrong_type("a field that references Person"))
+            }
+            (Some(WorkflowValueFrom::Clear), _) if def.is_required => out.push(error(
+                format!("{path}.valueFrom"),
+                "required_attribute",
+                format!("{} is required and cannot be cleared", a.key),
+            )),
+            (Some(_), _) => {}
+            (None, Some(value)) => out.extend(literal(&path, a, def, &value.0, fields)),
+            (None, None) => out.push(error(path, "value_or_value_from", "The action has no value")),
+        }
+    }
+    out
+}
+
+/// The problems of a literal `value` for field `a`, as a CI write would find them.
+fn literal(path: &str, a: &Field, def: &EffectiveAttributeRow, value: &Value, fields: &Fields) -> Vec<WorkflowProblem> {
+    let path = format!("{path}.value");
+    match a.data_type {
+        AttributeDataType::Reference => vec![error(
+            path,
+            "reference_literal",
+            format!(
+                "{} is a reference: set it to the actor (valueFrom actor) or clear it; a CI id does not travel \
+                 between installs",
+                a.key
+            ),
+        )],
+        AttributeDataType::Lookup => {
+            let found = value.as_str().and_then(|key| fields.value(a.lookup_list_id.unwrap_or_default(), key));
+            match found {
+                Some(v) if v.is_active => Vec::new(),
+                Some(v) => vec![error(path, "value_inactive", format!("The value {} is retired", v.key))],
+                None => {
+                    vec![error(path, "unknown_value", format!("{value} is not the key of a value of {}'s list", a.key))]
+                }
+            }
+        }
+        _ => plan::literal_problems(def, value, &path)
+            .into_iter()
+            .map(|p| error(p.field, &p.code, format!("{}: {}", a.key, p.message)))
+            .collect(),
+    }
 }
 
 #[cfg(test)]
@@ -900,6 +1147,26 @@ mod tests {
             "bf4fde411e1565c940affe9e828edf589d39b83d7de53121d857941a80adc9c9"
         );
         assert_eq!(checksum(&None, &[], &[]), "33783a6339d9a0615157f90b3ff3f7b4b833dea2e78e1ffbb61a4bb2b56e9839");
+    }
+
+    /// Actions design SHAA-2725 §10.1 and acceptance of slice S2: a version
+    /// without attribute actions keeps the checksum the code before
+    /// `setAttributes` computed (computed on `main` @ e2f3f5c9, with an
+    /// approval policy so every optional block before S2 is covered).
+    #[test]
+    fn a_graph_without_attribute_actions_keeps_its_pre_actions_checksum() {
+        let (states, mut transitions) = pre_approvals_graph();
+        transitions[0].approval = Some(
+            serde_json::from_value(json!({ "steps": [
+                { "key": "tech", "name": "Tech", "requiredApprovals": 1 },
+                { "key": "cab", "name": "CAB", "requiredApprovals": 2, "dueAfter": "P2D", "onOverdue": "reject",
+                  "excludeActorsOf": ["go_live"], "allowApiTokens": true } ] }))
+            .unwrap(),
+        );
+        assert_eq!(
+            checksum(&Some("planned".into()), &states, &transitions),
+            "dbbbc8b4c114ca84a3d8d4951f55b60e8a31248f8270338bd8802fde3397089a"
+        );
     }
 
     /// A policy is part of the checksum, and equal intervals checksum equally
