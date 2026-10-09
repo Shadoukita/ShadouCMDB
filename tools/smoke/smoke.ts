@@ -1651,7 +1651,7 @@ async function permissions(x: Json) {
   check(gone.status === 'revoked' && gone.revokedBy === ADMIN_USERNAME && gone.lastUsedAt, 'a revoked token stays listed with who revoked it and when it was last used');
   const tokenTrail: Json[] = (await get(`/api/v1/audit-log?entityType=api_tokens&entityId=${readerToken.token.id}&sort=occurredAt&limit=50`)).json.data;
   const outcomes = tokenTrail.map((e) => (e.action === 'token.use' ? `use:${e.newValue.outcome}` : e.action)).join(',');
-  check(outcomes === 'create,use:accepted,use:accepted,use:forbidden,use:session_only,use:session_only,update,use:revoked', `token create, every use and revoke are audited (${outcomes})`);
+  check(outcomes === 'create,use:accepted,use:accepted,use:forbidden,use:session_only,use:session_only,use:session_only,update,use:revoked', `token create, every use and revoke are audited (${outcomes})`);
   check(tokenTrail.every((e) => !JSON.stringify(e).includes(readerToken.secret.slice(6)) &&
     !JSON.stringify(e).includes(createHash('sha256').update(readerToken.secret).digest('hex'))), 'no token secret or hash in the audit log');
 
