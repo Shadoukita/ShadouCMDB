@@ -58,6 +58,6 @@ test("import settings: the page texts come from the German catalog", async ({ pa
   await expect(page.getByRole("heading", { level: 2, name: "Massenimport" })).toBeVisible();
   await expect(page.getByRole("heading", { level: 2, name: "Grenzwerte" })).toBeVisible();
   await expect(page.getByLabel("Massenimport eingeschaltet")).not.toBeChecked();
-  await expect(page.getByRole("link", { name: "Berechtigungsprofile" })).toHaveAttribute("href", "/admin/profiles");
+  await expect(page.locator(".panel").getByRole("link", { name: "Berechtigungsprofile" })).toHaveAttribute("href", "/admin/profiles");
   await expect(page.getByRole("button", { name: "Änderungen speichern" })).toBeDisabled();
 });
