@@ -2181,12 +2181,19 @@ async fn slow_inventory_exports_leave_a_connection_for_the_rest_of_the_api() {
     .await
     .unwrap();
     // 4 connections, 2 exports: 2 held by the downloads, 1 more while one starts.
+    // Opening a connection can take seconds on a loaded host (GH#825): the
+    // wait is generous and all 4 are open before the exports start, so the
+    // statuses below come from the export cap and the connections it leaves,
+    // not from how fast the host opens connections.
     let small = sqlx::postgres::PgPoolOptions::new()
         .max_connections(4)
-        .acquire_timeout(Duration::from_secs(3))
+        .acquire_timeout(Duration::from_secs(30))
         .connect_with((*w.pool.connect_options()).clone())
         .await
-        .unwrap();
+        .unwrap_or_else(|e| panic!("small pool: {e:?}"));
+    let warm = tokio::try_join!(small.acquire(), small.acquire(), small.acquire(), small.acquire())
+        .unwrap_or_else(|e| panic!("small pool: {e:?}"));
+    drop(warm);
     let app = app_with_exports(small.clone(), crate::config::ExportConfig { max_concurrent: 2 });
     let (_, reader) = w.user("reader", &[("server", false)], &[]).await;
     let start = |creds: Creds| {
@@ -2218,8 +2225,14 @@ async fn slow_inventory_exports_leave_a_connection_for_the_rest_of_the_api() {
     }
 
     // The downloads hold two connections; the rest of the API still answers.
-    let held = small.size() as usize - small.num_idle();
-    assert!(held <= 2, "{held} connections held by two downloads");
+    // A connection given back goes to the pool in a task of its own, which a
+    // loaded host can run a little later (GH#825).
+    let held = || small.size() as usize - small.num_idle();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while held() > 2 && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(held() <= 2, "{} connections held by two downloads", held());
     let (status, v, _) = call(&app, "GET", "/readyz", &Creds::default(), None).await;
     assert_eq!(status, 200, "{v}");
     let login = json!({ "username": "admin", "password": "correct horse battery" });
