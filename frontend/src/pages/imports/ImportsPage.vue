@@ -14,22 +14,29 @@ import Breadcrumbs from "../../components/Breadcrumbs.vue";
 import ConfirmDialog from "../../components/ConfirmDialog.vue";
 import EmptyState from "../../components/EmptyState.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
+import Icon from "../../components/Icon.vue";
+import KeyboardHints from "../../components/KeyboardHints.vue";
 import LoadingState from "../../components/LoadingState.vue";
 import PaginationBar from "../../components/PaginationBar.vue";
+import RowMenu, { type RowMenuItem } from "../../components/RowMenu.vue";
+import SkeletonRows from "../../components/SkeletonRows.vue";
+import { formatNumber, t } from "../../i18n";
 import { useDocumentTitle } from "../../lib/composables";
 import { formatBytes, formatDateTime, formatRelative } from "../../lib/format";
 import { RUNNING } from "../../lib/imports";
 import { useListQuery } from "../../lib/listQuery";
+import { onRowKeydown } from "../../lib/rowKeyboard";
 import { useImportAccess } from "../../lib/useImportAccess";
 import { useSessionStore } from "../../stores/session";
 import ImportStatusBadge from "./ImportStatusBadge.vue";
 
 /**
- * /imports: where bulk import starts. New import, the class templates, and the user's recent imports
- * (administrators may list everyone's). While import is turned off the notice sits above the list instead of
- * replacing it, so remaining jobs can still be cancelled and deleted (W3). Page and "All users" live in the URL.
+ * /imports: where bulk import starts, as an explorer list (design §0, step 9c). New import, the class templates,
+ * and the user's recent imports (administrators may list everyone's). While import is turned off the notice sits
+ * above the list instead of replacing it, so remaining jobs can still be stopped and deleted (W3). Page and
+ * "All users" live in the URL. Stop and Delete sit in the row menu and ask first.
  */
-useDocumentTitle("Imports");
+useDocumentTitle(() => t("imports.title"));
 const session = useSessionStore();
 const { permitted, settings, available } = useImportAccess();
 
@@ -40,6 +47,7 @@ const query = computed<ImportListQuery>(() => ({ limit: limit.value, offset: off
 const list = useImportList(query, permitted);
 const total = computed(() => list.data.value?.page.total ?? 0);
 const rows = computed(() => list.data.value?.data ?? []);
+const crumbs = computed(() => [{ label: t("inventory.crumb"), to: "/cis" }, { label: t("imports.title") }]);
 
 const classes = useCiClasses();
 const className = (key: string | null | undefined) => (key ? (classes.data.value?.find((c) => c.key === key)?.name ?? key) : "");
@@ -67,11 +75,11 @@ async function downloadTemplate() {
 
 function counts(j: ImportJobSummary): string {
   const c = j.summary?.committed;
-  if (c) return `${c.created.toLocaleString()} / ${c.updated.toLocaleString()} / ${c.unchanged.toLocaleString()} / ${(c.failed + c.skipped).toLocaleString()}`;
+  if (c) return [c.created, c.updated, c.unchanged, c.failed + c.skipped].map((n) => formatNumber(n)).join(" / ");
   return "";
 }
 
-// ---------- Cancel and delete ----------
+// ---------- Stop and delete ----------
 const cancel = useCancelImport();
 const del = useDeleteImport();
 const cancelling = ref<ImportJobSummary | null>(null);
@@ -103,169 +111,168 @@ function openDelete(j: ImportJobSummary) {
   del.reset();
   deleting.value = j;
 }
+
+/** Open, then Stop while the job runs or Delete once it has stopped; an upload in flight has neither. */
+const rowMenu = (j: ImportJobSummary): RowMenuItem[] => [
+  { label: t("imports.row.open"), to: `/imports/${j.id}` },
+  ...(RUNNING.has(j.status)
+    ? [{ label: t("imports.stop"), action: () => openCancel(j), danger: true }]
+    : j.status !== "uploading"
+      ? [{ label: t("imports.delete"), action: () => openDelete(j), danger: true }]
+      : []),
+];
 </script>
 
 <template>
-  <Breadcrumbs :items="[{ label: 'Inventory', to: '/cis' }, { label: 'Imports' }]" />
-
-  <EmptyState v-if="!permitted" title="Permission denied">
-    You need the <strong>Bulk import</strong> permission. Ask an administrator for access.
-    <template #actions><RouterLink class="btn" to="/cis">Back to inventory</RouterLink></template>
+  <Breadcrumbs v-if="!permitted" :items="crumbs" />
+  <EmptyState v-if="!permitted" icon="lock" :title="t('imports.denied.title')">
+    {{ t("imports.denied.body", { permission: t("permission.cis.import") }) }}
+    <template #actions><RouterLink class="btn" to="/cis">{{ t("imports.backToInventory") }}</RouterLink></template>
   </EmptyState>
 
   <template v-else>
-    <div class="page-header">
-      <div class="title">
-        <h1>Imports</h1>
-        <span v-if="list.isFetching.value && !list.isLoading.value" class="spinner" aria-label="Refreshing" />
+    <div class="list-head">
+      <Breadcrumbs :items="crumbs" />
+      <div class="page-header">
+        <div class="title">
+          <h1>{{ t("imports.title") }}</h1>
+          <span v-if="list.data.value" class="count mono">{{ t("common.total", { n: formatNumber(total) }) }}</span>
+          <span v-if="list.isFetching.value && !list.isPending.value" class="spinner" :aria-label="t('common.refreshing')" />
+        </div>
+        <div v-if="available" class="actions">
+          <RouterLink class="btn btn-primary" to="/imports/new"><Icon name="plus" />{{ t("imports.new") }}</RouterLink>
+        </div>
       </div>
-      <div v-if="available" class="actions">
-        <RouterLink class="btn btn-primary" to="/imports/new">+ New import</RouterLink>
-      </div>
+      <p class="page-intro">{{ t("imports.intro") }}</p>
+      <form v-if="session.isAdministrator" class="toolbar" @submit.prevent>
+        <div class="field">
+          <span class="label">{{ t("imports.filter.scope") }}</span>
+          <label class="checkbox-row">
+            <input type="checkbox" :checked="allUsers" @change="update({ all: ($event.target as HTMLInputElement).checked ? 'true' : undefined })" />
+            {{ t("imports.filter.allUsers") }}
+          </label>
+        </div>
+      </form>
     </div>
 
-    <LoadingState v-if="settings.isPending.value" label="Loading import settings…" />
+    <LoadingState v-if="settings.isPending.value" :label="t('imports.settingsLoading')" />
     <ErrorAlert v-else-if="settings.isError.value" :error="settings.error.value" :on-retry="() => settings.refetch()" />
     <div v-else-if="!available" class="alert alert-warn" role="status">
-      <template v-if="settings.data.value?.locked">
-        <strong>Bulk import is disabled by the server configuration.</strong>
-      </template>
-      <template v-else>
-        <strong>Bulk import is turned off for this instance.</strong>
-        An administrator can turn it on under
-        <RouterLink v-if="session.isAdministrator" to="/admin/import">Administration › Import</RouterLink>
-        <template v-else>Administration › Import</template>.
-      </template>
-      <template v-if="total > 0"> Your remaining imports are listed below; you can still cancel and delete them.</template>
+      <strong>{{ t(settings.data.value?.locked ? "imports.off.locked" : "imports.off.title") }}</strong>
+      <template v-if="!settings.data.value?.locked"> {{ t("imports.off.hint") }}</template>
+      <template v-if="total > 0"> {{ t("imports.off.remaining") }}</template>
+      <p v-if="!settings.data.value?.locked && session.isAdministrator" class="meta">
+        <RouterLink to="/admin/import">{{ t("imports.off.settingsLink") }}</RouterLink>
+      </p>
     </div>
 
-    <section v-if="available" class="panel import-intro">
-      <div class="panel-header"><h2>How import works</h2></div>
+    <section v-if="available" class="panel import-intro" aria-labelledby="import-how-title">
+      <div class="panel-header"><h2 id="import-how-title">{{ t("imports.how.title") }}</h2></div>
       <div class="panel-body">
         <ol class="import-how">
-          <li><strong>Upload</strong> a CSV or Excel (.xlsx) file, up to {{ formatBytes(settings.data.value!.limits.maxFileBytes) }} and {{ settings.data.value!.limits.maxRows.toLocaleString() }} rows.</li>
-          <li><strong>Map</strong> its columns to the attributes and relationships of one CI class.</li>
-          <li><strong>Check</strong> it: a dry run lists every row that would fail, before anything is saved.</li>
-          <li><strong>Import</strong> it. Existing CIs are matched and updated, new ones created; nothing is deleted.</li>
+          <li>
+            <strong>{{ t("imports.how.upload") }}</strong>
+            {{ t("imports.how.uploadBody", { size: formatBytes(settings.data.value!.limits.maxFileBytes), rows: formatNumber(settings.data.value!.limits.maxRows) }) }}
+          </li>
+          <li><strong>{{ t("imports.how.map") }}</strong> {{ t("imports.how.mapBody") }}</li>
+          <li><strong>{{ t("imports.how.check") }}</strong> {{ t("imports.how.checkBody") }}</li>
+          <li><strong>{{ t("imports.how.import") }}</strong> {{ t("imports.how.importBody") }}</li>
         </ol>
         <form class="inline-control" @submit.prevent="downloadTemplate">
-          <label for="template-class">Template for class</label>
+          <label for="template-class">{{ t("imports.template.label") }}</label>
           <select id="template-class" v-model="templateClass" :disabled="templateClasses.length === 0">
-            <option value="">{{ templateClasses.length === 0 ? "No class you can import into" : "Choose a class…" }}</option>
-            <option v-for="c in templateClasses" :key="c.id" :value="c.key">{{ c.name }}</option>
+            <option value="">{{ templateClasses.length === 0 ? t("imports.template.none") : t("imports.template.choose") }}</option>
+            <option v-for="c in templateClasses" :key="c.id" :value="c.key" dir="auto">{{ c.name }}</option>
           </select>
           <button type="submit" class="btn" :disabled="!templateClass || templateBusy">
-            {{ templateBusy ? "Preparing…" : "Download template (CSV)" }}
+            <Icon name="arrow-down-to-line" />{{ templateBusy ? t("imports.template.preparing") : t("imports.template.download") }}
           </button>
         </form>
-        <ErrorAlert v-if="templateError" :error="templateError" title="The template could not be downloaded" />
+        <ErrorAlert v-if="templateError" :error="templateError" :title="t('imports.template.failed')" />
       </div>
     </section>
 
-    <section class="panel" aria-labelledby="recent-imports">
-      <div class="panel-header">
-        <h2 id="recent-imports">Recent imports</h2>
-        <label v-if="session.isAdministrator" class="checkbox-row">
-          <input type="checkbox" :checked="allUsers" @change="update({ all: ($event.target as HTMLInputElement).checked ? 'true' : undefined })" />
-          All users
-        </label>
-      </div>
+    <section class="panel explorer" :aria-label="t('imports.recent')">
       <div v-if="list.isError.value" class="panel-body">
         <ErrorAlert :error="list.error.value" :on-retry="() => list.refetch()" />
       </div>
-      <div v-if="list.isLoading.value" class="table-wrap" aria-busy="true">
-        <LoadingState label="Loading imports…" />
-      </div>
-      <EmptyState v-else-if="list.data.value && total === 0" title="No imports yet">
-        <template v-if="available">
-          Import CIs from a CSV or Excel file: upload it, map its columns and check it before anything is saved.
+      <SkeletonRows v-else-if="list.isPending.value" :label="t('imports.loading')" />
+      <EmptyState v-else-if="total === 0" icon="upload" :title="t('imports.empty.title')">
+        {{ available ? t("imports.empty.body") : t("imports.empty.off") }}
+        <template v-if="available" #actions>
+          <RouterLink class="btn btn-primary" to="/imports/new"><Icon name="plus" />{{ t("imports.new") }}</RouterLink>
         </template>
-        <template v-else>There are no imports to show.</template>
-        <template v-if="available" #actions><RouterLink class="btn btn-primary" to="/imports/new">+ New import</RouterLink></template>
       </EmptyState>
-      <EmptyState v-else-if="list.data.value && rows.length === 0" title="This page is past the end of the results">
-        <template #actions><button class="btn" @click="update({})">Go to first page</button></template>
+      <EmptyState v-else-if="rows.length === 0" :title="t('common.pastEnd')">
+        <template #actions><button type="button" class="btn" @click="update({})">{{ t("common.firstPage") }}</button></template>
       </EmptyState>
 
-      <template v-if="rows.length > 0">
-        <div class="table-wrap">
-          <table :class="['data', { loading: list.isPlaceholderData.value }]">
-            <caption class="sr-only">Recent imports, newest first</caption>
+      <template v-if="rows.length > 0 && !list.isError.value">
+        <div class="table-wrap table-scroll">
+          <table :class="['data', 'list-table', 'imports-table', { loading: list.isPlaceholderData.value }]" aria-describedby="imports-keys">
+            <caption class="sr-only">{{ t("imports.caption") }}</caption>
             <thead>
               <tr>
-                <th scope="col">File</th>
-                <th scope="col">Class</th>
-                <th scope="col">Status</th>
-                <th scope="col" class="num" title="Created / updated / unchanged / failed or skipped">Rows <span class="muted">(new / upd. / same / failed)</span></th>
-                <th v-if="allUsers" scope="col">Started by</th>
-                <th scope="col">Started</th>
-                <th scope="col"><span class="sr-only">Actions</span></th>
+                <th scope="col">{{ t("imports.col.file") }}</th>
+                <th scope="col">{{ t("imports.col.class") }}</th>
+                <th scope="col">{{ t("imports.col.status") }}</th>
+                <th scope="col" class="num" :title="t('imports.col.rowsTitle')">
+                  {{ t("imports.col.rows") }} <span class="muted">{{ t("imports.col.rowsKey") }}</span>
+                </th>
+                <th v-if="allUsers" scope="col">{{ t("imports.col.startedBy") }}</th>
+                <th scope="col">{{ t("imports.col.started") }}</th>
+                <th scope="col" class="row-actions"><span class="sr-only">{{ t("inventory.actions") }}</span></th>
               </tr>
             </thead>
-            <tbody>
-              <tr v-for="j in rows" :key="j.id">
+            <tbody @keydown="onRowKeydown($event)">
+              <tr v-for="j in rows" :key="j.id" :data-id="j.id">
                 <td :title="`${j.fileName} (${formatBytes(j.fileSize)})`">
-                  <span class="cell-clip"><RouterLink :to="`/imports/${j.id}`">{{ j.fileName }}</RouterLink></span>
+                  <span class="cell-clip"><RouterLink :to="`/imports/${j.id}`" class="list-name" dir="auto">{{ j.fileName }}</RouterLink></span>
                 </td>
-                <td>{{ className(j.classKey) }}</td>
+                <td dir="auto">{{ className(j.classKey) }}</td>
                 <td><ImportStatusBadge :status="j.status" /></td>
-                <td class="num">
+                <td class="num mono">
                   <template v-if="counts(j)">{{ counts(j) }}</template>
-                  <span v-else-if="j.rowCount != null" class="muted">{{ j.rowCount.toLocaleString() }} in file</span>
+                  <span v-else-if="j.rowCount != null" class="muted">{{ t("imports.inFile", { n: formatNumber(j.rowCount) }) }}</span>
                 </td>
-                <td v-if="allUsers">{{ j.createdBy.name }}</td>
-                <td :title="formatDateTime(j.createdAt)">{{ formatRelative(j.createdAt) }}</td>
+                <td v-if="allUsers" dir="auto">{{ j.createdBy.name }}</td>
+                <td><time :datetime="j.createdAt" :title="formatDateTime(j.createdAt)">{{ formatRelative(j.createdAt) }}</time></td>
                 <td class="row-actions">
-                  <button v-if="RUNNING.has(j.status)" type="button" class="btn btn-sm" :aria-label="`Stop import of ${j.fileName}`" @click="openCancel(j)">
-                    Stop
-                  </button>
-                  <button
-                    v-else-if="j.status !== 'uploading'"
-                    type="button"
-                    class="btn btn-sm btn-quiet-danger"
-                    :aria-label="`Delete import of ${j.fileName}`"
-                    @click="openDelete(j)"
-                  >
-                    Delete
-                  </button>
+                  <RowMenu :label="t('inventory.rowMenu', { name: j.fileName })" :items="rowMenu(j)" />
                 </td>
               </tr>
             </tbody>
           </table>
         </div>
-        <PaginationBar :total="total" :limit="limit" :offset="offset" @change="lq.onPage" />
+        <div class="table-footer">
+          <PaginationBar numbered :total="total" :limit="limit" :offset="offset" @change="lq.onPage" />
+        </div>
+        <KeyboardHints id="imports-keys" />
       </template>
     </section>
   </template>
 
   <ConfirmDialog
     :open="!!cancelling"
-    :title="`Stop the import of “${cancelling?.fileName ?? ''}”?`"
-    confirm-label="Stop import"
+    :title="t('imports.stopDialog.title', { file: cancelling?.fileName ?? '' })"
+    :confirm-label="t('imports.stop')"
     :busy="cancel.isPending.value"
     @cancel="cancelling = null"
     @confirm="confirmCancel"
   >
-    <ErrorAlert v-if="cancel.isError.value" :error="cancel.error.value" title="Not stopped" />
-    <p v-if="cancelling?.phase === 'commit'">
-      The import stops after the current batch of at most 500 rows. Rows already imported stay imported. You can run
-      the same file again later; rows already imported will show as unchanged.
-    </p>
-    <p v-else>Nothing has been imported yet, so no configuration item changes.</p>
+    <ErrorAlert v-if="cancel.isError.value" :error="cancel.error.value" :title="t('imports.stopDialog.failed')" />
+    <p>{{ cancelling?.phase === "commit" ? t("imports.stopDialog.commit") : t("imports.stopDialog.nothingYet") }}</p>
   </ConfirmDialog>
 
   <ConfirmDialog
     :open="!!deleting"
-    :title="`Delete the import of “${deleting?.fileName ?? ''}”?`"
-    confirm-label="Delete import"
+    :title="t('imports.deleteDialog.title', { file: deleting?.fileName ?? '' })"
+    :confirm-label="t('imports.delete')"
     :busy="del.isPending.value"
     @cancel="deleting = null"
     @confirm="confirmDelete"
   >
-    <ErrorAlert v-if="del.isError.value" :error="del.error.value" title="Not deleted" />
-    <p>
-      The uploaded file, its mapping and its list of row problems are removed now. Configuration items already
-      imported are not changed, and the audit log keeps its entries.
-    </p>
+    <ErrorAlert v-if="del.isError.value" :error="del.error.value" :title="t('imports.deleteDialog.failed')" />
+    <p>{{ t("imports.deleteDialog.body") }}</p>
   </ConfirmDialog>
 </template>
