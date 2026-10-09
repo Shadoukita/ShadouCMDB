@@ -329,7 +329,7 @@ const plannedCaption = computed(() =>
               <td>{{ columnName(p.column, p.header) }}</td>
               <td :title="p.value ?? undefined"><span class="cell-clip">{{ p.value ?? "" }}</span></td>
               <td class="wrap">
-                <Icon :name="p.severity === 'error' ? 'circle-x' : 'triangle-alert'" /> 
+                <Icon :name="p.severity === 'error' ? 'circle-x' : 'triangle-alert'" />{{ " " }}
                 <span class="sr-only">{{ t(p.severity === "error" ? "imports.check.srError" : "imports.check.srWarning") }}{{ " " }}</span>{{ p.message }}
               </td>
               <td><code>{{ p.code }}</code></td>
