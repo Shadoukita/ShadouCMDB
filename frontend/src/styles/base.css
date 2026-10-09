@@ -78,7 +78,7 @@ kbd {
   font-variant-numeric: tabular-nums;
 }
 .muted {
-  color: var(--c-text-muted);
+  color: var(--c-text-secondary);
 }
 .sr-only {
   position: absolute;

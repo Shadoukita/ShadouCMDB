@@ -218,12 +218,12 @@ function toggleRecovery() {
 .sso {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-2);
+  gap: var(--space-1);
 }
 .sso-divider {
   display: flex;
   align-items: center;
-  gap: var(--sp-3);
+  gap: var(--space-2);
   font-size: var(--fs-sm);
   color: var(--c-text-secondary);
 }

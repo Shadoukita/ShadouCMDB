@@ -181,7 +181,7 @@ const staleSort = (w: UiWidget) => (classAttrs.value ? unavailableSortLabel(w.se
     </template>
   </section>
 
-  <section v-if="widgets !== null && widgets.length > 0" class="preview-frame" style="margin-top: var(--sp-4)" :aria-label="t('customization.dashboard.preview')">
+  <section v-if="widgets !== null && widgets.length > 0" class="preview-frame" style="margin-top: var(--space-3)" :aria-label="t('customization.dashboard.preview')">
     <p class="preview-label">{{ t("customization.dashboard.previewLabel") }}</p>
     <DashboardWidgets :widgets="widgets" />
   </section>
@@ -191,13 +191,13 @@ const staleSort = (w: UiWidget) => (classAttrs.value ? unavailableSortLabel(w.se
 .widget-options {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-3);
+  gap: var(--space-2);
   min-width: 320px;
   /* A flex cell takes table.data's fixed row height literally: let it grow with its options instead of clipping them. */
   height: auto;
   max-width: none;
   overflow: visible;
   white-space: normal;
-  padding-block: var(--sp-2);
+  padding-block: var(--space-1);
 }
 </style>

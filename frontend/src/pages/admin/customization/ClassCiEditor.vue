@@ -104,7 +104,7 @@ function editOnCreate() {
 .layouts-edit {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-3);
+  gap: var(--space-2);
 }
 .layouts-edit p {
   margin: 0;

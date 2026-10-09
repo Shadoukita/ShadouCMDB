@@ -57,9 +57,6 @@
   --fs-display: 28px; /* sign-in and dashboard greeting */
   --fs-kpi: 28px; /* stat tiles and dashboard figures */
   --fs-overline: 11px; /* uppercase table headers and stat labels */
-  /* Older names, kept until every rule uses the names above (rollout PR 11). */
-  --fs-lg: var(--fs-h2);
-  --fs-xl: var(--fs-h1);
 
   --lh-tight: 1.25;
   --lh-body: 1.45;
@@ -82,25 +79,16 @@
   --space-8: 32px;
   --space-10: 40px;
   --space-12: 48px;
-  /* Older steps, same values. */
-  --sp-1: var(--space-0_5);
-  --sp-2: var(--space-1);
-  --sp-3: var(--space-2);
-  --sp-4: var(--space-3);
-  --sp-5: var(--space-4);
-  --sp-6: var(--space-6);
 
   /* ---------- Radius and elevation ---------- */
   --radius-sm: 4px; /* badges, checkboxes, query tokens */
   --radius-md: 8px; /* buttons, inputs, menus, nav rows */
   --radius-lg: 12px; /* panels, cards, stat tiles, popovers, dialogs */
   --radius-full: 999px;
-  --radius: var(--radius-sm);
 
   --shadow-xs: 0 1px 2px rgb(16 20 26 / 12%);
   --shadow-md: 0 4px 12px rgb(16 24 40 / 12%);
   --shadow-lg: 0 16px 40px rgb(16 24 40 / 20%);
-  --shadow-pop: var(--shadow-md);
   --c-scrim: rgb(15 18 22 / 50%);
   --c-scroll-shade: rgb(16 24 40 / 14%); /* the edge of a scroll area with more content beyond it */
 
@@ -138,7 +126,6 @@
   --c-text-body: var(--gray-700); /* table cells and values: 10.3:1 */
   --c-text-secondary: var(--gray-600); /* 6.9:1 on the surface, 6.2:1 on --c-bg */
   --c-text-tertiary: var(--gray-500); /* 5.6:1 on the surface, 5.1:1 on --c-bg */
-  --c-text-muted: var(--c-text-secondary);
   --c-row-hover: #f0f7f8;
   --c-row-selected: #e9f2f3;
 
@@ -162,6 +149,8 @@
   --c-warning: #c2620f; /* 4.2:1: dots, meters and fills only, never text */
   --c-warning-subtle: #fcefdf;
   --c-warning-text: #8f4a09; /* 5.9:1 */
+  --c-warning-border: #e8b27a; /* the edge of a warning alert or panel: decorative */
+  --c-danger: var(--c-danger-solid); /* dots, icons, strokes and marker bars, never text */
   --c-danger-solid: #b4232c; /* white text 6.5:1 */
   --c-danger-solid-hover: #9a1e26;
   --c-danger-subtle: #fbe7e8;
@@ -186,13 +175,6 @@
   --c-viz-6: #1f7a4a;
   --c-viz-7: #b4232c;
   --c-viz-8: #5f6878;
-  /* Older names. */
-  --c-danger: var(--c-danger-solid);
-  --c-danger-hover: var(--c-danger-solid-hover);
-  --c-danger-bg: var(--c-danger-subtle);
-  --c-warn-bg: var(--c-warning-subtle);
-  --c-warn-border: #e8b27a;
-  --c-ok: var(--c-success);
 
   /* ---------- Colour: sidebar (dark rail in both themes) ---------- */
   --c-sidebar: var(--gray-950);
@@ -259,6 +241,8 @@
   --c-warning: #e8954a;
   --c-warning-subtle: #3a2614;
   --c-warning-text: #f2b27a;
+  --c-warning-border: #7a4f22;
+  --c-danger: #ff7b73; /* marks on the dark surface, brighter than the solid fill */
   --c-danger-solid: #c0342d; /* white text 5.6:1 */
   --c-danger-solid-hover: #a52b25;
   --c-danger-subtle: #3d1a1c;
@@ -279,9 +263,6 @@
   --c-viz-6: #3fa86f;
   --c-viz-7: #e0555c;
   --c-viz-8: #6f7a8b;
-  --c-danger: #ff7b73;
-  --c-danger-hover: #ff9a93;
-  --c-warn-border: #7a4f22;
 
   --c-sidebar: #0a0d11;
   --c-sidebar-hover: #141920;

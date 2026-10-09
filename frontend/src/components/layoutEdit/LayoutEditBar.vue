@@ -284,13 +284,13 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
 <style scoped>
 .le-bar {
   position: sticky;
-  top: calc(-1 * var(--sp-4));
+  top: calc(-1 * var(--space-3));
   z-index: 6;
   display: flex;
   flex-direction: column;
-  gap: var(--sp-2);
-  padding: var(--sp-2) var(--sp-4);
-  margin-bottom: var(--sp-4);
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-3);
+  margin-bottom: var(--space-3);
   border: 1px solid var(--c-border);
   border-top: 3px solid var(--c-primary);
   border-radius: var(--radius-lg);
@@ -301,7 +301,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--sp-2) var(--sp-3);
+  gap: var(--space-1) var(--space-2);
 }
 .le-bar-title {
   display: flex;
@@ -309,7 +309,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
   margin-right: auto;
 }
 .le-target {
-  margin-left: var(--sp-2);
+  margin-left: var(--space-1);
 }
 .le-bar-group,
 .le-bar-save {
@@ -318,7 +318,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
   gap: 2px;
 }
 .le-bar-save {
-  gap: var(--sp-2);
+  gap: var(--space-1);
   margin-left: auto;
 }
 /* Snap is a toggle: pressed reads as selected (A10: the old rule never matched it). */
@@ -335,7 +335,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
   margin: 0;
 }
 .le-impact-list {
-  margin: 0 0 var(--sp-3);
-  padding-left: var(--sp-4);
+  margin: 0 0 var(--space-2);
+  padding-left: var(--space-3);
 }
 </style>

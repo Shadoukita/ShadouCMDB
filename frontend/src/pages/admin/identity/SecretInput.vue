@@ -65,7 +65,7 @@ async function replace() {
 <style scoped>
 .secret-row {
   display: flex;
-  gap: var(--sp-2);
+  gap: var(--space-1);
   align-items: center;
 }
 .secret-row input {
@@ -74,7 +74,7 @@ async function replace() {
 .secret-state {
   flex: 1;
   font-size: var(--fs-sm);
-  color: var(--c-text-muted);
+  color: var(--c-text-secondary);
 }
 .secret-state.removed {
   color: var(--c-danger-text);

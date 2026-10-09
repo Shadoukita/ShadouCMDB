@@ -677,7 +677,7 @@ const notFound = computed(() => {
 .radio-choice {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-1);
+  gap: var(--space-0_5);
 }
 .radio-choice .checkbox-row {
   height: auto;
@@ -688,7 +688,7 @@ const notFound = computed(() => {
 }
 .copy-row {
   display: flex;
-  gap: var(--sp-2);
+  gap: var(--space-1);
 }
 .copy-row input {
   flex: 1;
@@ -696,10 +696,10 @@ const notFound = computed(() => {
 .mfa {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-2);
+  gap: var(--space-1);
   border-top: 1px solid var(--c-border);
-  padding-top: var(--sp-4);
-  margin-top: var(--sp-4);
+  padding-top: var(--space-3);
+  margin-top: var(--space-3);
 }
 .mfa legend {
   float: left;
@@ -707,6 +707,6 @@ const notFound = computed(() => {
 }
 .mfa .hint {
   font-size: var(--fs-xs);
-  color: var(--c-text-muted);
+  color: var(--c-text-secondary);
 }
 </style>

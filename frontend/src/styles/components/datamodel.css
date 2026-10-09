@@ -55,14 +55,14 @@ dialog.schema-change h3 {
   font-size: var(--fs-md);
   font-weight: var(--fw-semibold);
   color: var(--c-text);
-  margin: var(--sp-4) 0 var(--sp-2);
+  margin: var(--space-3) 0 var(--space-1);
 }
 dialog.schema-change section:first-of-type h3 {
   margin-top: 0;
 }
 /* The purge's typed confirmation: a plain form field; only the warning sentence is red (audit A8). */
 .sc-confirm {
-  margin-top: var(--sp-4);
+  margin-top: var(--space-3);
 }
 .sc-confirm input {
   max-width: 320px;
@@ -70,7 +70,7 @@ dialog.schema-change section:first-of-type h3 {
 .sc-warning {
   display: inline-flex;
   align-items: center;
-  gap: var(--sp-1);
+  gap: var(--space-0_5);
   color: var(--c-danger-text);
   font-weight: var(--fw-semibold);
 }
@@ -78,7 +78,7 @@ dialog.schema-change section:first-of-type h3 {
 .area-new-class {
   display: inline-flex;
   align-items: center;
-  gap: var(--sp-1);
+  gap: var(--space-0_5);
 }
 /* ---- 9a/D end ---- */
 

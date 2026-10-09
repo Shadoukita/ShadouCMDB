@@ -35,10 +35,10 @@ const blocks = computed(() => parseNote(props.text));
 .note-text p,
 .note-text ul,
 .note-text ol {
-  margin: 0 0 var(--sp-2);
+  margin: 0 0 var(--space-1);
 }
 .note-text ul,
 .note-text ol {
-  padding-left: var(--sp-5);
+  padding-left: var(--space-4);
 }
 </style>

@@ -40,7 +40,7 @@
 .alert-warn {
   --alert-accent: var(--c-warning);
   --alert-icon: var(--icon-triangle-alert);
-  border-color: var(--c-warn-border);
+  border-color: var(--c-warning-border);
   background: var(--c-warning-subtle);
   color: var(--c-warning-text);
 }

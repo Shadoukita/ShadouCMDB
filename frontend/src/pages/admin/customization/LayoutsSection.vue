@@ -373,7 +373,7 @@ async function edit(key: string) {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--sp-2) var(--sp-4);
+  gap: var(--space-1) var(--space-3);
 }
 .toolbar input[type="search"] {
   max-width: 260px;

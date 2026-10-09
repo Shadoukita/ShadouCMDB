@@ -90,7 +90,7 @@ table.data td code {
   font-size: var(--fs-mono);
 }
 table.data tr.deleted td {
-  color: var(--c-text-muted);
+  color: var(--c-text-secondary);
   text-decoration: line-through;
 }
 /* Stale rows while the next page loads: a wash and muted text, never opacity, so the text keeps AA contrast. */
@@ -99,7 +99,7 @@ table.data.loading tbody {
 }
 table.data.loading tbody td {
   background: var(--c-surface-alt);
-  color: var(--c-text-muted);
+  color: var(--c-text-secondary);
 }
 
 /* ---------- Pagination: "Showing n of total" on the left, page controls on the right ---------- */

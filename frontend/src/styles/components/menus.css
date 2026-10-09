@@ -128,7 +128,7 @@
 .combo-list li.note,
 .listbox [role="option"].excluded,
 .view-menu-popup [role^="menuitem"][aria-disabled="true"] {
-  color: var(--c-text-muted);
+  color: var(--c-text-secondary);
   cursor: default;
 }
 .combo-list li.note:hover,
