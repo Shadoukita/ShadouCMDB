@@ -630,8 +630,10 @@ pub struct WorkflowApprovalDelegationCreate {
     /// Who may decide for you: an active user other than you
     pub delegate_user_id: Uuid,
     /// May be in the future (planned leave)
+    #[serde(deserialize_with = "schemas::micros")]
     pub starts_at: DateTime<Utc>,
     /// Required: at most 90 days after `startsAt`, and in the future
+    #[serde(deserialize_with = "schemas::micros")]
     pub ends_at: DateTime<Utc>,
     /// Limit it to one workflow; left out: every workflow
     #[schema(schema_with = key_schema)]
@@ -675,8 +677,10 @@ pub struct WorkflowApprovalDelegationAdminCreate {
     pub principal_user_id: Uuid,
     /// Who may decide for them: an active user other than the principal, and not you (SHAA-1872 C2)
     pub delegate_user_id: Uuid,
+    #[serde(deserialize_with = "schemas::micros")]
     pub starts_at: DateTime<Utc>,
     /// Required: at most 90 days after `startsAt`, and in the future
+    #[serde(deserialize_with = "schemas::micros")]
     pub ends_at: DateTime<Utc>,
     #[schema(schema_with = key_schema)]
     #[serde(default)]
