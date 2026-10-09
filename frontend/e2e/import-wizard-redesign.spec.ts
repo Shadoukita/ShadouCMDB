@@ -102,7 +102,7 @@ test("import wizard: the page texts come from the German catalog", async ({ page
   await page.addInitScript(() => ((window as unknown as { __shadoucmdbTestLocale: string }).__shadoucmdbTestLocale = "de"));
   await page.goto(`/imports/${jobId}?step=1`);
   const head = page.locator(".record-head");
-  await expect(head.getByRole("navigation", { name: "Breadcrumb" })).toContainText("Importe");
+  await expect(head.getByRole("navigation", { name: "Navigationspfad" })).toContainText("Importe");
   await expect(head.getByTestId("record-meta")).toContainText("1 Zeile");
   await expect(head.getByTestId("record-meta").locator("time")).toContainText(/^Gestartet /);
   const steps = page.getByRole("navigation", { name: "Importschritte" });

@@ -192,8 +192,8 @@ test("while import is off, the user still sees and deletes their import", async 
   await expect(page.getByRole("status").filter({ hasText: "This import cannot continue" })).toContainText("Bulk import is turned off for this instance.");
   await expect(page.getByRole("status").filter({ hasText: "This import cannot continue" })).not.toContainText("read-only");
   await expect(page.getByRole("button", { name: "Next: Map columns" })).toHaveCount(0);
-  await page.getByRole("status").getByRole("link", { name: "Imports" }).click();
-  await row.getByRole("button", { name: `Actions for servers-${stamp}.csv` }).click();
+  // Stop and Delete stay in the page head while import is off (W3, M2); Delete returns to Imports.
+  await page.locator(".record-head").getByRole("button", { name: "More actions" }).click();
   await page.getByRole("menuitem", { name: "Delete import" }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toContainText("Configuration items already imported are not changed");
@@ -517,7 +517,8 @@ test("import off: another importer cannot open the job, and the owner's earlier 
     for (const step of [/^Upload/, /^Map columns/]) {
       await page.getByRole("link", { name: step }).click();
       await expect(notice).toContainText("Bulk import is turned off for this instance.");
-      await expect(page.getByRole("main").getByRole("button")).toHaveCount(0);
+      // Only the head's menu (Delete, allowed while off: W3) remains; no step action.
+      await expect(page.getByRole("main").getByRole("button", { name: /^(?!More actions$)/ })).toHaveCount(0);
       await expect(page.getByLabel(/Spreadsheet file \(CSV or XLSX/)).toHaveCount(0);
       await page.goto(`/imports/${id}`);
     }
