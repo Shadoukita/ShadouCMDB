@@ -2173,8 +2173,11 @@ async fn slow_inventory_exports_leave_a_connection_for_the_rest_of_the_api() {
     let Some(db) = scratch::database("inventory_export_small_pool").await else { return };
     let w = World::new(&db, BusinessServiceConfig::default()).await;
     let server = w.classes["server"];
+    // Far more than the writer's channel holds (4 pieces of about 64 KiB): a
+    // smaller file is queued whole, the writer ends and its slot is free
+    // before a slow third request arrives (GH#825).
     sqlx::query(
-        "INSERT INTO configuration_items (class_id, label) SELECT $1, 'bulk-' || lpad(g::text, 5, '0') FROM generate_series(1, 20000) g",
+        "INSERT INTO configuration_items (class_id, label) SELECT $1, 'bulk-' || lpad(g::text, 6, '0') FROM generate_series(1, 100000) g",
     )
     .bind(server)
     .execute(&w.pool)
@@ -2250,7 +2253,7 @@ async fn slow_inventory_exports_leave_a_connection_for_the_rest_of_the_api() {
         raw(&app, "GET", &format!("/api/v1/configuration-items/export?classId={server}&columns=label"), &w.admin, None)
             .await;
     assert_eq!(status, 200);
-    assert_eq!(csv_rows(&body).len(), 20_001);
+    assert_eq!(csv_rows(&body).len(), 100_001);
     small.close().await;
     db.drop().await;
 }
