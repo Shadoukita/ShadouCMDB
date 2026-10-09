@@ -25,10 +25,9 @@ test("an empty inventory tells the operator how to create the first CI", async (
 test("an unreachable API is explained, not a blank page", async ({ page }) => {
   await page.route("**/api/v1/**", (route) => route.abort("connectionrefused"));
   await page.goto("/cis");
-  const alert = page.getByRole("alert").first();
-  await expect(alert).toContainText("API unreachable", { timeout: 15_000 });
-  await expect(alert).toContainText("Cannot reach the ShadouCMDB API");
-  await expect(alert.getByRole("button", { name: "Retry" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "API unreachable" })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole("alert").first()).toContainText("Cannot reach the ShadouCMDB API");
+  await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
   await snap(page, "16-api-unreachable");
 });
 
@@ -38,12 +37,11 @@ test("an unmigrated database says to run migrate, and Retry recovers once it has
     route.fulfill({ status: 503, json: { error: { code: "SCHEMA_NOT_MIGRATED", message, requestId: "e2e" } } });
   await page.route("**/api/v1/**", notMigrated);
   await page.goto("/cis");
-  const alert = page.getByRole("alert").first();
-  await expect(alert).toContainText("The database is not migrated yet");
-  await expect(alert).toContainText("Run `shadoucmdb migrate`, then retry.");
+  await expect(page.getByRole("heading", { level: 1, name: "The database is not migrated yet" })).toBeVisible();
+  await expect(page.getByRole("alert").first()).toContainText("Run `shadoucmdb migrate`, then retry.");
   await expect(page).toHaveURL(/\/cis$/); // not sent to sign-in or setup
   await snap(page, "16b-schema-not-migrated");
   await page.unroute("**/api/v1/**", notMigrated);
-  await alert.getByRole("button", { name: "Retry" }).click();
+  await page.getByRole("button", { name: "Retry" }).click();
   await expect(page.getByRole("heading", { name: "Configuration items" })).toBeVisible();
 });
