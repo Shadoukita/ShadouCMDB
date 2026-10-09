@@ -29,7 +29,7 @@
 //!
 //! Workers hold no CI, instance or request lock and never write CI data.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -330,34 +330,38 @@ pub async fn fan_out(pool: &PgPool, cfg: &WorkflowActionsConfig, id: i64, owner:
         return Ok(FanOut::Lost);
     };
 
-    // Recipients, now: by user id, the first WORKFLOW_ACTIONS_MAX_RECIPIENTS.
+    // Recipients, now, by user id. The cap counts only those who are told, as in the preview.
     let recipients = recipients_of(&mut tx, run.action_id.unwrap_or_default()).await?;
     let mut users: Vec<Uuid> = resolve_static(&mut tx, &recipients).await?.into_keys().collect();
-    let truncated = users.len() > cfg.max_recipients;
-    users.truncate(cfg.max_recipients);
     let active: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM cmdb.users WHERE id = ANY($1) AND is_active")
         .bind(&users)
         .fetch_all(&mut *tx)
         .await?;
     let permissions = auth_data::load_permissions_of(&mut tx, &active).await?;
+    let active: HashSet<Uuid> = active.into_iter().collect();
     let actor = (event.actor_type == "user" || event.actor_type == "api_client")
         .then(|| event.actor_id.as_deref().and_then(|a| a.parse::<Uuid>().ok()))
         .flatten()
         .filter(|_| settings.exclude_actor.unwrap_or(true));
     // The users the built-in notifications of 0072 already told of this event.
-    let builtin: Vec<Uuid> = sqlx::query_scalar(
+    let builtin: HashSet<Uuid> = sqlx::query_scalar::<_, Uuid>(
         "SELECT DISTINCT user_id FROM cmdb.notifications WHERE user_id = ANY($1) AND dedupe_key = ANY($2)",
     )
     .bind(&users)
     .bind(builtin_keys(run.event_id, &event))
     .fetch_all(&mut *tx)
-    .await?;
+    .await?
+    .into_iter()
+    .collect();
 
     let mut keys = Vec::with_capacity(users.len());
     let mut statuses = Vec::with_capacity(users.len());
     let mut reasons: Vec<Option<&str>> = Vec::with_capacity(users.len());
     let mut notify = Vec::new();
-    for u in &users {
+    // Once the cap is full, the next user to be told ends the run as `truncated`: the rest get no
+    // delivery row, so a profile of many thousands does not write a row for each of them.
+    let mut end = users.len();
+    for (i, u) in users.iter().enumerate() {
         let reason = if Some(*u) == actor {
             Some("actor")
         } else if !active.contains(u) {
@@ -369,6 +373,10 @@ pub async fn fan_out(pool: &PgPool, cfg: &WorkflowActionsConfig, id: i64, owner:
         } else {
             None
         };
+        if reason.is_none() && notify.len() >= cfg.max_recipients {
+            end = i;
+            break;
+        }
         keys.push(format!("user:{u}"));
         statuses.push(if reason.is_some() { "skipped" } else { "delivered" });
         reasons.push(reason);
@@ -376,6 +384,8 @@ pub async fn fan_out(pool: &PgPool, cfg: &WorkflowActionsConfig, id: i64, owner:
             notify.push(*u);
         }
     }
+    let truncated = end < users.len();
+    users.truncate(end);
     sqlx::query(
         "INSERT INTO cmdb.workflow_action_deliveries
            (run_id, recipient_key, user_id, status, status_reason, attempts, completed_at)
