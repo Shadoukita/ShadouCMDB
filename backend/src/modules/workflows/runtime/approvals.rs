@@ -230,6 +230,7 @@ fn kind_str(k: WorkflowApprovalPrincipalKind) -> &'static str {
 /// same holds for a service owner an excluded user made an owner, and for the
 /// owners of a service an excluded user added the CI to (GH#708). The dropped
 /// sources are kept on the step with the change that named the approvers.
+#[allow(clippy::too_many_arguments)]
 async fn resolve(
     conn: &mut PgConnection,
     request: Uuid,
@@ -1840,7 +1841,7 @@ pub(super) async fn mark_overdue(pool: &PgPool, request: Uuid, step_no: i16) -> 
         finish(&mut tx, &req, WorkflowApprovalStatus::Rejected, WorkflowApprovalCloseReason::Overdue, "system").await?;
     } else {
         // The escalation approvers join, resolved before the first audit row (§9).
-        escalated_to = approvers::load(&mut *tx, row.definition_id)
+        escalated_to = approvers::load(&mut tx, row.definition_id)
             .await?
             .iter()
             .filter(|a| a.transition_key == t.key && a.step_key == s.key && a.role == WorkflowApproverRole::Escalation)

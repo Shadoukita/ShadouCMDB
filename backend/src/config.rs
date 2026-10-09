@@ -1086,6 +1086,25 @@ mod tests {
         })
     }
 
+    /// The approval sweep is on every 60 s by default; an operator turns it off
+    /// per process or sets the interval, and a bad value is refused at start.
+    #[test]
+    fn approval_sweep_settings() {
+        let cfg = load_with(&[]).unwrap();
+        assert_eq!(cfg.approval_sweep, ApprovalSweepConfig { enabled: true, interval: Duration::from_secs(60) });
+        let cfg =
+            load_with(&[("WORKFLOW_APPROVAL_SWEEP", "off"), ("WORKFLOW_APPROVAL_SWEEP_INTERVAL_SECS", "15")]).unwrap();
+        assert_eq!(cfg.approval_sweep, ApprovalSweepConfig { enabled: false, interval: Duration::from_secs(15) });
+        for (key, bad) in [
+            ("WORKFLOW_APPROVAL_SWEEP", "false"),
+            ("WORKFLOW_APPROVAL_SWEEP_INTERVAL_SECS", "5"),
+            ("WORKFLOW_APPROVAL_SWEEP_INTERVAL_SECS", "1m"),
+        ] {
+            let err = load_with(&[(key, bad)]).unwrap_err().to_string();
+            assert!(err.contains(key), "{key}={bad}: {err}");
+        }
+    }
+
     #[test]
     fn debug_output_redacts_database_secrets() {
         let cfg = Config::from_lookup(&|key| match key {

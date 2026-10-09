@@ -212,6 +212,20 @@ Where that is more people than should own the instance, create the first adminis
 `docker compose run --rm seed create-admin --username admin --email admin@example.com` instead, or set `SETUP_TOKEN` in `.env` and
 remove it once setup is done.
 
+### Approval deadlines (SLA sweep)
+
+Each `shadoucmdb serve` process checks the deadlines of workflow approval steps once a minute
+(`WORKFLOW_APPROVAL_SWEEP_INTERVAL_SECS`, 10 to 3600). A step past its due date is marked overdue, its
+escalation approvers may then decide it, and a step set to reject when overdue closes its request as
+rejected. Steps that too few people can decide are flagged once, and after a change of a workflow's
+approvers the pending steps are resolved again. The sweep never approves anything and uses the
+database's clock.
+
+Several server processes on one database may all run it: each step is handled once, under the same row
+locks as a decision, so an overdue step gets exactly one event and one audit row. To confine the sweep
+to some processes, set `WORKFLOW_APPROVAL_SWEEP=off` on the others. At least one process must keep it
+on, or no step ever becomes overdue.
+
 ## Backup, restore and reset
 
 `shadoucmdb backup` writes a consistent, checksummed backup of every table without pg_dump.

@@ -85,7 +85,7 @@ pub(super) async fn setup(w: &World) -> People {
 }
 
 /// Version 2's graph.
-fn graph() -> Value {
+pub(super) fn graph() -> Value {
     json!({
         "initialState": "planned",
         "states": [
@@ -109,7 +109,7 @@ fn graph() -> Value {
     })
 }
 
-async fn publish(w: &World, graph: Value) {
+pub(super) async fn publish(w: &World, graph: Value) {
     let draft = w.ok("PUT", &format!("{DEFS}/{}/draft", w.definition), graph).await;
     w.ok(
         "POST",
@@ -121,7 +121,7 @@ async fn publish(w: &World, graph: Value) {
 
 /// An API token of `owner` narrowed to `profile`, recorded as minted by
 /// `minter` (None: unknown, as a CLI-minted token).
-async fn token(w: &World, owner: Uuid, profile: Uuid, minter: Option<Uuid>) -> (Creds, Uuid) {
+pub(super) async fn token(w: &World, owner: Uuid, profile: Uuid, minter: Option<Uuid>) -> (Creds, Uuid) {
     let expires = (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339();
     let body = json!({ "name": format!("t-{}", Uuid::new_v4().simple()), "userId": owner, "profileId": profile,
         "expiresAt": expires });
@@ -178,11 +178,11 @@ pub(super) async fn decide(
     w.call(creds, "POST", &format!("{REQUESTS}/{request}/decisions"), Some(body)).await
 }
 
-fn reason(v: &Value) -> (String, String) {
+pub(super) fn reason(v: &Value) -> (String, String) {
     (code(v).to_owned(), v["error"]["details"][0]["code"].as_str().unwrap_or("").to_owned())
 }
 
-fn refused(code: &str, reason: &str) -> (String, String) {
+pub(super) fn refused(code: &str, reason: &str) -> (String, String) {
     (code.to_owned(), reason.to_owned())
 }
 
@@ -190,7 +190,7 @@ async fn count(w: &World, sql: &str, id: Uuid) -> i64 {
     sqlx::query_scalar(sqlx::AssertSqlSafe(sql.to_owned())).bind(id).fetch_one(&w.pool).await.unwrap()
 }
 
-async fn audit_ok(w: &World) {
+pub(super) async fn audit_ok(w: &World) {
     let problems: Vec<(i64, String)> =
         sqlx::query_as("SELECT chain_seq, problem FROM audit_log_verify()").fetch_all(&w.pool).await.unwrap();
     assert_eq!(problems, vec![]);

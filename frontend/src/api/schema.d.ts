@@ -2744,7 +2744,7 @@ export interface paths {
         };
         /**
          * Change history (read-only, paginated, newest first by default)
-         * @description Requires `audit.view`. Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. API tokens (`entityType` api_tokens) record `create` and `update` (revocation), and a `token.use` row for every request made with a known token, accepted or refused: `newValue` holds the token's name and prefix, owner, `outcome` (accepted, revoked, expired, owner_disabled, provider_disabled, mfa_required, account_incomplete, email_required, no_scope, session_only, forbidden), method, path (first 512 characters, then `…`, with `pathLength`), `operationId`, `ipAddress` and `userAgent`; a token that can no longer authenticate (revoked, expired, owner_disabled, provider_disabled, mfa_required, account_incomplete, email_required, no_scope) is recorded at most once a minute per outcome, the next row counting the uses left out in `unrecordedRefusals`; when no later request comes, a summary row (`actorType` system, no method or path) carries `unrecordedRefusals`, `windowStart` and `windowEnd` after the window ends or at graceful shutdown. Changes made with a token have `actorType` api_client and the owner as actor; the `token.use` row shares their `requestId`. Two-factor authentication events have `entityType` users and the user's id: `mfa.enrol`, `mfa.disable` (`reason` self_service or admin_reset), `mfa.failure` (a wrong or replayed code; `stage` login, disable or recovery_codes), `mfa.recovery_code_used` (with `recoveryCodesRemaining`) and `mfa.recovery_codes` (new codes replaced the old); sign-ins record `method` password, totp, recovery_code, setup, oidc or ldap in `login.success`. Identity providers (`entityType` identity_providers) record `create`, `update` and `delete` without their secrets; an account an identity provider creates or updates at sign-in is a `create` or `update` row on `users` with `actorType` system and `actorName` `identity provider "<name>"` (a new account whose provider address another account or person has is created without one, the address in `providerEmailConflict` of its `create` row), and a sign-in the provider vouched for but ShadouCMDB refused is a `login.failure`. A data model preview refused for a missing right (e.g. a field type change by a user who may not view every type storing the field) is a `schema_change.refused` row on the area, type or field previewed, `newValue` holding the operation, the body sent, `code`, `field` and `message`. A data export is an `export` row on what was exported (`entityType` configuration_items), `newValue` holding `kind`, `format`, `rowCount` and `visibility`, never the rows: the impact analysis CSV (`kind` impact, on the analysed CI, with the `parameters`, `truncated` and `truncatedReason`), a business service's member CSV (`kind` business_service_members, on the service), the inventory list CSV (`kind` inventory, `entityType` inventory with the nil id, `newValue` adding the `columns`, `sort` and `filters` of the query), and the configuration file (`kind` config, `entityType` config with the nil id, `newValue` holding `format`, `formatVersion`, `sections`, `profilesIncluded` and `mappingCount`, never the content). Adding or removing business service members records one relationship `create` or `delete` per member plus one `update` on the service whose `oldValue` and `newValue` are both `{"members": {"added": [ids], "removed": [ids]}}`; replacing its owners records one `update` on the service whose `oldValue` and `newValue` are `{"owners": {"technical": [...], "business": [...]}}`, each owner as `kind`, `id` and `name`. An operator's `shadoucmdb prune-audit` leaves an `audit.purge` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the scope, window, cutoff, the number of rows deleted per action and the `chainSeq` ranges deleted (`deletedRanges`); those rows are never pruned. A `shadoucmdb restore` leaves a `backup.restore` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the `backup` (`database`, `createdAt`, `appVersion`, `migration`, `rows`, `sha256`, `seal` verified, unsigned or unknown_key, and `keyId`), the `restoredHead` (`chainSeq` and `rowHash` of the audit chain as the backup brought it back), `replacedExisting` and `appVersion`; it is never pruned either. A caller whose profile limits the classes they may view does not get entries about a CI of another class, or of a CI that no longer exists, nor relationship entries with an endpoint in one, judged by the CIs' current classes and, for a CI, every class it had in either value: those entries are left out of the page and of `page.total` whatever the filters, so neither tells that they exist. For the same reason such a caller does not get the stored sequence number as `id`, which would show a gap where an entry was left out, but a keyed permutation of it: stable and distinct per entry, unrelated in order or distance to any other (a rotation of the encryption key changes it). In the CI entries they may see, a reference attribute into a CI they may not view keeps only its id (`attributeReferences` shows it hidden, as the item endpoints do), and a business service's membership change lists only the members they may view: one naming none of those is left out like the entries above. Counts an entry took with its writer's view are null to them unless they wrote it: `rowCount`, `truncated` and `truncatedReason` of a CI export (impact, business service members, inventory), and `created`, `updated`, `unchanged`, `skipped`, `failed` and `relationshipsAdded` of an `import.commit`, which may span classes they may not view. In `token.use` rows, the id in a `path` that names a CI (`/configuration-items/{id}`, `/configuration-items/{id}/graph`, `/configuration-items/{id}/impact`, `/configuration-items/{id}/impact/export`, `/configuration-items/{id}/business-services`, `/business-services/{id}` and every path below it, whose member in `/business-services/{id}/members/{ciId}` is judged on its own) or relationship (`/relationships/{id}`) they may not view (a relationship: both endpoints) is replaced with `{hidden}`, e.g. `/api/v1/configuration-items/{hidden}/graph`; the rest of the row stays. An inventory export whose `filters.classId` names a class they may not view keeps only its action, actor and time, like a CI entry of such a class. Schema change entries (`entityType` schema_changes) show `summary` and `impact` as getSchemaChange shows them to the caller: counts of stored data only with the view right on every type they describe. A field entry that lists values stored in CIs (`notMappedValues`, from the upgrade that archived the Application field criticality) keeps its counts but lists the values only to a caller who may view the field's type and every type below it. Shared saved views (`entityType` saved_views) record `create`, `update` and `delete` with the view's `name`, `description`, `context`, `visibility` and `definition` (a shared copy's `create` names its source view in `copiedFrom`; views a configuration import writes have `actorType` import); personal views and default views are not recorded. In those entries a caller whose profile limits the classes they may view does not get the keys of other classes in `definition.classKeys`: they are left out and counted in `hiddenClassKeyCount`, and an entry in which either value names classes but none they may view (a view the saved-view API answers 404 to them) is left out of the page and of `page.total`. Workflow definitions (`entityType` workflow_definitions) record `create`, `update` and `delete`, and `workflow.publish` for each published version; a caller whose profile limits the classes they may view gets only the entries of definitions on a class they may view that still exist. A workflow run is recorded on its CI (`entityType` configuration_items): `workflow.start` and `workflow.cancel` (details in `newValue`), and `workflow.transition`, `workflow.migrate` and `workflow.force` (before and after), and `workflow.approval_refresh` (an approval step's approvers before and after), so it follows the visibility rules of CI entries. Passwords (local or directory), session tokens, CSRF tokens, API token secrets, TOTP secrets, authenticator or recovery codes, OIDC client secrets, authorization codes and ID tokens, and LDAP bind passwords are never recorded.
+         * @description Requires `audit.view`. Every change made through the API records the signed-in user as the actor (`actorType` user, `actorId` their id, `actorName` their username). Authentication events are recorded too, with `entityType` sessions: `login.success`, `login.failure`, `login.locked`, `logout` and `session.revoke`; `oldValue` is null and `newValue` holds the details (user, `ipAddress`, `userAgent`, reason). A failed sign-in has no actor id and records the attempted username as typed (first 64 characters), with nothing saying whether it exists. API tokens (`entityType` api_tokens) record `create` and `update` (revocation), and a `token.use` row for every request made with a known token, accepted or refused: `newValue` holds the token's name and prefix, owner, `outcome` (accepted, revoked, expired, owner_disabled, provider_disabled, mfa_required, account_incomplete, email_required, no_scope, session_only, forbidden), method, path (first 512 characters, then `…`, with `pathLength`), `operationId`, `ipAddress` and `userAgent`; a token that can no longer authenticate (revoked, expired, owner_disabled, provider_disabled, mfa_required, account_incomplete, email_required, no_scope) is recorded at most once a minute per outcome, the next row counting the uses left out in `unrecordedRefusals`; when no later request comes, a summary row (`actorType` system, no method or path) carries `unrecordedRefusals`, `windowStart` and `windowEnd` after the window ends or at graceful shutdown. Changes made with a token have `actorType` api_client and the owner as actor; the `token.use` row shares their `requestId`. Two-factor authentication events have `entityType` users and the user's id: `mfa.enrol`, `mfa.disable` (`reason` self_service or admin_reset), `mfa.failure` (a wrong or replayed code; `stage` login, disable or recovery_codes), `mfa.recovery_code_used` (with `recoveryCodesRemaining`) and `mfa.recovery_codes` (new codes replaced the old); sign-ins record `method` password, totp, recovery_code, setup, oidc or ldap in `login.success`. Identity providers (`entityType` identity_providers) record `create`, `update` and `delete` without their secrets; an account an identity provider creates or updates at sign-in is a `create` or `update` row on `users` with `actorType` system and `actorName` `identity provider "<name>"` (a new account whose provider address another account or person has is created without one, the address in `providerEmailConflict` of its `create` row), and a sign-in the provider vouched for but ShadouCMDB refused is a `login.failure`. A data model preview refused for a missing right (e.g. a field type change by a user who may not view every type storing the field) is a `schema_change.refused` row on the area, type or field previewed, `newValue` holding the operation, the body sent, `code`, `field` and `message`. A data export is an `export` row on what was exported (`entityType` configuration_items), `newValue` holding `kind`, `format`, `rowCount` and `visibility`, never the rows: the impact analysis CSV (`kind` impact, on the analysed CI, with the `parameters`, `truncated` and `truncatedReason`), a business service's member CSV (`kind` business_service_members, on the service), the inventory list CSV (`kind` inventory, `entityType` inventory with the nil id, `newValue` adding the `columns`, `sort` and `filters` of the query), and the configuration file (`kind` config, `entityType` config with the nil id, `newValue` holding `format`, `formatVersion`, `sections`, `profilesIncluded` and `mappingCount`, never the content). Adding or removing business service members records one relationship `create` or `delete` per member plus one `update` on the service whose `oldValue` and `newValue` are both `{"members": {"added": [ids], "removed": [ids]}}`; replacing its owners records one `update` on the service whose `oldValue` and `newValue` are `{"owners": {"technical": [...], "business": [...]}}`, each owner as `kind`, `id` and `name`. An operator's `shadoucmdb prune-audit` leaves an `audit.purge` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the scope, window, cutoff, the number of rows deleted per action and the `chainSeq` ranges deleted (`deletedRanges`); those rows are never pruned. A `shadoucmdb restore` leaves a `backup.restore` row (`entityType` audit_log, `actorType` system, `actorName` the database user) whose `newValue` holds the `backup` (`database`, `createdAt`, `appVersion`, `migration`, `rows`, `sha256`, `seal` verified, unsigned or unknown_key, and `keyId`), the `restoredHead` (`chainSeq` and `rowHash` of the audit chain as the backup brought it back), `replacedExisting` and `appVersion`; it is never pruned either. A caller whose profile limits the classes they may view does not get entries about a CI of another class, or of a CI that no longer exists, nor relationship entries with an endpoint in one, judged by the CIs' current classes and, for a CI, every class it had in either value: those entries are left out of the page and of `page.total` whatever the filters, so neither tells that they exist. For the same reason such a caller does not get the stored sequence number as `id`, which would show a gap where an entry was left out, but a keyed permutation of it: stable and distinct per entry, unrelated in order or distance to any other (a rotation of the encryption key changes it). In the CI entries they may see, a reference attribute into a CI they may not view keeps only its id (`attributeReferences` shows it hidden, as the item endpoints do), and a business service's membership change lists only the members they may view: one naming none of those is left out like the entries above. Counts an entry took with its writer's view are null to them unless they wrote it: `rowCount`, `truncated` and `truncatedReason` of a CI export (impact, business service members, inventory), and `created`, `updated`, `unchanged`, `skipped`, `failed` and `relationshipsAdded` of an `import.commit`, which may span classes they may not view. In `token.use` rows, the id in a `path` that names a CI (`/configuration-items/{id}`, `/configuration-items/{id}/graph`, `/configuration-items/{id}/impact`, `/configuration-items/{id}/impact/export`, `/configuration-items/{id}/business-services`, `/business-services/{id}` and every path below it, whose member in `/business-services/{id}/members/{ciId}` is judged on its own) or relationship (`/relationships/{id}`) they may not view (a relationship: both endpoints) is replaced with `{hidden}`, e.g. `/api/v1/configuration-items/{hidden}/graph`; the rest of the row stays. An inventory export whose `filters.classId` names a class they may not view keeps only its action, actor and time, like a CI entry of such a class. Schema change entries (`entityType` schema_changes) show `summary` and `impact` as getSchemaChange shows them to the caller: counts of stored data only with the view right on every type they describe. A field entry that lists values stored in CIs (`notMappedValues`, from the upgrade that archived the Application field criticality) keeps its counts but lists the values only to a caller who may view the field's type and every type below it. Shared saved views (`entityType` saved_views) record `create`, `update` and `delete` with the view's `name`, `description`, `context`, `visibility` and `definition` (a shared copy's `create` names its source view in `copiedFrom`; views a configuration import writes have `actorType` import); personal views and default views are not recorded. In those entries a caller whose profile limits the classes they may view does not get the keys of other classes in `definition.classKeys`: they are left out and counted in `hiddenClassKeyCount`, and an entry in which either value names classes but none they may view (a view the saved-view API answers 404 to them) is left out of the page and of `page.total`. Workflow definitions (`entityType` workflow_definitions) record `create`, `update` and `delete`, and `workflow.publish` for each published version; a caller whose profile limits the classes they may view gets only the entries of definitions on a class they may view that still exist. A workflow run is recorded on its CI (`entityType` configuration_items): `workflow.start` and `workflow.cancel` (details in `newValue`), and `workflow.transition`, `workflow.migrate` and `workflow.force` (before and after), and `workflow.approval_refresh` (an approval step's approvers before and after), so it follows the visibility rules of CI entries. The approval sweep writes `workflow.approval_overdue` on the CI with `actorType` system (`reason` due, with the escalation approvers added in `escalatedTo`, or understaffed), and a `workflow.approval_refresh` with `trigger` sweep when re-resolving a step changed its approvers. Approval delegations (`entityType` workflow_approval_delegations) record `create` and `update` (revocation) with the whole delegation, users by name; to a caller whose profile limits the classes they may view, the workflow a delegation is limited to is named only when its type is one they may view, otherwise `definition` reads `{"key": null, "name": "a workflow you cannot view"}`. Passwords (local or directory), session tokens, CSRF tokens, API token secrets, TOTP secrets, authenticator or recovery codes, OIDC client secrets, authorization codes and ID tokens, and LDAP bind passwords are never recorded.
          */
         get: operations["listAuditLog"];
         put?: never;
@@ -3393,7 +3393,7 @@ export interface paths {
         get: operations["getWorkflowApprovers"];
         /**
          * Replace who may decide each step of the workflow's approval policies
-         * @description Requires `workflows.manage`. `approvers` is the complete new set. Send the workflow's `version`: 409 VERSION_CONFLICT if it changed in between. Exactly the field `source` names is set (400 `required` or `source_mismatch`); profiles, groups and users are given by id or by name (a user by username), a field by id or by key. 400 VALIDATION_ERROR: `unknown_step` on `approvers[i].stepKey` for a step that no version and not the draft has, `not_found` for an unknown profile, group or user, `unknown_attribute` or `attribute_type` on `approvers[i].attribute` unless it is a reference field of the workflow's type (own or inherited) to the Person type, and `duplicate`. A change bumps the workflow's version and is audited as an `update` with the assignments before and after, by name. The response carries the lint's warnings (`problems`). Assignments of a step that only the draft had are dropped (audited the same way) when the draft is deleted or saved without it. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `workflows.manage`. `approvers` is the complete new set. Send the workflow's `version`: 409 VERSION_CONFLICT if it changed in between. Exactly the field `source` names is set (400 `required` or `source_mismatch`); profiles, groups and users are given by id or by name (a user by username), a field by id or by key. 400 VALIDATION_ERROR: `unknown_step` on `approvers[i].stepKey` for a step that no version and not the draft has, `not_found` for an unknown profile, group or user, `unknown_attribute` or `attribute_type` on `approvers[i].attribute` unless it is a reference field of the workflow's type (own or inherited) to the Person type, and `duplicate`. A change bumps the workflow's version and is audited as an `update` with the assignments before and after, by name. The response carries the lint's warnings (`problems`). Assignments of a step that only the draft had are dropped (audited the same way) when the draft is deleted or saved without it. After the change is saved, the active steps of the workflow's pending approval requests are resolved again from the new assignments (up to 200 at once; the approval sweep finishes the rest), each change of a step's approvers audited on its CI as `workflow.approval_refresh` with actor `system`. Decisions already cast stand. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         put: operations["replaceWorkflowApprovers"];
         post?: never;
@@ -3653,7 +3653,7 @@ export interface paths {
         };
         /**
          * List approval requests: your inbox, the ones you made or decided, or all (paginated, filterable)
-         * @description `view=actionable` (the default) is the inbox: pending requests whose active step you may decide now, in person, by the same rules as a decision (an approver of the step, not the requester or the requesting token's creator, not yet decided by you, and the step's separation of duties and API token rules). `requested` and `decided` are the requests you made, and those you approved or rejected a step of; `all` is every request. Requests on CIs of types the caller may not view are left out of the page and of `page.total`. `requestedBy` lists one user's requests, for example to cancel the pending requests of a disabled account (`view=all&status=pending&requestedBy=…`). Sorted by the active step's due date, the earliest first, unless `sort` says otherwise.
+         * @description `view=actionable` (the default) is the inbox: pending requests whose active step you may decide now, in person or for someone through a live delegation, by the same rules as a decision (an approver of the step, not the requester or the requesting token's creator, not yet decided by or for you, and the step's separation of duties and API token rules; for a delegation, the same rules for the principal, who must also view the CI's type). `requested` and `decided` are the requests you made, and those you approved or rejected a step of; `all` is every request. Requests on CIs of types the caller may not view are left out of the page and of `page.total`. `requestedBy` lists one user's requests, for example to cancel the pending requests of a disabled account (`view=all&status=pending&requestedBy=…`). Sorted by the active step's due date, the earliest first, unless `sort` says otherwise.
          */
         get: operations["listWorkflowApprovalRequests"];
         put?: never;
@@ -3695,7 +3695,7 @@ export interface paths {
         put?: never;
         /**
          * Approve or reject the active step of an approval request
-         * @description Needs no edit right: the view right on the CI's type and a place among the active step's approvers (a named user, a member of an assigned profile or group, the user a CI field names, or an owner of a business service the CI belongs to), read when the decision is made (403 FORBIDDEN `not_eligible`). **Four-eyes** (403 WORKFLOW_APPROVAL_SELF): the requester never decides their own request, whichever profile or credential they use (`requester`), nor does a token the requester minted (`token_creator`); a step can also refuse whoever approved an earlier step (`earlier_step`) and whoever ran, requested or approved other transitions of the instance (`actor_of:<key>`). API tokens decide only on a step that allows them (403 FORBIDDEN `session_required`), and only a token its owner minted for themselves (403 FORBIDDEN `token_not_self_minted`). A comment is required to reject. Any rejection rejects the request and the instance stays where it is. When the step reaches its quorum the next step becomes active; the last one's final approval applies the transition in the same transaction: the staged fields (only those the transition takes) and the state field are written to the CI with the decider as actor (a CI `update` audit row naming `approvalRequestId` and `requestedBy`), and the step is audited as `workflow.transition` with the same. If a staged field changed since the request, the conditions no longer hold, or the request stages a field the transition does not take, the final approval is refused with 409 WORKFLOW_APPROVAL_STALE and nothing is recorded, not even the decision. Each decision is audited as `workflow.approval_decide`. 409 CONFLICT `not_pending`, `step_not_active` or `already_decided`; 409 VERSION_CONFLICT on a stale `expectedVersion` (the request's `version`).
+         * @description Needs no edit right: the view right on the CI's type and a place among the active step's approvers (a named user, a member of an assigned profile or group, the user a CI field names, or an owner of a business service the CI belongs to), read when the decision is made (403 FORBIDDEN `not_eligible`). **Four-eyes** (403 WORKFLOW_APPROVAL_SELF): the requester never decides their own request, whichever profile or credential they use (`requester`), nor does a token the requester minted (`token_creator`); a step can also refuse whoever approved an earlier step (`earlier_step`) and whoever ran, requested or approved other transitions of the instance (`actor_of:<key>`). API tokens decide only on a step that allows them (403 FORBIDDEN `session_required`), and only a token its owner minted for themselves (403 FORBIDDEN `token_not_self_minted`). A comment is required to reject. Any rejection rejects the request and the instance stays where it is. When the step reaches its quorum the next step becomes active; the last one's final approval applies the transition in the same transaction: the staged fields (only those the transition takes) and the state field are written to the CI with the decider as actor (a CI `update` audit row naming `approvalRequestId` and `requestedBy`), and the step is audited as `workflow.transition` with the same. If a staged field changed since the request, the conditions no longer hold, or the request stages a field the transition does not take, the final approval is refused with 409 WORKFLOW_APPROVAL_STALE and nothing is recorded, not even the decision. Each decision is audited as `workflow.approval_decide`. 409 CONFLICT `not_pending`, `step_not_active` or `already_decided`; 409 VERSION_CONFLICT on a stale `expectedVersion` (the request's `version`). **Delegation:** a delegate decides for a principal (`onBehalfOf`, see `myEligibility.onBehalfOf`) through a live delegation: in its window, not revoked, both accounts active, unscoped or limited to this workflow. It lends only the principal's own eligibility, and both must view the CI's type. Four-eyes and the step's separation of duties bind the delegate and the principal alike (`on_behalf_of_requester` when the principal made the request). Left out, `onBehalfOf` means in person when you qualify in person, else your only principal (400 `required` when there are several); 403 FORBIDDEN `no_delegation` for a principal no live delegation covers. One vote per person per step, whether cast in person or for someone (409 CONFLICT `already_decided` on `onBehalfOf` when the principal's vote is in). The decision records the principal (`onBehalfOfName`) and its audit row `onBehalfOf` and `delegationId`.
          */
         post: operations["decideWorkflowApprovalRequest"];
         delete?: never;
@@ -3758,6 +3758,94 @@ export interface paths {
          * @description Requires `workflows.manage`. For administrators (`workflows.manage`): the active step's approvers are resolved again from the workflow's current approver assignments and the CI's current values, for example after the CI field that names the approver changed. Decisions already cast stand. No body. Audited on the CI as `workflow.approval_refresh`, also when nothing changed: `oldValue` holds the step's `approvers` (`kind`, `id`, `via`) and `eligibleCount` before, `newValue` the request, the step, `changed` and the same two after. 409 CONFLICT `not_pending`.
          */
         post: operations["refreshWorkflowApprovalRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/approval-delegations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Your approval delegations: of your approvals, and to you (paginated)
+         * @description `role=principal` lists the delegations of your approvals (including those an administrator made for you), `role=delegate` those that let you decide for someone; both when left out. `status` is judged now: `scheduled`, `active`, `ended` or `revoked`. A delegation limited to a workflow on a type you may not view shows `scoped: true` without naming it. Newest window first.
+         */
+        get: operations["listMyApprovalDelegations"];
+        put?: never;
+        /**
+         * Delegate your approvals to someone for a time (for example while on leave)
+         * @description From `startsAt` (may be in the future) to `endsAt` (required, at most 90 days later, in the future), the delegate may decide the approval steps you could decide yourself, on every workflow or only on `definitionKey`. It lends only your own eligibility, never one you hold as someone else's delegate, and never visibility: the delegate decides only requests on CIs both of you may view. Four-eyes binds the delegate as it binds you: neither of you decides a request either of you made. Applies while it is not revoked and both accounts are active, judged at the database's clock. 400 VALIDATION_ERROR on `delegateUserId` (`self`, `unknown`, `inactive`), `endsAt` (`out_of_range`, `in_past`) or `definitionKey` (`unknown`); 409 CONFLICT `limit` when you already have 5 scheduled or active delegations. Needs a signed-in session. Audited as a `create` on `workflow_approval_delegations`. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        post: operations["createMyApprovalDelegation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/approval-delegations/{id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke a delegation of your approvals, or decline one to you
+         * @description The principal or the delegate; for anyone else the delegation does not exist (404). It stays listed as `revoked`. Decisions already made through it stand. 409 CONFLICT `revoked` or `ended`. Needs a signed-in session. Audited as an `update` on `workflow_approval_delegations`. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        post: operations["revokeMyApprovalDelegation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/approval-delegations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List approval delegations (administrators, paginated)
+         * @description Requires `users.manage`. Every delegation, filtered by `principal`, `delegate` and `active` (not revoked and not ended). Needs `users.manage`. Newest window first.
+         */
+        get: operations["listApprovalDelegations"];
+        put?: never;
+        /**
+         * Delegate an absent user's approvals to someone (administrators)
+         * @description Requires `users.manage`. For `users.manage` holders, when someone is absent unexpectedly: as createMyApprovalDelegation, for `principalUserId`. The principal sees it in their own list, with you as `createdBy`. **You cannot name yourself as the delegate** (400 VALIDATION_ERROR `creator` on `delegateUserId`; the database refuses such a row too), so an administrator cannot turn a CAB member's approval into an administrator's. 400 VALIDATION_ERROR on `principalUserId` (`unknown`, `inactive`). Needs a signed-in session. Audited as a `create` on `workflow_approval_delegations`. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        post: operations["createApprovalDelegation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/approval-delegations/{id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke any approval delegation (administrators)
+         * @description Requires `users.manage`. Needs `users.manage`. It stays listed as `revoked`; decisions already made through it stand. 409 CONFLICT `revoked` or `ended`. Needs a signed-in session. Audited as an `update` on `workflow_approval_delegations`. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        post: operations["revokeApprovalDelegation"];
         delete?: never;
         options?: never;
         head?: never;
@@ -7743,6 +7831,50 @@ export interface components {
             /** Format: date-time */
             decidedAt: string;
         };
+        /** @description A time-boxed delegation of one user's approvals to another (never deleted: revoked, so the history stays) */
+        WorkflowApprovalDelegation: {
+            /** Format: uuid */
+            id: string;
+            /** @description Whose approvals are delegated */
+            principal: components["schemas"]["WorkflowApprovalDelegationUser"];
+            /** @description Who may decide for the principal */
+            delegate: components["schemas"]["WorkflowApprovalDelegationUser"];
+            /** @description Limited to one workflow; false: every workflow */
+            scoped: boolean;
+            /**
+             * @description The workflow it is limited to; null when it is not limited, or when the workflow's type is one you may not
+             *     view
+             */
+            definitionKey: string | null;
+            definitionName: string | null;
+            /** Format: date-time */
+            startsAt: string;
+            /** Format: date-time */
+            endsAt: string;
+            reason: string | null;
+            /**
+             * @description Where a delegation stands now (judged at the database's clock)
+             * @enum {string}
+             */
+            status: "scheduled" | "active" | "ended" | "revoked";
+            /** Format: date-time */
+            createdAt: string;
+            /** @description The principal, or the administrator who made it for them */
+            createdBy: components["schemas"]["WorkflowApprovalDelegationUser"];
+            /** Format: date-time */
+            revokedAt: string | null;
+            revokedByName: string | null;
+        };
+        WorkflowApprovalDelegationList: {
+            data: components["schemas"]["WorkflowApprovalDelegation"][];
+            page: components["schemas"]["PageMeta"];
+        };
+        /** @description A user on a delegation, as recorded (the id is null once the account was deleted) */
+        WorkflowApprovalDelegationUser: {
+            /** Format: uuid */
+            id: string | null;
+            name: string;
+        };
         /**
          * @description An approver source of a step, or part of one, that was not used: someone who may not decide the request set
          *     the field that names the approvers (GH#664), made a service owner an owner, or added the CI to the service
@@ -7780,13 +7912,25 @@ export interface components {
         /** @description Whether the caller may decide the active step now, and why not */
         WorkflowApprovalEligibility: {
             canDecide: boolean;
+            /** @description May decide in person (a decision without `onBehalfOf` is cast in person when this is true) */
+            inPerson: boolean;
+            /** @description The principals the caller may decide for through a live delegation, by name */
+            onBehalfOf: components["schemas"]["WorkflowApprovalOnBehalfOf"][];
             /**
              * @description Why not: the `details[0].code` a decision would be refused with (`not_pending`, `not_eligible`,
-             *     `requester`, `token_creator`, `earlier_step`, `actor_of:<key>`, `session_required`,
-             *     `token_not_self_minted`); null when `canDecide`
+             *     `requester`, `token_creator`, `on_behalf_of_requester`, `earlier_step`, `actor_of:<key>`,
+             *     `session_required`, `token_not_self_minted`); null when `canDecide`
              */
             reason: string | null;
             message: string | null;
+        };
+        /** @description A principal the caller may decide for, and the delegation that allows it */
+        WorkflowApprovalOnBehalfOf: {
+            /** Format: uuid */
+            userId: string;
+            name: string;
+            /** Format: uuid */
+            delegationId: string;
         };
         /** @description A request and its instance after a decision, withdrawal or cancellation */
         WorkflowApprovalOutcome: {
@@ -8422,6 +8566,8 @@ export interface components {
              * @description The step an `approval_request`, `approval_decision` or `approval_overdue` event is about
              */
             approvalStepNo: number | null;
+            /** @description The principal a delegate decided for (`approval_decision` events only) */
+            onBehalfOfName: string | null;
         };
         WorkflowEventList: {
             data: components["schemas"]["WorkflowEvent"][];
@@ -33250,6 +33396,12 @@ export interface operations {
                      */
                     expectedVersion: number;
                     comment?: string | null;
+                    /**
+                     * Format: uuid
+                     * @description Decide for this principal through a live delegation to you (`myEligibility.onBehalfOf`). Left out: in
+                     *     person when you qualify in person, otherwise for your only principal (400 when there are several)
+                     */
+                    onBehalfOf?: string | null;
                 };
             };
         };
@@ -33614,6 +33766,612 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkflowApprovalRequest"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listMyApprovalDelegations: {
+        parameters: {
+            query?: {
+                /** @description Page size (1-200) */
+                limit?: number;
+                /** @description Rows to skip */
+                offset?: number;
+                /** @description Left out: both */
+                role?: "principal" | "delegate";
+                /** @description true: only delegations that are not revoked and have not ended (scheduled or active); false: only the others */
+                active?: "true" | "false";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowApprovalDelegationList"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    createMyApprovalDelegation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * Format: uuid
+                     * @description Who may decide for you: an active user other than you
+                     */
+                    delegateUserId: string;
+                    /**
+                     * Format: date-time
+                     * @description May be in the future (planned leave)
+                     */
+                    startsAt: string;
+                    /**
+                     * Format: date-time
+                     * @description Required: at most 90 days after `startsAt`, and in the future
+                     */
+                    endsAt: string;
+                    /** @description Stable machine key, lower_snake_case */
+                    definitionKey?: string;
+                    reason?: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowApprovalDelegation"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    revokeMyApprovalDelegation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowApprovalDelegation"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listApprovalDelegations: {
+        parameters: {
+            query?: {
+                /** @description Page size (1-200) */
+                limit?: number;
+                /** @description Rows to skip */
+                offset?: number;
+                /** @description Only delegations of this user's approvals */
+                principal?: string;
+                /** @description Only delegations to this user */
+                delegate?: string;
+                /** @description true: only delegations that are not revoked and have not ended (scheduled or active); false: only the others */
+                active?: "true" | "false";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowApprovalDelegationList"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    createApprovalDelegation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * Format: uuid
+                     * @description Whose approvals are delegated
+                     */
+                    principalUserId: string;
+                    /**
+                     * Format: uuid
+                     * @description Who may decide for them: an active user other than the principal, and not you (SHAA-1872 C2)
+                     */
+                    delegateUserId: string;
+                    /** Format: date-time */
+                    startsAt: string;
+                    /**
+                     * Format: date-time
+                     * @description Required: at most 90 days after `startsAt`, and in the future
+                     */
+                    endsAt: string;
+                    /** @description Stable machine key, lower_snake_case */
+                    definitionKey?: string;
+                    reason?: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowApprovalDelegation"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    revokeApprovalDelegation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowApprovalDelegation"];
                 };
             };
             /** @description Invalid input (code VALIDATION_ERROR) with per-field details */

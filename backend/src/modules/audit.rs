@@ -946,6 +946,34 @@ pub(crate) mod tests {
         rows
     }
 
+    /// A delegation names a workflow only to a caller who may view its type
+    /// (approvals design SHAA-1869 §8); the users stay, an unscoped one is unchanged.
+    #[test]
+    fn a_delegation_hides_a_workflow_of_a_class_the_caller_cannot_view() {
+        let delegation = |class: Option<Uuid>| {
+            json!({ "principal": { "id": id(5), "name": "pat" }, "delegate": { "id": id(6), "name": "dee" },
+                    "definition": class.map(|c| json!({ "id": id(7), "key": "change", "name": "Change", "classId": c })) })
+        };
+        let rows = run(vec![
+            entry("workflow_approval_delegations", id(8), None, Some(delegation(Some(id(10))))),
+            entry(
+                "workflow_approval_delegations",
+                id(8),
+                Some(delegation(Some(id(20)))),
+                Some(delegation(Some(id(20)))),
+            ),
+            entry("workflow_approval_delegations", id(8), None, Some(delegation(None))),
+        ]);
+        assert_eq!(rows[0].new_value.as_ref().unwrap()["definition"]["key"], "change");
+        for v in [&rows[1].old_value, &rows[1].new_value] {
+            let v = v.as_ref().unwrap();
+            assert_eq!(v["definition"], json!({ "key": null, "name": "a workflow you cannot view" }));
+            assert_eq!(v["delegate"]["name"], "dee");
+        }
+        assert_eq!(rows[2].new_value.as_ref().unwrap()["definition"], Value::Null);
+        assert!(rows.iter().all(|r| !r.redacted));
+    }
+
     #[test]
     fn a_ci_of_a_class_the_caller_cannot_view_loses_its_values() {
         let rows = run(vec![entry("configuration_items", id(2), Some(ci(id(20), id(1))), Some(ci(id(20), id(1))))]);
