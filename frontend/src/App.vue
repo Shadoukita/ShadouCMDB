@@ -6,6 +6,7 @@ import ErrorAlert from "./components/ErrorAlert.vue";
 import GlobalSearch from "./components/GlobalSearch.vue";
 import LoadingState from "./components/LoadingState.vue";
 import MainNav from "./components/MainNav.vue";
+import NotificationsBell from "./components/NotificationsBell.vue";
 import ReauthenticateDialog from "./components/ReauthenticateDialog.vue";
 import ToastHost from "./components/ToastHost.vue";
 import UserMenu from "./components/UserMenu.vue";
@@ -93,7 +94,7 @@ function retry() {
     <header class="shell-header">
       <GlobalSearch />
       <div class="shell-actions">
-        <!-- Notifications slot (design §0.6 gap G5, SHAA-2356): the bell goes before "New CI" once notifications exist. -->
+        <NotificationsBell />
         <RouterLink v-if="session.canOnAnyClass('create')" class="btn btn-primary new-ci" to="/cis/new" :title="t('shell.newCi')">
           <Icon name="plus" /><span class="btn-label">{{ t("shell.newCi") }}</span>
         </RouterLink>

@@ -130,6 +130,15 @@ test("320 px: header reflows, the user menu shows initials and names the user wh
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
     await expectHeaderFits(page);
   }
+  // The notifications panel spans the window under the header instead of hanging off its left edge.
+  const bell = page.getByRole("banner").getByRole("button", { name: /^Notifications/ });
+  await bell.click();
+  const notifications = await page.getByRole("region", { name: "Notifications" }).boundingBox();
+  expect(notifications!.x).toBeGreaterThanOrEqual(0);
+  expect(notifications!.x + notifications!.width).toBeLessThanOrEqual(320);
+  await page.keyboard.press("Escape");
+  await expect(bell).toBeFocused();
+
   const who = page.getByRole("button", { name: /^Signed in as \S/ });
   await expect(who.locator(".who-initials")).toBeVisible();
   await expect(who.locator(".who-initials")).not.toBeEmpty();
