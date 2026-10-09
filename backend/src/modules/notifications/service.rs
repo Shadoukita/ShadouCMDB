@@ -48,6 +48,8 @@ pub enum Kind {
     WorkflowTransition,
     /// The recipient's import ended (completed, completed with errors, or failed)
     ImportFinished,
+    /// A workflow's notification action names the recipient (configured per workflow)
+    WorkflowAction,
 }
 
 impl Kind {
@@ -57,6 +59,7 @@ impl Kind {
             Kind::ApprovalClosed => "approval_closed",
             Kind::WorkflowTransition => "workflow_transition",
             Kind::ImportFinished => "import_finished",
+            Kind::WorkflowAction => "workflow_action",
         }
     }
 }
@@ -89,7 +92,10 @@ pub struct Notification {
     /// `stepName`, `dueAt`, `requestedByName`; `approval_closed` also `status`, `closeReason`, `closedByName`.
     /// `workflow_transition`: `instanceId`, `ciId`, `ciLabel`, `ciIdent`, `definitionName`, `event` (`transition`,
     /// `cancel`, `force`), `transitionKey`, `transitionName`, `fromStateKey`, `fromStateName`, `toStateKey`,
-    /// `toStateName`, `actorName`. `import_finished`: `fileName`, `classKey`, `status`, `errorCode`. Any may be null.
+    /// `toStateName`, `actorName`. `import_finished`: `fileName`, `classKey`, `status`, `errorCode`. `workflow_action`: those of
+    /// `workflow_transition` plus `actionKey`, `actionName`, `approvalRequestId` and `requestNo` (`event` is the
+    /// workflow event's kind: `transition`, `approval_request`, `approval_decision`, `approval_close`,
+    /// `approval_overdue`, `cancel`, `force`, ...). Any may be null.
     #[schema(value_type = Object)]
     pub data: Value,
     pub created_at: DateTime<Utc>,

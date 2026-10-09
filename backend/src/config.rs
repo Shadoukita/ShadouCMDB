@@ -349,6 +349,49 @@ impl Default for ApprovalSweepConfig {
     }
 }
 
+/// The workflow action outbox of this server process (`WORKFLOW_ACTIONS_*`,
+/// design SHAA-2725 §4.2-§4.6); see [`crate::modules::workflows::actions::outbox`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorkflowActionsConfig {
+    /// `WORKFLOW_ACTIONS_WORKER` (`on` / `off`): off leaves fan-out and sending to other processes.
+    pub worker: bool,
+    /// `WORKFLOW_ACTIONS_CONCURRENCY` (1 to 32): runs and deliveries in flight in this process.
+    pub concurrency: usize,
+    /// `WORKFLOW_ACTIONS_POLL_MS` (100 to 60000): how often an idle worker looks for work.
+    pub poll: Duration,
+    /// `WORKFLOW_ACTIONS_MAX_ATTEMPTS` (1 to 20): attempts before a delivery is dead.
+    pub max_attempts: i16,
+    /// `WORKFLOW_ACTIONS_MAX_RECIPIENTS` (1 to 5000): recipients of one run, after expansion.
+    pub max_recipients: usize,
+    /// `WORKFLOW_ACTIONS_QUEUE_MAX` (10 to 10000000): pending runs and deliveries before new runs are suppressed.
+    pub queue_max: i64,
+    /// `WORKFLOW_ACTIONS_MAX_PER_INSTANCE_PER_HOUR` (1 to 10000): the loop breaker.
+    pub max_per_instance_per_hour: i32,
+    /// `WORKFLOW_ACTIONS_MAX_AGE_HOURS` (1 to 168): a delivery older than this is dead, never sent late.
+    pub max_age_hours: i32,
+    /// `WORKFLOW_ACTIONS_RETENTION_DAYS` (1 to 3650): runs and delivered or skipped deliveries.
+    pub retention_days: i32,
+    /// `WORKFLOW_ACTIONS_DEAD_RETENTION_DAYS` (1 to 3650): dead deliveries.
+    pub dead_retention_days: i32,
+}
+
+impl Default for WorkflowActionsConfig {
+    fn default() -> Self {
+        WorkflowActionsConfig {
+            worker: true,
+            concurrency: 4,
+            poll: Duration::from_millis(1000),
+            max_attempts: 8,
+            max_recipients: 200,
+            queue_max: 100_000,
+            max_per_instance_per_hour: 50,
+            max_age_hours: 24,
+            retention_days: 30,
+            dead_retention_days: 90,
+        }
+    }
+}
+
 /// Hard ceilings of the `BUSINESS_SERVICE_*` settings (the nesting ceiling is
 /// also the database trigger's, migration 0033).
 pub const BUSINESS_SERVICE_MAX_MEMBERS_CEILING: i64 = 50_000;
@@ -393,6 +436,7 @@ pub struct Config {
     pub exports: ExportConfig,
     pub notifications: NotificationConfig,
     pub approval_sweep: ApprovalSweepConfig,
+    pub workflow_actions: WorkflowActionsConfig,
 }
 
 /// The env file the variables were read from (`--env-file`, or `./.env`), as an absolute path.
@@ -463,6 +507,7 @@ impl std::fmt::Debug for Config {
             exports,
             notifications,
             approval_sweep,
+            workflow_actions,
         } = self;
         f.debug_struct("Config")
             .field("api_host", api_host)
@@ -483,6 +528,7 @@ impl std::fmt::Debug for Config {
             .field("exports", exports)
             .field("notifications", notifications)
             .field("approval_sweep", approval_sweep)
+            .field("workflow_actions", workflow_actions)
             .finish()
     }
 }
@@ -922,6 +968,24 @@ impl Config {
                 .map_or(ApprovalSweepConfig::default().interval, Duration::from_secs),
         };
 
+        let d = WorkflowActionsConfig::default();
+        let workflow_actions = WorkflowActionsConfig {
+            worker: r.one_of("WORKFLOW_ACTIONS_WORKER", &["on", "off"], "on") == "on",
+            concurrency: r.int::<usize>("WORKFLOW_ACTIONS_CONCURRENCY", 1, 32).unwrap_or(d.concurrency),
+            poll: r.int::<u64>("WORKFLOW_ACTIONS_POLL_MS", 100, 60_000).map_or(d.poll, Duration::from_millis),
+            max_attempts: r.int::<i16>("WORKFLOW_ACTIONS_MAX_ATTEMPTS", 1, 20).unwrap_or(d.max_attempts),
+            max_recipients: r.int::<usize>("WORKFLOW_ACTIONS_MAX_RECIPIENTS", 1, 5000).unwrap_or(d.max_recipients),
+            queue_max: r.int::<i64>("WORKFLOW_ACTIONS_QUEUE_MAX", 10, 10_000_000).unwrap_or(d.queue_max),
+            max_per_instance_per_hour: r
+                .int::<i32>("WORKFLOW_ACTIONS_MAX_PER_INSTANCE_PER_HOUR", 1, 10_000)
+                .unwrap_or(d.max_per_instance_per_hour),
+            max_age_hours: r.int::<i32>("WORKFLOW_ACTIONS_MAX_AGE_HOURS", 1, 168).unwrap_or(d.max_age_hours),
+            retention_days: r.int::<i32>("WORKFLOW_ACTIONS_RETENTION_DAYS", 1, 3650).unwrap_or(d.retention_days),
+            dead_retention_days: r
+                .int::<i32>("WORKFLOW_ACTIONS_DEAD_RETENTION_DAYS", 1, 3650)
+                .unwrap_or(d.dead_retention_days),
+        };
+
         let encryption = EncryptionConfig {
             key_file: r.raw("ENCRYPTION_KEY_FILE").map(PathBuf::from),
             previous_key_file: r.raw("ENCRYPTION_KEY_PREVIOUS_FILE").map(PathBuf::from),
@@ -997,6 +1061,7 @@ impl Config {
             exports,
             notifications,
             approval_sweep,
+            workflow_actions,
         })
     }
 }
@@ -1099,6 +1164,51 @@ mod tests {
             ("WORKFLOW_APPROVAL_SWEEP", "false"),
             ("WORKFLOW_APPROVAL_SWEEP_INTERVAL_SECS", "5"),
             ("WORKFLOW_APPROVAL_SWEEP_INTERVAL_SECS", "1m"),
+        ] {
+            let err = load_with(&[(key, bad)]).unwrap_err().to_string();
+            assert!(err.contains(key), "{key}={bad}: {err}");
+        }
+    }
+
+    /// The action outbox's settings: defaults, a full set, and refusals at start.
+    #[test]
+    fn workflow_actions_settings() {
+        assert_eq!(load_with(&[]).unwrap().workflow_actions, WorkflowActionsConfig::default());
+        let cfg = load_with(&[
+            ("WORKFLOW_ACTIONS_WORKER", "off"),
+            ("WORKFLOW_ACTIONS_CONCURRENCY", "8"),
+            ("WORKFLOW_ACTIONS_POLL_MS", "250"),
+            ("WORKFLOW_ACTIONS_MAX_ATTEMPTS", "3"),
+            ("WORKFLOW_ACTIONS_MAX_RECIPIENTS", "50"),
+            ("WORKFLOW_ACTIONS_QUEUE_MAX", "100"),
+            ("WORKFLOW_ACTIONS_MAX_PER_INSTANCE_PER_HOUR", "5"),
+            ("WORKFLOW_ACTIONS_MAX_AGE_HOURS", "2"),
+            ("WORKFLOW_ACTIONS_RETENTION_DAYS", "7"),
+            ("WORKFLOW_ACTIONS_DEAD_RETENTION_DAYS", "14"),
+        ])
+        .unwrap();
+        assert_eq!(
+            cfg.workflow_actions,
+            WorkflowActionsConfig {
+                worker: false,
+                concurrency: 8,
+                poll: Duration::from_millis(250),
+                max_attempts: 3,
+                max_recipients: 50,
+                queue_max: 100,
+                max_per_instance_per_hour: 5,
+                max_age_hours: 2,
+                retention_days: 7,
+                dead_retention_days: 14,
+            }
+        );
+        for (key, bad) in [
+            ("WORKFLOW_ACTIONS_WORKER", "yes"),
+            ("WORKFLOW_ACTIONS_CONCURRENCY", "0"),
+            ("WORKFLOW_ACTIONS_POLL_MS", "50"),
+            ("WORKFLOW_ACTIONS_MAX_ATTEMPTS", "21"),
+            ("WORKFLOW_ACTIONS_QUEUE_MAX", "5"),
+            ("WORKFLOW_ACTIONS_MAX_PER_INSTANCE_PER_HOUR", "0"),
         ] {
             let err = load_with(&[(key, bad)]).unwrap_err().to_string();
             assert!(err.contains(key), "{key}={bad}: {err}");

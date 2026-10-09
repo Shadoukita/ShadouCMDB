@@ -3427,6 +3427,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/workflow-definitions/{id}/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The workflow's notification actions: who is told what, when
+         * @description Requires `workflows.manage`. An action has a kind (`inbox`: an entry in each recipient's notifications; `email` and `webhook` come in a later release), a trigger (`transition`, `approval_requested`, `approval_step`, `approval_closed`, `approval_overdue` on the transition `transition`, or `instance_cancelled`, `instance_forced`) and recipient sources, resolved when the action runs. Actions are on the definition: a change applies at once to every version, without publishing. Nothing is sent from the request that runs the transition; the event's transaction queues a run, and the action workers deliver it after commit to each recipient who may then view the CI's type. `problems` holds the lint's warnings.
+         */
+        get: operations["getWorkflowActions"];
+        /**
+         * Replace the workflow's notification actions
+         * @description Requires `workflows.manage`. `actions` is the complete new set, in order; an action keeps its id and its delivery history by `key`. Send the workflow's `version`: 409 VERSION_CONFLICT if it changed in between. A change bumps the workflow's version and is audited as an `update` with the actions before and after, recipients by name. 400 VALIDATION_ERROR: `required` / `not_applicable` / `source_mismatch` for fields the kind, trigger or source needs or does not take; `unknown_transition` for a transition no version and not the draft has; `not_found` for an unknown profile, group or user; `duplicate`; `too_many_actions` beyond 10 per trigger and transition; `unknown_placeholder` in an e-mail text; `kind_unavailable` for `email` and `webhook`, and `source_unavailable` for sources other than `profile`, `group` and `user`, until the release that delivers them. Runs already queued for a removed or disabled action are cancelled. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        put: operations["replaceWorkflowActions"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/workflow-definitions/{id}/actions/{key}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Who an action would notify now, and why each user is in or out
+         * @description Requires `workflows.manage`. Resolves the action's recipient sources to users as a run would now: `included`, or out with a reason (`inactive`, `no_view`: may not view the type of the CI `ciId`, or of the workflow without it, `truncated`: beyond `WORKFLOW_ACTIONS_MAX_RECIPIENTS`). Whoever runs the event is left out too unless the action sets `excludeActor: false`. Nothing is sent. 404 for an unknown action, and for a CI that does not exist or that the caller may not view.
+         */
+        get: operations["previewWorkflowAction"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/workflow-definitions/{id}/instance-migrations": {
         parameters: {
             query?: never;
@@ -6317,7 +6361,10 @@ export interface components {
              *     `stepName`, `dueAt`, `requestedByName`; `approval_closed` also `status`, `closeReason`, `closedByName`.
              *     `workflow_transition`: `instanceId`, `ciId`, `ciLabel`, `ciIdent`, `definitionName`, `event` (`transition`,
              *     `cancel`, `force`), `transitionKey`, `transitionName`, `fromStateKey`, `fromStateName`, `toStateKey`,
-             *     `toStateName`, `actorName`. `import_finished`: `fileName`, `classKey`, `status`, `errorCode`. Any may be null.
+             *     `toStateName`, `actorName`. `import_finished`: `fileName`, `classKey`, `status`, `errorCode`. `workflow_action`: those of
+             *     `workflow_transition` plus `actionKey`, `actionName`, `approvalRequestId` and `requestNo` (`event` is the
+             *     workflow event's kind: `transition`, `approval_request`, `approval_decision`, `approval_close`,
+             *     `approval_overdue`, `cancel`, `force`, ...). Any may be null.
              */
             data: Record<string, never>;
             /** Format: date-time */
@@ -6334,7 +6381,7 @@ export interface components {
          */
         NotificationEntityType: "workflow_approval_requests" | "workflow_instances" | "import_jobs";
         /** @enum {string} */
-        NotificationKind: "approval_requested" | "approval_closed" | "workflow_transition" | "import_finished";
+        NotificationKind: "approval_requested" | "approval_closed" | "workflow_transition" | "import_finished" | "workflow_action";
         NotificationList: {
             data: components["schemas"]["Notification"][];
             page: components["schemas"]["PageMeta"];
@@ -7804,6 +7851,174 @@ export interface components {
             /** @description Database migrations shipped with this build */
             migrations: number;
         };
+        /** @description One notification action of a workflow */
+        WorkflowAction: {
+            /** Format: uuid */
+            id: string;
+            key: string;
+            name: string;
+            kind: components["schemas"]["WorkflowActionKind"];
+            trigger: components["schemas"]["WorkflowActionTrigger"];
+            transition?: string | null;
+            enabled: boolean;
+            recipients: components["schemas"]["WorkflowActionRecipient"][];
+            endpoint?: components["schemas"]["WorkflowActionEndpointRef"] | null;
+            settings: components["schemas"]["WorkflowActionSettings"];
+        };
+        /** @description A reference field of the workflow's type */
+        WorkflowActionAttributeRef: {
+            /** Format: uuid */
+            id: string;
+            key: string;
+        };
+        /**
+         * @description How much an e-mail tells
+         * @enum {string}
+         */
+        WorkflowActionContent: "minimal" | "standard" | "detailed";
+        /** @description A webhook endpoint, by key and name */
+        WorkflowActionEndpointRef: {
+            /** Format: uuid */
+            id: string;
+            key: string;
+            name: string;
+        };
+        /** @description One notification action as sent */
+        WorkflowActionInput: {
+            /** @description Stable machine key, lower_snake_case */
+            key: string;
+            name: string;
+            kind: components["schemas"]["WorkflowActionKind"];
+            trigger: components["schemas"]["WorkflowActionTrigger"];
+            transition?: string | null;
+            enabled?: boolean;
+            /** @description Inbox and e-mail: 1 to 20 sources, expanded and deduplicated when the action runs */
+            recipients?: components["schemas"]["WorkflowActionRecipientInput"][];
+            /** @description Key of a registered webhook endpoint */
+            endpoint?: string;
+            settings?: components["schemas"]["WorkflowActionSettings"];
+        };
+        /** @description An intro text in English and German */
+        WorkflowActionIntro: {
+            en?: string;
+            de?: string;
+        };
+        /**
+         * @description How an action delivers
+         * @enum {string}
+         */
+        WorkflowActionKind: "inbox" | "email" | "webhook";
+        /**
+         * @description Who takes part in the event
+         * @enum {string}
+         */
+        WorkflowActionParticipant: "actor" | "starter" | "requester" | "approvers";
+        /** @description Who an action would notify now */
+        WorkflowActionPreview: {
+            key: string;
+            kind: components["schemas"]["WorkflowActionKind"];
+            /**
+             * Format: uuid
+             * @description The CI judged, if one was given
+             */
+            ciId?: string | null;
+            /**
+             * Format: int64
+             * @description Users who would be notified
+             */
+            included: number;
+            /** @description Up to 500 users, those included first, then by username */
+            users: components["schemas"]["WorkflowActionPreviewUser"][];
+            /** @description More users than listed */
+            truncated: boolean;
+            /** @description Whoever runs the event is left out as well (`excludeActor`, the default) */
+            excludesActor: boolean;
+        };
+        /**
+         * @description Whether a user would be notified, and why not
+         * @enum {string}
+         */
+        WorkflowActionPreviewReason: "included" | "no_view" | "inactive" | "truncated";
+        /** @description One user an action resolves to */
+        WorkflowActionPreviewUser: {
+            /** Format: uuid */
+            id: string;
+            username: string;
+            displayName: string;
+            reason: components["schemas"]["WorkflowActionPreviewReason"];
+            /** @description The sources that name them, as `group CAB` */
+            sources: string[];
+        };
+        /** @description One source of an action's recipients */
+        WorkflowActionRecipient: {
+            source: components["schemas"]["WorkflowActionRecipientSource"];
+            profile?: components["schemas"]["WorkflowPrincipalRef"] | null;
+            group?: components["schemas"]["WorkflowPrincipalRef"] | null;
+            user?: components["schemas"]["WorkflowPrincipalRef"] | null;
+            attribute?: components["schemas"]["WorkflowActionAttributeRef"] | null;
+            serviceOwnerRole?: components["schemas"]["WorkflowServiceOwnerRole"] | null;
+            participant?: components["schemas"]["WorkflowActionParticipant"] | null;
+            address?: string | null;
+        };
+        /** @description One source of an action's recipients; exactly the field `source` names is set (none for `ci_owner`) */
+        WorkflowActionRecipientInput: {
+            source: components["schemas"]["WorkflowActionRecipientSource"];
+            /** @description By id, or by name regardless of case (a user by username) */
+            profile?: string;
+            /** @description By id, or by name regardless of case (a user by username) */
+            group?: string;
+            /** @description By id, or by name regardless of case (a user by username) */
+            user?: string;
+            /** @description By id, or by name regardless of case (a user by username) */
+            attribute?: string;
+            serviceOwnerRole?: components["schemas"]["WorkflowServiceOwnerRole"] | null;
+            participant?: components["schemas"]["WorkflowActionParticipant"] | null;
+            address?: string;
+        };
+        /**
+         * @description Where an action's recipients come from
+         * @enum {string}
+         */
+        WorkflowActionRecipientSource: "profile" | "group" | "user" | "ci_owner" | "ci_attribute" | "service_owner" | "participant" | "address";
+        /** @description Settings of an action; each applies only to the kinds and triggers it names */
+        WorkflowActionSettings: {
+            /** @description Inbox and e-mail: leave out who ran the event (default true), so nobody is told of their own action */
+            excludeActor?: boolean | null;
+            /** @description Trigger `approval_closed`: only these outcomes (default all) */
+            statuses?: components["schemas"]["WorkflowApprovalOutcome"][] | null;
+            content?: components["schemas"]["WorkflowActionContent"] | null;
+            subject?: components["schemas"]["WorkflowActionSubject"] | null;
+            intro?: components["schemas"]["WorkflowActionIntro"] | null;
+            /** @description Webhook: the CI fields (keys, own or inherited) the payload carries; none by default */
+            includeAttributes?: string[] | null;
+        };
+        /** @description A subject in English and German */
+        WorkflowActionSubject: {
+            en?: string;
+            de?: string;
+        };
+        /**
+         * @description What fires an action
+         * @enum {string}
+         */
+        WorkflowActionTrigger: "transition" | "approval_requested" | "approval_step" | "approval_closed" | "approval_overdue" | "instance_cancelled" | "instance_forced";
+        /** @description The notification actions of a workflow, with what the lint finds in them */
+        WorkflowActions: {
+            /**
+             * Format: int32
+             * @description The definition's version: send it back with a change
+             */
+            version: number;
+            /** @description In the order they were saved */
+            actions: components["schemas"]["WorkflowAction"][];
+            /**
+             * @description Warnings: `unknown_transition` (the current version lacks it; kept for instances on older versions),
+             *     `recipients_cannot_view` (no active user of a source may view the workflow's type), `too_many_recipients`
+             *     (more than `WORKFLOW_ACTIONS_MAX_RECIPIENTS` users; the rest are left out), `missing_locale` and
+             *     `minimal_placeholder` (e-mail)
+             */
+            problems: components["schemas"]["WorkflowProblem"][];
+        };
         /**
          * @description The approval policy of a transition: running it creates an approval request, and the instance moves only once
          *     every step is approved, in order. The requester can never approve their own request.
@@ -7943,12 +8158,11 @@ export interface components {
             /** Format: uuid */
             delegationId: string;
         };
-        /** @description A request and its instance after a decision, withdrawal or cancellation */
-        WorkflowApprovalOutcome: {
-            request: components["schemas"]["WorkflowApprovalRequest"];
-            /** @description Moved along the transition when the decision was the final approval */
-            instance: components["schemas"]["WorkflowInstance"];
-        };
+        /**
+         * @description The outcome of an approval request
+         * @enum {string}
+         */
+        WorkflowApprovalOutcome: "approved" | "rejected" | "withdrawn" | "cancelled";
         /** @description A principal who may decide the active step */
         WorkflowApprovalPrincipal: {
             /**
@@ -8840,6 +9054,11 @@ export interface components {
             /** @enum {string} */
             severity: "error" | "warning";
         };
+        /**
+         * @description An owner role of a business service
+         * @enum {string}
+         */
+        WorkflowServiceOwnerRole: "technical" | "business";
         /** @description A workflow that can be started on a CI */
         WorkflowStartable: {
             /** Format: uuid */
@@ -26151,7 +26370,7 @@ export interface operations {
                 offset?: number;
                 unread?: "true" | "false";
                 /** @description Only this kind */
-                kind?: "approval_requested" | "approval_closed" | "workflow_transition" | "import_finished";
+                kind?: "approval_requested" | "approval_closed" | "workflow_transition" | "import_finished" | "workflow_action";
             };
             header?: never;
             path?: never;
@@ -31956,6 +32175,305 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkflowApproverPreview"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getWorkflowActions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowActions"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    replaceWorkflowActions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * Format: int32
+                     * @description The version you loaded; if someone saved in between, the request fails with 409 VERSION_CONFLICT
+                     */
+                    version: number;
+                    /** @description Every action of the workflow, in order (replaces the current set; an action keeps its history by key) */
+                    actions: components["schemas"]["WorkflowActionInput"][];
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowActions"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    previewWorkflowAction: {
+        parameters: {
+            query?: {
+                /** @description Judge the view right on this CI's type; without it, on the workflow's type */
+                ciId?: string;
+            };
+            header?: never;
+            path: {
+                id: string;
+                /** @description Action key */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowActionPreview"];
                 };
             };
             /** @description Invalid input (code VALIDATION_ERROR) with per-field details */

@@ -471,6 +471,7 @@ pub fn document(routes: &[Route]) -> OpenApi {
                     .into_iter()
                     .fold(ResponsesBuilder::new(), |b, (status, resp)| b.response(status.to_string(), resp)),
             );
+        schemas.extend(r.body_nested.iter().cloned());
         if let Some(body) = &r.body {
             let media: &[&str] = if r.body_media.is_empty() { &["application/json"] } else { r.body_media };
             let request = media.iter().fold(RequestBodyBuilder::new().required(Some(Required::True)), |b, m| {
