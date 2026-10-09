@@ -1172,7 +1172,11 @@ pub(crate) mod tests {
         assert_eq!(status, 429, "the password-only endpoints share the lock");
 
         // Once the lock has passed, the right password and code go through.
+        // The code is taken when it is sent: the enrolment step can pass out
+        // of the window on a busy host (GH#832). The confirm used `step - 1`,
+        // so any later step is unused.
         tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        let right = totp::code_at(&secret, settled_step().await);
         let (status, v, _) = call(&app, "DELETE", "/api/v1/auth/mfa/totp", &session, Some(with(&right))).await;
         assert_eq!(status, 204, "{v}");
         db.drop().await;
