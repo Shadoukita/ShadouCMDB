@@ -41,6 +41,7 @@ import {
   type TargetOption,
 } from "../../lib/importMapping";
 import { useSessionStore } from "../../stores/session";
+import { formatNumber, t, tAround } from "../../i18n";
 import Icon from "../../components/Icon.vue";
 
 /**
@@ -242,7 +243,7 @@ const rowProblems = computed(() => {
   return out;
 });
 const summary = ref<HTMLElement>();
-const header = (i: number) => props.job.columns[i]?.header ?? `Column ${i + 1}`;
+const header = (i: number) => props.job.columns[i]?.header ?? t("imports.map.columnN", { n: formatNumber(i + 1) });
 
 async function showProblems(list: MappingProblem[]) {
   problems.value = list;
@@ -259,11 +260,11 @@ function focusProblem(p: MappingProblem) {
 
 function status(i: number): string {
   const c = form.value.columns[i]!;
-  if (rowProblems.value.has(i)) return "Needs attention";
+  if (rowProblems.value.has(i)) return t("imports.map.status.needsAttention");
   const m = matched.value.get(i);
   if (m && m.target === c.target) return m.text;
-  if (c.target === "ignore") return "Not mapped";
-  return props.job.mapping && props.job.mappingId ? "From saved mapping" : "Mapped";
+  if (c.target === "ignore") return t("imports.map.status.notMapped");
+  return props.job.mapping && props.job.mappingId ? t("imports.map.status.fromSaved") : t("imports.map.status.mapped");
 }
 
 // ---------- Save and check ----------
@@ -292,8 +293,8 @@ async function next() {
 }
 const failureTitle = computed(() => {
   const e = failure.value;
-  if (e instanceof ApiError && refusalCode(e) === "import_busy") return "Another import of yours is running";
-  return setMapping.isError.value ? "The mapping was not saved" : "The check did not start";
+  if (e instanceof ApiError && refusalCode(e) === "import_busy") return t("imports.map.failure.busy");
+  return setMapping.isError.value ? t("imports.map.failure.notSaved") : t("imports.map.failure.checkNotStarted");
 });
 
 // ---------- Save mapping as… / Update mapping ----------
@@ -319,7 +320,7 @@ async function submitSave() {
   saveErrors.value = {};
   const name = saveName.value.trim();
   if (!name) {
-    saveErrors.value = { name: "Enter a name." };
+    saveErrors.value = { name: t("imports.map.save.nameMissing") };
     return;
   }
   const definition = toDefinition(
@@ -334,15 +335,15 @@ async function submitSave() {
         : await createSaved.mutateAsync({ name, description, classKey: form.value.classKey, definition });
     savedId.value = m.id;
     appliedNotice.value = undefined;
-    savedMessage.value = dialog.value === "update" ? `Mapping “${m.name}” updated.` : `Mapping saved as “${m.name}”.`;
+    savedMessage.value = dialog.value === "update" ? t("imports.map.save.updated", { name: m.name }) : t("imports.map.save.savedAs", { name: m.name });
     dialog.value = null;
   } catch (e) {
     if (e instanceof ApiError) {
       const code = refusalCode(e);
-      if (code === "duplicate_name") return void (saveErrors.value = { name: "A mapping with this name already exists for this class. Choose another name." });
+      if (code === "duplicate_name") return void (saveErrors.value = { name: t("imports.map.save.duplicateName") });
       if (code === "VERSION_CONFLICT") {
         return void (saveErrors.value = {
-          other: new Error("Someone else changed this mapping after you loaded it. Choose it again under Saved mapping, then save your changes."),
+          other: new Error(t("imports.map.save.versionConflict")),
         });
       }
       if (e.status === 400 && e.details.length) {
@@ -362,23 +363,24 @@ async function submitSave() {
 const loading = computed(() => classesQ.isPending.value || typesQ.isPending.value || rulesQ.isPending.value);
 const loadError = computed(() => classesQ.error.value ?? typesQ.error.value ?? rulesQ.error.value ?? attributesQ.error.value);
 const editable = computed(() => props.job.status === "ready" || props.job.status === "validated");
+const appliedAround = computed(() => tAround("imports.map.appliedByHeaders", "name"));
 </script>
 
 <template>
   <section class="panel" aria-labelledby="step-heading">
-    <div class="panel-header"><h2 id="step-heading" tabindex="-1">Map columns</h2></div>
+    <div class="panel-header"><h2 id="step-heading" tabindex="-1">{{ t("imports.map.title") }}</h2></div>
     <div class="panel-body">
       <div v-if="job.status === 'ready' && job.error?.code === 'mapping_invalid'" class="alert alert-error" role="alert">
-        <strong>The mapping no longer fits the data model.</strong> {{ job.error.message }} Check the mapping and start the check again.
+        <strong>{{ t("imports.map.invalid.title") }}</strong> {{ job.error.message }} {{ t("imports.map.invalid.body") }}
       </div>
       <p v-if="job.status === 'validated'" class="alert" role="status">
-        This file was already checked with the mapping below. Saving the mapping again discards that result and checks the file again.
+        {{ t("imports.map.alreadyChecked") }}
       </p>
 
-      <LoadingState v-if="loading" label="Loading classes…" />
+      <LoadingState v-if="loading" :label="t('imports.map.loadingClasses')" />
       <ErrorAlert v-else-if="loadError" :error="loadError" :on-retry="() => { classesQ.refetch(); typesQ.refetch(); rulesQ.refetch(); }" />
       <p v-else-if="importable.length === 0" class="alert" role="status">
-        You cannot create or edit CIs in any class, so there is nothing to import into.
+        {{ t("imports.map.noClass") }}
       </p>
 
       <form v-else id="import-mapping-form" novalidate @submit.prevent="next">
@@ -391,12 +393,16 @@ const editable = computed(() => props.job.status === "ready" || props.job.status
           aria-labelledby="import-problems-title"
         >
           <strong id="import-problems-title">
-            {{ problems.length === 1 ? "1 problem in the mapping" : `${problems.length} problems in the mapping` }}
+            {{ t("imports.map.problems", { n: problems.length }) }}
           </strong>
           <ul class="error-summary">
             <li v-for="(p, n) in problems" :key="n">
               <a href="#" @click.prevent="focusProblem(p)">
-                <template v-if="p.column !== undefined">Column {{ p.column + 1 }} ({{ header(p.column) }}): </template>{{ p.message }}
+                {{
+                  p.column !== undefined
+                    ? t("imports.map.problemAt", { column: formatNumber(p.column + 1), header: header(p.column), message: p.message })
+                    : p.message
+                }}
               </a>
             </li>
           </ul>
@@ -404,32 +410,32 @@ const editable = computed(() => props.job.status === "ready" || props.job.status
 
         <div class="import-mapping-settings">
           <div class="field">
-            <label for="import-class">Target class</label>
+            <label for="import-class">{{ t("imports.map.targetClass") }}</label>
             <select id="import-class" v-model="form.classKey" required :disabled="!editable || busy" @change="onClassChange">
-              <option value="" disabled>Choose a class…</option>
+              <option value="" disabled>{{ t("imports.template.choose") }}</option>
               <option v-for="c in importable" :key="c.id" :value="c.key">{{ c.name }}</option>
             </select>
             <span v-if="cls" class="hint"><ClassBadge :icon="cls.icon" :color="cls.color" :name="cls.name" /></span>
           </div>
 
           <div v-if="cls" class="field">
-            <label for="import-saved">Saved mapping</label>
+            <label for="import-saved">{{ t("imports.map.savedMapping") }}</label>
             <select
               id="import-saved"
               :value="savedId"
               :disabled="!editable || busy || saved.isPending.value"
               @change="onSavedChange(($event.target as HTMLSelectElement).value)"
             >
-              <option value="">None</option>
+              <option value="">{{ t("imports.map.savedNone") }}</option>
               <option v-for="m in saved.data.value?.data ?? []" :key="m.id" :value="m.id">{{ m.name }}</option>
             </select>
             <span v-if="savedMapping?.description" class="hint">{{ savedMapping.description }}</span>
-            <span v-else-if="saved.isError.value" class="hint error">The saved mappings could not be loaded.</span>
+            <span v-else-if="saved.isError.value" class="hint error">{{ t("imports.map.savedFailed") }}</span>
           </div>
 
           <template v-if="cls">
             <fieldset id="import-mode" class="field" tabindex="-1">
-              <legend>Mode</legend>
+              <legend>{{ t("imports.map.mode") }}</legend>
               <label v-for="m in MODES" :key="m.value" class="checkbox-row">
                 <input v-model="form.mode" type="radio" name="import-mode" :value="m.value" :disabled="!editable || busy" />
                 {{ m.label }}
@@ -437,7 +443,7 @@ const editable = computed(() => props.job.status === "ready" || props.job.status
             </fieldset>
 
             <div class="field">
-              <label for="import-key">Match existing CIs by<span v-if="form.mode !== 'create_only'" aria-hidden="true"> *</span></label>
+              <label for="import-key">{{ t("imports.map.key") }}<span v-if="form.mode !== 'create_only'" aria-hidden="true"> *</span></label>
               <select
                 id="import-key"
                 v-model="form.keyField"
@@ -445,60 +451,59 @@ const editable = computed(() => props.job.status === "ready" || props.job.status
                 :disabled="!editable || busy"
                 aria-describedby="import-key-help"
               >
-                <option value="">{{ form.mode === "create_only" ? "Not needed" : "Choose…" }}</option>
-                <option value="ident">Ident</option>
+                <option value="">{{ form.mode === "create_only" ? t("imports.map.key.notNeeded") : t("imports.map.choose") }}</option>
+                <option value="ident">{{ t("imports.map.ident") }}</option>
                 <option v-for="a in keyChoices" :key="a.id" :value="`attributes.${a.key}`">{{ a.label }}</option>
               </select>
               <span id="import-key-help" class="hint">
-                A row updates the CI whose value is equal (ignoring case and surrounding spaces). Rows with no match create a CI.
-                A value that matches more than one CI is an error.
+                {{ t("imports.map.key.hint") }}
               </span>
             </div>
 
             <fieldset class="field">
-              <legend>Empty cells</legend>
+              <legend>{{ t("imports.map.emptyCells") }}</legend>
               <label class="checkbox-row">
                 <input v-model="form.emptyCells" type="radio" name="import-empty" value="ignore" :disabled="!editable || busy" />
-                Leave the existing value unchanged
+                {{ t("imports.map.emptyCells.ignore") }}
               </label>
               <label class="checkbox-row">
                 <input v-model="form.emptyCells" type="radio" name="import-empty" value="clear" :disabled="!editable || busy" />
-                Clear the existing value
+                {{ t("imports.map.emptyCells.clear") }}
               </label>
             </fieldset>
 
             <details class="import-mapping-options">
-              <summary>Value options</summary>
+              <summary>{{ t("imports.map.valueOptions") }}</summary>
               <div class="import-file-options">
                 <div class="field">
-                  <label for="import-decimalSeparator">Decimal separator</label>
+                  <label for="import-decimalSeparator">{{ t("imports.map.decimalSeparator") }}</label>
                   <select id="import-decimalSeparator" v-model="form.decimalSeparator" :disabled="!editable || busy">
-                    <option value=".">Point ( . )</option>
-                    <option value=",">Comma ( , )</option>
+                    <option value=".">{{ t("imports.map.decimalPoint") }}</option>
+                    <option value=",">{{ t("imports.map.decimalComma") }}</option>
                   </select>
                 </div>
                 <div class="field">
-                  <label for="import-dateFormat">Date format</label>
+                  <label for="import-dateFormat">{{ t("imports.map.dateFormat") }}</label>
                   <select id="import-dateFormat" v-model="form.dateFormat" :disabled="!editable || busy">
                     <option v-for="f in DATE_FORMATS" :key="f" :value="f">{{ f }}</option>
                   </select>
                 </div>
                 <div class="field">
-                  <label for="import-timeZone">Time zone for times without an offset</label>
+                  <label for="import-timeZone">{{ t("imports.map.timeZoneDefault") }}</label>
                   <input id="import-timeZone" v-model.trim="form.timeZone" list="import-time-zones" :disabled="!editable || busy" />
                 </div>
                 <div class="field">
-                  <label for="import-listSeparator">Several values separated by</label>
+                  <label for="import-listSeparator">{{ t("imports.map.listSeparator") }}</label>
                   <input id="import-listSeparator" v-model="form.listSeparator" maxlength="1" size="2" :disabled="!editable || busy" />
                 </div>
                 <div class="field">
                   <label class="checkbox-row">
                     <input v-model="form.trim" type="checkbox" :disabled="!editable || busy" />
-                    Trim spaces around text values
+                    {{ t("imports.map.trim") }}
                   </label>
                 </div>
               </div>
-              <p class="muted">XLSX date cells are read as dates and need no format.</p>
+              <p class="muted">{{ t("imports.map.xlsxDates") }}</p>
             </details>
             <datalist id="import-time-zones">
               <option v-for="z in timeZones" :key="z" :value="z" />
@@ -507,39 +512,39 @@ const editable = computed(() => props.job.status === "ready" || props.job.status
         </div>
 
         <p v-if="appliedNotice" class="alert alert-success" role="status">
-          Mapping <em>{{ appliedNotice }}</em> applied because the column names match.
+          {{ appliedAround[0] }}<em>{{ appliedNotice }}</em>{{ appliedAround[1] }}
         </p>
         <p v-else-if="fromJobNotice" class="alert" role="status">
-          The mapping of the previous upload was applied: columns with the same names keep their targets.
+          {{ t("imports.map.fromJob") }}
         </p>
         <p v-if="savedMessage" class="alert alert-success" role="status">{{ savedMessage }}</p>
         <ErrorAlert
           v-if="suggestion.isError.value && suggestArgs"
           :error="suggestion.error.value"
-          title="The columns could not be matched automatically"
+          :title="t('imports.map.suggestFailed')"
           :on-retry="() => suggestion.refetch()"
         />
 
-        <LoadingState v-if="suggesting" label="Matching the file's columns…" />
-        <LoadingState v-else-if="cls && !groups" label="Loading the class's attributes…" />
+        <LoadingState v-if="suggesting" :label="t('imports.map.suggesting')" />
+        <LoadingState v-else-if="cls && !groups" :label="t('imports.map.loadingAttributes')" />
         <div v-else-if="cls && groups" class="table-wrap import-mapping">
           <table id="import-mapping-table" class="data" tabindex="-1">
-            <caption>{{ job.columns.length }} columns in the file</caption>
+            <caption>{{ t("imports.map.caption", { n: job.columns.length }) }}</caption>
             <thead>
               <tr>
-                <th scope="col">File column</th>
-                <th scope="col">Maps to</th>
-                <th scope="col">Options</th>
-                <th scope="col">Status</th>
+                <th scope="col">{{ t("imports.map.col.file") }}</th>
+                <th scope="col">{{ t("imports.map.col.target") }}</th>
+                <th scope="col">{{ t("imports.map.col.options") }}</th>
+                <th scope="col">{{ t("imports.col.status") }}</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="(col, i) in job.columns" :key="col.index" :class="{ 'has-error': rowProblems.has(i) }">
-                <td data-label="File column">
+                <td :data-label="t('imports.map.col.file')">
                   <strong :id="`import-col-${i}`">{{ col.header }}</strong>
-                  <div class="muted import-samples">{{ col.samples.join(" · ") || "(no values)" }}</div>
+                  <div class="muted import-samples">{{ col.samples.join(" · ") || t("imports.map.noValues") }}</div>
                 </td>
-                <td data-label="Maps to">
+                <td :data-label="t('imports.map.col.target')">
                   <select
                     :id="`import-map-${i}`"
                     v-model="form.columns[i]!.target"
@@ -549,18 +554,18 @@ const editable = computed(() => props.job.status === "ready" || props.job.status
                     :disabled="!editable || busy"
                     @change="clearColumnProblems(i)"
                   >
-                    <option value="ignore">Do not import</option>
-                    <optgroup label="Core fields">
+                    <option value="ignore">{{ t("imports.map.ignore") }}</option>
+                    <optgroup :label="t('imports.map.group.core')">
                       <option v-for="o in groups.core" :key="o.value" :value="o.value">{{ o.label }}</option>
                     </optgroup>
-                    <optgroup v-if="groups.attributes.length" label="Attributes">
+                    <optgroup v-if="groups.attributes.length" :label="t('imports.map.group.attributes')">
                       <option v-for="o in groups.attributes" :key="o.value" :value="o.value">
-                        {{ o.label }}{{ o.attribute?.isRequired ? " *" : "" }}{{ o.definedBy ? ` (from ${o.definedBy})` : "" }}
+                        {{ o.label }}{{ o.attribute?.isRequired ? " *" : "" }}{{ o.definedBy ? ` ${t("imports.map.definedBy", { class: o.definedBy })}` : "" }}
                       </option>
                     </optgroup>
-                    <optgroup v-if="groups.relationships.length" label="Relationships">
+                    <optgroup v-if="groups.relationships.length" :label="t('imports.map.group.relationships')">
                       <option v-for="o in groups.relationships" :key="o.value" :value="o.value">
-                        {{ o.label }} ({{ o.direction === "outgoing" ? "this CI →" : "→ this CI" }})
+                        {{ o.label }} ({{ o.direction === "outgoing" ? t("imports.map.dir.outgoing") : t("imports.map.dir.incoming") }})
                       </option>
                     </optgroup>
                   </select>
@@ -568,41 +573,41 @@ const editable = computed(() => props.job.status === "ready" || props.job.status
                     {{ rowProblems.get(i)!.join(" ") }}
                   </div>
                 </td>
-                <td data-label="Options" class="import-col-options">
+                <td :data-label="t('imports.map.col.options')" class="import-col-options">
                   <template v-if="needsMatch(option(i))">
-                    <label :for="`import-match-${i}`">Find the other CI by</label>
+                    <label :for="`import-match-${i}`">{{ t("imports.map.matchBy") }}</label>
                     <select :id="`import-match-${i}`" v-model="form.columns[i]!.matchBy" :disabled="!editable || busy">
-                      <option value="ident">Ident</option>
-                      <option value="label">Label</option>
-                      <option value="attribute">An attribute</option>
+                      <option value="ident">{{ t("imports.map.ident") }}</option>
+                      <option value="label">{{ t("imports.map.matchBy.label") }}</option>
+                      <option value="attribute">{{ t("imports.map.matchBy.attribute") }}</option>
                     </select>
                     <template v-if="form.columns[i]!.matchBy === 'attribute'">
-                      <label :for="`import-match-attr-${i}`">Attribute</label>
+                      <label :for="`import-match-attr-${i}`">{{ t("imports.map.matchAttribute") }}</label>
                       <select :id="`import-match-attr-${i}`" v-model="form.columns[i]!.matchAttribute" :disabled="!editable || busy">
-                        <option value="">Choose…</option>
+                        <option value="">{{ t("imports.map.choose") }}</option>
                         <option v-for="a in matchAttributes(option(i))" :key="a.key" :value="a.key">{{ a.label }}</option>
                       </select>
                     </template>
-                    <span v-if="option(i)?.type" class="muted">Several values separated by “{{ form.listSeparator }}”</span>
+                    <span v-if="option(i)?.type" class="muted">{{ t("imports.map.listSeparatorHint", { separator: form.listSeparator }) }}</span>
                   </template>
-                  <span v-else-if="option(i)?.attribute?.dataType === 'lookup'" class="muted">Values are the name or key of a list value</span>
+                  <span v-else-if="option(i)?.attribute?.dataType === 'lookup'" class="muted">{{ t("imports.map.lookupHint") }}</span>
                   <template v-else-if="option(i)?.attribute?.dataType === 'number'">
-                    <label :for="`import-dec-${i}`">Decimal separator</label>
+                    <label :for="`import-dec-${i}`">{{ t("imports.map.decimalSeparator") }}</label>
                     <select :id="`import-dec-${i}`" v-model="form.columns[i]!.decimalSeparator" :disabled="!editable || busy">
-                      <option value="">As set above ({{ form.decimalSeparator }})</option>
-                      <option value=".">Point ( . )</option>
-                      <option value=",">Comma ( , )</option>
+                      <option value="">{{ t("imports.map.asAboveValue", { value: form.decimalSeparator }) }}</option>
+                      <option value=".">{{ t("imports.map.decimalPoint") }}</option>
+                      <option value=",">{{ t("imports.map.decimalComma") }}</option>
                     </select>
                   </template>
                   <template v-else-if="option(i)?.attribute?.dataType === 'date'">
-                    <label :for="`import-date-${i}`">Date format</label>
+                    <label :for="`import-date-${i}`">{{ t("imports.map.dateFormat") }}</label>
                     <select :id="`import-date-${i}`" v-model="form.columns[i]!.dateFormat" :disabled="!editable || busy">
-                      <option value="">As set above ({{ form.dateFormat }})</option>
+                      <option value="">{{ t("imports.map.asAboveValue", { value: form.dateFormat }) }}</option>
                       <option v-for="f in DATE_FORMATS" :key="f" :value="f">{{ f }}</option>
                     </select>
                   </template>
                   <template v-else-if="option(i)?.attribute?.dataType === 'datetime'">
-                    <label :for="`import-tz-${i}`">Time zone</label>
+                    <label :for="`import-tz-${i}`">{{ t("imports.map.timeZone") }}</label>
                     <input
                       :id="`import-tz-${i}`"
                       v-model.trim="form.columns[i]!.timeZone"
@@ -612,16 +617,16 @@ const editable = computed(() => props.job.status === "ready" || props.job.status
                     />
                   </template>
                   <template v-if="form.columns[i]!.target !== 'ignore'">
-                    <label :for="`import-empty-${i}`">Empty cells</label>
+                    <label :for="`import-empty-${i}`">{{ t("imports.map.emptyCells") }}</label>
                     <select :id="`import-empty-${i}`" v-model="form.columns[i]!.emptyCells" :disabled="!editable || busy">
-                      <option value="">As set above</option>
-                      <option value="ignore">Leave unchanged</option>
-                      <option value="clear">Clear the value</option>
+                      <option value="">{{ t("imports.map.asAbove") }}</option>
+                      <option value="ignore">{{ t("imports.map.emptyCells.leave") }}</option>
+                      <option value="clear">{{ t("imports.map.emptyCells.clearValue") }}</option>
                     </select>
                   </template>
                   <span v-if="form.columns[i]!.target === 'ignore'" class="muted">–</span>
                 </td>
-                <td data-label="Status">
+                <td :data-label="t('imports.col.status')">
                   <span :class="rowProblems.has(i) ? 'status-error' : undefined">
                     <Icon :name="rowProblems.has(i) ? 'circle-alert' : form.columns[i]!.target === 'ignore' ? 'circle' : 'check'" /> {{ status(i) }}
                   </span>
@@ -635,15 +640,15 @@ const editable = computed(() => props.job.status === "ready" || props.job.status
 
         <div class="form-footer">
           <button type="submit" class="btn btn-primary" :disabled="!cls || !groups || !editable || busy">
-            {{ setMapping.isPending.value ? "Saving the mapping…" : startDryRun.isPending.value ? "Starting the check…" : "Next: Check file" }}
+            {{ setMapping.isPending.value ? t("imports.map.savingMapping") : startDryRun.isPending.value ? t("imports.map.startingCheck") : t("imports.map.next") }}
           </button>
           <button v-if="cls && groups" type="button" class="btn" :disabled="busy || saving" @click="openSave('new')">
-            {{ savedMapping ? "Save as new…" : "Save mapping as…" }}
+            {{ savedMapping ? t("imports.map.saveAsNew") : t("imports.map.saveAs") }}
           </button>
           <button v-if="canUpdateSaved" type="button" class="btn" :disabled="busy || saving" @click="openSave('update')">
-            Update mapping…
+            {{ t("imports.map.update") }}
           </button>
-          <span class="muted">Nothing is saved to the inventory until the last step.</span>
+          <span class="muted">{{ t("imports.map.nothingSaved") }}</span>
         </div>
       </form>
     </div>
@@ -651,18 +656,17 @@ const editable = computed(() => props.job.status === "ready" || props.job.status
 
   <FormDialog
     :open="!!dialog"
-    :title="dialog === 'update' ? `Update mapping “${savedMapping?.name ?? ''}”` : 'Save mapping as'"
-    :submit-label="dialog === 'update' ? 'Update mapping' : 'Save mapping'"
+    :title="dialog === 'update' ? t('imports.map.dialog.updateTitle', { name: savedMapping?.name ?? '' }) : t('imports.map.dialog.saveTitle')"
+    :submit-label="dialog === 'update' ? t('imports.map.dialog.updateSubmit') : t('imports.map.dialog.saveSubmit')"
     :busy="saving"
     @cancel="dialog = null"
     @submit="submitSave"
   >
     <p class="muted">
-      Everyone who may import into {{ cls?.name ?? "this class" }} can use this mapping. Files with the same column names
-      get it applied automatically.
+      {{ t("imports.map.dialog.body", { class: cls?.name ?? t("imports.map.dialog.thisClass") }) }}
     </p>
     <div class="field">
-      <label for="import-save-name">Name</label>
+      <label for="import-save-name">{{ t("imports.map.dialog.name") }}</label>
       <input
         id="import-save-name"
         v-model="saveName"
@@ -674,7 +678,7 @@ const editable = computed(() => props.job.status === "ready" || props.job.status
       <span v-if="saveErrors.name" id="import-save-name-error" class="error">{{ saveErrors.name }}</span>
     </div>
     <div class="field">
-      <label for="import-save-description">Description (optional)</label>
+      <label for="import-save-description">{{ t("imports.map.dialog.description") }}</label>
       <textarea
         id="import-save-description"
         v-model="saveDescription"
@@ -685,6 +689,6 @@ const editable = computed(() => props.job.status === "ready" || props.job.status
       />
       <span v-if="saveErrors.description" id="import-save-description-error" class="error">{{ saveErrors.description }}</span>
     </div>
-    <ErrorAlert v-if="saveErrors.other" :error="saveErrors.other" title="The mapping was not saved" />
+    <ErrorAlert v-if="saveErrors.other" :error="saveErrors.other" :title="t('imports.map.failure.notSaved')" />
   </FormDialog>
 </template>

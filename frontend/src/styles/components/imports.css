@@ -1,0 +1,100 @@
+/* ---------- Bulk import wizard (9c-2) ---------- */
+
+/* The stepper (audit M1): numbered circles joined by connectors on a card under the head band. Finished steps
+   carry a check on the primary tint and a primary connector, the current step is solid, later steps are outlined.
+   The icon and the "(done)" text tell the states apart too, never colour alone (1.4.1). */
+.import-stepper {
+  margin: 0 0 var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+}
+.import-stepper ol {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: var(--fs-sm);
+}
+.import-stepper li {
+  display: flex;
+  flex: 1 1 0;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--c-text-secondary);
+}
+.import-stepper li:last-child {
+  flex: none;
+}
+/* The connector to the next step fills the room the label leaves. */
+.import-stepper li:not(:last-child)::after {
+  content: "";
+  flex: 1;
+  min-width: var(--space-4);
+  height: 2px;
+  margin-left: var(--space-1);
+  border-radius: var(--radius-full);
+  background: var(--c-border);
+}
+.import-stepper li.done::after {
+  background: var(--c-primary);
+}
+.import-stepper .label {
+  white-space: nowrap;
+}
+.import-stepper a.label {
+  color: var(--c-link);
+}
+.import-stepper .num {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid var(--c-border-control);
+  background: var(--c-surface);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  font-variant-numeric: tabular-nums;
+}
+.import-stepper li.done .num {
+  border-color: var(--c-primary);
+  background: var(--c-primary-subtle);
+  color: var(--c-primary);
+}
+.import-stepper li.current {
+  color: var(--c-text);
+  font-weight: var(--fw-semibold);
+}
+.import-stepper li.current .num {
+  border-color: var(--c-primary);
+  background: var(--c-primary);
+  color: var(--c-primary-text);
+}
+.import-stepper li.future {
+  color: var(--c-text-tertiary);
+}
+/* 1.4.10: below the narrow layout the steps wrap and drop their connectors. */
+@media (max-width: 640px) {
+  .import-stepper ol {
+    flex-wrap: wrap;
+  }
+  .import-stepper li,
+  .import-stepper li:last-child {
+    flex: none;
+  }
+  .import-stepper li::after {
+    display: none;
+  }
+}
+
+/* The head's intro on a new import, where there is no file to describe yet. */
+.import-head .record-meta:not([data-testid]) {
+  max-width: 72ch;
+}

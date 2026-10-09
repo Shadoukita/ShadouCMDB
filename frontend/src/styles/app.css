@@ -17,6 +17,7 @@
 @import "./components/services.css";
 @import "./components/admin.css";
 @import "./components/datamodel.css";
+@import "./components/imports.css";
 
 /*
  * Page and shell rules. The primitives (SHAA-1670 design document, §2.7) live in base.css and
@@ -662,40 +663,6 @@ table.data td.fill {
 }
 
 /* ---------- Bulk import ---------- */
-.import-stepper ol {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-2) var(--sp-5);
-  list-style: none;
-  margin: 0 0 var(--sp-4);
-  padding: 0;
-  font-size: var(--fs-sm);
-}
-.import-stepper li {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  color: var(--c-text-muted);
-}
-.import-stepper li.current {
-  color: var(--c-text);
-  font-weight: var(--fw-semibold);
-}
-.import-stepper .num {
-  display: inline-grid;
-  flex: none;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  border: 1px solid var(--c-border-strong);
-  font-size: var(--fs-xs);
-}
-.import-stepper li.current .num {
-  background: var(--c-primary);
-  border-color: var(--c-primary);
-  color: var(--c-primary-text);
-}
 .import-drop {
   border: 2px dashed transparent;
   border-radius: var(--radius);
