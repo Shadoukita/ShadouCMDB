@@ -203,6 +203,19 @@ async fn delegations_lend_a_principals_approvals_and_nothing_more() {
     .unwrap_err();
     assert!(unique.to_string().contains("workflow_approval_decisions_principal_uq"), "{unique}");
 
+    // nov may not view servers: a workflow on them is as unknown as one that does not exist (GH#818).
+    let (starts, ends) = window(-1, 24);
+    let scoped =
+        |key: &str| json!({ "delegateUserId": eve.1, "startsAt": starts, "endsAt": ends, "definitionKey": key });
+    let hidden = w.call(&nov.0, "POST", MINE, Some(scoped("server_lifecycle"))).await;
+    let missing = w.call(&nov.0, "POST", MINE, Some(scoped("no_such_workflow"))).await;
+    assert_eq!((hidden.0, details(&hidden.1)), (400, pairs(&[("definitionKey", "unknown")])), "{}", hidden.1);
+    assert_eq!((missing.0, details(&missing.1)), (hidden.0, details(&hidden.1)), "{}", missing.1);
+    let same = missing.1["error"]["details"].to_string().replace("no_such_workflow", "server_lifecycle");
+    assert_eq!(hidden.1["error"]["details"].to_string(), same, "only the echoed key differs");
+    let made = "SELECT count(*) FROM workflow_approval_delegations WHERE principal_id = $1";
+    assert_eq!(scalar_i64(&w, made, nov.1).await, 0);
+
     // A delegate who may not view the type never sees the request.
     delegated(&w, &p.a2.0, nov.1).await;
     let (status, v) = w.call(&nov.0, "GET", &path, None).await;

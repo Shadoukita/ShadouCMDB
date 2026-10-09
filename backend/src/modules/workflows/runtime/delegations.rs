@@ -224,15 +224,21 @@ async fn create(pool: &PgPool, ctx: &RequestContext, n: New<'_>) -> Result<Workf
         Some(_) => return Err(invalid("delegateUserId", "inactive", "The delegate's account is disabled")),
         None => return Err(invalid("delegateUserId", "unknown", "No such user")),
     };
+    // A workflow on a type the caller may not view is answered as unknown, so
+    // the key cannot be probed for (GH#818).
     let definition: Option<Uuid> = match n.definition_key {
         None => None,
-        Some(key) => Some(
-            sqlx::query_scalar("SELECT id FROM cmdb.workflow_definitions WHERE lower(key) = lower($1)")
-                .bind(key)
-                .fetch_optional(&mut *tx)
-                .await?
-                .ok_or_else(|| invalid("definitionKey", "unknown", format!("No workflow has the key {key}")))?,
-        ),
+        Some(key) => {
+            let found: Option<(Uuid, Uuid)> =
+                sqlx::query_as("SELECT id, class_id FROM cmdb.workflow_definitions WHERE lower(key) = lower($1)")
+                    .bind(key)
+                    .fetch_optional(&mut *tx)
+                    .await?;
+            match found {
+                Some((id, class)) if may_view(ctx, class) => Some(id),
+                _ => return Err(invalid("definitionKey", "unknown", format!("No workflow has the key {key}"))),
+            }
+        }
     };
     let now: DateTime<Utc> = sqlx::query_scalar("SELECT now()").fetch_one(&mut *tx).await?;
     if n.ends_at <= now {
