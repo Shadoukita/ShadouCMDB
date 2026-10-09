@@ -56,7 +56,7 @@ function set(i: number, patch: Partial<MappingRow>) {
       <div v-if="errors.groupMappings" class="field"><span class="error" role="alert">{{ errors.groupMappings }}</span></div>
       <p v-if="rows.length === 0" class="alert alert-warn no-margin" role="status">{{ t("idp.mappings.none") }}</p>
       <div v-else class="table-wrap">
-        <table class="data mappings">
+        <table class="data list-table mappings">
           <thead>
             <tr>
               <th scope="col">{{ t("idp.mappings.group") }}</th>

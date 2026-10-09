@@ -38,24 +38,26 @@ const NEW_LDAP = { path: "/admin/identity-providers/new", query: { kind: "ldap" 
 </script>
 
 <template>
-  <Breadcrumbs :items="adminCrumbs('identity-providers')" />
-  <div class="page-header">
-    <div class="title">
-      <h1>{{ t("admin.section.identityProviders") }}</h1>
-      <span v-if="list.data.value" class="muted count">{{ t("common.total", { n: formatNumber(rows.length) }) }}</span>
-      <span v-if="list.isFetching.value && !list.isLoading.value" class="spinner" :aria-label="t('common.refreshing')" />
+  <div class="list-head">
+    <Breadcrumbs :items="adminCrumbs('identity-providers')" />
+    <div class="page-header">
+      <div class="title">
+        <h1>{{ t("admin.section.identityProviders") }}</h1>
+        <span v-if="list.data.value" class="count mono">{{ t("common.total", { n: formatNumber(rows.length) }) }}</span>
+        <span v-if="list.isFetching.value && !list.isLoading.value" class="spinner" :aria-label="t('common.refreshing')" />
+      </div>
+      <div class="actions">
+        <RouterLink class="btn" :to="NEW_LDAP"><Icon name="plus" />{{ t("idp.newLdap") }}</RouterLink>
+        <RouterLink class="btn btn-primary" :to="NEW_OIDC"><Icon name="plus" />{{ t("idp.newOidc") }}</RouterLink>
+      </div>
     </div>
-    <div class="actions">
-      <RouterLink class="btn" :to="NEW_LDAP"><Icon name="plus" />{{ t("idp.newLdap") }}</RouterLink>
-      <RouterLink class="btn btn-primary" :to="NEW_OIDC"><Icon name="plus" />{{ t("idp.newOidc") }}</RouterLink>
-    </div>
-  </div>
-  <p class="page-intro">{{ t("idp.list.intro") }}</p>
-
-  <section class="panel explorer" :aria-label="t('admin.section.identityProviders')">
+    <p class="page-intro">{{ t("idp.list.intro") }}</p>
     <div v-if="rows.length > 0" class="toolbar">
       <p class="toolbar-hint">{{ t("idp.list.orderHint") }}</p>
     </div>
+  </div>
+
+  <section class="panel explorer" :aria-label="t('admin.section.identityProviders')">
     <div v-if="list.isError.value" class="panel-body">
       <ErrorAlert :error="list.error.value" :on-retry="() => list.refetch()" />
     </div>
@@ -70,7 +72,7 @@ const NEW_LDAP = { path: "/admin/identity-providers/new", query: { kind: "ldap" 
 
     <template v-if="rows.length > 0 && !list.isError.value">
       <div class="table-wrap table-scroll">
-        <table class="data" aria-describedby="idp-keys">
+        <table class="data list-table" aria-describedby="idp-keys">
           <thead>
             <tr>
               <th scope="col" class="num">{{ t("idp.col.order") }}</th>
@@ -88,7 +90,7 @@ const NEW_LDAP = { path: "/admin/identity-providers/new", query: { kind: "ldap" 
             <tr v-for="p in rows" :key="p.id" :data-id="p.id" :class="{ disabled: !p.isEnabled }">
               <td class="num">{{ p.sortOrder }}</td>
               <td class="wrap">
-                <RouterLink :to="`/admin/identity-providers/${p.id}`" dir="auto">{{ p.name }}</RouterLink>
+                <RouterLink class="list-name" :to="`/admin/identity-providers/${p.id}`" dir="auto">{{ p.name }}</RouterLink>
                 <span v-if="warning(p)" class="badge warn spaced">{{ warning(p) }}</span>
                 <span v-if="p.oidc?.mfaAssurance === 'trustProvider'" class="badge warn spaced" :title="t('idp.mfaNotVerifiedTitle')" data-testid="mfa-not-verified">
                   {{ t("idp.mfaNotVerified") }}
@@ -96,9 +98,9 @@ const NEW_LDAP = { path: "/admin/identity-providers/new", query: { kind: "ldap" 
               </td>
               <td>{{ providerKindLabel(p.kind) }}</td>
               <td>
-                <span class="status">
-                  <span :class="['status-dot', p.isEnabled ? 'ok' : 'off']" aria-hidden="true" />{{ p.isEnabled ? t("idp.enabled") : t("common.disabled") }}
-                </span>
+                <span :class="['badge', p.isEnabled ? 'ok' : 'off']"
+                  ><span class="status-dot" aria-hidden="true" />{{ p.isEnabled ? t("idp.enabled") : t("common.disabled") }}</span
+                >
               </td>
               <td class="mono" :title="endpoint(p)">{{ endpoint(p) }}</td>
               <td class="num" :title="p.groupMappings.map((m) => `${m.group} → ${m.profileName}`).join('\n')">{{ formatNumber(p.groupMappings.length) }}</td>
