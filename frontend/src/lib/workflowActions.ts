@@ -149,6 +149,9 @@ export const triggerHasTransition = (tr: ActionTrigger) => tr !== "instance_canc
 export const isApprovalTrigger = (tr: ActionTrigger) => tr.startsWith("approval_");
 /** Inbox and e-mail tell people; a webhook goes to its endpoint. */
 export const notifiesPeople = (k: ActionKind) => k !== "webhook";
+/** The stored actions "who would be notified" can preview: webhooks reach an endpoint, never people (GH#852). */
+export const previewableActions = (list: { key: string; name: string; kind: ActionKind }[]) =>
+  list.filter((a) => notifiesPeople(a.kind)).map((a) => ({ key: a.key, name: a.name }));
 
 /** The recipient sources an action of this kind takes; a fixed address has no inbox. */
 export function sourcesFor(kind: ActionKind): RecipientSource[] {

@@ -24,6 +24,7 @@ import {
   generalProblems,
   newAction,
   notifiesPeople,
+  previewableActions,
   recipientLabel,
   transitionChoices,
   type ActionProblem,
@@ -220,7 +221,7 @@ function target(a: DraftAction): string {
   const first = recipientLabel(a.recipients[0]);
   return a.recipients.length === 1 ? first : t("wfActions.andMore", { first, n: a.recipients.length - 1 });
 }
-const previewable = computed(() => (actionsQ.data.value?.actions ?? []).map((a) => ({ key: a.key, name: a.name })));
+const previewable = computed(() => previewableActions(actionsQ.data.value?.actions ?? []));
 const loading = computed(() => actionsQ.isLoading.value || draft.isLoading.value || current.isLoading.value);
 </script>
 

@@ -13,6 +13,7 @@ import {
   modesFor,
   newAction,
   participantsFor,
+  previewableActions,
   problemsOfAction,
   recipientIdentity,
   setAttributeFromApi,
@@ -226,5 +227,20 @@ describe("notification actions", () => {
         { key: "gone", name: "gone", orphan: true },
       ],
     );
+  });
+});
+
+describe("previewableActions (GH#852)", () => {
+  test("leaves out webhooks: they reach an endpoint, never people", () => {
+    const list = [
+      { key: "tell", name: "Tell", kind: "inbox" as const },
+      { key: "hook", name: "Hook", kind: "webhook" as const },
+      { key: "mail", name: "Mail", kind: "email" as const },
+    ];
+    assert.deepEqual(previewableActions(list), [
+      { key: "tell", name: "Tell" },
+      { key: "mail", name: "Mail" },
+    ]);
+    assert.deepEqual(previewableActions([list[1]]), []);
   });
 });

@@ -23,7 +23,9 @@ const props = defineProps<{
   selectedKey?: string;
 }>();
 
-const key = ref(props.selectedKey ?? props.actions[0]?.key ?? "");
+const key = ref(
+  props.selectedKey && props.actions.some((a) => a.key === props.selectedKey) ? props.selectedKey : (props.actions[0]?.key ?? ""),
+);
 watch(
   () => [props.actions, props.selectedKey] as const,
   ([list, sel]) => {
