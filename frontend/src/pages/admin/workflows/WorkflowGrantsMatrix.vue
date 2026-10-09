@@ -166,7 +166,7 @@ const ungranted = computed(() => rows.value.filter((r) => !PSEUDO_GRANTS.include
     </EmptyState>
     <template v-if="!loading && grants.data.value">
       <div v-if="columns.length === 0" class="panel-body muted">No permission profiles to grant.</div>
-      <div v-else class="table-wrap">
+      <div v-else class="table-wrap" role="region" tabindex="0" aria-label="Grant matrix">
         <table class="data wf-grants" data-testid="wf-grants">
           <thead>
             <tr>
