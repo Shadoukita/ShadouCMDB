@@ -498,6 +498,7 @@ export const en = {
   "event.action.workflow.force": "Workflow state forced",
   "ciState.validUntil": "Valid until {date}",
   "auth.signIn.title": "Sign in",
+  "auth.signIn.lead": "Sign in with your account to continue.",
   "auth.signIn.sessionEnded": "Your session has ended. Sign in again to continue where you left off.",
   "auth.signIn.ssoFailedTitle": "Single sign-on did not work.",
   "auth.signIn.failed": "Could not sign in",

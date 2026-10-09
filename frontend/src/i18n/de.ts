@@ -506,6 +506,7 @@ export const de: { [K in MessageKey]: string } = {
   "event.action.workflow.force": "Workflow-Status erzwungen",
   "ciState.validUntil": "Gültig bis {date}",
   "auth.signIn.title": "Anmelden",
+  "auth.signIn.lead": "Melden Sie sich mit Ihrem Konto an, um fortzufahren.",
   "auth.signIn.sessionEnded": "Ihre Sitzung ist abgelaufen. Melden Sie sich erneut an, um dort weiterzumachen, wo Sie aufgehört haben.",
   "auth.signIn.ssoFailedTitle": "Die einmalige Anmeldung (Single Sign-on) hat nicht funktioniert.",
   "auth.signIn.failed": "Anmeldung nicht möglich",

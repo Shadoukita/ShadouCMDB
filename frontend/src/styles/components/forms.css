@@ -24,6 +24,10 @@ textarea {
   font-size: var(--fs-md);
   min-width: 0;
 }
+/* Identifiers typed or shown in a control (codes, secrets, URLs): `.mono` alone loses to `input[type]` above. */
+:is(input, textarea).mono {
+  font-family: var(--font-mono);
+}
 :is(input, select, textarea):hover:not(:disabled, [readonly]) {
   border-color: var(--c-border-control-hover);
 }
