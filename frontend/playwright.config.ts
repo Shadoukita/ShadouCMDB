@@ -20,8 +20,9 @@ export default defineConfig({
   workers: 1,
   retries: 0,
   forbidOnly: !!process.env.CI,
-  // In CI the HTML report (with traces of failed tests) is uploaded as an artifact.
-  reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : [["list"]],
+  // In CI the HTML report (with traces of failed tests) is uploaded as an artifact. The github reporter also puts
+  // each failure on the check run as an annotation, readable through the checks API without access to job logs.
+  reporter: process.env.CI ? [["list"], ["github"], ["html", { open: "never" }]] : [["list"]],
   use: {
     baseURL: baseURL ?? "http://localhost:5199",
     storageState: STORAGE_STATE,
