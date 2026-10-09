@@ -7,10 +7,13 @@ import { classIdByName, createCi, expect, snap, test } from "./support";
 // its Impact tab, the create and edit pages, and the layout editor. With the test-only German locale forced, none of
 // their English texts may show, neither as text nor as an accessible name or tooltip.
 
+/** Names that come from the server, in English in the demo data: the template's "Notes" attribute, the built-in class. */
+const SERVER_NAMES = new Set(["Notes", "Business service"]);
 /** This slice's English texts that read differently in German (messages with parameters are checked by name). */
 const ENGLISH = (Object.keys(en) as MessageKey[])
   .filter((k) => /^(impact|record|form|layoutEditor|clone)\./.test(k) && en[k] !== de[k] && !en[k].includes("{") && en[k].length >= 5)
-  .map((k) => en[k]);
+  .map((k) => en[k])
+  .filter((s) => !SERVER_NAMES.has(s));
 
 async function forceGerman(page: Page, opts: { theme?: "dark"; density?: "comfortable" } = {}) {
   await page.addInitScript((o) => {
@@ -55,7 +58,7 @@ test("the CI record and its Impact tab are German", async ({ page }) => {
   await expectNoEnglish(page);
 
   await page.goto(`/cis/${ci.id}/impact`);
-  await expect(page.getByLabel("Richtung")).toBeVisible();
+  await expect(page.getByRole("radiogroup", { name: "Richtung" })).toBeVisible();
   await expect(page.locator(".impact-summary, .empty-state").first()).toBeVisible();
   await expectNoEnglish(page);
 });
