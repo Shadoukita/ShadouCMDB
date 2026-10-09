@@ -195,7 +195,7 @@ const rowMenu = (tok: ApiToken): RowMenuItem[] => [
     </EmptyState>
 
     <template v-if="rows.length > 0 && !list.isError.value">
-      <div class="table-wrap table-scroll">
+      <div class="table-wrap table-scroll" role="region" tabindex="0" :aria-label="t('admin.tokens.table')">
         <table :class="['data', 'list-table', 'token-table', { loading: list.isPlaceholderData.value }]" aria-describedby="tokens-keys">
           <thead>
             <tr>

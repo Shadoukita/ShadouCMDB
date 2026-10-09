@@ -361,7 +361,7 @@ pub struct WorkflowActionsConfig {
     pub poll: Duration,
     /// `WORKFLOW_ACTIONS_MAX_ATTEMPTS` (1 to 20): attempts before a delivery is dead.
     pub max_attempts: i16,
-    /// `WORKFLOW_ACTIONS_MAX_RECIPIENTS` (1 to 5000): recipients of one run, after expansion.
+    /// `WORKFLOW_ACTIONS_MAX_RECIPIENTS` (1 to 5000): users one run notifies, after expansion.
     pub max_recipients: usize,
     /// `WORKFLOW_ACTIONS_QUEUE_MAX` (10 to 10000000): pending runs and deliveries before new runs are suppressed.
     pub queue_max: i64,

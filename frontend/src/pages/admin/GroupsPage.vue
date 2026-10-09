@@ -103,7 +103,7 @@ function clearSearch() {
     </EmptyState>
 
     <template v-if="rows.length > 0 && !list.isError.value">
-      <div class="table-wrap table-scroll">
+      <div class="table-wrap table-scroll" role="region" tabindex="0" :aria-label="t('groups.table')">
         <table :class="['data', 'list-table', { loading: list.isPlaceholderData.value }]" aria-describedby="groups-keys">
           <thead>
             <tr>

@@ -145,6 +145,23 @@ test("users and permission profiles", async ({ page }, testInfo) => {
   await checkA11y(page, testInfo, "profile-edit");
 });
 
+test("the class permission matrix scrolls from the keyboard (WCAG 2.1.1)", async ({ page }, testInfo) => {
+  // A short window makes the matrix scroll with the few classes a fresh database has. A read-only
+  // profile has no enabled checkbox in it, so only the region itself can take focus.
+  await page.setViewportSize({ width: 1280, height: 420 });
+  await page.goto("/admin/profiles");
+  await page.locator("table tbody tr a").first().click();
+  const matrix = page.getByRole("region", { name: "Class permissions" });
+  await expect(matrix.locator("tbody tr").first()).toBeVisible();
+  expect(await matrix.evaluate((el) => el.scrollHeight > el.clientHeight), "the matrix scrolls").toBe(true);
+  await checkA11y(page, testInfo, "profile-edit-scrolling");
+
+  await matrix.focus();
+  await expect(matrix).toBeFocused();
+  await page.keyboard.press("PageDown");
+  await expect.poll(() => matrix.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+});
+
 test("dismissing a toast by keyboard keeps focus in the page (WCAG 2.4.3)", async ({ page }) => {
   // Create a group and delete it again: two toasts in one page session ("Created", then "Deleted").
   // A second page.goto would reload the app and drop the first toast with it.

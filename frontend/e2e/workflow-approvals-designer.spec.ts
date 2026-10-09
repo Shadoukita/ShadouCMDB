@@ -211,6 +211,8 @@ test("the preview for one CI: who would be asked, resolved by the API", async ({
   const result = preview.getByTestId("wf-preview-result");
   await expect(result).toContainText("2 users may decide this step");
   await expect(result).toContainText("the step needs 2 approvals");
+  // The live region is in the DOM before the first run, so screen readers announce the summary (GH-850).
+  await expect(preview.getByTestId("wf-preview-status")).toContainText("2 users may decide this step");
   const users = preview.getByTestId("wf-preview-users");
   for (const m of MEMBERS) await expect(users.getByRole("row", { name: new RegExp(m) })).toContainText("Eligible");
   await expect(users.getByRole("row", { name: new RegExp(HEAD) })).toContainText("Only once overdue");

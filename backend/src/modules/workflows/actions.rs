@@ -18,6 +18,9 @@
 //! refused with `kind_unavailable` / `source_unavailable` until their slice
 //! ships, so nothing is saved that would never be delivered.
 
+pub mod deliveries;
+#[cfg(test)]
+mod deliveries_tests;
 pub mod outbox;
 #[cfg(test)]
 mod tests;
@@ -796,7 +799,8 @@ pub fn specs(actions: &[WorkflowAction]) -> Value {
 /// Transition keys of definition `id`: in any version or the draft, and in its current version.
 async fn transition_keys(conn: &mut PgConnection, id: Uuid) -> Result<(HashSet<String>, HashSet<String>), AppError> {
     let rows: Vec<(String, bool)> = sqlx::query_as(
-        "SELECT DISTINCT t.key, v.id = d.current_version_id FROM cmdb.workflow_transitions t
+        // A workflow with only a draft has no current version: `=` would be NULL there.
+        "SELECT DISTINCT t.key, v.id IS NOT DISTINCT FROM d.current_version_id FROM cmdb.workflow_transitions t
          JOIN cmdb.workflow_versions v ON v.id = t.version_id
          JOIN cmdb.workflow_definitions d ON d.id = v.definition_id
          WHERE v.definition_id = $1",
