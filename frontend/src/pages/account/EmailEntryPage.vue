@@ -29,6 +29,13 @@ const error = ref<unknown>(null);
 const local = ref<string | undefined>();
 const signOutError = ref<unknown>(null);
 
+/** "Signed in as {name} ({username})." split around both slots, so the name is set in bold and the username in mono. */
+const signedInAs = computed(() => {
+  const [before = "", rest = ""] = t("people.entry.signedInAs", { name: "\u0000", username: "\u0001" }).split("\u0000");
+  const [middle = "", after = ""] = rest.split("\u0001");
+  return [before, middle, after];
+});
+
 /** A refused address is told next to the field; anything else (a lost connection, a server error) above the form. */
 const fieldError = computed(() => local.value ?? (error.value instanceof ApiError ? emailErrorMessage(error.value.details, true) : undefined));
 const otherError = computed(() => (error.value && !fieldError.value ? error.value : null));
@@ -76,10 +83,7 @@ async function signOut() {
     <form class="bare-card" aria-labelledby="email-entry-title" novalidate data-testid="email-entry" @submit.prevent="submit">
       <div class="bare-brand"><BrandMark /></div>
       <h1 id="email-entry-title">{{ t("people.entry.title") }}</h1>
-      <p v-if="session.user">
-        {{ t("people.entry.signedInAs", { name: session.user.displayName, username: session.user.username }) }}
-      </p>
-      <p>{{ t("people.entry.intro") }}</p>
+      <p class="lead">{{ t("people.entry.intro") }}</p>
       <ErrorAlert v-if="otherError" :error="otherError" :title="t('people.entry.failed')" />
       <ErrorAlert v-if="signOutError" :error="signOutError" :title="t('account.enrol.signOutFailed')" />
       <FormField id="email-entry" :label="t('people.entry.label')" required :error="fieldError" :hint="t('people.entry.hint')">
@@ -98,7 +102,14 @@ async function signOut() {
         </template>
       </FormField>
       <button type="submit" class="btn btn-primary block" :disabled="busy">{{ busy ? t("people.entry.saving") : t("people.entry.submit") }}</button>
-      <button type="button" class="btn block" @click="signOut">{{ t("account.enrol.signOut") }}</button>
+      <div class="bare-foot">
+        <p v-if="session.user" class="hint" data-testid="email-entry-identity">
+          {{ signedInAs[0] }}<strong>{{ session.user.displayName }}</strong>{{ signedInAs[1] }}<code>{{ session.user.username }}</code>{{ signedInAs[2] }}
+        </p>
+        <p>
+          <button type="button" class="btn-link" @click="signOut">{{ t("people.entry.notYou") }}</button>
+        </p>
+      </div>
     </form>
   </main>
 </template>

@@ -1137,6 +1137,7 @@ export const en = {
   "people.entry.signedInAs": "Signed in as {name} ({username}).",
   "people.entry.intro":
     "Your account was created before e-mail addresses were required. Enter yours to continue: it links your account to your person record in the inventory.",
+  "people.entry.notYou": "Not you? Sign out",
   "people.entry.label": "E-mail address",
   "people.entry.hint": "Only an administrator can change it afterwards.",
   "people.entry.required": "Enter your e-mail address.",

@@ -1151,6 +1151,7 @@ export const de: { [K in MessageKey]: string } = {
   "people.entry.signedInAs": "Angemeldet als {name} ({username}).",
   "people.entry.intro":
     "Ihr Konto wurde angelegt, bevor E-Mail-Adressen Pflicht waren. Geben Sie Ihre ein, um fortzufahren: Sie verknüpft Ihr Konto mit Ihrem Personendatensatz im Inventar.",
+  "people.entry.notYou": "Nicht Sie? Abmelden",
   "people.entry.label": "E-Mail-Adresse",
   "people.entry.hint": "Danach kann sie nur ein Administrator ändern.",
   "people.entry.required": "Geben Sie Ihre E-Mail-Adresse ein.",
