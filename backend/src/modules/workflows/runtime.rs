@@ -33,6 +33,8 @@
 
 pub mod approval_lists;
 pub mod approvals;
+pub mod delegations;
+pub mod sweep;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -121,6 +123,7 @@ struct PinnedStep {
     name: String,
     required_approvals: i16,
     due_minutes: Option<i32>,
+    on_overdue: super::schemas::WorkflowApprovalOverdue,
     distinct_from_earlier: bool,
     exclude_actors_of: Vec<String>,
     allow_api_tokens: bool,
@@ -218,7 +221,7 @@ pub(super) async fn pinned(conn: &mut PgConnection, version_id: Uuid) -> Result<
     .await?;
     let steps = sqlx::query_as::<_, PinnedStep>(
         "SELECT s.transition_id, s.step_no, s.key, s.name, s.required_approvals,
-                (extract(epoch FROM s.due_after) / 60)::int AS due_minutes, s.distinct_from_earlier,
+                (extract(epoch FROM s.due_after) / 60)::int AS due_minutes, s.on_overdue, s.distinct_from_earlier,
                 s.exclude_actors_of, s.allow_api_tokens
          FROM cmdb.workflow_transition_approval_steps s JOIN cmdb.workflow_transitions t ON t.id = s.transition_id
          WHERE t.version_id = $1 ORDER BY s.transition_id, s.step_no",
@@ -714,6 +717,8 @@ pub(super) struct NewEvent<'a> {
     pub(super) field_changes: Option<Value>,
     /// The approval request (and step) an `approval_*` event, or the transition a final approval applied, belongs to.
     pub(super) approval: Option<(Uuid, Option<i16>)>,
+    /// The principal a delegate decided for (`approval_decision`).
+    pub(super) on_behalf_of: Option<&'a str>,
 }
 
 pub(super) async fn insert_event(
@@ -725,8 +730,9 @@ pub(super) async fn insert_event(
     sqlx::query(
         "INSERT INTO cmdb.workflow_instance_events
            (instance_id, kind, transition_key, from_state_key, to_state_key, to_version_no,
-            actor_type, actor_id, actor_name, comment, field_changes, request_id, approval_request_id, approval_step_no)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
+            actor_type, actor_id, actor_name, comment, field_changes, request_id, approval_request_id, approval_step_no,
+            on_behalf_of_name)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
     )
     .bind(e.instance)
     .bind(e.kind)
@@ -742,6 +748,7 @@ pub(super) async fn insert_event(
     .bind(&ctx.request_id)
     .bind(e.approval.map(|a| a.0))
     .bind(e.approval.and_then(|a| a.1))
+    .bind(e.on_behalf_of)
     .execute(conn)
     .await?;
     Ok(())
@@ -939,6 +946,7 @@ pub async fn start(
             comment,
             field_changes: changes,
             approval: None,
+            on_behalf_of: None,
         },
     )
     .await?;
@@ -983,7 +991,8 @@ pub async fn events(
         .await?;
     let data = sqlx::query_as::<_, WorkflowEvent>(
         "SELECT id, kind, transition_key, from_state_key, to_state_key, from_version_no, to_version_no, occurred_at,
-                actor_type, actor_name, comment, field_changes, request_id, approval_request_id, approval_step_no
+                actor_type, actor_name, comment, field_changes, request_id, approval_request_id, approval_step_no,
+                on_behalf_of_name
          FROM cmdb.workflow_instance_events WHERE instance_id = $1 ORDER BY id LIMIT $2 OFFSET $3",
     )
     .bind(id)
@@ -1417,6 +1426,7 @@ async fn transition_in(
             comment,
             field_changes: changes.clone(),
             approval: None,
+            on_behalf_of: None,
         },
     )
     .await?;
@@ -1554,6 +1564,7 @@ pub async fn cancel(
             comment: Some(reason),
             field_changes: None,
             approval: None,
+            on_behalf_of: None,
         },
     )
     .await?;
@@ -1622,6 +1633,7 @@ pub async fn force(
             comment: Some(reason),
             field_changes: changes.clone(),
             approval: None,
+            on_behalf_of: None,
         },
     )
     .await?;

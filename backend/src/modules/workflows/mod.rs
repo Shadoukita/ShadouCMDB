@@ -412,14 +412,24 @@ pub fn routes() -> Vec<Route> {
                  (own or inherited) to the Person type, and `duplicate`. A change bumps the workflow's version and \
                  is audited as an `update` with the assignments before and after, by name. The response carries the \
                  lint's warnings (`problems`). Assignments of a step that only the draft had are dropped (audited \
-                 the same way) when the draft is deleted or saved without it.",
+                 the same way) when the draft is deleted or saved without it. After the change is saved, the \
+                 active steps of the workflow's pending approval requests are resolved again from the new \
+                 assignments (up to 200 at once; the approval sweep finishes the rest), each change of a step's \
+                 approvers audited on its CI as `workflow.approval_refresh` with actor `system`. Decisions already \
+                 cast stand.",
             )
             .requires(manage)
             .session_only()
             .errors(&[ErrorCode::NotFound, ErrorCode::VersionConflict])
             .handle(
                 |api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<WorkflowApproversReplace>>| async move {
-                    Ok(Json(approvers::replace(&api.pool, &api.ctx, id, &b).await?))
+                    let out = approvers::replace(&api.pool, &api.ctx, id, &b).await?;
+                    // Committed: re-resolution never holds the definition and a CI at once (§9).
+                    if let Err(e) = runtime::sweep::after_approvers_change(&api.pool, id).await {
+                        tracing::warn!(definition = %id, error = %e, "re-resolving approval steps after an approvers \
+                            change failed; the approval sweep retries");
+                    }
+                    Ok(Json(out))
                 },
             ),
         route(Method::GET, APPROVER_PREVIEW, "previewWorkflowApprovers")
@@ -503,6 +513,10 @@ pub fn routes() -> Vec<Route> {
 const RUN_TAG: &str = "Workflow instances";
 const APPROVAL_TAG: &str = "Workflow approvals";
 const APPROVAL: &str = "/api/v1/workflow-approval-requests/{id}";
+const MY_DELEGATIONS: &str = "/api/v1/me/approval-delegations";
+const MY_DELEGATION_REVOKE: &str = "/api/v1/me/approval-delegations/{id}/revoke";
+const DELEGATIONS: &str = "/api/v1/admin/approval-delegations";
+const DELEGATION_REVOKE: &str = "/api/v1/admin/approval-delegations/{id}/revoke";
 const INSTANCES: &str = "/api/v1/workflow-instances";
 const INSTANCE: &str = "/api/v1/workflow-instances/{id}";
 
@@ -699,9 +713,10 @@ pub fn runtime_routes() -> Vec<Route> {
             .summary("List approval requests: your inbox, the ones you made or decided, or all (paginated, filterable)")
             .description(
                 "`view=actionable` (the default) is the inbox: pending requests whose active step you may decide \
-                 now, in person, by the same rules as a decision (an approver of the step, not the requester or \
-                 the requesting token's creator, not yet decided by you, and the step's separation of duties and \
-                 API token rules). `requested` and `decided` are the requests you made, and those you approved or \
+                 now, in person or for someone through a live delegation, by the same rules as a decision (an \
+                 approver of the step, not the requester or the requesting token's creator, not yet decided by or \
+                 for you, and the step's separation of duties and API token rules; for a delegation, the same \
+                 rules for the principal, who must also view the CI's type). `requested` and `decided` are the requests you made, and those you approved or \
                  rejected a step of; `all` is every request. Requests on CIs of types the caller may not view are \
                  left out of the page and of `page.total`. `requestedBy` lists one user's requests, for example to \
                  cancel the pending requests of a disabled account (`view=all&status=pending&requestedBy=…`). \
@@ -751,7 +766,17 @@ pub fn runtime_routes() -> Vec<Route> {
                  stages a field the transition does not take, the final approval is refused with 409 \
                  WORKFLOW_APPROVAL_STALE and nothing is recorded, not even the decision. Each decision is audited \
                  as `workflow.approval_decide`. 409 CONFLICT `not_pending`, `step_not_active` or \
-                 `already_decided`; 409 VERSION_CONFLICT on a stale `expectedVersion` (the request's `version`).",
+                 `already_decided`; 409 VERSION_CONFLICT on a stale `expectedVersion` (the request's `version`). \
+                 **Delegation:** a delegate decides for a principal (`onBehalfOf`, see `myEligibility.onBehalfOf`) \
+                 through a live delegation: in its window, not revoked, both accounts active, unscoped or limited \
+                 to this workflow. It lends only the principal's own eligibility, and both must view the CI's type. \
+                 Four-eyes and the step's separation of duties bind the delegate and the principal alike \
+                 (`on_behalf_of_requester` when the principal made the request). Left out, `onBehalfOf` means in \
+                 person when you qualify in person, else your only principal (400 `required` when there are \
+                 several); 403 FORBIDDEN `no_delegation` for a principal no live delegation covers. One vote per \
+                 person per step, whether cast in person or for someone (409 CONFLICT `already_decided` on \
+                 `onBehalfOf` when the principal's vote is in). The decision records the principal \
+                 (`onBehalfOfName`) and its audit row `onBehalfOf` and `delegationId`.",
             )
             .errors(&[
                 ErrorCode::WorkflowApprovalSelf,
@@ -812,6 +837,103 @@ pub fn runtime_routes() -> Vec<Route> {
             .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])
             .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
                 Ok(Json(runtime::approvals::refresh(&api.pool, &api.ctx, id).await?))
+            }),
+        route(Method::GET, MY_DELEGATIONS, "listMyApprovalDelegations")
+            .tag(APPROVAL_TAG)
+            .summary("Your approval delegations: of your approvals, and to you (paginated)")
+            .description(
+                "`role=principal` lists the delegations of your approvals (including those an administrator made \
+                 for you), `role=delegate` those that let you decide for someone; both when left out. `status` is \
+                 judged now: `scheduled`, `active`, `ended` or `revoked`. A delegation limited to a workflow on a \
+                 type you may not view shows `scoped: true` without naming it. Newest window first.",
+            )
+            .handle(
+                |api, In(NoPath, Query(q), NoBody): In<NoPath, Query<WorkflowApprovalMyDelegationList>, NoBody>| async move {
+                    Ok(Json(runtime::delegations::list_mine(&api.pool, &api.ctx, &q).await?))
+                },
+            ),
+        route(Method::POST, MY_DELEGATIONS, "createMyApprovalDelegation")
+            .tag(APPROVAL_TAG)
+            .summary("Delegate your approvals to someone for a time (for example while on leave)")
+            .description(
+                "From `startsAt` (may be in the future) to `endsAt` (required, at most 90 days later, in the \
+                 future), the delegate may decide the approval steps you could decide yourself, on every workflow \
+                 or only on `definitionKey`. It lends only your own eligibility, never one you hold as someone \
+                 else's delegate, and never visibility: the delegate decides only requests on CIs both of you may \
+                 view. Four-eyes binds the delegate as it binds you: neither of you decides a request either of you \
+                 made. Applies while it is not revoked and both accounts are active, judged at the database's \
+                 clock. 400 VALIDATION_ERROR on `delegateUserId` (`self`, `unknown`, `inactive`), `endsAt` \
+                 (`out_of_range`, `in_past`) or `definitionKey` (`unknown`); 409 CONFLICT `limit` when you already \
+                 have 5 scheduled or active delegations. Needs a signed-in session. Audited as a `create` on \
+                 `workflow_approval_delegations`.",
+            )
+            .status(StatusCode::CREATED)
+            .session_only()
+            .errors(&[ErrorCode::Conflict])
+            .handle(
+                |api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<WorkflowApprovalDelegationCreate>>| async move {
+                    Ok(WithStatus(StatusCode::CREATED, runtime::delegations::create_mine(&api.pool, &api.ctx, &b).await?))
+                },
+            ),
+        route(Method::POST, MY_DELEGATION_REVOKE, "revokeMyApprovalDelegation")
+            .tag(APPROVAL_TAG)
+            .summary("Revoke a delegation of your approvals, or decline one to you")
+            .description(
+                "The principal or the delegate; for anyone else the delegation does not exist (404). It stays \
+                 listed as `revoked`. Decisions already made through it stand. 409 CONFLICT `revoked` or `ended`. \
+                 Needs a signed-in session. Audited as an `update` on `workflow_approval_delegations`.",
+            )
+            .session_only()
+            .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])
+            .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
+                Ok(Json(runtime::delegations::revoke(&api.pool, &api.ctx, id, false).await?))
+            }),
+        route(Method::GET, DELEGATIONS, "listApprovalDelegations")
+            .tag(APPROVAL_TAG)
+            .summary("List approval delegations (administrators, paginated)")
+            .description(
+                "Every delegation, filtered by `principal`, `delegate` and `active` (not revoked and not ended). \
+                 Needs `users.manage`. Newest window first.",
+            )
+            .requires(GlobalPermission::UsersManage)
+            .handle(
+                |api, In(NoPath, Query(q), NoBody): In<NoPath, Query<WorkflowApprovalDelegationList>, NoBody>| async move {
+                    Ok(Json(runtime::delegations::list(&api.pool, &api.ctx, &q).await?))
+                },
+            ),
+        route(Method::POST, DELEGATIONS, "createApprovalDelegation")
+            .tag(APPROVAL_TAG)
+            .summary("Delegate an absent user's approvals to someone (administrators)")
+            .description(
+                "For `users.manage` holders, when someone is absent unexpectedly: as createMyApprovalDelegation, \
+                 for `principalUserId`. The principal sees it in their own list, with you as `createdBy`. **You \
+                 cannot name yourself as the delegate** (400 VALIDATION_ERROR `creator` on `delegateUserId`; the \
+                 database refuses such a row too), so an administrator cannot turn a CAB member's approval into an \
+                 administrator's. 400 VALIDATION_ERROR on `principalUserId` (`unknown`, `inactive`). Needs a \
+                 signed-in session. Audited as a `create` on `workflow_approval_delegations`.",
+            )
+            .status(StatusCode::CREATED)
+            .requires(GlobalPermission::UsersManage)
+            .session_only()
+            .errors(&[ErrorCode::Conflict])
+            .handle(
+                |api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<WorkflowApprovalDelegationAdminCreate>>| async move {
+                    Ok(WithStatus(StatusCode::CREATED, runtime::delegations::create_for(&api.pool, &api.ctx, &b).await?))
+                },
+            ),
+        route(Method::POST, DELEGATION_REVOKE, "revokeApprovalDelegation")
+            .tag(APPROVAL_TAG)
+            .summary("Revoke any approval delegation (administrators)")
+            .description(
+                "Needs `users.manage`. It stays listed as `revoked`; decisions already made through it stand. 409 \
+                 CONFLICT `revoked` or `ended`. Needs a signed-in session. Audited as an `update` on \
+                 `workflow_approval_delegations`.",
+            )
+            .requires(GlobalPermission::UsersManage)
+            .session_only()
+            .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])
+            .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
+                Ok(Json(runtime::delegations::revoke(&api.pool, &api.ctx, id, true).await?))
             }),
         route(Method::GET, "/api/v1/workflow-instances/{id}/approval-requests", "listWorkflowInstanceApprovalRequests")
             .tag(APPROVAL_TAG)
