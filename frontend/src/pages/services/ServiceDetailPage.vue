@@ -9,6 +9,7 @@ import CiStateBadge from "../../components/CiStateBadge.vue";
 import ClassBadge from "../../components/ClassBadge.vue";
 import CriticalityBadge from "../../components/CriticalityBadge.vue";
 import EmptyState from "../../components/EmptyState.vue";
+import PermissionDenied from "../../components/PermissionDenied.vue";
 import LoadingState from "../../components/LoadingState.vue";
 import RowMenu, { type RowMenuItem } from "../../components/RowMenu.vue";
 import SaveBar from "../../components/SaveBar.vue";
@@ -202,16 +203,22 @@ watch(
 <template>
   <LoadingState v-if="svc.isLoading.value || ci.isLoading.value" :label="t('services.detail.loading')" />
   <template v-else-if="error">
-    <Breadcrumbs :items="[{ label: t('services.title'), to: '/services' }, { label: forbidden ? t('services.forbiddenTitle') : notFound ? t('services.notFoundTitle') : t('common.error') }]" />
-    <EmptyState v-if="forbidden" :title="t('services.forbiddenTitle')">
+    <PermissionDenied
+      v-if="forbidden"
+      :crumbs="[{ label: t('services.title'), to: '/services' }]"
+      :requirement="t('denied.serviceView')"
+      :panel-title="t('services.forbiddenPanelTitle')"
+    >
       {{ t("services.forbidden") }}
-      <template #actions><RouterLink class="btn" to="/">{{ t("services.backToDashboard") }}</RouterLink></template>
-    </EmptyState>
-    <EmptyState v-else-if="notFound" :title="t('services.notFoundTitle')">
-      {{ t("services.notFound") }}
-      <template #actions><RouterLink class="btn" to="/services">{{ t("services.backToList") }}</RouterLink></template>
-    </EmptyState>
-    <ServiceError v-else :error="error" :on-retry="retry" />
+    </PermissionDenied>
+    <template v-else>
+      <Breadcrumbs :items="[{ label: t('services.title'), to: '/services' }, { label: notFound ? t('services.notFoundTitle') : t('common.error') }]" />
+      <EmptyState v-if="notFound" :title="t('services.notFoundTitle')">
+        {{ t("services.notFound") }}
+        <template #actions><RouterLink class="btn" to="/services">{{ t("services.backToList") }}</RouterLink></template>
+      </EmptyState>
+      <ServiceError v-else :error="error" :on-retry="retry" />
+    </template>
   </template>
   <template v-else-if="s && c && self">
     <Breadcrumbs :items="crumbs" />

@@ -6,6 +6,7 @@ import { useCi, useCiClasses, useClassAttributes } from "../api/queries";
 import Breadcrumbs from "../components/Breadcrumbs.vue";
 import ClassBadge from "../components/ClassBadge.vue";
 import EmptyState from "../components/EmptyState.vue";
+import PermissionDenied from "../components/PermissionDenied.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
 import LoadingState from "../components/LoadingState.vue";
 import EditLayoutButton from "../components/layoutEdit/EditLayoutButton.vue";
@@ -35,19 +36,34 @@ const forbidden = computed(() => ci.error.value instanceof ApiError && ci.error.
 
 <template>
   <LoadingState v-if="ci.isLoading.value" />
-  <EmptyState v-else-if="forbidden" title="Permission denied">
-    None of your permission profiles allows viewing this configuration item's class, so it cannot be edited.
-    <template #actions><RouterLink class="btn" to="/cis">Back to inventory</RouterLink></template>
-  </EmptyState>
+  <PermissionDenied
+    v-else-if="forbidden"
+    :crumbs="[{ label: t('inventory.crumb'), to: '/cis' }]"
+    :requirement="t('denied.classView')"
+    :panel-title="t('denied.ci.panelTitle')"
+  >
+    {{ t("denied.ci.edit") }}
+    <template #actions><RouterLink class="btn btn-primary" to="/cis">{{ t("inventory.denied.back") }}</RouterLink></template>
+  </PermissionDenied>
   <ErrorAlert v-else-if="ci.isError.value" :error="ci.error.value" :on-retry="() => ci.refetch()" />
   <EmptyState v-else-if="c && c.deletedAt" title="This configuration item is deleted">
     Deleted CIs cannot be edited.
     <template #actions><RouterLink :to="`/cis/${c.id}`">Back to the record</RouterLink></template>
   </EmptyState>
-  <EmptyState v-else-if="c && !session.canOnClass(c.classId, 'edit')" title="Permission denied">
-    None of your permission profiles allows editing {{ c.class.name }} configuration items.
-    <template #actions><RouterLink :to="`/cis/${c.id}`">Back to the record</RouterLink></template>
-  </EmptyState>
+  <PermissionDenied
+    v-else-if="c && !session.canOnClass(c.classId, 'edit')"
+    :crumbs="[
+      { label: t('inventory.crumb'), to: '/cis' },
+      { label: c.class.name, to: `/cis?classId=${c.classId}` },
+      { label: c.label, to: `/cis/${c.id}` },
+      { label: t('common.edit') },
+    ]"
+    :requirement="t('denied.classEdit', { name: c.class.name })"
+    :panel-title="t('denied.ci.panelTitle')"
+  >
+    {{ t("denied.ci.editClass", { name: c.class.name }) }}
+    <template #actions><RouterLink class="btn btn-primary" :to="`/cis/${c.id}`">{{ t("denied.ci.backToRecord") }}</RouterLink></template>
+  </PermissionDenied>
   <template v-else-if="c">
     <Breadcrumbs
       :items="[
