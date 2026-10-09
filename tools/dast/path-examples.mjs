@@ -146,7 +146,7 @@ async function collect(request) {
     const id = (await request("GET", `${resource}?limit=1`)).data[0]?.id;
     if (id) examples[resource] = id;
   }
-  for (const resource of ["schema-changes", "notifications", ...LEGACY]) {
+  for (const resource of ["schema-changes", "notifications", ...LEGACY, "admin/webhook-endpoints", "admin/webhook-allowed-hosts"]) {
     examples[resource] = (await request("GET", `${resource}?limit=1`)).data[0]?.id ?? randomUUID();
   }
   const version = (await request("GET", "ui-settings/versions?limit=1")).data[0]?.version;

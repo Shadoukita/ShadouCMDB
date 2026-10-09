@@ -780,6 +780,7 @@ async function main() {
   await customization({ serverClass, server, adminMe });
   await savedViews({ serverClass });
   await workflows({ infra, adminMe });
+  await webhooks();
   await realTables({ inService, infra, adminMe });
 
   // --- Deletes and history ------------------------------------------------------
@@ -1269,6 +1270,61 @@ async function workflows(x: Json) {
   await del(`${base}/${def.id}`, 409); // it has run on a CI: deactivate it instead
   const active = (await get(`${base}/${def.id}`)).json;
   check((await patch(`${base}/${def.id}`, { version: active.version, isActive: false })).json.isActive === false, 'a workflow that has run is deactivated');
+}
+
+/**
+ * Webhook endpoints and the allowlist (SHAA-2735): every operation. Off unless the operator sets
+ * WEBHOOKS_ALLOWED=true, which CI does not: then every change is refused with WEBHOOKS_DISABLED and
+ * nothing is stored. With webhooks on, an endpoint is created, changed, re-keyed, paused, resumed,
+ * pinged (the .test host does not resolve) and deleted; the signing secret is shown only once.
+ */
+async function webhooks() {
+  console.log('\n# Webhooks');
+  const hosts = '/api/v1/admin/webhook-allowed-hosts';
+  const endpoints = '/api/v1/admin/webhook-endpoints';
+  const unknown = '00000000-0000-4000-8000-000000000000';
+  check(Array.isArray((await get(hosts)).json.data), 'the allowlist is listed');
+  check(Array.isArray((await get(`${endpoints}?limit=10`)).json.data), 'the endpoints are listed');
+  await post(hosts, { host: 'hooks.example.test' }, 400);
+  await post(endpoints, { key: 'Bad Key', name: 'x', url: 'https://hooks.example.test/' }, 400);
+  await get(`${endpoints}/${unknown}`, 404);
+  await call('POST', `${endpoints}/${unknown}/pause`, undefined, 404);
+
+  const entry = await call('POST', hosts, { hostPattern: `smoke-${RUN}.example.test`, comment: 'Smoke' }, undefined, {}, { accept: [201, 409] });
+  if (entry.status === 409) {
+    check(entry.json?.error?.code === 'WEBHOOKS_DISABLED', 'with webhooks off the allowlist cannot be changed');
+    const off = await post(endpoints, { key: `smoke_${RUN}`, name: 'Smoke', url: `https://smoke-${RUN}.example.test/hook` }, 409);
+    check(off.json?.error?.code === 'WEBHOOKS_DISABLED', 'with webhooks off no endpoint can be created');
+    await patch(`${endpoints}/${unknown}`, { version: 1, name: 'x' }, 409);
+    await call('POST', `${endpoints}/${unknown}/rotate-secret`, {}, 409);
+    await call('POST', `${endpoints}/${unknown}/ping`, undefined, 409);
+    await call('POST', `${endpoints}/${unknown}/resume`, undefined, 409);
+    await del(`${endpoints}/${unknown}`, 404);
+    await del(`${hosts}/${unknown}`, 404);
+    return;
+  }
+  check(entry.status === 201 && entry.json.hostPattern === `smoke-${RUN}.example.test`, 'an allowlist entry is added');
+  await post(endpoints, { key: `smoke_out_${RUN}`, name: 'x', url: 'https://not-allowed.example.test/' }, 400);
+  await post(endpoints, { key: `smoke_cred_${RUN}`, name: 'x', url: `https://user:pw@smoke-${RUN}.example.test/` }, 400);
+  const created = (await post(endpoints, {
+    key: `smoke_${RUN}`,
+    name: 'Smoke',
+    url: `https://smoke-${RUN}.example.test/hook`,
+    authHeader: { name: 'Authorization', value: `Bearer smoke-${RUN}` },
+  })).json;
+  const id = created.endpoint.id;
+  check(typeof created.secret === 'string' && created.secret.length > 0, 'the signing secret is shown on creation');
+  const one = (await get(`${endpoints}/${id}`)).json;
+  check(!('secret' in one) && one.authHeaderSet === true, 'the secret and header value are not shown again');
+  check((await patch(`${endpoints}/${id}`, { version: one.version, name: 'Smoke renamed' })).json.name === 'Smoke renamed', 'the endpoint is renamed');
+  await patch(`${endpoints}/${id}`, { version: one.version, name: 'stale' }, 409);
+  check(typeof (await call('POST', `${endpoints}/${id}/rotate-secret`, { graceHours: 1 }, 200)).json.secret === 'string', 'the secret is rotated');
+  check((await call('POST', `${endpoints}/${id}/pause`, undefined, 200)).json.status === 'paused', 'the endpoint is paused');
+  await call('POST', `${endpoints}/${id}/resume`, undefined, 200);
+  check((await call('POST', `${endpoints}/${id}/ping`, undefined, 200)).json.ok === false, 'a ping to a host that does not resolve fails without a 5xx');
+  await del(`${endpoints}/${id}`);
+  await del(`${endpoints}/${id}`, 404);
+  await call('DELETE', `${hosts}/${entry.json.id}`, undefined, 200);
 }
 
 /** Saved views (SHAA-578): every operation, resolution into list parameters, defaults and the shared-copy audit. */
