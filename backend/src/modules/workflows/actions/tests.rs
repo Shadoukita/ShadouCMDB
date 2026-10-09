@@ -219,6 +219,34 @@ async fn actions_are_validated_saved_audited_and_previewed() {
     db.drop().await;
 }
 
+/// A workflow with only a draft (no current version) reads and saves its
+/// actions: the draft's transitions are known, and the lint says no current
+/// version has them.
+#[tokio::test]
+async fn a_workflow_with_only_a_draft_has_actions_too() {
+    let Some(db) = scratch::database("workflow_actions_draft_only").await else { return };
+    let w = world(&db).await;
+    w.profile("Ops", &[(w.server, false)]).await;
+    let d = w.ok("POST", DEFS, json!({ "key": "review", "name": "Review", "classId": w.server })).await;
+    let d = d["id"].as_str().unwrap();
+    let graph = json!({ "initialState": "a", "states": [
+            { "key": "a", "name": "A", "category": "open" },
+            { "key": "b", "name": "B", "category": "done", "terminal": true } ],
+        "transitions": [ { "key": "end", "name": "End", "from": "a", "to": "b" } ] });
+    w.ok("PUT", &format!("{DEFS}/{d}/draft"), graph).await;
+    let url = format!("{DEFS}/{d}/actions");
+
+    let v = w.ok("GET", &url, json!(null)).await;
+    assert_eq!((v["actions"].clone(), v["problems"].clone()), (json!([]), json!([])), "{v}");
+    let body = json!({ "version": v["version"], "actions": [inbox("tell_ops", "transition", Some("end"),
+        json!([{ "source": "profile", "profile": "Ops" }]))] });
+    let v = w.ok("PUT", &url, body).await;
+    let codes: Vec<&str> = v["problems"].as_array().unwrap().iter().map(|p| p["code"].as_str().unwrap()).collect();
+    // Ops has no user yet, so the lint warns about that too.
+    assert_eq!(codes, ["unknown_transition", "recipients_cannot_view"], "{v}");
+    db.drop().await;
+}
+
 /// A transition with an inbox action: after commit, one fan-out notifies the
 /// recipients who may view the CI once; the others are skipped with the
 /// reason and get no row; a refused transition queues nothing.
