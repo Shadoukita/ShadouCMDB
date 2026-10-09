@@ -184,6 +184,7 @@ test("while import is off, the user still sees and deletes their import", async 
   await page.goto("/imports");
   await expect(page.getByText("Bulk import is turned off for this instance.")).toBeVisible();
   await expect(page.getByText("Your remaining imports are listed below")).toBeVisible();
+  await expect(page.getByRole("status").filter({ hasText: "turned off" })).toContainText("for this instance. An administrator can turn it on under Administration › Import. Your remaining");
   const row = page.getByRole("row", { name: new RegExp(`servers-${stamp}\\.csv`) });
   await expect(row).toBeVisible();
   // The job page says so too, and offers no step action the server would refuse.

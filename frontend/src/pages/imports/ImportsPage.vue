@@ -47,6 +47,10 @@ const query = computed<ImportListQuery>(() => ({ limit: limit.value, offset: off
 const list = useImportList(query, permitted);
 const total = computed(() => list.data.value?.page.total ?? 0);
 const rows = computed(() => list.data.value?.data ?? []);
+/** The sentences after the "turned off" heading, joined here: template whitespace around them is condensed away. */
+const offDetail = computed(() =>
+  [settings.data.value?.locked ? "" : t("imports.off.hint"), total.value > 0 ? t("imports.off.remaining") : ""].filter(Boolean).join(" "),
+);
 const crumbs = computed(() => [{ label: t("inventory.crumb"), to: "/cis" }, { label: t("imports.title") }]);
 
 const classes = useCiClasses();
@@ -159,8 +163,7 @@ const rowMenu = (j: ImportJobSummary): RowMenuItem[] => [
     <ErrorAlert v-else-if="settings.isError.value" :error="settings.error.value" :on-retry="() => settings.refetch()" />
     <div v-else-if="!available" class="alert alert-warn" role="status">
       <strong>{{ t(settings.data.value?.locked ? "imports.off.locked" : "imports.off.title") }}</strong>
-      <template v-if="!settings.data.value?.locked"> {{ t("imports.off.hint") }}</template>
-      <template v-if="total > 0"> {{ t("imports.off.remaining") }}</template>
+      {{ offDetail }}
       <p v-if="!settings.data.value?.locked && session.isAdministrator" class="meta">
         <RouterLink to="/admin/import">{{ t("imports.off.settingsLink") }}</RouterLink>
       </p>
@@ -217,7 +220,7 @@ const rowMenu = (j: ImportJobSummary): RowMenuItem[] => [
                 <th scope="col">{{ t("imports.col.class") }}</th>
                 <th scope="col">{{ t("imports.col.status") }}</th>
                 <th scope="col" class="num" :title="t('imports.col.rowsTitle')">
-                  {{ t("imports.col.rows") }} <span class="muted">{{ t("imports.col.rowsKey") }}</span>
+                  {{ t("imports.col.rows") }} <span class="muted rows-key">{{ t("imports.col.rowsKey") }}</span>
                 </th>
                 <th v-if="allUsers" scope="col">{{ t("imports.col.startedBy") }}</th>
                 <th scope="col">{{ t("imports.col.started") }}</th>

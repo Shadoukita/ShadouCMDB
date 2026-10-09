@@ -20,7 +20,7 @@ test.beforeAll(async ({ request }) => {
     data: Buffer.from("Name;Hostname\r\nweb01;web01.example.com\r\n"),
     headers: { "Content-Type": "text/csv", "X-File-Name": FILE, "X-CSRF-Token": await csrf(request) },
   });
-  expect(res.status(), "upload").toBe(201);
+  expect(res.status(), "upload").toBe(202);
   jobId = ((await res.json()) as { id: string }).id;
 });
 
