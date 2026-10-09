@@ -407,7 +407,7 @@ dialog.manage-views td.row-actions {
 .histogram-swatch {
   width: 10px;
   height: 10px;
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
 }
 .histogram-body {
   padding: 0 var(--panel-p) var(--space-2);
@@ -935,7 +935,7 @@ table.list-table .badge .status-dot {
 .crit-bars > span {
   width: 4px;
   height: 12px;
-  border-radius: 1px;
+  border-radius: var(--radius-xs);
   background: var(--c-border);
 }
 .crit-meter.danger .crit-bars > .on {

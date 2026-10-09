@@ -382,7 +382,7 @@ table.data select {
   max-width: 280px;
 }
 table.data tbody th {
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   text-align: left;
 }
 tr.selected {

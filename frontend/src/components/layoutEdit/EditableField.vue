@@ -160,7 +160,7 @@ function onResizeStart(e: PointerEvent) {
   top: 0;
   bottom: 0;
   width: 3px;
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   background: var(--c-primary);
 }
 .le-field-head {
@@ -168,7 +168,7 @@ function onResizeStart(e: PointerEvent) {
   align-items: center;
   gap: var(--space-0_5);
   font-size: var(--fs-sm);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   min-width: 0;
 }
 .le-field-label {
@@ -177,7 +177,7 @@ function onResizeStart(e: PointerEvent) {
   white-space: nowrap;
 }
 .le-field-head .badge {
-  font-weight: 400;
+  font-weight: var(--fw-regular);
 }
 .le-grip {
   border: 0;
@@ -200,7 +200,7 @@ function onResizeStart(e: PointerEvent) {
   position: absolute;
   right: 4px;
   bottom: 100%;
-  z-index: 4;
+  z-index: var(--z-handle);
   display: flex;
   align-items: center;
   gap: 2px;
@@ -247,7 +247,7 @@ function onResizeStart(e: PointerEvent) {
   bottom: 30%;
   left: 3px;
   width: 2px;
-  border-radius: 1px;
+  border-radius: var(--radius-xs);
   background: var(--c-border-strong);
 }
 .le-field:hover .resize-handle::after,

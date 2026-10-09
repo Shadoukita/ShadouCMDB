@@ -101,7 +101,7 @@
 }
 .lg-sep-label {
   font-size: var(--fs-sm);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   color: var(--c-text-secondary);
 }
 .lg-sec {
@@ -137,7 +137,7 @@
 .layout-container .panel-body:focus-within,
 .layout-container .panel-body:hover {
   position: relative;
-  z-index: 1;
+  z-index: var(--z-raised);
 }
 @container section (max-width: 820px) {
   .lg-cols-3, .lg-cols-4, .lg-cols-5, .lg-cols-6, .lg-cols-7, .lg-cols-8, .lg-cols-9, .lg-cols-10, .lg-cols-11, .lg-cols-12 { --lg-cols: 2; }
@@ -291,7 +291,7 @@ dl.props .group-title:first-child {
   display: flex;
   gap: var(--space-2);
   align-items: flex-start;
-  font-weight: 400;
+  font-weight: var(--fw-regular);
   cursor: pointer;
 }
 .check-list input {
@@ -317,7 +317,7 @@ table.data tr.disabled td {
   width: 10px;
   height: 10px;
   flex: none;
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   box-shadow: inset 0 0 0 1px var(--c-border-control);
 }
 .inline-control {
@@ -342,7 +342,7 @@ table.data tbody th[scope="colgroup"] {
   background: none;
   color: inherit;
   font-size: inherit;
-  font-weight: 400;
+  font-weight: var(--fw-regular);
 }
 table.data tr.selected td {
   background: var(--c-row-selected);
@@ -437,7 +437,7 @@ table.reorderable tr.drop-target th {
 .lg-win > .panel-header {
   position: sticky;
   top: 0;
-  z-index: 2;
+  z-index: var(--z-pinned);
   background: inherit;
 }
 .lg-free > .lg-win.is-collapsed {
@@ -481,13 +481,13 @@ table.reorderable tr.drop-target th {
   top: 50%;
   right: 12px;
   transform: translateY(-50%);
-  z-index: 5;
+  z-index: var(--z-floating);
   padding: 2px var(--space-1);
   border-radius: var(--radius-sm);
   background: var(--c-primary);
   color: var(--c-primary-text);
   font-size: var(--fs-sm);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   font-variant-numeric: tabular-nums;
   pointer-events: none;
 }
@@ -532,7 +532,7 @@ fieldset.key-checklist {
 }
 fieldset.key-checklist legend {
   font-size: var(--fs-sm);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   padding: 0 var(--space-1);
 }
 fieldset.key-checklist .hint {
@@ -545,12 +545,12 @@ label.check {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  font-weight: 400;
+  font-weight: var(--fw-regular);
 }
 .save-bar {
   position: sticky;
   top: calc(-1 * var(--space-3));
-  z-index: 5;
+  z-index: var(--z-floating);
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -593,7 +593,7 @@ label.check {
 }
 .nav-editor tr.nav-section td {
   background: var(--c-surface-alt);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 .nav-editor tr.nav-item td:first-child {
   padding-left: var(--space-6);
@@ -725,7 +725,7 @@ table.data td.fill {
 .import-progress-track {
   height: 8px;
   border: 1px solid var(--c-border-strong);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
   background: var(--c-surface-alt);
 }
@@ -809,13 +809,13 @@ table.data td.fill {
 }
 .import-mapping-settings legend {
   font-size: var(--fs-sm);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   padding: 0;
 }
 .import-mapping-options summary {
   cursor: pointer;
   font-size: var(--fs-sm);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 .import-mapping-options[open] summary {
   margin-bottom: var(--space-1);
@@ -866,7 +866,7 @@ table.data td.fill {
 }
 .status-error {
   color: var(--c-danger-text);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 .error-summary {
   margin: var(--space-1) 0 0;
@@ -916,7 +916,7 @@ table.data td.fill {
     content: attr(data-label);
     display: block;
     font-size: var(--fs-xs);
-    font-weight: 600;
+    font-weight: var(--fw-semibold);
     color: var(--c-text-secondary);
   }
   .import-samples {
@@ -1017,7 +1017,7 @@ table.data tr.group-row th {
   background: none;
   color: var(--c-text);
   font: inherit;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   cursor: pointer;
 }
 table.data tr.path-row td {
@@ -1112,7 +1112,7 @@ ol.impact-path li + li::before {
   overflow-y: auto;
 }
 .listbox .option-name {
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 .owner-roles {
   display: grid;
@@ -1193,7 +1193,7 @@ fieldset.owner-role {
 }
 .token-error {
   color: var(--c-danger-text);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 .owners-actions {
   margin-top: var(--space-3);
@@ -1331,7 +1331,7 @@ dialog.member-picker td .badge {
   font-size: var(--fs-md);
 }
 .impact-services-caveat {
-  font-weight: normal;
+  font-weight: var(--fw-regular);
   font-size: var(--fs-sm);
 }
 

@@ -335,6 +335,6 @@ function codesSaved() {
 }
 .error-text {
   color: var(--c-danger-text);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 </style>
