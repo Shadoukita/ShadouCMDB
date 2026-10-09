@@ -55,5 +55,6 @@ Without Docker, install slapd and the LDAP tools (Debian/Ubuntu: `apt install sl
 stop the packaged service), and set `LDAP_IT_MODE=local`. `LDAP_IT_SLAPD`, `LDAP_IT_LDAPMODIFY`,
 `LDAP_IT_SCHEMA` and `LDAP_IT_MODULES` point to other locations of the binaries, the schema directory and
 the module directory. Other settings: `LDAP_IT_PORT` (default 6360), `LDAP_IT_DIR` (certificates,
-configuration and local data; default `$RUNNER_TEMP/ldap-it` or `$TMPDIR/ldap-it`), and `LDAP_IT_PSQL`
-(default `psql`).
+configuration and local data; default `$RUNNER_TEMP/ldap-it` or `$TMPDIR/ldap-it`), `LDAP_IT_PSQL`
+(default `psql`), and `LDAP_IT_REGISTRY` (default `docker.io`; a Docker Hub mirror such as
+`mirror.gcr.io` to pull the same pinned image from there).

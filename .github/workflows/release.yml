@@ -188,7 +188,8 @@ jobs:
             run: qemu-aarch64-static
     services:
       postgres:
-        image: postgres:17
+        # Docker Hub mirror: anonymous docker.io pulls hit its rate limit on shared runners (SHAA-2894).
+        image: mirror.gcr.io/library/postgres:17
         env:
           POSTGRES_USER: ci
           POSTGRES_PASSWORD: ci-only-password
@@ -373,7 +374,8 @@ jobs:
       attestations: write
     services:
       postgres:
-        image: postgres:17
+        # Docker Hub mirror: anonymous docker.io pulls hit its rate limit on shared runners (SHAA-2894).
+        image: mirror.gcr.io/library/postgres:17
         env:
           POSTGRES_USER: ci
           POSTGRES_PASSWORD: ci-only-password
@@ -392,7 +394,16 @@ jobs:
           merge-multiple: true
       - run: find dist/docker -type f -exec ls -l {} +
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          # binfmt and BuildKit images come from Docker Hub; pull them through the mirror (SHAA-2894).
+          image: mirror.gcr.io/tonistiigi/binfmt:latest
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1
+          # Dockerfile.release's syntax frontend (docker/dockerfile:1) comes from Docker Hub too.
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
 
       - name: Test each platform's image against PostgreSQL
         run: |
