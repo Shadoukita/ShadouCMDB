@@ -557,6 +557,9 @@ export const en = {
   "auth.setup.intro":
     "No user exists yet. The account you create here holds the built-in {profile} profile: it can manage users, permission profiles and every configuration item. You can add more users afterwards under Administration.",
   "auth.setup.introProfile": "Administrator",
+  "auth.setup.sectionServer": "Server access",
+  "auth.setup.sectionAccount": "Administrator account",
+  "auth.setup.closesHint": "Setup closes as soon as this account exists. Everyone else signs in with an account an administrator creates.",
   "auth.setup.goToSignIn": "Go to sign-in",
   "auth.setup.token": "Setup token",
   "auth.setup.tokenHint":
