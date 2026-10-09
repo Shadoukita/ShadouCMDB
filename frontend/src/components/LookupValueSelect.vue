@@ -33,9 +33,9 @@ const options = computed(() => (values.data.value ?? []).filter((v) => v.isActiv
 const stray = computed(() => model.value !== "" && (waiting.value || (!!values.data.value && !options.value.some((o) => o.id === model.value))));
 const whole = useLookupListValues(() => (dependent.value && stray.value ? props.listId : null));
 const strayLabel = computed(() => {
-  if (!dependent.value) return "Unknown value";
+  if (!dependent.value) return t("form.unknownValue");
   const v = whole.data.value?.find((o) => o.id === model.value);
-  return v ? `${v.name} (not a value of the chosen ${props.parent!.label})` : "Unknown value";
+  return v ? t("form.lookup.notOfParent", { name: v.name, parent: props.parent!.label }) : t("form.unknownValue");
 });
 
 // Changing the parent clears a child value that the new parent does not offer.
@@ -57,10 +57,10 @@ watchEffect(() => {
 });
 
 const placeholder = computed(() => {
-  if (waiting.value) return `Choose ${props.parent!.label} first`;
-  if (values.isLoading.value) return "Loading…";
-  if (values.isError.value) return "Could not load the list";
-  if (dependent.value && options.value.length === 0) return `No values for this ${props.parent!.label}`;
+  if (waiting.value) return t("form.lookup.chooseParent", { parent: props.parent!.label });
+  if (values.isLoading.value) return t("common.loading");
+  if (values.isError.value) return t("form.listFailed");
+  if (dependent.value && options.value.length === 0) return t("form.lookup.noValues", { parent: props.parent!.label });
   return t("common.notSet");
 });
 </script>
@@ -76,7 +76,7 @@ const placeholder = computed(() => {
   >
     <option value="">{{ placeholder }}</option>
     <template v-if="!waiting">
-      <option v-for="v in options" :key="v.id" :value="v.id">{{ v.name }}{{ v.isActive ? "" : " (retired)" }}</option>
+      <option v-for="v in options" :key="v.id" :value="v.id">{{ v.name }}{{ v.isActive ? "" : ` ${t("filters.retired")}` }}</option>
     </template>
     <option v-if="stray" :value="model">{{ strayLabel }}</option>
   </select>

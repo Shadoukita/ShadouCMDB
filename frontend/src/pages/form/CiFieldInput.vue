@@ -44,7 +44,7 @@ function linkable(key: string, id: string): boolean {
         type="text"
         class="mono"
         spellcheck="false"
-        :placeholder="draft.base ? undefined : 'Generated'"
+        :placeholder="draft.base ? undefined : t('form.identGenerated')"
         :aria-invalid="p.invalid || undefined"
         :aria-describedby="p.describedBy"
       />
@@ -56,9 +56,9 @@ function linkable(key: string, id: string): boolean {
         :aria-invalid="p.invalid || undefined"
         :aria-describedby="p.describedBy"
       >
-        <option value="">{{ draft.criticalityLoading ? "Loading…" : draft.criticalityError ? "Could not load the list" : t("common.notSet") }}</option>
-        <option v-for="v in draft.criticalityOptions" :key="v.id" :value="v.id">{{ v.name }}{{ v.isActive ? "" : " (retired)" }}</option>
-        <option v-if="draft.criticalityStray" :value="draft.criticalityId">{{ draft.base?.criticality?.name ?? "Unknown value" }}</option>
+        <option value="">{{ draft.criticalityLoading ? t("common.loading") : draft.criticalityError ? t("form.listFailed") : t("common.notSet") }}</option>
+        <option v-for="v in draft.criticalityOptions" :key="v.id" :value="v.id">{{ v.name }}{{ v.isActive ? "" : ` ${t("filters.retired")}` }}</option>
+        <option v-if="draft.criticalityStray" :value="draft.criticalityId">{{ draft.base?.criticality?.name ?? t("form.unknownValue") }}</option>
       </select>
       <input
         v-else-if="f === 'validFrom' || f === 'validUntil'"
