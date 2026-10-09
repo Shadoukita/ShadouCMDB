@@ -20,8 +20,10 @@
 //!   is retried with exponential backoff and jitter (honouring
 //!   `Retry-After`), a permanent one is dead at once, and every dead letter
 //!   is audited (`workflow.action_dead`, actor system).
-//! - **Housekeeping**, every tick: leases that ran out are returned,
-//!   deliveries past `WORKFLOW_ACTIONS_MAX_AGE_HOURS` die as `expired`, the
+//! - **Housekeeping**, every tick: leases that ran out are returned, a run
+//!   whose last fan-out attempt (`WORKFLOW_ACTIONS_MAX_ATTEMPTS`) failed is
+//!   cancelled as `fan_out_failed` and audited (`workflow.action_dead`), runs
+//!   and deliveries past `WORKFLOW_ACTIONS_MAX_AGE_HOURS` give up as `expired`, the
 //!   queue's overload flag and the per-instance limit the enqueue trigger
 //!   reads are refreshed, suppressed runs are audited (at most once a minute
 //!   per definition and reason), and once an hour finished rows past their
@@ -72,6 +74,8 @@ type RecipientIds = (WorkflowActionRecipientSource, Option<Uuid>, Option<Uuid>, 
 type EventNames = (Option<String>, Option<String>, Option<String>, Option<String>, Option<i32>);
 /// A dead delivery: id, run, action key, kind, CI, reason, attempts.
 type DeadRow = (Uuid, i64, String, String, Uuid, Option<String>, i16);
+/// A run that gave up: id, workflow, action key, kind, CI, reason, attempts.
+type DeadRunRow = (i64, Uuid, String, String, Uuid, Option<String>, i16);
 
 // ---------------------------------------------------------------------------
 // Channels
@@ -221,11 +225,12 @@ pub async fn resolve_static(
 // Fan-out
 // ---------------------------------------------------------------------------
 
-/// Claims up to `n` pending runs for `owner`.
+/// Claims up to `n` pending runs for `owner`; each claim is an attempt.
 pub async fn claim_runs(pool: &PgPool, owner: &str, n: i64) -> sqlx::Result<Vec<i64>> {
     sqlx::query_scalar(
         "UPDATE cmdb.workflow_action_runs r
-            SET status = 'fanning_out', lease_owner = $1, lease_until = now() + $2 * interval '1 millisecond'
+            SET status = 'fanning_out', lease_owner = $1, lease_until = now() + $2 * interval '1 millisecond',
+                attempts = least(r.attempts + 1, 32767)
           WHERE r.id IN (SELECT id FROM cmdb.workflow_action_runs WHERE status = 'pending'
                           ORDER BY created_at, id LIMIT $3 FOR UPDATE SKIP LOCKED)
           RETURNING r.id",
@@ -817,6 +822,8 @@ fn system() -> RequestContext {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Housekeeping {
     pub runs_released: u64,
+    /// Runs cancelled after their last fan-out attempt or past the maximum age.
+    pub runs_cancelled: u64,
     pub deliveries_released: u64,
     pub expired: u64,
     pub backlog: i64,
@@ -824,18 +831,69 @@ pub struct Housekeeping {
     pub suppressed_audited: u64,
 }
 
+/// One `workflow.action_dead` row (actor system) per run that was just
+/// cancelled with `fan_out_failed` or `expired`, on its workflow.
+async fn audit_dead_runs(tx: &mut PgConnection, ids: &[i64]) -> sqlx::Result<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let rows: Vec<DeadRunRow> = sqlx::query_as(
+        "SELECT id, definition_id, action_key, kind, ci_id, status_reason, attempts
+         FROM cmdb.workflow_action_runs WHERE id = ANY($1) ORDER BY id",
+    )
+    .bind(ids)
+    .fetch_all(&mut *tx)
+    .await?;
+    let entries = rows
+        .into_iter()
+        .map(|(run, definition, action_key, kind, ci, reason, attempts)| AuditEntry {
+            action: AuditAction::WorkflowActionDead,
+            entity_type: "workflow_definitions",
+            entity_id: definition,
+            old_value: None,
+            new_value: Some(json!({ "runId": run, "actionKey": action_key, "kind": kind, "ciId": ci,
+                "reason": reason, "attempts": attempts })),
+        })
+        .collect();
+    crud::write_audit(tx, &system(), entries).await
+}
+
 /// One pass: leases, max age, the queue flag and suppression audits.
 pub async fn housekeeping(pool: &PgPool, cfg: &WorkflowActionsConfig) -> sqlx::Result<Housekeeping> {
+    // A fan-out lease that ran out: the attempt counted. Back to pending, or
+    // cancelled when it was the last one; a run still waiting past the
+    // maximum age is cancelled too. Never fanned out late without notice.
+    let mut tx = pool.begin().await?;
     let mut out = Housekeeping {
         runs_released: sqlx::query(
             "UPDATE cmdb.workflow_action_runs SET status = 'pending', lease_owner = NULL, lease_until = NULL
-             WHERE status = 'fanning_out' AND lease_until < now()",
+             WHERE status = 'fanning_out' AND lease_until < now() AND attempts < $1
+               AND created_at >= now() - $2 * interval '1 hour'",
         )
-        .execute(pool)
+        .bind(cfg.max_attempts)
+        .bind(cfg.max_age_hours)
+        .execute(&mut *tx)
         .await?
         .rows_affected(),
         ..Housekeeping::default()
     };
+    let runs_died: Vec<i64> = sqlx::query_scalar(
+        "UPDATE cmdb.workflow_action_runs SET status = 'cancelled',
+           status_reason = CASE WHEN attempts >= $1 THEN 'fan_out_failed' ELSE 'expired' END,
+           completed_at = now(), lease_owner = NULL, lease_until = NULL
+         WHERE id IN (SELECT id FROM cmdb.workflow_action_runs
+                       WHERE (status = 'fanning_out' AND lease_until < now())
+                          OR (status = 'pending' AND created_at < now() - $2 * interval '1 hour')
+                       LIMIT 1000 FOR UPDATE SKIP LOCKED)
+         RETURNING id",
+    )
+    .bind(cfg.max_attempts)
+    .bind(cfg.max_age_hours)
+    .fetch_all(&mut *tx)
+    .await?;
+    out.runs_cancelled = runs_died.len() as u64;
+    audit_dead_runs(&mut tx, &runs_died).await?;
+    tx.commit().await?;
 
     // A sending lease that ran out: the attempt counted. Back to pending, or
     // dead when it was the last one.
@@ -877,7 +935,8 @@ pub async fn housekeeping(pool: &PgPool, cfg: &WorkflowActionsConfig) -> sqlx::R
 
     // The queue flag and the per-instance limit the enqueue trigger reads.
     let (runs, deliveries): (i64, i64) = sqlx::query_as(
-        "SELECT (SELECT count(*) FROM (SELECT 1 FROM cmdb.workflow_action_runs WHERE status = 'pending' LIMIT $1) r),
+        "SELECT (SELECT count(*) FROM (SELECT 1 FROM cmdb.workflow_action_runs
+                                        WHERE status IN ('pending', 'fanning_out') LIMIT $1) r),
                 (SELECT count(*) FROM (SELECT 1 FROM cmdb.workflow_action_deliveries
                                         WHERE status IN ('pending', 'held') LIMIT $1) d)",
     )
@@ -1104,7 +1163,8 @@ async fn fan_out_loop(pool: PgPool, cfg: WorkflowActionsConfig, owner: String, m
             Ok(ids) => {
                 for id in ids {
                     if let Err(e) = fan_out(&pool, &cfg, id, &owner).await {
-                        // The run stays leased; housekeeping returns it when the lease ends.
+                        // The run stays leased; housekeeping returns it when the lease ends, or
+                        // cancels it after WORKFLOW_ACTIONS_MAX_ATTEMPTS.
                         tracing::warn!(run = id, error = %e, "workflow action fan-out failed; retried after its lease");
                     }
                 }
@@ -1175,8 +1235,9 @@ async fn housekeeping_loop(pool: PgPool, cfg: WorkflowActionsConfig, mut stop: w
     let mut last_retention: Option<Instant> = None;
     loop {
         match housekeeping(&pool, &cfg).await {
-            Ok(h) if h.runs_released + h.deliveries_released + h.expired > 0 => tracing::info!(
+            Ok(h) if h.runs_released + h.runs_cancelled + h.deliveries_released + h.expired > 0 => tracing::info!(
                 runs_released = h.runs_released,
+                runs_cancelled = h.runs_cancelled,
                 deliveries_released = h.deliveries_released,
                 expired = h.expired,
                 "workflow action housekeeping"
