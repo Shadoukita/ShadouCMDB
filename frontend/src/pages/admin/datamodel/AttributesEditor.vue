@@ -293,7 +293,7 @@ function defaultText(d: AttributeDefinition): string {
             <td>{{ d.label }}</td>
             <td class="mono">{{ d.key }}</td>
             <td>{{ typeName(d.dataType) }}<span v-if="typeDetail(d)" class="muted"> · {{ typeDetail(d) }}</span></td>
-            <td>{{ d.groupName ?? GENERAL_SECTION }}</td>
+            <td>{{ d.groupName ?? t("record.section.general") }}</td>
             <td><span v-if="d.isRequired" class="badge warn">{{ t("common.required") }}</span></td>
             <td><RouterLink class="list-name" :to="`/admin/classes/${d.definedOn.id}`" dir="auto">{{ d.definedOn.name }}</RouterLink></td>
           </tr>

@@ -23,7 +23,6 @@ import {
   STATE_LABELS,
   summaryPhrase,
   truncationMessage,
-  VISIBILITY_NOTE,
   type ImpactState,
 } from "../../lib/impact";
 import type { TrailStep } from "../../lib/trail";
@@ -324,7 +323,7 @@ const VIEWS = [
               {{ summaryParts[0] }}<em dir="auto">{{ data.root.name }}</em>{{ summaryParts[1] }}<template v-if="critCounts"> · {{ critCounts }}</template>
             </template>
           </p>
-          <p v-if="data.visibility === 'restricted'" class="muted impact-visibility">{{ VISIBILITY_NOTE }}</p>
+          <p v-if="data.visibility === 'restricted'" class="muted impact-visibility">{{ t("impact.visibilityNote") }}</p>
           <div v-if="data.truncated" class="alert alert-warn" role="status">
             <strong>{{ t("impact.incomplete") }}</strong> {{ truncationMessage(data, settings.data.value?.timeoutMs) }}
           </div>

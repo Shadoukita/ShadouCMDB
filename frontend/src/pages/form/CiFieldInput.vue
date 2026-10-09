@@ -3,7 +3,7 @@ import type { Ci } from "../../api/queries";
 import AttributeInput from "../../components/AttributeInput.vue";
 import CiLink from "../../components/CiLink.vue";
 import { t } from "../../i18n";
-import { nowFormValue, NOW_HINT } from "../../lib/attributeValues";
+import { nowFormValue, nowHint } from "../../lib/attributeValues";
 import type { TrailStep } from "../../lib/trail";
 import { BUILTIN, cellClass } from "../../lib/uiSettings";
 import type { CiDraft } from "./ciDraft";
@@ -65,7 +65,7 @@ function linkable(key: string, id: string): boolean {
         :id="p.id"
         v-model="draft.core[f]"
         type="datetime-local"
-        :title="NOW_HINT"
+        :title="nowHint()"
         :aria-invalid="p.invalid || undefined"
         :aria-describedby="p.describedBy"
         @dblclick="draft.core[f] = nowFormValue('datetime')"

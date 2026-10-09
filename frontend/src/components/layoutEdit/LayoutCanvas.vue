@@ -37,7 +37,7 @@ import {
   type LayoutTab,
   type SeparatorPlace,
 } from "../../lib/layoutDesign";
-import { PRESENTATION_ONLY, type LayoutEditor } from "../../lib/layoutEditor";
+import { presentationOnly, type LayoutEditor } from "../../lib/layoutEditor";
 import {
   ATTRIBUTE_PREFIX,
   attributeKey,
@@ -628,7 +628,7 @@ function onHiddenDrop(e: DragEvent) {
       </ul>
       <span v-else class="muted">{{ t("layoutEditor.hiddenNone") }}</span>
       <span class="hint">{{ t("layoutEditor.hiddenHint") }}</span>
-      <span class="hint" data-testid="le-presentation-only">{{ PRESENTATION_ONLY }}</span>
+      <span class="hint" data-testid="le-presentation-only">{{ presentationOnly() }}</span>
     </div>
 
     <div class="le-frame" data-testid="le-frame">
