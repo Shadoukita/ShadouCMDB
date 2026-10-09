@@ -135,21 +135,23 @@ onBeforeUnmount(() => window.removeEventListener("beforeunload", onBeforeUnload)
 </script>
 
 <template>
-  <Breadcrumbs :items="adminCrumbs('customization', { label: current?.label ?? section })" />
-  <div class="page-header">
-    <div class="title">
-      <h1>{{ t("admin.section.customization") }}</h1>
-      <span v-if="settings.data.value" class="muted">
-        {{ settings.data.value.updatedBy ? t("cust.versionBy", { version: settings.data.value.version, name: settings.data.value.updatedBy }) : t("cust.version", { version: settings.data.value.version }) }}
-      </span>
+  <div class="record-head cust-head">
+    <Breadcrumbs :items="adminCrumbs('customization', { label: current?.label ?? section })" />
+    <div class="page-header">
+      <div class="title">
+        <h1>{{ t("admin.section.customization") }}</h1>
+        <span v-if="settings.data.value" class="count mono">
+          {{ settings.data.value.updatedBy ? t("cust.versionBy", { version: settings.data.value.version, name: settings.data.value.updatedBy }) : t("cust.version", { version: settings.data.value.version }) }}
+        </span>
+      </div>
     </div>
+    <p class="page-intro">{{ t("cust.intro") }}</p>
+    <nav class="tabs record-tabs" :aria-label="t('admin.section.customization')">
+      <RouterLink v-for="s in SECTIONS" :key="s.key" :to="`/admin/customization/${s.key}`" :aria-current="s.key === section ? 'page' : undefined">
+        {{ s.label }}
+      </RouterLink>
+    </nav>
   </div>
-  <p class="page-intro">{{ t("cust.intro") }}</p>
-  <nav class="tabs" :aria-label="t('admin.section.customization')">
-    <RouterLink v-for="s in SECTIONS" :key="s.key" :to="`/admin/customization/${s.key}`" :aria-current="s.key === section ? 'page' : undefined">
-      {{ s.label }}
-    </RouterLink>
-  </nav>
 
   <LoadingState v-if="settings.isLoading.value || (settings.data.value && stored.isLoading.value)" :label="t('cust.loading')" />
   <ErrorAlert v-else-if="settings.isError.value" :error="settings.error.value" :on-retry="() => settings.refetch()" />

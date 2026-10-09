@@ -107,7 +107,7 @@ function resetMenu() {
       <span class="muted">{{ t("customization.nav.subtitle") }}</span>
     </div>
     <div class="panel-body flush">
-      <table class="data">
+      <table class="data list-table">
         <thead>
           <tr>
             <th scope="col">{{ t("customization.nav.colEntry") }}</th>

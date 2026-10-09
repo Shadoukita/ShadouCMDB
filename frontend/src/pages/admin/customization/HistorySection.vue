@@ -43,7 +43,7 @@ async function onRestore() {
     <LoadingState v-if="versions.isLoading.value" />
     <div v-else-if="versions.isError.value" class="panel-body"><ErrorAlert :error="versions.error.value" :on-retry="() => versions.refetch()" /></div>
     <div v-else-if="versions.data.value" class="panel-body flush">
-      <table class="data">
+      <table class="data list-table">
         <thead>
           <tr>
             <th scope="col">{{ t("customization.history.colVersion") }}</th>
@@ -55,7 +55,7 @@ async function onRestore() {
         </thead>
         <tbody>
           <tr v-for="v in versions.data.value.data" :key="v.version" :class="{ selected: shown === v.version }">
-            <td>{{ v.version }} <span v-if="v.isCurrent" class="badge ok">{{ t("customization.history.current") }}</span></td>
+            <td><span class="mono">{{ v.version }}</span> <span v-if="v.isCurrent" class="badge ok"><span class="status-dot" aria-hidden="true" />{{ t("customization.history.current") }}</span></td>
             <td>{{ formatDateTime(v.createdAt) }}</td>
             <td>{{ v.actorName ?? "" }} <span v-if="actorLabel(v.actorType)" class="muted">({{ actorLabel(v.actorType) }})</span></td>
             <td>{{ v.comment ?? "" }}</td>
@@ -66,7 +66,7 @@ async function onRestore() {
           </tr>
         </tbody>
       </table>
-      <PaginationBar :total="versions.data.value.page.total" :limit="page.limit" :offset="page.offset" @change="(p) => (page = p)" />
+      <PaginationBar numbered :total="versions.data.value.page.total" :limit="page.limit" :offset="page.offset" @change="(p) => (page = p)" />
     </div>
   </section>
   <section v-if="shown !== undefined" class="panel" style="margin-top: var(--sp-4)">
