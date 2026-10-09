@@ -58,6 +58,7 @@ const KIND_ICONS: Record<NotificationKind, IconName> = {
   approval_closed: "circle-check",
   workflow_transition: "arrow-right",
   import_finished: "upload",
+  workflow_action: "bell",
 };
 
 // A new arrival changes the count: refresh an open list with it.

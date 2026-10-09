@@ -5,7 +5,7 @@ import type { Notification } from "../src/api/notifications";
 import { en } from "../src/i18n/en";
 import { badgeText, describeNotification, notificationTarget } from "../src/lib/notifications";
 
-const KINDS = ["approval_requested", "approval_closed", "workflow_transition", "import_finished"] as const;
+const KINDS = ["approval_requested", "approval_closed", "workflow_transition", "import_finished", "workflow_action"] as const;
 const ID = "0b9c5e8e-7a51-4c3e-9d6c-3f2a1b0c9d8e";
 const INSTANCE = "5f1c2d3e-4b5a-4687-9a0b-1c2d3e4f5a6b";
 const note = (kind: Notification["kind"], entityType: Notification["entityType"], data: Record<string, unknown>) =>
@@ -41,6 +41,17 @@ describe("notification labels", () => {
     assert.equal(describeNotification(note("workflow_transition", "workflow_instances", { ...base, event: "transition" })).title, "db-02 moved from Active to Retired");
     assert.equal(describeNotification(note("workflow_transition", "workflow_instances", { ...base, event: "cancel" })).title, "The workflow on db-02 was cancelled");
     assert.equal(describeNotification(note("workflow_transition", "workflow_instances", { ...base, event: "force" })).title, "db-02 was set to Retired by force");
+  });
+
+  test("a configured workflow notification reads like the event it reports, with the action's name", () => {
+    const base = { ciLabel: "db-02", fromStateName: "Active", toStateName: "Retired", actorName: "bob", actionName: "Tell Ops" };
+    const moved = describeNotification(note("workflow_action", "workflow_instances", { ...base, event: "transition", definitionName: "Lifecycle", transitionName: "Retire" }));
+    assert.equal(moved.title, "db-02 moved from Active to Retired");
+    assert.equal(moved.detail, "Lifecycle · Retire · Tell Ops · by bob");
+    const approval = describeNotification(
+      note("workflow_action", "workflow_approval_requests", { ...base, event: "approval_request", transitionName: "Retire" }),
+    );
+    assert.equal(approval.title, "Approval of Retire on db-02: requested");
   });
 
   test("imports say whether they failed", () => {

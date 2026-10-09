@@ -46,6 +46,15 @@ const CLOSE_REASONS: Record<string, MessageKey> = {
   ci_deleted: "notifications.reason.ciDeleted",
 };
 
+/** Approval events a configured workflow notification can report (`data.event`). */
+const APPROVAL_EVENTS: Record<string, MessageKey> = {
+  approval_request: "notifications.event.approval_request",
+  approval_decision: "notifications.event.approval_decision",
+  approval_close: "notifications.event.approval_close",
+  approval_withdraw: "notifications.event.approval_withdraw",
+  approval_overdue: "notifications.event.approval_overdue",
+};
+
 const IMPORT_FINISHED: Record<string, MessageKey> = {
   completed: "notifications.text.importCompleted",
   completed_with_errors: "notifications.text.importCompletedWithErrors",
@@ -81,10 +90,19 @@ export function describeNotification(n: Pick<Notification, "kind" | "data">): { 
         detail: join(workflow, reason ? t(reason) : null, by && t("notifications.detail.by", { name: by })),
       };
     }
-    case "workflow_transition": {
+    case "workflow_transition":
+    case "workflow_action": {
+      const event = str(d, "event");
+      const approvalEvent = event ? APPROVAL_EVENTS[event] : undefined;
+      if (n.kind === "workflow_action" && approvalEvent) {
+        const by = str(d, "actorName");
+        return {
+          title: t("notifications.text.workflowApprovalEvent", { transition, ci, event: t(approvalEvent) }),
+          detail: join(workflow, str(d, "actionName"), by && t("notifications.detail.by", { name: by })),
+        };
+      }
       const from = str(d, "fromStateName") ?? str(d, "fromStateKey") ?? t("notifications.fallback.state");
       const to = str(d, "toStateName") ?? str(d, "toStateKey") ?? t("notifications.fallback.state");
-      const event = str(d, "event");
       const title =
         event === "cancel"
           ? t("notifications.text.workflowCancelled", { ci })
@@ -94,7 +112,12 @@ export function describeNotification(n: Pick<Notification, "kind" | "data">): { 
       const actor = str(d, "actorName");
       return {
         title,
-        detail: join(workflow, event === "transition" ? transition : null, actor && t("notifications.detail.by", { name: actor })),
+        detail: join(
+          workflow,
+          event === "transition" ? transition : null,
+          n.kind === "workflow_action" ? str(d, "actionName") : null,
+          actor && t("notifications.detail.by", { name: actor }),
+        ),
       };
     }
     case "import_finished": {
