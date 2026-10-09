@@ -684,6 +684,7 @@ const notFound = computed(() => {
   align-items: flex-start;
 }
 .radio-choice input {
+  /* token-lint-allow: geometry; aligns the radio with the label's first line. */
   margin-top: 3px;
 }
 .copy-row {

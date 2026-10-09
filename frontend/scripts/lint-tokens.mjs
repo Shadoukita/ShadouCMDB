@@ -1,5 +1,5 @@
-// Tokens all the way down (SHAA-1670 design document §1, rule 4): no colour, font, radius, shadow or
-// z-index literal outside src/styles/tokens.css. Checks every stylesheet and every <style> block in a
+// Tokens all the way down (SHAA-1670 design document §1, rule 4): no colour, font, radius, shadow,
+// z-index or spacing literal outside src/styles/tokens.css. Checks every stylesheet and every <style> block in a
 // .vue file, and exits 1 with the file and line of each offending declaration.
 //
 //   npm run lint -w frontend          (CI runs it as `npm run lint --workspaces --if-present`)
@@ -40,6 +40,18 @@ const RULES = [
     what: "a --shadow-* token, or an inset bar in a colour token",
   },
 ];
+// Spacing (audit X9): padding, margin and gap take the --space-* scale. A var() of any token, 0, auto, a
+// -1px border overlap and relative units pass; so does calc(), which is geometry (an icon's width beside
+// the spacing). An optical offset that centres a dot or a box on a line uses token-lint-allow.
+const SPACING_PROP = /^(padding|margin|gap|row-gap|column-gap|inset)(-[a-z-]+)?$/;
+function offScale(value) {
+  let rest = value;
+  for (let prev = ""; prev !== rest; ) {
+    prev = rest;
+    rest = rest.replace(/(calc|var|min|max|clamp|env)?\([^()]*\)/g, " ");
+  }
+  return rest.split(/[\s,/]+/).some((part) => part !== "" && !/^(0|auto|inherit|-1px|-?[\d.]+(em|rem|%|ch|vh|vw|fr))$/.test(part));
+}
 const COLOUR_PROP = /^(color|background(-color)?|border(-[a-z]+)*(-color)?|outline(-color)?|fill|stroke|caret-color|accent-color|text-decoration(-color)?|column-rule(-color)?|box-shadow|--[\w-]+)$/;
 const HEX = /#[0-9a-f]{3,8}\b/i;
 const COLOUR_FN = /\b(rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\(/i;
@@ -88,6 +100,7 @@ for (const path of files(SRC)) {
     }
     const rule = RULES.find((r) => r.prop.test(prop));
     if (rule && !rule.allow.some((a) => a.test(value))) report(`use ${rule.what}`);
+    if (SPACING_PROP.test(prop) && offScale(value)) report("spacing literal: use a --space-* token");
   }
 }
 

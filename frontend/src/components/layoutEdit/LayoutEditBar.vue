@@ -315,7 +315,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
 .le-bar-save {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-0_5);
 }
 .le-bar-save {
   gap: var(--space-1);

@@ -184,7 +184,7 @@ function resetMenu() {
         <label for="nav-new-section">{{ t("customization.nav.newSection") }}</label>
         <input id="nav-new-section" v-model="newSection" type="text" maxlength="100" :placeholder="t('customization.nav.newSectionPlaceholder')" />
         <button type="submit" class="btn" :disabled="!newSection.trim()">{{ t("customization.nav.addSection") }}</button>
-        <span style="flex: 1" />
+        <span class="spacer" />
         <button type="button" class="btn" :disabled="doc.navigation.entries.length === 0" @click="resetMenu">{{ t("customization.nav.reset") }}</button>
       </form>
       <p class="hint">
