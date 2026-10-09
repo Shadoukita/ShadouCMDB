@@ -226,6 +226,25 @@ locks as a decision, so an overdue step gets exactly one event and one audit row
 to some processes, set `WORKFLOW_APPROVAL_SWEEP=off` on the others. At least one process must keep it
 on, or no step ever becomes overdue.
 
+### Workflow notification actions (outbox workers)
+
+A workflow can notify people when a transition runs, an approval request is made, moves to its next
+step, closes or becomes overdue, or an instance is cancelled or forced (Administration › Workflows,
+`PUT /api/v1/admin/workflow-definitions/{id}/actions`). Nothing is sent from the request: the
+transition's own transaction queues a run, so a transition that fails or is rolled back notifies no one.
+After commit, each `shadoucmdb serve` process fans the runs out to their recipients and delivers them
+(in-app notifications in this release). A recipient who may not view the CI's type is skipped, and the
+CI is never named to them.
+
+Several server processes on one database may all run the workers (`WORKFLOW_ACTIONS_WORKER=on`, the
+default): each run and each delivery is held by one process at a time under a lease, and a process that
+stops mid-way leaves work that another one takes over when the lease ends, without duplicates. To
+confine the workers to some processes, set `WORKFLOW_ACTIONS_WORKER=off` on the others; keep at least
+one on. The queue is bounded: past `WORKFLOW_ACTIONS_QUEUE_MAX` pending items, and past
+`WORKFLOW_ACTIONS_MAX_PER_INSTANCE_PER_HOUR` events on one instance (a loop), new runs are kept as
+`suppressed` and audited as `workflow.action_suppressed` rather than queued. The other limits and the
+retention periods are listed in `.env.example`.
+
 ## Backup, restore and reset
 
 `shadoucmdb backup` writes a consistent, checksummed backup of every table without pg_dump.

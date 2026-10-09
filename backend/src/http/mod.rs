@@ -65,6 +65,8 @@ pub struct AppState {
     pub imports: Arc<crate::config::ImportConfig>,
     /// Business service limits (`BUSINESS_SERVICE_*`).
     pub business_services: crate::config::BusinessServiceConfig,
+    /// Workflow action limits (`WORKFLOW_ACTIONS_*`).
+    pub workflow_actions: crate::config::WorkflowActionsConfig,
     /// Saved-view count requests running at once (GH#780).
     pub view_counts: Arc<tokio::sync::Semaphore>,
     /// Inventory exports in progress (`EXPORT_MAX_CONCURRENT`, GH#801).
@@ -95,6 +97,7 @@ impl AppState {
             impact: Arc::default(),
             imports: Arc::default(),
             business_services: Default::default(),
+            workflow_actions: Default::default(),
             view_counts: Arc::new(tokio::sync::Semaphore::new(crate::modules::saved_views::service::count_slots(
                 pool.options().get_max_connections(),
             ))),
@@ -134,6 +137,11 @@ impl AppState {
 
     pub fn with_business_services(mut self, limits: crate::config::BusinessServiceConfig) -> Self {
         self.business_services = limits;
+        self
+    }
+
+    pub fn with_workflow_actions(mut self, limits: crate::config::WorkflowActionsConfig) -> Self {
+        self.workflow_actions = limits;
         self
     }
 
@@ -824,6 +832,7 @@ pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'sta
         .limited(&cfg.http)
         .with_impact(cfg.impact)
         .with_business_services(cfg.business_services)
+        .with_workflow_actions(cfg.workflow_actions)
         .with_exports(cfg.exports)
         .importing(&cfg.imports);
     // Before listening: rows under a key that is not configured stop the server
@@ -848,6 +857,11 @@ pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'sta
     let note_retention = crate::modules::ci_notes::service::spawn_retention(pool.clone());
     let notifications = crate::modules::notifications::service::Retention::spawn(pool.clone(), cfg.notifications);
     let approval_sweep = crate::modules::workflows::runtime::sweep::Sweep::spawn(pool.clone(), cfg.approval_sweep);
+    let action_outbox = crate::modules::workflows::actions::outbox::Outbox::spawn(
+        pool.clone(),
+        cfg.workflow_actions,
+        crate::modules::workflows::actions::outbox::Channels::default(),
+    );
 
     let listener = TcpListener::bind((cfg.api_host.as_str(), cfg.api_port))
         .await
@@ -906,6 +920,9 @@ pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'sta
     notifications.stop().await;
     if let Some(sweep) = approval_sweep {
         sweep.stop().await;
+    }
+    if let Some(outbox) = action_outbox {
+        outbox.stop().await;
     }
     if let Some(exporter) = exporter {
         exporter.stop().await;
@@ -1577,6 +1594,7 @@ mod tests {
             exports: Default::default(),
             notifications: Default::default(),
             approval_sweep: Default::default(),
+            workflow_actions: Default::default(),
         };
         configure(&mut cfg);
         router(AppState::new(pool, auth, crate::secrets::Keyring::for_tests()), &cfg)

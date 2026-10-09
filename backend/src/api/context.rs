@@ -81,6 +81,10 @@ pub struct ClientInfo {
     /// `AUDIT_CAPTURE_CLIENT_IP` says (processed in memory only), and never
     /// stored or logged.
     pub net: crate::auth::throttle::Net,
+    /// `X-ShadouCMDB-Cause`: the workflow action delivery a client (a webhook
+    /// receiver) says caused this request. Recorded on the workflow events it
+    /// writes, for the echo-loop breaker (SHAA-2725 §7.4); evidence only.
+    pub cause: Option<Uuid>,
 }
 
 /// Per-request context handed to services: the caller, the audit actor and a request id.

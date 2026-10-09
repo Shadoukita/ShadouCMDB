@@ -8,6 +8,7 @@
 //! Running workflows on CIs is the runtime API ([`runtime`], S3), whose
 //! routes are [`runtime_routes`].
 
+pub mod actions;
 pub mod adopt;
 #[cfg(test)]
 mod adopt_tests;
@@ -117,6 +118,8 @@ const PUBLISH: &str = "/api/v1/admin/workflow-definitions/{id}/draft/publish";
 const GRANTS: &str = "/api/v1/admin/workflow-definitions/{id}/grants";
 const APPROVERS: &str = "/api/v1/admin/workflow-definitions/{id}/approvers";
 const APPROVER_PREVIEW: &str = "/api/v1/admin/workflow-definitions/{id}/approvers/preview";
+const ACTIONS: &str = "/api/v1/admin/workflow-definitions/{id}/actions";
+const ACTION_PREVIEW: &str = "/api/v1/admin/workflow-definitions/{id}/actions/{key}/preview";
 const BOOTSTRAP: &str = "/api/v1/admin/workflow-definitions/{id}/bootstrap";
 const MIGRATIONS: &str = "/api/v1/admin/workflow-definitions/{id}/instance-migrations";
 
@@ -459,6 +462,66 @@ pub fn routes() -> Vec<Route> {
                 |api,
                  In(IdPath(id), Query(q), NoBody): In<IdPath, Query<WorkflowApproverPreviewQuery>, NoBody>| async move {
                     Ok(Json(approvers::preview(&api.pool, &api.ctx, id, &q).await?))
+                },
+            ),
+        route(Method::GET, ACTIONS, "getWorkflowActions")
+            .tag(TAG)
+            .summary("The workflow's notification actions: who is told what, when")
+            .description(
+                "An action has a kind (`inbox`: an entry in each recipient's notifications; `email` and `webhook` \
+                 come in a later release), a trigger (`transition`, `approval_requested`, `approval_step`, \
+                 `approval_closed`, `approval_overdue` on the transition `transition`, or `instance_cancelled`, \
+                 `instance_forced`) and recipient sources, resolved when the action runs. Actions are on the \
+                 definition: a change applies at once to every version, without publishing. Nothing is sent from \
+                 the request that runs the transition; the event's transaction queues a run, and the action \
+                 workers deliver it after commit to each recipient who may then view the CI's type. `problems` \
+                 holds the lint's warnings.",
+            )
+            .requires(manage)
+            .errors(&[ErrorCode::NotFound])
+            .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
+                Ok(Json(actions::get(&api.pool, &api.ctx, id, api.workflow_actions.max_recipients).await?))
+            }),
+        route(Method::PUT, ACTIONS, "replaceWorkflowActions")
+            .tag(TAG)
+            .summary("Replace the workflow's notification actions")
+            .description(
+                "`actions` is the complete new set, in order; an action keeps its id and its delivery history by \
+                 `key`. Send the workflow's `version`: 409 VERSION_CONFLICT if it changed in between. A change bumps \
+                 the workflow's version and is audited as an `update` with the actions before and after, recipients \
+                 by name. 400 VALIDATION_ERROR: `required` / `not_applicable` / `source_mismatch` for fields the kind, \
+                 trigger or source needs or does not take; `unknown_transition` for a transition no version and not \
+                 the draft has; `not_found` for an unknown profile, group or user; `duplicate`; `too_many_actions` \
+                 beyond 10 per trigger and transition; `unknown_placeholder` in an e-mail text; `kind_unavailable` \
+                 for `email` and `webhook`, and `source_unavailable` for sources other than `profile`, `group` and \
+                 `user`, until the release that delivers them. Runs already queued for a removed or disabled action \
+                 are cancelled.",
+            )
+            .requires(manage)
+            .session_only()
+            .errors(&[ErrorCode::NotFound, ErrorCode::VersionConflict])
+            .handle(
+                |api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<actions::WorkflowActionsReplace>>| async move {
+                    Ok(Json(actions::replace(&api.pool, &api.ctx, id, &b, api.workflow_actions.max_recipients).await?))
+                },
+            ),
+        route(Method::GET, ACTION_PREVIEW, "previewWorkflowAction")
+            .tag(TAG)
+            .summary("Who an action would notify now, and why each user is in or out")
+            .description(
+                "Resolves the action's recipient sources to users as a run would now: `included`, or out with a \
+                 reason (`inactive`, `no_view`: may not view the type of the CI `ciId`, or of the workflow without \
+                 it, `truncated`: beyond `WORKFLOW_ACTIONS_MAX_RECIPIENTS`). Whoever runs the event is left out too \
+                 unless the action sets `excludeActor: false`. Nothing is sent. 404 for an unknown action, and for a \
+                 CI that does not exist or that the caller may not view.",
+            )
+            .requires(manage)
+            .class_checked()
+            .errors(&[ErrorCode::NotFound])
+            .handle(
+                |api,
+                 In(path, Query(q), NoBody): In<actions::ActionKeyPath, Query<actions::WorkflowActionPreviewQuery>, NoBody>| async move {
+                    Ok(Json(actions::preview(&api.pool, &api.ctx, &path, &q, api.workflow_actions.max_recipients).await?))
                 },
             ),
         route(Method::POST, MIGRATIONS, "migrateWorkflowInstances")

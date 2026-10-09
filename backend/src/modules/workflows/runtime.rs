@@ -731,8 +731,8 @@ pub(super) async fn insert_event(
         "INSERT INTO cmdb.workflow_instance_events
            (instance_id, kind, transition_key, from_state_key, to_state_key, to_version_no,
             actor_type, actor_id, actor_name, comment, field_changes, request_id, approval_request_id, approval_step_no,
-            on_behalf_of_name)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
+            on_behalf_of_name, caused_by_delivery_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
     )
     .bind(e.instance)
     .bind(e.kind)
@@ -749,6 +749,8 @@ pub(super) async fn insert_event(
     .bind(e.approval.map(|a| a.0))
     .bind(e.approval.and_then(|a| a.1))
     .bind(e.on_behalf_of)
+    // The echo-loop breaker reads it on transitions only (SHAA-2725 §7.4).
+    .bind(ctx.client.cause.filter(|_| e.kind == "transition"))
     .execute(conn)
     .await?;
     Ok(())

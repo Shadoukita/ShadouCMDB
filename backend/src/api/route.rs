@@ -56,6 +56,8 @@ pub struct Api {
     pub imports: Arc<crate::config::ImportConfig>,
     /// Business service limits (`BUSINESS_SERVICE_*`).
     pub business_services: crate::config::BusinessServiceConfig,
+    /// Workflow action limits (`WORKFLOW_ACTIONS_*`).
+    pub workflow_actions: crate::config::WorkflowActionsConfig,
     /// Saved-view count requests running at once.
     pub view_counts: Arc<tokio::sync::Semaphore>,
     /// Inventory exports in progress.
@@ -202,6 +204,11 @@ impl<T: IntoParams + DeserializeOwned + Send + 'static> QueryInput for Query<T> 
 
 pub trait BodyInput: Sized + Send + 'static {
     fn schema() -> Option<RefOr<Schema>>;
+    /// The components the body schema references: a type used only in
+    /// request bodies is documented through these.
+    fn nested() -> Vec<(String, RefOr<Schema>)> {
+        Vec::new()
+    }
     fn parse(body: Option<Value>) -> Result<Self, AppError>;
 
     /// Reads the request body: by default the whole of it, as JSON, up to
@@ -303,6 +310,11 @@ impl<T: ToSchema + DeserializeOwned + Check + Send + 'static> BodyInput for Body
     fn schema() -> Option<RefOr<Schema>> {
         Some(T::schema())
     }
+    fn nested() -> Vec<(String, RefOr<Schema>)> {
+        let mut out = Vec::new();
+        T::schemas(&mut out);
+        out
+    }
 
     fn parse(body: Option<Value>) -> Result<Self, AppError> {
         parse_body(required_body(body)?).map(Body).map_err(|e| AppError::validation(e.errors))
@@ -323,6 +335,9 @@ pub struct CheckedBody<T>(pub Result<T, InvalidBody>);
 impl<T: ToSchema + DeserializeOwned + Check + Send + 'static> BodyInput for CheckedBody<T> {
     fn schema() -> Option<RefOr<Schema>> {
         Some(T::schema())
+    }
+    fn nested() -> Vec<(String, RefOr<Schema>)> {
+        Body::<T>::nested()
     }
 
     fn parse(body: Option<Value>) -> Result<Self, AppError> {
@@ -668,6 +683,8 @@ pub struct Route {
     pub path_params: Vec<Parameter>,
     pub query_params: Vec<Parameter>,
     pub body: Option<RefOr<Schema>>,
+    /// The components `body` references.
+    pub body_nested: Vec<(String, RefOr<Schema>)>,
     /// Media types of a raw body ([`RouteBuilder::raw_body`]); empty for JSON.
     pub body_media: &'static [&'static str],
     /// The route bounds its own duration instead of `HTTP_REQUEST_TIMEOUT_SECS`.
@@ -899,6 +916,10 @@ impl RouteBuilder {
                         peer_ip,
                         user_agent: auth::session::user_agent(&headers).filter(|_| capture.user_agent),
                         net: auth::throttle::Net::of(trusted_ip),
+                        cause: headers
+                            .get("x-shadoucmdb-cause")
+                            .and_then(|v| v.to_str().ok())
+                            .and_then(|v| Uuid::parse_str(v.trim()).ok()),
                     };
                     let net = client.net;
                     let used = auth::token::Use { method: &method, path: uri.path(), operation_id: &operation_id };
@@ -970,6 +991,7 @@ impl RouteBuilder {
                         impact: state.impact,
                         imports: state.imports,
                         business_services: state.business_services,
+                        workflow_actions: state.workflow_actions,
                         view_counts: state.view_counts,
                         exports: state.exports,
                     };
@@ -1013,6 +1035,7 @@ impl RouteBuilder {
             path_params: P::params(),
             query_params: Q::params(),
             body: B::schema(),
+            body_nested: B::nested(),
             body_media: self.body_media,
             own_timeout: self.own_timeout,
             response,

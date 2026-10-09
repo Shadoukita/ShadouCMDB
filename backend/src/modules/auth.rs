@@ -1636,6 +1636,7 @@ pub(crate) mod tests {
             peer_ip: Some(peer.parse().unwrap()),
             user_agent: Some("audit-test".into()),
             net: Net::of(Some(ip.parse().unwrap())),
+            cause: None,
         };
         anon().with_client(client)
     }

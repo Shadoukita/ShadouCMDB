@@ -55,7 +55,7 @@ export const CREATED = ["admin/profiles", "admin/groups", "admin/users", "admin/
  * (create answers 410) and empty on a fresh install, so they cannot be given a row.
  */
 export const LEGACY = ["statuses", "environments", "locations", "owners"];
-export const OPTIONAL = ["schema-changes", "notifications", ...LEGACY, "ui-settings/versions", "admin/templates", "ui-settings/class-layouts", "admin/workflow-definitions/versions"];
+export const OPTIONAL = ["schema-changes", "notifications", ...LEGACY, "ui-settings/versions", "admin/templates", "ui-settings/class-layouts", "admin/workflow-definitions/versions", "admin/workflow-definitions/actions"];
 
 /** Paths whose parameter names an object of another resource. */
 export const ALIASES = {
@@ -64,6 +64,8 @@ export const ALIASES = {
   "business-services/{id}/members": "configuration-items",
   // GET /admin/workflow-definitions/{id}/versions/{no}: a version number, not an id.
   "admin/workflow-definitions/{id}/versions": "admin/workflow-definitions/versions",
+  // GET /admin/workflow-definitions/{id}/actions/{key}/preview: an action key of the definition.
+  "admin/workflow-definitions/{id}/actions": "admin/workflow-definitions/actions",
   // PATCH/DELETE /configuration-items/{id}/notes/{noteId}: a note of the example CI.
   "configuration-items/{id}/notes": "ci-notes",
 };
@@ -202,6 +204,8 @@ async function collect(request) {
     await request("POST", "admin/workflow-definitions", { key: "dast_scan_target", name, classId: serverClass.id })
   ).id;
   examples["admin/workflow-definitions/versions"] = 1;
+  // The definition has no actions, so a preview answers 404 after the handler looked the key up.
+  examples["admin/workflow-definitions/actions"] = "dast_scan_action";
   // A running instance of a second, published workflow on a demo server: the scan may run its
   // transition, force its state and cancel it.
   const flow = await request("POST", "admin/workflow-definitions", { key: "dast_scan_instance", name: `${name} (running)`, classId: serverClass.id });

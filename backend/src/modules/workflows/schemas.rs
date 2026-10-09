@@ -336,7 +336,7 @@ pub struct WorkflowState {
     pub state_value: Option<String>,
 }
 
-fn nullable_key_schema() -> Schema {
+pub(super) fn nullable_key_schema() -> Schema {
     utoipa::openapi::schema::AnyOfBuilder::new()
         .item(key_schema())
         .item(ObjectBuilder::new().schema_type(Type::Null))
