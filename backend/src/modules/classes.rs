@@ -3007,6 +3007,15 @@ mod tests {
             json!({ "classId": class, "key": "notes", "label": "Notes", "dataType": "text" }),
         )
         .await;
+        let reference = post(
+            "/api/v1/attribute-definitions",
+            json!({ "classId": class, "key": "peer", "label": "Peer", "dataType": "reference", "referenceClassId": class }),
+        )
+        .await;
+        // A populated field: the refusal comes before any look at the values, which stay.
+        let target = post("/api/v1/configuration-items", json!({ "classId": class })).await;
+        let holder =
+            post("/api/v1/configuration-items", json!({ "classId": class, "attributes": { "peer": target } })).await;
         let refused = |v: &Value| {
             let d = &v["error"]["details"][0];
             (code(v).to_owned(), d["field"].as_str().map(str::to_owned), d["code"].as_str().map(str::to_owned))
@@ -3017,9 +3026,16 @@ mod tests {
             Some("type_change_unsupported".to_owned()),
         );
 
-        for (field, to) in
-            [(&lookup, "text"), (&lookup, "integer"), (&lookup, "reference"), (&text, "lookup"), (&text, "reference")]
-        {
+        for (field, to) in [
+            (&lookup, "text"),
+            (&lookup, "integer"),
+            (&lookup, "reference"),
+            (&text, "lookup"),
+            (&text, "reference"),
+            (&reference, "text"),
+            (&reference, "ip"),
+            (&reference, "lookup"),
+        ] {
             let url = format!("/api/v1/attribute-definitions/{field}");
             let (status, v, _) = call(&app, "PATCH", &url, &admin, Some(json!({ "dataType": to }))).await;
             assert_eq!((status, refused(&v)), (422, expected.clone()), "PATCH {field} to {to}: {v}");
@@ -3032,11 +3048,17 @@ mod tests {
         let restate = json!({ "dataType": "lookup", "label": "Tier level" });
         let (status, v, _) = call(&app, "PATCH", &url, &admin, Some(restate)).await;
         assert_eq!((status, v["label"].as_str()), (200, Some("Tier level")), "{v}");
-        for (field, ty) in [(&lookup, "lookup"), (&text, "text")] {
+        let url = format!("/api/v1/attribute-definitions/{reference}");
+        let restate = json!({ "dataType": "reference", "label": "Peer CI" });
+        let (status, v, _) = call(&app, "PATCH", &url, &admin, Some(restate)).await;
+        assert_eq!((status, v["label"].as_str()), (200, Some("Peer CI")), "{v}");
+        for (field, ty) in [(&lookup, "lookup"), (&text, "text"), (&reference, "reference")] {
             let (status, v, _) =
                 call(&app, "GET", &format!("/api/v1/attribute-definitions/{field}"), &admin, None).await;
             assert_eq!((status, v["dataType"].as_str()), (200, Some(ty)), "{v}");
         }
+        let (status, v, _) = call(&app, "GET", &format!("/api/v1/configuration-items/{holder}"), &admin, None).await;
+        assert_eq!((status, v["attributes"]["peer"].as_str()), (200, Some(target.as_str())), "{v}");
         db.drop().await;
     }
 
