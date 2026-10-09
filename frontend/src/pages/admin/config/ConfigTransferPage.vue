@@ -287,7 +287,7 @@ const sectionName = (s: string) => SECTION_NAMES[s] ?? s;
 }
 .import-changes summary {
   cursor: pointer;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   padding: var(--space-1) 0;
 }
 </style>

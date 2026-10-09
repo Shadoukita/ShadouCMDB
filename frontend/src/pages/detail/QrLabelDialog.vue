@@ -143,6 +143,7 @@ function print() {
     border: 0;
   }
   html.printing-qr .qr-label figcaption {
+    /* token-lint-allow: a printed label is black on white paper in either theme */
     color: #000;
   }
 }

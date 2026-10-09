@@ -297,7 +297,7 @@ const canLower = computed(() => props.layer.index > 1);
 .le-win:not(.stacked) > :deep(.panel) > .panel-header {
   position: sticky;
   top: 0;
-  z-index: 2;
+  z-index: var(--z-pinned);
   background: var(--c-surface);
   cursor: move;
 }
@@ -312,13 +312,13 @@ const canLower = computed(() => props.layer.index > 1);
   position: absolute;
   top: -9px;
   left: var(--space-4);
-  z-index: 3;
+  z-index: var(--z-grip);
   display: inline-flex;
   align-items: center;
   height: 18px;
   padding: 0 var(--space-2);
   border: 1px solid var(--c-border-strong);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--c-surface);
   color: var(--c-text-secondary);
   cursor: move;
@@ -338,7 +338,7 @@ const canLower = computed(() => props.layer.index > 1);
 /* Resize handles: strips along the edges and squares at the corners, just outside the window. */
 .win-edge {
   position: absolute;
-  z-index: 4;
+  z-index: var(--z-handle);
 }
 .win-edge.n,
 .win-edge.s {
@@ -397,26 +397,26 @@ const canLower = computed(() => props.layer.index > 1);
 .le-win.selected > .win-edge.se {
   border-right: 3px solid var(--c-primary);
   border-bottom: 3px solid var(--c-primary);
-  border-radius: 0 0 3px 0;
+  border-radius: 0 0 var(--radius-xs) 0;
 }
 .win-readout {
   position: absolute;
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  z-index: 5;
+  z-index: var(--z-floating);
   padding: var(--space-0_5) var(--space-2);
   border-radius: var(--radius-sm);
   background: var(--c-primary);
   color: var(--c-primary-text);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   pointer-events: none;
 }
 .win-menu {
   position: absolute;
-  z-index: 10;
+  z-index: var(--z-dropdown);
   display: flex;
   flex-direction: column;
   min-width: 220px;

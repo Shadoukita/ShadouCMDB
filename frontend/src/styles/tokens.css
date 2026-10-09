@@ -46,6 +46,7 @@
   --font-sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 
+  --fs-2xs: 10px; /* counts on the rail's small badges only */
   --fs-xs: 11px; /* badges, overline labels, kbd hints */
   --fs-sm: 12px; /* labels, help text, table headers, breadcrumbs */
   --fs-md: 13px; /* body, table cells, controls */
@@ -56,6 +57,7 @@
   --fs-h1: 24px; /* page and record title */
   --fs-display: 28px; /* sign-in and dashboard greeting */
   --fs-kpi: 28px; /* stat tiles and dashboard figures */
+  --fs-brand: 16px; /* the brand tile letter */
   --fs-overline: 11px; /* uppercase table headers and stat labels */
 
   --lh-tight: 1.25;
@@ -81,6 +83,7 @@
   --space-12: 48px;
 
   /* ---------- Radius and elevation ---------- */
+  --radius-xs: 2px; /* bars, swatches and marks a few pixels wide */
   --radius-sm: 4px; /* badges, checkboxes, query tokens */
   --radius-md: 8px; /* buttons, inputs, menus, nav rows */
   --radius-lg: 12px; /* panels, cards, stat tiles, popovers, dialogs */
@@ -92,12 +95,20 @@
   --c-scrim: rgb(15 18 22 / 50%);
   --c-scroll-shade: rgb(16 24 40 / 14%); /* the edge of a scroll area with more content beyond it */
 
-  --z-raised: 1;
+  /* Layers inside one stacking context (a layout window, a field, the page body), lowest first. */
+  --z-raised: 1; /* a hovered or focused item above its neighbours */
+  --z-pinned: 2; /* a sticky header inside a scrolling window */
+  --z-grip: 3; /* a window's drag grip */
+  --z-handle: 4; /* resize handles and floating field toolbars */
+  --z-floating: 5; /* size readouts, guides and the save bar */
+  --z-edit-bar: 6; /* the layout editor bar */
+  /* Page layers. */
   --z-sticky: 10;
   --z-dropdown: 30;
   --z-drawer: 40;
   --z-dialog: 50;
   --z-toast: 60;
+  --z-snap: 9999; /* a layout editor snap line: above every window, whose order the operator sets */
 
   /* ---------- Density (standard; comfortable below, on <html data-density="comfortable">) ---------- */
   --row-h: 28px; /* table and facet rows */
@@ -117,6 +128,7 @@
   --c-surface: var(--gray-0);
   --c-surface-alt: var(--gray-25);
   --c-surface-sunken: var(--gray-100);
+  --c-surface-inverse: var(--gray-950); /* the dark attention card on the light dashboard */
   --c-border: var(--gray-150); /* panels, table rules: decorative */
   --c-border-strong: var(--gray-300);
   --c-border-control: var(--gray-400); /* inputs, secondary buttons: 3.7:1 surface, 3.5:1 alt, 3.4:1 bg */

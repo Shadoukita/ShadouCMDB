@@ -195,7 +195,7 @@ table.count-table td.share {
 .kpi-bars > span {
   flex: 1;
   min-width: 2px;
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   background: var(--c-surface-sunken);
 }
 .kpi-bars > span.current {
@@ -256,7 +256,7 @@ table.count-table td.share {
 .legend-key {
   width: 10px;
   height: 10px;
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
 }
 .legend-key.s-updated {
   background: var(--c-viz-1);
@@ -332,7 +332,7 @@ table.count-table td.share {
   flex: none;
   width: 8px;
   height: 8px;
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   background: var(--viz);
 }
 .count-track {
@@ -416,7 +416,7 @@ table.count-table td.share {
   height: 100%;
   padding: var(--space-5);
   border-radius: var(--radius-lg);
-  background: var(--gray-950);
+  background: var(--c-surface-inverse);
   color: var(--c-text);
 }
 /* On the dark canvas the panel is a raised surface with a rule, as the other cards. */
@@ -433,7 +433,7 @@ table.count-table td.share {
 .attention-head h2 {
   margin: 0;
   font-size: var(--fs-h2);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   color: var(--c-sidebar-text-strong);
 }
 .attention-n {
@@ -477,7 +477,7 @@ table.count-table td.share {
   border-radius: var(--radius-md);
   font-family: var(--font-mono);
   font-size: var(--fs-md);
-  font-weight: 500;
+  font-weight: var(--fw-medium);
   font-variant-numeric: tabular-nums;
 }
 .attention-count.tone-no_owner {
@@ -490,7 +490,7 @@ table.count-table td.share {
 }
 .attention-count.tone-no_relationships {
   background: var(--c-primary-subtle);
-  color: var(--cyan-300);
+  color: var(--c-sidebar-link);
 }
 .attention-count.tone-pending_approval,
 .attention-count.tone-none {
@@ -504,7 +504,7 @@ table.count-table td.share {
   min-width: 0;
 }
 .attention-title {
-  font-weight: 500;
+  font-weight: var(--fw-medium);
   color: var(--c-sidebar-text-strong);
 }
 .attention-desc,

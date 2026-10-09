@@ -285,7 +285,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
 .le-bar {
   position: sticky;
   top: calc(-1 * var(--space-3));
-  z-index: 6;
+  z-index: var(--z-edit-bar);
   display: flex;
   flex-direction: column;
   gap: var(--space-1);

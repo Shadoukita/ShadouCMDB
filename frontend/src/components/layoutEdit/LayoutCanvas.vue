@@ -951,7 +951,7 @@ function onHiddenDrop(e: DragEvent) {
   right: 0;
   top: -9px;
   height: 3px;
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   background: var(--c-primary);
 }
 .le-sep-label {
@@ -959,7 +959,7 @@ function onHiddenDrop(e: DragEvent) {
   background: none;
   font: inherit;
   font-size: var(--fs-sm);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   color: var(--c-text-secondary);
   cursor: text;
   padding: 0;
@@ -987,7 +987,7 @@ function onHiddenDrop(e: DragEvent) {
   position: absolute;
   right: 4px;
   bottom: 100%;
-  z-index: 4;
+  z-index: var(--z-handle);
   display: flex;
   align-items: center;
   gap: 2px;
@@ -1032,7 +1032,7 @@ function onHiddenDrop(e: DragEvent) {
 /* A line a moving window's edge snapped to. */
 .le-snap {
   position: absolute;
-  z-index: 9999;
+  z-index: var(--z-snap);
   background: var(--c-primary);
   pointer-events: none;
 }
@@ -1119,7 +1119,7 @@ function onHiddenDrop(e: DragEvent) {
 }
 .le-tab-label {
   padding: var(--space-2) var(--space-2);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   color: var(--c-text-secondary);
 }
 .le-tab.current .le-tab-label {
@@ -1139,7 +1139,7 @@ function onHiddenDrop(e: DragEvent) {
 }
 .le-rename {
   font: inherit;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   min-width: 160px;
   margin: var(--space-0_5) 0;
 }
