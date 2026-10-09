@@ -56,6 +56,7 @@ const forbidden = computed(() => ci.error.value instanceof ApiError && ci.error.
       { label: t('inventory.crumb'), to: '/cis' },
       { label: c.class.name, to: `/cis?classId=${c.classId}` },
       { label: c.label, to: `/cis/${c.id}` },
+      { label: t('common.edit') },
     ]"
     :requirement="t('denied.classEdit', { name: c.class.name })"
     :panel-title="t('denied.ci.panelTitle')"
