@@ -1609,6 +1609,89 @@ table.data.wf-grants .wf-grant-cell {
   text-align: center;
 }
 
+/* Approvals (SHAA-2798): a transition's steps, the approvers of each step and the preview. */
+.wf-steps {
+  list-style: none;
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  display: grid;
+  gap: var(--space-3);
+}
+.wf-step-body {
+  margin: 0;
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  background: var(--c-surface-alt);
+  display: grid;
+  gap: var(--space-2);
+}
+.wf-step-body > legend {
+  padding: 0 var(--space-1);
+  font-weight: var(--fw-medium);
+}
+.wf-step-body .wf-exclude {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.wf-step-body .wf-exclude legend {
+  color: var(--c-text-secondary);
+  padding: 0 0 var(--space-1);
+}
+.wf-due-amount {
+  width: 6rem;
+}
+.wf-approver-step {
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--c-border);
+  display: grid;
+  gap: var(--space-2);
+}
+.wf-approver-step:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+.wf-approver-step-title {
+  margin: 0;
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semibold);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+table.data.wf-approver-table {
+  max-width: 60rem;
+}
+.wf-approver-add,
+.wf-preview-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-2) var(--space-3);
+}
+.wf-approver-add > .field,
+.wf-preview-form > .field {
+  flex: 0 1 14rem;
+  min-width: 10rem;
+}
+.wf-approver-add > .combobox,
+.wf-preview-form .combobox {
+  flex: 1 1 18rem;
+}
+.wf-approver-add > .field.wf-approver-add-action {
+  flex: 1 1 14rem;
+}
+.wf-preview-actions {
+  flex: 1 0 100%;
+}
+table.data.wf-approver-table th:first-child {
+  width: 16rem;
+}
+
 /* ---------- CI page form (SHAA-1644) ----------
  * A CI's fields open as inputs; a field the user may not change shows its value where the input would be. */
 .ro-value {
