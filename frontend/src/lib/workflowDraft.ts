@@ -10,6 +10,7 @@ import type {
   WorkflowTransition,
   WorkflowVersion,
 } from "../api/workflows";
+import { checkSteps, stepFromApi, stepToApi, type DraftApprovalStep } from "./workflowApprovals";
 
 export type ConditionOp = "eq" | "ne" | "in" | "notIn" | "isSet" | "isNotSet" | "gt" | "gte" | "lt" | "lte" | "contains";
 export type FieldDataType = "text" | "number" | "integer" | "boolean" | "enum" | "date" | "datetime" | "ip" | "cidr" | "reference" | "lookup";
@@ -28,11 +29,13 @@ export interface ConditionGroup {
 }
 export type ConditionNode = ConditionLeaf | ConditionGroup;
 
-export interface DraftTransition extends Omit<WorkflowTransition, "conditions" | "fields" | "requiresComment"> {
+export interface DraftTransition extends Omit<WorkflowTransition, "conditions" | "fields" | "requiresComment" | "approval"> {
   requiresComment: boolean;
   fields: { attribute: string; required: boolean }[];
   /** The root group; no children means no condition. */
   conditions: ConditionGroup;
+  /** The approval policy's steps, in order; none means the transition runs without approval. */
+  approval: DraftApprovalStep[];
 }
 export interface DraftState extends Omit<WorkflowState, "terminal" | "stateValue"> {
   terminal: boolean;
@@ -178,6 +181,7 @@ export function draftFromVersion(v: Pick<WorkflowVersion, "initialState" | "stat
       requiresComment: t.requiresComment ?? false,
       fields: (t.fields ?? []).map((f) => ({ attribute: f.attribute, required: f.required ?? true })),
       conditions: parseConditions(t.conditions),
+      approval: (t.approval?.steps ?? []).map(stepFromApi),
     })),
     positions: layoutPositions(v.layout),
   };
@@ -200,6 +204,7 @@ export function toDraftBody(d: Draft, expectedChecksum?: string | null): Workflo
       const c = conditionsToJson(t.conditions);
       // Free-form objects in the spec generate as Record<string, never>.
       if (c) out.conditions = c as WorkflowTransition["conditions"];
+      if (t.approval.length) out.approval = { steps: t.approval.map(stepToApi) };
       return out;
     }),
     layout: positions as unknown as WorkflowDraftBody["layout"],
@@ -407,6 +412,7 @@ export function checkDraft(d: Draft): PlacedProblem[] {
       if (empty) add(target, `${path}.value`, `The condition on ${n.field} needs a value.`, "required");
     };
     walk(t.conditions, `transitions[${i}].conditions`);
+    for (const p of checkSteps(t.approval)) add(target, `transitions[${i}].${p.path}`, p.message, p.code);
   });
   return out;
 }

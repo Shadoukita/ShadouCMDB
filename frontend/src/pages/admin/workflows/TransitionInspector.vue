@@ -3,6 +3,7 @@ import { computed, ref, watch } from "vue";
 import type { AttributeDefinition } from "../../../api/datamodel";
 import { keyError } from "../../../lib/keys";
 import type { Draft, DraftTransition, PlacedProblem } from "../../../lib/workflowDraft";
+import ApprovalStepsEditor from "./ApprovalStepsEditor.vue";
 import ConditionGroupEditor from "./ConditionGroupEditor.vue";
 import ProblemList from "./ProblemList.vue";
 
@@ -40,6 +41,8 @@ function commitKey() {
     (next === "_cancel" ? "_cancel is reserved." : props.draft.transitions.some((t) => t.key === next) ? `Another transition already has the key ${next}.` : undefined);
   keyProblem.value = err;
   if (err) return;
+  // Steps of other transitions that exclude this one's actors follow the new key.
+  for (const tr of props.draft.transitions) for (const st of tr.approval) st.excludeActorsOf = st.excludeActorsOf.map((k) => (k === props.transition.key ? next : k));
   props.transition.key = next;
   emit("renamed", next);
 }
@@ -53,6 +56,7 @@ function addField() {
   toAdd.value = "";
 }
 const fid = (f: string) => `wf-tr-${f}`;
+const otherTransitions = computed(() => props.draft.transitions.filter((x) => x !== props.transition).map((x) => ({ key: x.key, name: x.name })));
 </script>
 
 <template>
@@ -143,6 +147,8 @@ const fid = (f: string) => `wf-tr-${f}`;
         <p class="hint no-margin">Checked on the CI's current values when the transition runs; it can run only when they hold.</p>
         <ConditionGroupEditor :group="transition.conditions" :fields="fields" :depth="1" :id-prefix="`wf-cond-${transition.key}`" />
       </fieldset>
+
+      <ApprovalStepsEditor :steps="transition.approval" :transition-key="transition.key" :others="otherTransitions" :problems="problems" />
 
       <div class="inline-actions">
         <button type="button" class="btn btn-sm btn-quiet-danger" @click="emit('remove')">Delete transition</button>

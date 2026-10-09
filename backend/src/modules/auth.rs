@@ -14,7 +14,9 @@ use uuid::Uuid;
 
 use super::mfa::{self, MfaStatus};
 use super::profiles::ClassPermission;
-use super::users::{self, User, UserCreate, password_problem, password_schema, required_email_schema, username_schema};
+use super::users::{
+    self, Locale, User, UserCreate, password_problem, password_schema, required_email_schema, username_schema,
+};
 use super::{people, sso};
 use crate::api::context::{RequestContext, unauthenticated};
 use crate::api::route::{
@@ -123,6 +125,18 @@ pub struct EmailEntry {
 }
 impl Check for EmailEntry {}
 
+/// Your own preferences; a field left out stays as it is
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionUpdate {
+    /// The language of the e-mails the server sends you; null: the server's
+    /// default (`MAIL_DEFAULT_LOCALE`)
+    #[schema(value_type = Option<Locale>, nullable)]
+    #[serde(default, deserialize_with = "schemas::patch")]
+    locale: Option<Option<Locale>>,
+}
+impl Check for SessionUpdate {}
+
 impl Check for PasswordChange {
     fn check(&self) -> Vec<FieldError> {
         password_problem("newPassword", &self.new_password)
@@ -173,6 +187,10 @@ pub struct Session {
     /// enter it with PUT /api/v1/auth/email; until then every other route but
     /// this one and sign-out answers 403 EMAIL_REQUIRED
     pub email_required: bool,
+    /// The language of the e-mails the server sends you; null: the server's
+    /// default (`MAIL_DEFAULT_LOCALE`). Set with PATCH /api/v1/auth/me
+    #[schema(required = true)]
+    pub locale: Option<Locale>,
     /// Send as the X-CSRF-Token header on every POST, PUT, PATCH and DELETE
     /// (also readable from the shadoucmdb_csrf cookie, `__Host-shadoucmdb_csrf` behind HTTPS)
     pub csrf_token: String,
@@ -188,7 +206,9 @@ async fn session_dto(pool: &PgPool, user_id: Uuid, session_id: Uuid, csrf_token:
     let permissions = data::load_permissions(&mut conn, user_id).await?;
     let mfa = mfa::status(&mut conn, user_id, Some(session_id)).await?;
     let email_required = user.email.is_none();
-    Ok(Session { user, permissions: EffectivePermissions::from(&permissions), mfa, email_required, csrf_token })
+    let locale =
+        sqlx::query_scalar("SELECT locale FROM cmdb.users WHERE id = $1").bind(user_id).fetch_one(&mut *conn).await?;
+    Ok(Session { user, permissions: EffectivePermissions::from(&permissions), mfa, email_required, locale, csrf_token })
 }
 
 /// Opens a session for the user and records `login.success`; returns its id and cookies.
@@ -1097,6 +1117,38 @@ async fn enter_email(pool: &PgPool, ctx: &RequestContext, b: EmailEntry) -> Resu
     session_dto(pool, me.user_id, session_id, csrf_token).await
 }
 
+/// Stores the caller's own preferences; a changed language is audited as an
+/// `update` on the user, the language before and after.
+async fn update_me(pool: &PgPool, ctx: &RequestContext, b: SessionUpdate) -> Result<Session, AppError> {
+    let me = principal(ctx)?;
+    let session_id = me.session_id().ok_or_else(unauthenticated)?;
+    let csrf_token = me.csrf_token().ok_or_else(unauthenticated)?.to_owned();
+    if let Some(locale) = b.locale {
+        let mut tx = pool.begin().await?;
+        let before: Option<Locale> = sqlx::query_scalar("SELECT locale FROM cmdb.users WHERE id = $1 FOR UPDATE")
+            .bind(me.user_id)
+            .fetch_one(&mut *tx)
+            .await?;
+        if before != locale {
+            sqlx::query("UPDATE cmdb.users SET locale = $2 WHERE id = $1")
+                .bind(me.user_id)
+                .bind(locale)
+                .execute(&mut *tx)
+                .await?;
+            let entry = AuditEntry {
+                action: AuditAction::Update,
+                entity_type: "users",
+                entity_id: me.user_id,
+                old_value: Some(serde_json::json!({ "locale": before })),
+                new_value: Some(serde_json::json!({ "locale": locale })),
+            };
+            crud::write_audit(&mut tx, ctx, vec![entry]).await?;
+        }
+        tx.commit().await?;
+    }
+    session_dto(pool, me.user_id, session_id, csrf_token).await
+}
+
 async fn change_password(
     pool: &PgPool,
     auth: &AuthState,
@@ -1185,6 +1237,16 @@ pub fn routes() -> Vec<Route> {
                 let csrf_token = me.csrf_token().ok_or_else(unauthenticated)?.to_owned();
                 let session_id = me.session_id().ok_or_else(unauthenticated)?;
                 Ok(Json(session_dto(&api.pool, me.user_id, session_id, csrf_token).await?))
+            }),
+        route(Method::PATCH, "/api/v1/auth/me", "updateCurrentSession")
+            .tag(TAG)
+            .summary("Change your own preferences (the language of e-mails the server sends you)")
+            .description(
+                "`locale` (`en`, `de`, or null for the server's default `MAIL_DEFAULT_LOCALE`) is the language of the e-mails workflow actions send you. The web UI sets it when you change its language. A change is audited as an `update` on `users` with the language before and after. Answers the session as GET /api/v1/auth/me does.",
+            )
+            .session_only()
+            .handle(|api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<SessionUpdate>>| async move {
+                Ok(Json(update_me(&api.pool, &api.ctx, b).await?))
             }),
         route(Method::PUT, "/api/v1/auth/email", "enterOwnEmail")
             .tag(TAG)
@@ -2928,6 +2990,62 @@ pub(crate) mod tests {
         assert_eq!(send("GET", "/api/v1/auth/me", true, Some(&tossed), None, None).await.0, 401);
         // Session A itself is untouched.
         assert_eq!(send("GET", "/api/v1/auth/me", false, Some(&plain), None, None).await.0, 200);
+        db.drop().await;
+    }
+
+    /// PATCH /api/v1/auth/me (SHAA-2731): the language of e-mails, `en`, `de`
+    /// or null for the server's default; a change is audited, the same value
+    /// again is not; a field left out changes nothing; anything else is a 400;
+    /// a cookie session needs the CSRF token, and an API token cannot.
+    #[tokio::test]
+    async fn the_signed_in_user_sets_the_language_of_their_e_mails() {
+        use serde_json::json;
+
+        use crate::modules::api_tokens::tests::{Creds, app, call, code, session_of};
+
+        let Some(db) = scratch::database("auth_me_locale").await else { return };
+        let app = app(db.pool.clone());
+        let pool = &db.pool;
+        let setup = json!({ "username": "owner", "email": "owner@example.test", "displayName": "Owner",
+                            "password": "correct horse battery", "setupToken": crate::auth::setup_token::TEST_TOKEN });
+        let (status, me, headers) = call(&app, "POST", "/api/v1/setup", &Creds::default(), Some(setup)).await;
+        assert_eq!(status, 201, "{me}");
+        assert_eq!(me["locale"], json!(null), "{me}");
+        let session = session_of(&me, &headers);
+
+        let (status, v, _) = call(&app, "PATCH", "/api/v1/auth/me", &session, Some(json!({ "locale": "de" }))).await;
+        assert_eq!((status, &v["locale"]), (200, &json!("de")), "{v}");
+        let (status, v, _) = call(&app, "GET", "/api/v1/auth/me", &session, None).await;
+        assert_eq!((status, &v["locale"]), (200, &json!("de")), "{v}");
+        let (status, v, _) = call(&app, "PATCH", "/api/v1/auth/me", &session, Some(json!({ "locale": "de" }))).await;
+        assert_eq!((status, &v["locale"]), (200, &json!("de")), "{v}");
+        let (status, v, _) = call(&app, "PATCH", "/api/v1/auth/me", &session, Some(json!({}))).await;
+        assert_eq!((status, &v["locale"]), (200, &json!("de")), "left out: unchanged {v}");
+        let (status, v, _) = call(&app, "PATCH", "/api/v1/auth/me", &session, Some(json!({ "locale": null }))).await;
+        assert_eq!((status, &v["locale"]), (200, &json!(null)), "{v}");
+        for bad in [json!({ "locale": "fr" }), json!({ "locale": "DE" }), json!({ "language": "de" })] {
+            let (status, v, _) = call(&app, "PATCH", "/api/v1/auth/me", &session, Some(bad.clone())).await;
+            assert_eq!((status, code(&v)), (400, "VALIDATION_ERROR"), "{bad}: {v}");
+        }
+        let no_csrf = Creds { csrf: None, ..session.clone() };
+        let (status, v, _) = call(&app, "PATCH", "/api/v1/auth/me", &no_csrf, Some(json!({ "locale": "en" }))).await;
+        assert_eq!((status, code(&v)), (403, "CSRF_TOKEN_INVALID"), "{v}");
+
+        let changes: Vec<(Option<serde_json::Value>, Option<serde_json::Value>)> = sqlx::query_as(
+            "SELECT old_value, new_value FROM audit_log WHERE entity_type = 'users' AND action = 'update'
+             ORDER BY chain_seq",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            changes,
+            [
+                (Some(json!({ "locale": null })), Some(json!({ "locale": "de" }))),
+                (Some(json!({ "locale": "de" })), Some(json!({ "locale": null }))),
+            ],
+            "one entry per change"
+        );
         db.drop().await;
     }
 }

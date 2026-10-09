@@ -54,6 +54,10 @@ const BATCH_BYTES: usize = 8 << 20;
 pub struct Report {
     pub rows: u64,
     pub users: i64,
+    /// Workflow action runs and deliveries that were still to be sent, cancelled ([`hold_outbound`]).
+    pub outbound_cancelled: u64,
+    /// Webhook endpoints suspended with reason `restored`.
+    pub endpoints_suspended: u64,
     pub migrations_applied_after: usize,
     /// Required fields left nullable because some assets have no value.
     pub warnings: Vec<String>,
@@ -207,6 +211,19 @@ pub async fn run(
              it about this restore",
             report.entry.chain_seq
         ),
+    }
+    if report.outbound_cancelled > 0 {
+        println!(
+            "{} workflow notification(s) that were still to be sent were cancelled: a restore sends nothing",
+            report.outbound_cancelled
+        );
+    }
+    if report.endpoints_suspended > 0 {
+        println!(
+            "{} webhook endpoint(s) suspended (reason restored): check their URLs point where this installation \
+             should send, then resume them in Administration > Webhooks",
+            report.endpoints_suspended
+        );
     }
     if report.users == 0 {
         println!("The backup has no users: the web UI will ask for first-run setup");
@@ -419,6 +436,8 @@ pub async fn restore<R: Read>(
     )
     .await?;
 
+    let (cancelled, endpoints) = hold_outbound(&mut tx).await?;
+
     let builtin: i64 =
         sqlx::query_scalar("SELECT count(*) FROM permission_profiles WHERE is_builtin").fetch_one(&mut *tx).await?;
     if builtin != 1 {
@@ -453,11 +472,48 @@ pub async fn restore<R: Read>(
     Ok(Report {
         rows: header.total_rows(),
         users,
+        outbound_cancelled: cancelled,
+        endpoints_suspended: endpoints,
         migrations_applied_after: (after - before) as usize,
         warnings,
         restored_head,
         entry,
     })
+}
+
+/// A restore must not send (SHAA-2731, design SHAA-2725 §10.4): a production
+/// backup restored into a test system would otherwise e-mail last night's
+/// notifications again and post to production receivers. What was still to be
+/// sent is cancelled (runs) or dead (deliveries) with reason `restored`, and
+/// every webhook endpoint is suspended with reason `restored` until an
+/// administrator resumes it. Returns how many runs and deliveries were
+/// cancelled, and how many endpoints suspended.
+async fn hold_outbound(conn: &mut PgConnection) -> anyhow::Result<(u64, u64)> {
+    let runs = sqlx::query(
+        "UPDATE cmdb.workflow_action_runs
+         SET status = 'cancelled', status_reason = 'restored', lease_owner = NULL, lease_until = NULL,
+             completed_at = now()
+         WHERE status IN ('pending', 'fanning_out')",
+    )
+    .execute(&mut *conn)
+    .await?
+    .rows_affected();
+    let deliveries = sqlx::query(
+        "UPDATE cmdb.workflow_action_deliveries
+         SET status = 'dead', status_reason = 'restored', lease_owner = NULL, lease_until = NULL,
+             completed_at = now()
+         WHERE status IN ('pending', 'sending', 'held')",
+    )
+    .execute(&mut *conn)
+    .await?
+    .rows_affected();
+    let endpoints = sqlx::query(
+        "UPDATE cmdb.webhook_endpoints SET status = 'suspended', suspended_reason = 'restored', version = version + 1",
+    )
+    .execute(&mut *conn)
+    .await?
+    .rows_affected();
+    Ok((runs + deliveries, endpoints))
 }
 
 /// Writes the `backup.restore` audit entry (GH#513): which backup, how its

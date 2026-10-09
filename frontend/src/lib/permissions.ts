@@ -19,6 +19,7 @@ export const GLOBAL_PERMISSIONS: { key: GlobalPermission; label: string; hint: s
     "cis.import",
     "views.share",
     "workflows.manage",
+    "webhooks.manage",
   ] as const
 ).map((key) => ({ key, label: t(`permission.${key}`), hint: t(`permission.${key}.hint`) }));
 
