@@ -310,7 +310,7 @@ async fn run(
         items_data::summaries(&mut tx, &ids).await.map_err(db_error)?.into_iter().map(|r| (r.id, r)).collect();
     let pairs: Vec<(Uuid, Uuid)> = merged.iter().map(|(id, m)| (*id, m.class_id)).collect();
     let status_of = statuses(&mut tx, &pairs, assembly).await?;
-    tx.commit().await?;
+    tx.commit().await.map_err(db_error)?;
 
     let type_of: HashMap<Uuid, &data::TypeRow> = traversal.types.iter().map(|t| (t.id, t)).collect();
     let via_dto = |v: &engine::Via| -> Result<ImpactVia, AppError> {

@@ -214,6 +214,44 @@ fn expect(pairs: &[(Uuid, i32)]) -> BTreeMap<Uuid, i32> {
     pairs.iter().copied().collect()
 }
 
+/// GH#825: the walks' and the in-edge counts' timeouts end with their
+/// statements. Left set, a timeout of the few milliseconds the walks had left
+/// bounded the next SAVEPOINT, and its cancellation aborted the analysis with
+/// 500 instead of answering. What remains is the traversal's own bound, the end
+/// of the allowance, which is a second later than the counts' half.
+#[tokio::test]
+async fn a_traversal_leaves_only_its_own_bound() {
+    let Some(db) = scratch::database("a_traversal_leaves_only_its_own_bound").await else { return };
+    let f = fixture(&db).await;
+    let [root, a, b] = f.cis("app", 3).await[..] else { unreachable!() };
+    f.affects(root, a).await;
+    f.affects(a, b).await;
+    let mut tx = f.pool.begin().await.unwrap();
+    let started = tokio::time::Instant::now();
+    let deadline = started + Duration::from_secs(60);
+    let opts = engine::Options {
+        ways: &[engine::Way::Downstream],
+        depth: 1,
+        types: None,
+        include_inactive: true,
+        max_nodes: 100,
+        deadline,
+        visible: None,
+        result_classes: None,
+    };
+    let t = engine::traverse(&mut tx, &[root], &opts).await.unwrap();
+    assert_eq!((t.walks[0].nodes.len(), t.walks[0].more_beyond_depth), (1, true), "hop, probe, counts");
+    let timeout: String = sqlx::query_scalar("SHOW statement_timeout").fetch_one(&mut *tx).await.unwrap();
+    let ms: u64 = [("ms", 1), ("s", 1_000), ("min", 60_000)]
+        .iter()
+        .find_map(|(unit, n)| timeout.strip_suffix(unit).and_then(|v| v.parse::<u64>().ok()).map(|v| v * n))
+        .unwrap_or_else(|| panic!("{timeout}"));
+    let counts_end = (deadline + engine::ASSEMBLY_ALLOWANCE / 2 - started).as_millis() as u64;
+    assert!(ms > counts_end, "{timeout} left: the counts' bound (at most {counts_end} ms), not the traversal's");
+    tx.rollback().await.unwrap();
+    db.drop().await;
+}
+
 // ---------------------------------------------------------------------------
 // Semantics
 // ---------------------------------------------------------------------------
@@ -420,8 +458,26 @@ async fn a_slow_assembly_ends_within_the_allowance() {
 
     // The downstream counts end at half the allowance (before: 2 s for each
     // walk's counts) and fall back to the via edge; the upstream walk is then
-    // out of time, and the truncated result is answered.
-    let r = run_with(&f, &ctx, &state, root, &both).await;
+    // out of time, and the truncated result is answered. The walks get 3 s.
+    // A loaded host can still use up their time before the first hop, or need
+    // more than the other half of the allowance for the rest of the assembly
+    // (the analysis then ends at the allowance with 503 SERVER_BUSY): either is
+    // the bound holding, checked, and the analysis is tried again (GH#825).
+    let walks = Arc::new(ImpactState::new(ImpactConfig { timeout: Duration::from_secs(3), ..ImpactConfig::default() }));
+    let mut attempts = 0;
+    let r = loop {
+        attempts += 1;
+        match service::analyse(&f.pool, &ctx, &walks, root, &both).await {
+            Ok(a) if a.result.items.is_empty() && attempts < 5 => {
+                engine::assert_bounded_by_the_allowance();
+            }
+            Ok(a) => break a.result,
+            Err(e) if e.code == ErrorCode::ServerBusy && attempts < 5 => {
+                engine::assert_bounded_by_the_allowance();
+            }
+            Err(e) => panic!("analysis failed (attempt {attempts}): {e:?}"),
+        }
+    };
     assert_eq!((r.truncated_reason, r.items.len()), (Some(TruncatedReason::Timeout), 1));
     assert!(r.items.iter().all(|i| i.reached_by_count == 1));
     assert_eq!(engine::assert_bounded_by_the_allowance(), 1, "the downstream counts only");
@@ -459,8 +515,11 @@ async fn a_slow_assembly_ends_within_the_allowance() {
     assert_eq!((err.code, err.retry_after), (ErrorCode::ServerBusy, Some(1)), "{err:?}");
     engine::assert_bounded_by_the_allowance();
 
-    // Without the injected delays the counts are exact again.
-    let r = run(&f, &ctx, root, &both).await;
+    // Without the injected delays the counts are exact again, given the time
+    // a loaded host needs.
+    let ample =
+        Arc::new(ImpactState::new(ImpactConfig { timeout: Duration::from_secs(30), ..ImpactConfig::default() }));
+    let r = run_with(&f, &ctx, &ample, root, &both).await;
     assert_eq!((r.truncated, r.items.len()), (false, 2));
     db.drop().await;
 }

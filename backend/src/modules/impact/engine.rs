@@ -214,12 +214,16 @@ pub(crate) fn db_error(e: sqlx::Error) -> AppError {
 /// each statement on its own, so this runs again before every statement.
 pub(crate) async fn bound(conn: &mut PgConnection, until: Instant) -> Result<(), AppError> {
     let ms = remaining_ms(until).ok_or_else(out_of_time)?;
-    data::set_statement_timeout(conn, ms).await?;
+    data::set_statement_timeout(conn, ms).await.map_err(db_error)?;
     Ok(())
 }
 
 /// One hop's query under the deadline, in a savepoint so a cancelled
-/// statement leaves the snapshot usable. `Ok(None)`: the deadline hit.
+/// statement leaves the snapshot usable. The savepoint is rolled back either
+/// way (the hop only reads): `set_config` survives a released savepoint, and
+/// the hop's short timeout would otherwise bound the statements after it, a
+/// cancelled SAVEPOINT aborting the analysis with 500 (GH#825). `Ok(None)`:
+/// the deadline hit.
 async fn timed_hop(
     conn: &mut PgConnection,
     deadline: Instant,
@@ -230,15 +234,15 @@ async fn timed_hop(
     limit: i64,
 ) -> Result<Option<Vec<HopEdge>>, AppError> {
     let Some(ms) = remaining_ms(deadline) else { return Ok(None) };
-    let mut sp = conn.begin().await?;
-    data::set_statement_timeout(&mut sp, ms).await?;
+    let mut sp = conn.begin().await.map_err(db_error)?;
+    data::set_statement_timeout(&mut sp, ms).await.map_err(db_error)?;
     match data::hop(&mut sp, frontier, visited, types, reach, limit).await {
         Ok(rows) => {
-            sp.commit().await?;
+            sp.rollback().await.map_err(db_error)?;
             Ok(Some(rows))
         }
         Err(e) if is_query_canceled(&e) => {
-            sp.rollback().await?;
+            sp.rollback().await.map_err(db_error)?;
             Ok(None)
         }
         Err(e) => Err(e.into()),
@@ -358,8 +362,8 @@ pub async fn traverse(conn: &mut PgConnection, roots: &[Uuid], opts: &Options<'_
             Some(ms) => {
                 #[cfg(test)]
                 CANCEL_AT.with_borrow_mut(|c| c.last_mut().expect("recorded by remaining_ms").1 = true);
-                let mut sp = conn.begin().await?;
-                data::set_statement_timeout(&mut sp, ms).await?;
+                let mut sp = conn.begin().await.map_err(db_error)?;
+                data::set_statement_timeout(&mut sp, ms).await.map_err(db_error)?;
                 let counted = async {
                     #[cfg(test)]
                     if SLOW_COUNTS.lock().unwrap().iter().any(|r| roots.contains(r)) {
@@ -367,13 +371,15 @@ pub async fn traverse(conn: &mut PgConnection, roots: &[Uuid], opts: &Options<'_
                     }
                     data::in_edge_counts(&mut sp, &ids, &visited, &hop_types).await
                 };
+                // Rolled back either way, as a hop: the counts' timeout must
+                // not bound the summaries after them.
                 match counted.await {
                     Ok(rows) => {
-                        sp.commit().await?;
+                        sp.rollback().await.map_err(db_error)?;
                         rows.into_iter().collect()
                     }
                     Err(e) if is_query_canceled(&e) => {
-                        sp.rollback().await?;
+                        sp.rollback().await.map_err(db_error)?;
                         HashMap::new()
                     }
                     Err(e) => return Err(e.into()),
@@ -421,6 +427,27 @@ mod tests {
         let isolation: String = sqlx::query_scalar("SHOW transaction_isolation").fetch_one(&mut *tx).await.unwrap();
         assert_eq!((after, isolation.as_str()), (before, "repeatable read"));
         tx.commit().await.unwrap();
+        db.drop().await;
+    }
+
+    /// GH#825: `set_config` survives a released savepoint. A hop's timeout,
+    /// the time left of the walks, must not bound the statements after it
+    /// (a SAVEPOINT cancelled by it aborted the analysis with 500).
+    #[tokio::test]
+    async fn a_hop_leaves_the_statement_timeout_as_it_found_it() {
+        let Some(db) = crate::db::scratch::database("a_hop_leaves_the_statement_timeout_as_it_found_it").await else {
+            return;
+        };
+        let mut tx = db.pool.begin().await.unwrap();
+        data::set_statement_timeout(&mut tx, 60_000).await.unwrap();
+        let root = [Uuid::new_v4()];
+        let reach = Reach { visible: None, include_inactive: true };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let rows = timed_hop(&mut tx, deadline, &root, &root, &HopTypes::default(), reach, 10).await.unwrap();
+        assert_eq!(rows.map(|r| r.len()), Some(0), "the hop ran");
+        let timeout: String = sqlx::query_scalar("SHOW statement_timeout").fetch_one(&mut *tx).await.unwrap();
+        assert_eq!(timeout, "1min");
+        tx.rollback().await.unwrap();
         db.drop().await;
     }
 
