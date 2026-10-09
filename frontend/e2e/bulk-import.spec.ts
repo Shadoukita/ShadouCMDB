@@ -84,7 +84,7 @@ test("off by default: no entry points, and /imports says so", async ({ browser }
   await expect(page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Bulk import" })).toHaveCount(0);
   await page.goto("/imports");
   await expect(page.getByText("Bulk import is turned off for this instance.")).toBeVisible();
-  await expect(page.getByRole("link", { name: "+ New import" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "New import" })).toHaveCount(0);
   await page.context().close();
 });
 
@@ -133,7 +133,7 @@ test("upload a CSV: step 1 reads it, shows the preview, and a reload resumes the
   expect(download.suggestedFilename()).toBe("server-template.csv");
   const template = await readFile(await download.path(), "utf-8");
   expect(template).toContain("Ident");
-  await page.getByRole("link", { name: "+ New import" }).first().click();
+  await page.getByRole("link", { name: "New import" }).first().click();
   await expect(page).toHaveURL(/\/imports\/new$/);
   await expect(page.getByRole("list").filter({ hasText: "Upload" }).locator('[aria-current="step"]')).toHaveText(/Upload/);
   await checkA11y(page, testInfo, "import-upload");
@@ -184,6 +184,7 @@ test("while import is off, the user still sees and deletes their import", async 
   await page.goto("/imports");
   await expect(page.getByText("Bulk import is turned off for this instance.")).toBeVisible();
   await expect(page.getByText("Your remaining imports are listed below")).toBeVisible();
+  await expect(page.getByRole("status").filter({ hasText: "turned off" })).toContainText("for this instance. An administrator can turn it on under Administration › Import. Your remaining");
   const row = page.getByRole("row", { name: new RegExp(`servers-${stamp}\\.csv`) });
   await expect(row).toBeVisible();
   // The job page says so too, and offers no step action the server would refuse.
@@ -192,7 +193,8 @@ test("while import is off, the user still sees and deletes their import", async 
   await expect(page.getByRole("status").filter({ hasText: "This import cannot continue" })).not.toContainText("read-only");
   await expect(page.getByRole("button", { name: "Next: Map columns" })).toHaveCount(0);
   await page.getByRole("status").getByRole("link", { name: "Imports" }).click();
-  await row.getByRole("button", { name: /Delete import of/ }).click();
+  await row.getByRole("button", { name: `Actions for servers-${stamp}.csv` }).click();
+  await page.getByRole("menuitem", { name: "Delete import" }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toContainText("Configuration items already imported are not changed");
   await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
@@ -350,7 +352,7 @@ test("happy path, CSV: auto-matched columns with a lookup, a reference and a rel
   await page.getByRole("link", { name: "Open inventory" }).click();
   await expect(page).toHaveURL(/\/cis\?classId=/);
 
-  // The list with rows: its Stop and Delete buttons are checked too, not only the empty state.
+  // The list with rows and its row menus is checked too, not only the empty state.
   await page.goto("/imports");
   const listed = page.getByRole("row", { name: new RegExp(`apps-${stamp}\\.csv`) });
   await expect(listed).toBeVisible();

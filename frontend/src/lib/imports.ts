@@ -5,6 +5,7 @@ import type { ApiError } from "../api/client";
 import type { ImportJob, ImportLimits, ImportStatus } from "../api/imports";
 import { formatBytes } from "./format";
 import type { IconName } from "../icons/lucide";
+import type { MessageKey } from "../i18n";
 
 /** A job in one of these states changes by itself on the server, so the UI polls it. */
 export const RUNNING: ReadonlySet<ImportStatus> = new Set(["uploading", "queued", "analysing", "validating", "committing"]);
@@ -76,20 +77,20 @@ export function shownStep(job: Pick<ImportJob, "status" | "phase" | "mapping" | 
   return Number.isInteger(n) && n >= 1 && n <= last ? (n as WizardStep) : stepOf(job);
 }
 
-/** Status wording, with an icon so the badge never relies on colour alone (1.4.1). */
-export const STATUS: Record<ImportStatus, { label: string; icon: IconName; tone: "" | "ok" | "warn" | "danger" | "off" }> = {
-  uploading: { label: "Uploading", icon: "upload", tone: "" },
-  queued: { label: "Waiting", icon: "ellipsis", tone: "" },
-  analysing: { label: "Reading the file", icon: "ellipsis", tone: "" },
-  ready: { label: "Ready to map", icon: "circle", tone: "" },
-  validating: { label: "Checking", icon: "ellipsis", tone: "" },
-  validated: { label: "Checked", icon: "circle", tone: "" },
-  committing: { label: "Importing", icon: "ellipsis", tone: "" },
-  completed: { label: "Completed", icon: "circle-check", tone: "ok" },
-  completed_with_errors: { label: "Completed with errors", icon: "circle-alert", tone: "warn" },
-  failed: { label: "Failed", icon: "circle-x", tone: "danger" },
-  cancelled: { label: "Cancelled", icon: "minus", tone: "off" },
-  expired: { label: "Expired", icon: "minus", tone: "off" },
+/** Status wording (a catalog key), with an icon so the badge never relies on colour alone (1.4.1). */
+export const STATUS: Record<ImportStatus, { label: MessageKey; icon: IconName; tone: "" | "ok" | "warn" | "danger" | "off" }> = {
+  uploading: { label: "imports.status.uploading", icon: "upload", tone: "" },
+  queued: { label: "imports.status.queued", icon: "ellipsis", tone: "" },
+  analysing: { label: "imports.status.analysing", icon: "ellipsis", tone: "" },
+  ready: { label: "imports.status.ready", icon: "circle", tone: "" },
+  validating: { label: "imports.status.validating", icon: "ellipsis", tone: "" },
+  validated: { label: "imports.status.validated", icon: "circle", tone: "" },
+  committing: { label: "imports.status.committing", icon: "ellipsis", tone: "" },
+  completed: { label: "imports.status.completed", icon: "circle-check", tone: "ok" },
+  completed_with_errors: { label: "imports.status.completed_with_errors", icon: "circle-alert", tone: "warn" },
+  failed: { label: "imports.status.failed", icon: "circle-x", tone: "danger" },
+  cancelled: { label: "imports.status.cancelled", icon: "minus", tone: "off" },
+  expired: { label: "imports.status.expired", icon: "minus", tone: "off" },
 };
 
 export type FileFormat = "csv" | "xlsx";

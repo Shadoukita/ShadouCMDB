@@ -754,6 +754,20 @@ table.data td.fill {
 .import-intro {
   margin-bottom: var(--sp-4);
 }
+.import-intro .inline-control select {
+  max-width: 320px;
+}
+/* The Rows key spells out the four counts; below the wide layout it is read out and in the header's tooltip only, so the row menu stays in view. */
+@media (max-width: 1279px) {
+  .imports-table .rows-key {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+}
 .import-file-facts {
   max-width: 640px;
   margin-bottom: var(--sp-4);
