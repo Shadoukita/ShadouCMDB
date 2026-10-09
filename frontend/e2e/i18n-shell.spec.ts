@@ -80,11 +80,11 @@ test("not found, the pagination bar and the error alert are German with the Germ
 
   await page.route("**/api/v1/**", (route) => route.abort("connectionrefused"));
   await page.reload();
-  const alert = page.getByRole("alert").first();
-  await expect(alert).toContainText("API nicht erreichbar", { timeout: 15_000 });
-  await expect(alert).toContainText("Die ShadouCMDB-API unter");
-  await expect(alert.getByRole("button", { name: "Erneut versuchen" })).toBeVisible();
-  await expectNoEnglish(alert);
+  const card = page.getByTestId("boot-error");
+  await expect(card.getByRole("heading", { level: 1, name: "API nicht erreichbar" })).toBeVisible({ timeout: 15_000 });
+  await expect(card.getByRole("alert")).toContainText("Die ShadouCMDB-API unter");
+  await expect(card.getByRole("button", { name: "Erneut versuchen" })).toBeVisible();
+  await expectNoEnglish(card);
 });
 
 test("the inventory's built-in column headers and the Columns popover are German with the German catalog (SHAA-2406)", async ({ page, request }) => {
