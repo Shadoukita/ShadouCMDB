@@ -281,7 +281,7 @@ const pastEnd = computed(() => !!list.data.value && total.value > 0 && rows.valu
     </EmptyState>
 
     <template v-if="rows.length > 0 && !list.isError.value">
-      <div class="table-wrap table-scroll">
+      <div class="table-wrap table-scroll" role="region" tabindex="0" :aria-label="t('audit.table')">
         <table :class="['data', 'list-table', 'event-table', { loading: list.isPlaceholderData.value }]">
           <thead>
             <tr>

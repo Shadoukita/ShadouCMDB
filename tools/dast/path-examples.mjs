@@ -57,7 +57,7 @@ export const CREATED = ["admin/profiles", "admin/groups", "admin/users", "admin/
  * would be its only webhook object, and deleting it is all its `/{id}` route does.
  */
 export const LEGACY = ["statuses", "environments", "locations", "owners"];
-export const OPTIONAL = ["schema-changes", "notifications", ...LEGACY, "ui-settings/versions", "admin/templates", "ui-settings/class-layouts", "admin/workflow-definitions/versions", "admin/workflow-definitions/actions", "admin/webhook-endpoints", "admin/webhook-allowed-hosts"];
+export const OPTIONAL = ["schema-changes", "notifications", ...LEGACY, "ui-settings/versions", "admin/templates", "ui-settings/class-layouts", "admin/workflow-definitions/versions", "admin/workflow-definitions/actions", "admin/workflow-definitions/action-deliveries", "admin/webhook-endpoints", "admin/webhook-allowed-hosts"];
 
 /** Paths whose parameter names an object of another resource. */
 export const ALIASES = {
@@ -68,6 +68,8 @@ export const ALIASES = {
   "admin/workflow-definitions/{id}/versions": "admin/workflow-definitions/versions",
   // GET /admin/workflow-definitions/{id}/actions/{key}/preview: an action key of the definition.
   "admin/workflow-definitions/{id}/actions": "admin/workflow-definitions/actions",
+  // GET /admin/workflow-definitions/{id}/action-deliveries/{deliveryId} (and retry, discard): a delivery of the definition.
+  "admin/workflow-definitions/{id}/action-deliveries": "admin/workflow-definitions/action-deliveries",
   // PATCH/DELETE /configuration-items/{id}/notes/{noteId}: a note of the example CI.
   "configuration-items/{id}/notes": "ci-notes",
 };
@@ -208,6 +210,8 @@ async function collect(request) {
   examples["admin/workflow-definitions/versions"] = 1;
   // The definition has no actions, so a preview answers 404 after the handler looked the key up.
   examples["admin/workflow-definitions/actions"] = "dast_scan_action";
+  // Nor deliveries: a well-formed id answers 404 after the handler looked it up.
+  examples["admin/workflow-definitions/action-deliveries"] = randomUUID();
   // A running instance of a second, published workflow on a demo server: the scan may run its
   // transition, force its state and cancel it.
   const flow = await request("POST", "admin/workflow-definitions", { key: "dast_scan_instance", name: `${name} (running)`, classId: serverClass.id });

@@ -1103,6 +1103,21 @@ async function workflows(x: Json) {
   await get(`${actions}/nope/preview`, 404);
   check((await put(actions, { version: withAction.version, actions: [] })).json.actions.length === 0, 'the action is removed');
 
+  // Actions S3b (SHAA-2831): the deliveries list, the summary, retry and discard.
+  const deliveries = `${base}/${def.id}/action-deliveries`;
+  const listed = (await get(`${deliveries}?status=dead&limit=10`)).json;
+  check(Array.isArray(listed.data) && typeof listed.page?.total === 'number', 'the deliveries of a workflow are listed by status');
+  const summary = (await get(`${actions}/summary`)).json;
+  check(Array.isArray(summary.actions) && typeof summary.queue?.overloaded === 'boolean', 'the action summary reports the queue');
+  const noDelivery = `${deliveries}/00000000-0000-4000-8000-000000000000`;
+  await get(noDelivery, 404);
+  await post(`${noDelivery}/retry`, undefined, 404);
+  await post(`${noDelivery}/discard`, undefined, 404);
+  const retried = (await post(`${deliveries}/retry`, { ids: ['00000000-0000-4000-8000-000000000000'] }, 200)).json;
+  check(retried.changed === 0 && retried.refused[0]?.reason === 'not_found', 'a bulk retry refuses an unknown delivery');
+  const discarded = (await post(`${deliveries}/discard`, { filter: { status: 'dead', from: new Date().toISOString() } }, 200)).json;
+  check(discarded.changed === 0 && discarded.more === false, 'a bulk discard by filter reports what it changed');
+
   // Runtime (SHAA-1424): an instance on a CI is started, run, forced and cancelled.
   console.log('\n# Workflow instances');
   const current = (await get(`${base}/${def.id}`)).json;

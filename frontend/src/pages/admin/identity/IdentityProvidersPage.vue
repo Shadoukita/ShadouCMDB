@@ -71,7 +71,7 @@ const NEW_LDAP = { path: "/admin/identity-providers/new", query: { kind: "ldap" 
     </EmptyState>
 
     <template v-if="rows.length > 0 && !list.isError.value">
-      <div class="table-wrap table-scroll">
+      <div class="table-wrap table-scroll" role="region" tabindex="0" :aria-label="t('idp.list.table')">
         <table class="data list-table" aria-describedby="idp-keys">
           <thead>
             <tr>

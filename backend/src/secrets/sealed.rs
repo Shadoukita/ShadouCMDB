@@ -554,7 +554,7 @@ pub struct KeyCount {
 }
 
 /// Whether the table has its key column, as an integer: not before its
-/// migration (0025, 0026, 0076), e.g. when `backup` or `verify` run against a
+/// migration (0025, 0026, 0077), e.g. when `backup` or `verify` run against a
 /// database at an older level.
 async fn has_key_column(conn: &mut PgConnection, table: SealedTable) -> sqlx::Result<bool> {
     sqlx::query_scalar(
