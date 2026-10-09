@@ -188,7 +188,8 @@ jobs:
             run: qemu-aarch64-static
     services:
       postgres:
-        image: postgres:17
+        # Docker Hub mirror: anonymous docker.io pulls hit its rate limit on shared runners (SHAA-2894).
+        image: mirror.gcr.io/library/postgres:17
         env:
           POSTGRES_USER: ci
           POSTGRES_PASSWORD: ci-only-password
@@ -373,7 +374,8 @@ jobs:
       attestations: write
     services:
       postgres:
-        image: postgres:17
+        # Docker Hub mirror: anonymous docker.io pulls hit its rate limit on shared runners (SHAA-2894).
+        image: mirror.gcr.io/library/postgres:17
         env:
           POSTGRES_USER: ci
           POSTGRES_PASSWORD: ci-only-password
