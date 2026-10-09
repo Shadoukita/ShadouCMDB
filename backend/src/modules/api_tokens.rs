@@ -713,6 +713,7 @@ pub(crate) mod tests {
             business_services,
             exports: Default::default(),
             notifications: Default::default(),
+            approval_sweep: Default::default(),
         };
         let mut state = AppState::new(pool, auth, crate::secrets::Keyring::for_tests())
             .importing(&imports)

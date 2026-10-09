@@ -7,7 +7,8 @@
 //! them (the GH#264 rule).
 //!
 //! **The inbox** (`view=actionable`) is the SQL form of `check_decider`: the
-//! pending requests whose active step the caller may decide in person now.
+//! pending requests whose active step the caller may decide now, in person
+//! or for a principal through a live delegation (slice A4).
 //! Both read the same eligibility rows and the same `excludeActorsOf` set, so
 //! a request listed here is one `myEligibility.canDecide` says yes to.
 
@@ -17,11 +18,12 @@ use uuid::Uuid;
 
 use super::super::approval_schemas::*;
 use super::approvals::actors_of;
-use super::visible_instance;
+use super::{delegations, visible_instance};
 use crate::api::context::RequestContext;
 use crate::api::schemas::{Page, Paged, Sort};
 use crate::auth::Credential;
 use crate::auth::permissions::ClassOp;
+use crate::data::auth as auth_data;
 use crate::data::crud::{self, Where};
 
 use crate::http::error::AppError;
@@ -161,31 +163,76 @@ struct Me {
     /// its owner minted decides (SHAA-1872 C1).
     token: bool,
     self_minted: bool,
+    /// The principals the caller may decide for through a live delegation.
+    acting: Vec<Acting>,
 }
 
-fn me(ctx: &RequestContext) -> Option<Me> {
-    let p = ctx.principal()?;
+/// A principal the caller may act for: on which workflows (None: every
+/// one) and on which types (None: every one), since a delegation lends
+/// neither visibility nor more than the principal's own eligibility.
+struct Acting {
+    principal: Uuid,
+    definitions: Option<Vec<Uuid>>,
+    classes: Option<Vec<Uuid>>,
+}
+
+async fn me(conn: &mut PgConnection, ctx: &RequestContext) -> Result<Option<Me>, AppError> {
+    let Some(p) = ctx.principal() else { return Ok(None) };
     let (token, self_minted) = match p.credential {
         Credential::Token { minted_by, .. } => (true, minted_by == Some(p.user_id)),
         Credential::Session { .. } => (false, false),
     };
-    Some(Me { id: p.user_id, token, self_minted })
+    let live = delegations::live(&mut *conn, p.user_id, None).await?;
+    let grouped = delegations::by_principal(&live);
+    let principals: Vec<Uuid> = grouped.iter().map(|g| g.0).collect();
+    let permissions = auth_data::load_permissions_of(&mut *conn, &principals).await?;
+    let acting = grouped
+        .into_iter()
+        .map(|(principal, definitions)| Acting {
+            principal,
+            definitions,
+            classes: permissions.get(&principal).map_or(Some(Vec::new()), |p| p.class_scope(ClassOp::View)),
+        })
+        .collect();
+    Ok(Some(Me { id: p.user_id, token, self_minted, acting }))
 }
 
-/// `view=actionable`: what `check_decider` lets the caller decide in person,
-/// condition by condition (§4.2, §4.3).
-///
-/// The conditions only read the request tables, so they are evaluated in a
-/// subquery that starts from the caller's eligibility rows; the `OFFSET 0`
-/// keeps the planner from merging it, so the instance and CI (for the class
-/// scope) are looked up only for the requests the caller may decide.
+/// `view=actionable`: what `check_decider` lets the caller decide now, in
+/// person or for a principal through a live delegation, condition by
+/// condition (§4.2, §4.3, §6.1).
 fn actionable(w: &mut Where<'_>, me: &Me) {
     if me.token && !me.self_minted {
         w.and().push("false");
         return;
     }
-    // A principal of the active step: the user, one of their profiles or groups.
     let qb = w.and();
+    qb.push("(");
+    decidable_as(qb, me, me.id);
+    for a in &me.acting {
+        qb.push(" OR (");
+        decidable_as(qb, me, a.principal);
+        if let Some(defs) = &a.definitions {
+            qb.push(" AND wi.definition_id = ANY(").push_bind(defs.clone()).push(")");
+        }
+        if let Some(classes) = &a.classes {
+            qb.push(" AND ci.class_id = ANY(").push_bind(classes.clone()).push(")");
+        }
+        qb.push(")");
+    }
+    qb.push(")");
+}
+
+/// The requests the caller may decide as `principal` (themselves, or the
+/// principal of a delegation): the four-eyes and separation-of-duties rules
+/// bind both the caller and the principal.
+///
+/// The conditions only read the request tables, so they are evaluated in a
+/// subquery that starts from the principal's eligibility rows; the `OFFSET 0`
+/// keeps the planner from merging it, so the instance and CI (for the class
+/// scope) are looked up only for the requests that qualify.
+fn decidable_as(qb: &mut sqlx::QueryBuilder<sqlx::Postgres>, me: &Me, principal: Uuid) {
+    let ids = if principal == me.id { vec![me.id] } else { vec![me.id, principal] };
+    // A principal of the active step: the user, one of their profiles or groups.
     qb.push(
         "r.id IN (SELECT r.id FROM cmdb.workflow_approval_eligibility e \
          JOIN cmdb.workflow_approval_requests r ON r.id = e.request_id AND r.current_step_no = e.step_no \
@@ -194,29 +241,29 @@ fn actionable(w: &mut Where<'_>, me: &Me) {
            AND (e.role = 'approver' OR st.overdue_at IS NOT NULL) \
            AND ((e.principal_kind = 'user' AND e.principal_id = ",
     )
-    .push_bind(me.id)
+    .push_bind(principal)
     .push(
         ") OR (e.principal_kind = 'profile' AND e.principal_id IN \
                 (SELECT profile_id FROM cmdb.user_permission_profiles WHERE user_id = ",
     )
-    .push_bind(me.id)
+    .push_bind(principal)
     .push(
         ")) OR (e.principal_kind = 'group' AND e.principal_id IN \
                 (SELECT group_id FROM cmdb.user_group_members WHERE user_id = ",
     )
-    .push_bind(me.id)
+    .push_bind(principal)
     .push(")))");
-    // Four-eyes: never the requester or the requesting token's creator.
-    qb.push(" AND NOT (").push_bind(me.id).push(" = ANY(r.excluded_user_ids))");
-    // Not decided by them yet.
+    // Four-eyes: never the requester or the requesting token's creator, nor for them.
+    qb.push(" AND NOT (r.excluded_user_ids && ").push_bind(ids.clone()).push("::uuid[])");
+    // Not decided by or for either of them yet.
     qb.push(
         " AND NOT EXISTS (SELECT 1 FROM cmdb.workflow_approval_decisions dd \
-         WHERE dd.request_id = r.id AND dd.step_no = r.current_step_no AND (dd.actor_id = ",
+         WHERE dd.request_id = r.id AND dd.step_no = r.current_step_no AND (dd.actor_id = ANY(",
     )
-    .push_bind(me.id)
-    .push(" OR dd.on_behalf_of_id = ")
-    .push_bind(me.id)
-    .push("))");
+    .push_bind(ids.clone())
+    .push(") OR dd.on_behalf_of_id = ANY(")
+    .push_bind(ids.clone())
+    .push(")))");
     // The step's policy, from the pinned version.
     qb.push(
         " AND EXISTS (SELECT 1 FROM cmdb.workflow_transitions tr \
@@ -230,18 +277,18 @@ fn actionable(w: &mut Where<'_>, me: &Me) {
         " AND (NOT ps.distinct_from_earlier OR r.current_step_no = 1 OR NOT EXISTS ( \
            SELECT 1 FROM cmdb.workflow_approval_decisions de \
            WHERE de.request_id = r.id AND de.step_no < r.current_step_no AND de.decision = 'approve' \
-             AND (de.actor_id = ",
+             AND (de.actor_id = ANY(",
     )
-    .push_bind(me.id)
-    .push(" OR de.on_behalf_of_id = ")
-    .push_bind(me.id)
+    .push_bind(ids.clone())
+    .push(") OR de.on_behalf_of_id = ANY(")
+    .push_bind(ids.clone())
     .push(format!(
-        "))) AND (cardinality(ps.exclude_actors_of) = 0 OR NOT EXISTS ( \
-           SELECT 1 FROM ({}) AS a(key, id) WHERE a.id = ",
+        ")))) AND (cardinality(ps.exclude_actors_of) = 0 OR NOT EXISTS ( \
+           SELECT 1 FROM ({}) AS a(key, id) WHERE a.id = ANY(",
         actors_of("r.instance_id", "ps.exclude_actors_of")
     ))
-    .push_bind(me.id)
-    .push("))) OFFSET 0)");
+    .push_bind(ids)
+    .push(")))) OFFSET 0)");
 }
 
 pub async fn list(
@@ -250,7 +297,8 @@ pub async fn list(
     q: &WorkflowApprovalRequestList,
 ) -> Result<Page<WorkflowApprovalRequestItem>, AppError> {
     let scope = ctx.class_scope(ClassOp::View);
-    let me = me(ctx);
+    let mut conn = pool.acquire().await?;
+    let me = me(&mut conn, ctx).await?;
     let filter = |w: &mut Where<'_>| {
         if let Some(classes) = &scope {
             w.and().push("ci.class_id = ANY(").push_bind(classes.clone()).push(")");
@@ -297,7 +345,6 @@ pub async fn list(
         }
     };
     let order = order(&q.sort);
-    let mut conn = pool.acquire().await?;
     let (ids, total) = crud::select_ids_counted(&mut conn, FROM, "r.id", &filter, &order, q.limit, q.offset).await?;
     let data = items(&mut conn, &ids, &order).await?;
     Ok(Page { data, page: q.page_meta(total) })
@@ -310,7 +357,7 @@ pub(crate) async fn count_actionable(
     ctx: &RequestContext,
     ci: Option<Uuid>,
 ) -> Result<i64, AppError> {
-    let Some(me) = me(ctx) else { return Ok(0) };
+    let Some(me) = me(&mut *conn, ctx).await? else { return Ok(0) };
     let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new(format!("SELECT count(*) FROM {FROM}"));
     let mut w = Where::new(&mut qb);
     if let Some(classes) = ctx.class_scope(ClassOp::View) {

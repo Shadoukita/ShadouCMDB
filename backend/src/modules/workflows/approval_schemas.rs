@@ -258,13 +258,26 @@ pub struct WorkflowApprovalPrincipal {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkflowApprovalEligibility {
     pub can_decide: bool,
+    /// May decide in person (a decision without `onBehalfOf` is cast in person when this is true)
+    pub in_person: bool,
+    /// The principals the caller may decide for through a live delegation, by name
+    pub on_behalf_of: Vec<WorkflowApprovalOnBehalfOf>,
     /// Why not: the `details[0].code` a decision would be refused with (`not_pending`, `not_eligible`,
-    /// `requester`, `token_creator`, `earlier_step`, `actor_of:<key>`, `session_required`,
-    /// `token_not_self_minted`); null when `canDecide`
+    /// `requester`, `token_creator`, `on_behalf_of_requester`, `earlier_step`, `actor_of:<key>`,
+    /// `session_required`, `token_not_self_minted`); null when `canDecide`
     #[schema(required = true)]
     pub reason: Option<String>,
     #[schema(required = true)]
     pub message: Option<String>,
+}
+
+/// A principal the caller may decide for, and the delegation that allows it
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowApprovalOnBehalfOf {
+    pub user_id: Uuid,
+    pub name: String,
+    pub delegation_id: Uuid,
 }
 
 /// An approval request with its steps and decisions
@@ -343,6 +356,10 @@ pub struct WorkflowApprovalDecide {
     #[schema(schema_with = comment_schema)]
     #[serde(default)]
     pub comment: Option<String>,
+    /// Decide for this principal through a live delegation to you (`myEligibility.onBehalfOf`). Left out: in
+    /// person when you qualify in person, otherwise for your only principal (400 when there are several)
+    #[serde(default)]
+    pub on_behalf_of: Option<Uuid>,
 }
 
 impl Check for WorkflowApprovalDecide {
@@ -532,3 +549,203 @@ pub struct WorkflowApprovalRequestItem {
     /// Send it as `expectedVersion` with a decision, withdrawal or cancellation
     pub version: i32,
 }
+
+// ---------------------------------------------------------------------------
+// Delegations (slice A4, §6.1)
+// ---------------------------------------------------------------------------
+
+/// Where a delegation stands now (judged at the database's clock)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowApprovalDelegationStatus {
+    /// Starts later
+    Scheduled,
+    /// In its window and not revoked: the delegate may decide for the principal while both accounts are active
+    Active,
+    /// Its window is over
+    Ended,
+    /// Revoked before it ended
+    Revoked,
+}
+
+/// A user on a delegation, as recorded (the id is null once the account was deleted)
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowApprovalDelegationUser {
+    #[schema(required = true)]
+    pub id: Option<Uuid>,
+    pub name: String,
+}
+
+/// A time-boxed delegation of one user's approvals to another (never deleted: revoked, so the history stays)
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowApprovalDelegation {
+    pub id: Uuid,
+    /// Whose approvals are delegated
+    pub principal: WorkflowApprovalDelegationUser,
+    /// Who may decide for the principal
+    pub delegate: WorkflowApprovalDelegationUser,
+    /// Limited to one workflow; false: every workflow
+    pub scoped: bool,
+    /// The workflow it is limited to; null when it is not limited, or when the workflow's type is one you may not
+    /// view
+    #[schema(required = true)]
+    pub definition_key: Option<String>,
+    #[schema(required = true)]
+    pub definition_name: Option<String>,
+    #[serde(serialize_with = "ts::serialize")]
+    pub starts_at: DateTime<Utc>,
+    #[serde(serialize_with = "ts::serialize")]
+    pub ends_at: DateTime<Utc>,
+    #[schema(required = true)]
+    pub reason: Option<String>,
+    #[schema(inline)]
+    pub status: WorkflowApprovalDelegationStatus,
+    #[serde(serialize_with = "ts::serialize")]
+    pub created_at: DateTime<Utc>,
+    /// The principal, or the administrator who made it for them
+    pub created_by: WorkflowApprovalDelegationUser,
+    #[schema(required = true)]
+    #[serde(serialize_with = "schemas::ts_opt::serialize")]
+    pub revoked_at: Option<DateTime<Utc>>,
+    #[schema(required = true)]
+    pub revoked_by_name: Option<String>,
+}
+
+/// Longest delegation window (the database checks it too).
+pub const MAX_DELEGATION_DAYS: i64 = 90;
+/// Active (not revoked, not ended) delegations a principal may have at once.
+pub const MAX_ACTIVE_DELEGATIONS: i64 = 5;
+const MAX_DELEGATION_REASON: usize = 500;
+
+fn delegation_reason_schema() -> Schema {
+    schemas::multiline_text_schema(MAX_DELEGATION_REASON)
+}
+
+/// Delegate your own approvals
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowApprovalDelegationCreate {
+    /// Who may decide for you: an active user other than you
+    pub delegate_user_id: Uuid,
+    /// May be in the future (planned leave)
+    pub starts_at: DateTime<Utc>,
+    /// Required: at most 90 days after `startsAt`, and in the future
+    pub ends_at: DateTime<Utc>,
+    /// Limit it to one workflow; left out: every workflow
+    #[schema(schema_with = key_schema)]
+    #[serde(default)]
+    pub definition_key: Option<String>,
+    #[schema(schema_with = delegation_reason_schema)]
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+fn check_delegation(starts: DateTime<Utc>, ends: DateTime<Utc>, reason: Option<&str>) -> Vec<FieldError> {
+    let error = |field: &str, code: &str, message: &str| FieldError {
+        location: FieldLocation::Body,
+        field: field.into(),
+        message: message.into(),
+        code: code.into(),
+    };
+    let mut out = Vec::new();
+    if ends <= starts {
+        out.push(error("endsAt", "out_of_range", "The delegation must end after it starts"));
+    } else if ends - starts > chrono::Duration::days(MAX_DELEGATION_DAYS) {
+        out.push(error("endsAt", "out_of_range", "A delegation lasts at most 90 days"));
+    }
+    if reason.is_some_and(|r| r.chars().count() > MAX_DELEGATION_REASON) {
+        out.push(error("reason", "too_long", "At most 500 characters"));
+    }
+    out
+}
+
+impl Check for WorkflowApprovalDelegationCreate {
+    fn check(&self) -> Vec<FieldError> {
+        check_delegation(self.starts_at, self.ends_at, self.reason.as_deref())
+    }
+}
+
+/// Delegate someone else's approvals while they are absent (`users.manage`)
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowApprovalDelegationAdminCreate {
+    /// Whose approvals are delegated
+    pub principal_user_id: Uuid,
+    /// Who may decide for them: an active user other than the principal, and not you (SHAA-1872 C2)
+    pub delegate_user_id: Uuid,
+    pub starts_at: DateTime<Utc>,
+    /// Required: at most 90 days after `startsAt`, and in the future
+    pub ends_at: DateTime<Utc>,
+    #[schema(schema_with = key_schema)]
+    #[serde(default)]
+    pub definition_key: Option<String>,
+    #[schema(schema_with = delegation_reason_schema)]
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+impl Check for WorkflowApprovalDelegationAdminCreate {
+    fn check(&self) -> Vec<FieldError> {
+        check_delegation(self.starts_at, self.ends_at, self.reason.as_deref())
+    }
+}
+
+/// Your side of a delegation
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowApprovalDelegationRole {
+    /// Delegations of your approvals
+    Principal,
+    /// Delegations to you
+    Delegate,
+}
+
+fn active_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .enum_values(Some(["true", "false"]))
+        .description(Some(
+            "true: only delegations that are not revoked and have not ended (scheduled or active); false: only the \
+             others",
+        ))
+        .into()
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[serde(rename_all = "camelCase")]
+#[into_params(parameter_in = Query)]
+pub struct WorkflowApprovalMyDelegationList {
+    /// Page size (1-200)
+    #[param(required = false, default = 50, minimum = 1, maximum = 200)]
+    pub limit: i64,
+    /// Rows to skip
+    #[param(required = false, default = 0, minimum = 0, maximum = 1_000_000)]
+    pub offset: i64,
+    /// Left out: both
+    #[param(inline)]
+    pub role: Option<WorkflowApprovalDelegationRole>,
+    #[param(schema_with = active_schema)]
+    pub active: Option<QueryBool>,
+}
+paged!(WorkflowApprovalMyDelegationList);
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[serde(rename_all = "camelCase")]
+#[into_params(parameter_in = Query)]
+pub struct WorkflowApprovalDelegationList {
+    /// Page size (1-200)
+    #[param(required = false, default = 50, minimum = 1, maximum = 200)]
+    pub limit: i64,
+    /// Rows to skip
+    #[param(required = false, default = 0, minimum = 0, maximum = 1_000_000)]
+    pub offset: i64,
+    /// Only delegations of this user's approvals
+    pub principal: Option<Uuid>,
+    /// Only delegations to this user
+    pub delegate: Option<Uuid>,
+    #[param(schema_with = active_schema)]
+    pub active: Option<QueryBool>,
+}
+paged!(WorkflowApprovalDelegationList);

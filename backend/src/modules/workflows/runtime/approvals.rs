@@ -39,7 +39,10 @@ use super::super::approval_schemas::*;
 use super::super::approvers::{self, Source};
 use super::super::eval::{self, Subject};
 use super::super::runtime_schemas::WorkflowBlockedReason;
-use super::super::schemas::{WorkflowApprovalDroppedSource, WorkflowApproverRole, WorkflowApproverSource};
+use super::super::schemas::{
+    WorkflowApprovalDroppedSource, WorkflowApprovalOverdue, WorkflowApproverRole, WorkflowApproverSource,
+};
+use super::delegations;
 use super::{
     CANCEL_KEY, InstanceRow, NewEvent, Pinned, PinnedStep, PinnedTransition, as_transition_fields, check_active,
     condition_values, current_values, granted, insert_event, instance, is_set, may_edit, may_manage, move_to, pinned,
@@ -214,10 +217,11 @@ fn kind_str(k: WorkflowApprovalPrincipalKind) -> &'static str {
     }
 }
 
-/// Resolves the `approver` assignments of step `s` into the request's
-/// eligibility rows: profiles and groups stay principals (membership is read
-/// at decision time), a CI field and service owners resolve to users now.
-/// Records how many active users who may view the CI could decide it.
+/// Resolves the `approver` assignments of step `s`, and its `escalation`
+/// ones once it is `overdue`, into the request's eligibility rows: profiles
+/// and groups stay principals (membership is read at decision time), a CI
+/// field and service owners resolve to users now. Records how many active
+/// users who may view the CI could decide it.
 ///
 /// A CI field source is dropped when the field's current value was set by an
 /// `excluded` user (directly or through an API token one of them minted:
@@ -226,6 +230,7 @@ fn kind_str(k: WorkflowApprovalPrincipalKind) -> &'static str {
 /// same holds for a service owner an excluded user made an owner, and for the
 /// owners of a service an excluded user added the CI to (GH#708). The dropped
 /// sources are kept on the step with the change that named the approvers.
+#[allow(clippy::too_many_arguments)]
 async fn resolve(
     conn: &mut PgConnection,
     request: Uuid,
@@ -234,20 +239,21 @@ async fn resolve(
     transition: &str,
     s: &PinnedStep,
     excluded: &[Uuid],
+    overdue: bool,
 ) -> Result<(), AppError> {
     use WorkflowApprovalPrincipalKind as K;
     let assignments = approvers::load(&mut *conn, row.definition_id).await?;
-    let mut rows: Vec<(K, Uuid, Value)> = Vec::new();
+    let mut rows: Vec<(K, Uuid, Value, &str)> = Vec::new();
     let mut dropped: Vec<WorkflowApprovalDroppedSource> = Vec::new();
-    for a in assignments
-        .iter()
-        .filter(|a| a.transition_key == transition && a.step_key == s.key && a.role == WorkflowApproverRole::Approver)
-    {
+    for a in assignments.iter().filter(|a| {
+        a.transition_key == transition && a.step_key == s.key && (a.role == WorkflowApproverRole::Approver || overdue)
+    }) {
+        let role = a.role.as_str();
         let via = json!({ "source": a.source.kind().as_str(), "label": a.source.label() });
         match &a.source {
-            Source::Profile { id, .. } => rows.push((K::Profile, *id, via)),
-            Source::Group { id, .. } => rows.push((K::Group, *id, via)),
-            Source::User { id, .. } => rows.push((K::User, *id, via)),
+            Source::Profile { id, .. } => rows.push((K::Profile, *id, via, role)),
+            Source::Group { id, .. } => rows.push((K::Group, *id, via, role)),
+            Source::User { id, .. } => rows.push((K::User, *id, via, role)),
             Source::Attribute { key, .. } => {
                 let Some(person) = values.get(key).and_then(Value::as_str).and_then(|v| v.parse::<Uuid>().ok()) else {
                     continue;
@@ -272,13 +278,13 @@ async fn resolve(
                     .bind(person)
                     .fetch_all(&mut *conn)
                     .await?;
-                rows.extend(users.into_iter().map(|u| (K::User, u, via.clone())));
+                rows.extend(users.into_iter().map(|u| (K::User, u, via.clone(), role)));
             }
-            Source::ServiceOwner(role) => {
+            Source::ServiceOwner(owner) => {
                 // Direct membership only (A-Q3), less the owners and memberships an excluded user set (GH#708).
-                let owners = approvers::service_owners(&mut *conn, row.ci_id, *role, excluded).await?;
-                rows.extend(owners.users.into_iter().map(|u| (K::User, u, via.clone())));
-                rows.extend(owners.groups.into_iter().map(|g| (K::Group, g, via.clone())));
+                let owners = approvers::service_owners(&mut *conn, row.ci_id, *owner, excluded).await?;
+                rows.extend(owners.users.into_iter().map(|u| (K::User, u, via.clone(), role)));
+                rows.extend(owners.groups.into_iter().map(|g| (K::Group, g, via.clone(), role)));
                 dropped.extend(owners.dropped);
             }
         }
@@ -291,9 +297,11 @@ async fn resolve(
     let kinds: Vec<&str> = rows.iter().map(|r| kind_str(r.0)).collect();
     let ids: Vec<Uuid> = rows.iter().map(|r| r.1).collect();
     let vias: Vec<SqlJson<Value>> = rows.iter().map(|r| SqlJson(r.2.clone())).collect();
+    let roles: Vec<&str> = rows.iter().map(|r| r.3).collect();
     sqlx::query(
         "INSERT INTO cmdb.workflow_approval_eligibility (request_id, step_no, role, principal_kind, principal_id, via)
-         SELECT $1, $2, 'approver', u.kind, u.id, u.via FROM unnest($3::text[], $4::uuid[], $5::jsonb[]) AS u(kind, id, via)
+         SELECT $1, $2, u.role, u.kind, u.id, u.via
+         FROM unnest($3::text[], $4::uuid[], $5::jsonb[], $6::text[]) AS u(kind, id, via, role)
          ON CONFLICT DO NOTHING",
     )
     .bind(request)
@@ -301,6 +309,7 @@ async fn resolve(
     .bind(&kinds)
     .bind(&ids)
     .bind(&vias)
+    .bind(&roles)
     .execute(&mut *conn)
     .await?;
     let pick = |k: K| -> Vec<Uuid> { rows.iter().filter(|r| r.0 == k).map(|r| r.1).collect() };
@@ -411,7 +420,7 @@ pub(super) async fn create(
     // Every step's approvers are fixed now: an edit of a field that names
     // them, while the request is pending, changes nothing (GH#664).
     for s in &steps {
-        resolve(&mut *conn, id, row, staged.current, &t.key, s, &excluded).await?;
+        resolve(&mut *conn, id, row, staged.current, &t.key, s, &excluded, false).await?;
     }
     sqlx::query("UPDATE cmdb.workflow_instances SET version = version + 1 WHERE id = $1")
         .bind(row.id)
@@ -430,6 +439,7 @@ pub(super) async fn create(
             comment: staged.comment,
             field_changes: None,
             approval: Some((id, Some(1))),
+            on_behalf_of: None,
         },
     )
     .await?;
@@ -471,8 +481,10 @@ struct Decider {
     name: String,
     token_id: Option<Uuid>,
     minted_by: Option<Uuid>,
-    /// The eligibility rows that qualify them.
+    /// The eligibility rows that qualify them (or the principal they act for).
     via: Vec<Value>,
+    /// Deciding for a principal through a delegation (§6.1).
+    on_behalf_of: Option<delegations::Live>,
 }
 
 /// `(transition_key, user_id)` of everyone `excludeActorsOf` refuses on
@@ -499,23 +511,79 @@ pub(super) fn actors_of(instance: &str, keys: &str) -> String {
     )
 }
 
-/// Whether the caller may decide step `s` of `req` now, with the reason
-/// they may not as the error a decision would get. Reads only.
-async fn check_decider(
+/// The eligibility rows of step `s` that `user` matches in their own right:
+/// an active account that is a principal of the step, one of its profiles or
+/// groups. Escalation rows count once the step is overdue.
+async fn via_of(
+    conn: &mut PgConnection,
+    req: &RequestRow,
+    s: &PinnedStep,
+    user: Uuid,
+    overdue: bool,
+) -> Result<Vec<Value>, AppError> {
+    let via: Vec<SqlJson<Value>> = sqlx::query_scalar(
+        "SELECT e.via FROM cmdb.workflow_approval_eligibility e JOIN cmdb.users u ON u.id = $3 AND u.is_active
+         WHERE e.request_id = $1 AND e.step_no = $2 AND (e.role = 'approver' OR $4)
+           AND ((e.principal_kind = 'user' AND e.principal_id = $3)
+             OR (e.principal_kind = 'profile' AND e.principal_id IN
+                   (SELECT profile_id FROM cmdb.user_permission_profiles WHERE user_id = $3))
+             OR (e.principal_kind = 'group' AND e.principal_id IN
+                   (SELECT group_id FROM cmdb.user_group_members WHERE user_id = $3)))
+         ORDER BY e.role, e.principal_kind, e.principal_id",
+    )
+    .bind(req.id)
+    .bind(s.step_no)
+    .bind(user)
+    .bind(overdue)
+    .fetch_all(conn)
+    .await?;
+    Ok(via.into_iter().map(|v| v.0).collect())
+}
+
+/// Whether `user` approved (in person or for someone) an earlier step of `req`.
+async fn approved_earlier(
+    conn: &mut PgConnection,
+    req: &RequestRow,
+    s: &PinnedStep,
+    user: Uuid,
+) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM cmdb.workflow_approval_decisions
+                        WHERE request_id = $1 AND step_no < $2 AND decision = 'approve'
+                          AND (actor_id = $3 OR on_behalf_of_id = $3))",
+    )
+    .bind(req.id)
+    .bind(s.step_no)
+    .bind(user)
+    .fetch_one(conn)
+    .await?)
+}
+
+/// What the caller may do on step `s`: decide in person (or why not), and
+/// for which principals through a live delegation (or why not, per principal).
+struct Standing {
+    in_person: Result<Vec<Value>, AppError>,
+    delegated: Vec<(delegations::Live, Vec<Value>)>,
+    refused: Vec<(Uuid, AppError)>,
+}
+
+/// The refusals that bind the caller whoever they act for (four-eyes on the
+/// caller, the token rules) are errors; the rest is per identity.
+async fn standing(
     conn: &mut PgConnection,
     ctx: &RequestContext,
     req: &RequestRow,
     row: &InstanceRow,
     s: &PinnedStep,
     overdue: bool,
-) -> Result<Decider, AppError> {
+) -> Result<Standing, AppError> {
     use ErrorCode::{Forbidden, WorkflowApprovalSelf as SelfApproval};
     let Some(me) = ctx.principal() else {
         return Err(detail(Forbidden, "decision", "not_eligible", "Only a user can decide an approval request".into()));
     };
-    let (token, token_id, minted_by) = match me.credential {
-        Credential::Token { token_id, minted_by, .. } => (true, token_id, minted_by),
-        Credential::Session { .. } => (false, None, None),
+    let (token, minted_by) = match me.credential {
+        Credential::Token { minted_by, .. } => (true, minted_by),
+        Credential::Session { .. } => (false, None),
     };
     // Four-eyes: never the requester or the requesting token's creator, whatever the profile or credential.
     if req.excluded_user_ids.contains(&me.user_id) {
@@ -534,41 +602,6 @@ async fn check_decider(
             "token_creator",
             "Four-eyes: this API token was minted by the requester, so it cannot decide the request".into(),
         ));
-    }
-    if s.distinct_from_earlier && s.step_no > 1 {
-        let earlier: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM cmdb.workflow_approval_decisions
-                            WHERE request_id = $1 AND step_no < $2 AND decision = 'approve'
-                              AND (actor_id = $3 OR on_behalf_of_id = $3))",
-        )
-        .bind(req.id)
-        .bind(s.step_no)
-        .bind(me.user_id)
-        .fetch_one(&mut *conn)
-        .await?;
-        if earlier {
-            return Err(detail(
-                SelfApproval,
-                "decision",
-                "earlier_step",
-                format!("You approved an earlier step of this request, so step {} needs someone else", s.key),
-            ));
-        }
-    }
-    if !s.exclude_actors_of.is_empty() {
-        let actors: Vec<(String, Uuid)> = sqlx::query_as(sqlx::AssertSqlSafe(actors_of("$1", "$2")))
-            .bind(row.id)
-            .bind(&s.exclude_actors_of)
-            .fetch_all(&mut *conn)
-            .await?;
-        if let Some((key, _)) = actors.iter().find(|(_, u)| *u == me.user_id) {
-            return Err(detail(
-                SelfApproval,
-                "decision",
-                &format!("actor_of:{key}"),
-                format!("You took part in transition {key} of this instance, so step {} needs someone else", s.key),
-            ));
-        }
     }
     // Tokens (SHAA-1872 C1): only where the step allows them, and only one the owner minted.
     if token {
@@ -589,38 +622,182 @@ async fn check_decider(
             ));
         }
     }
-    // Eligibility, read live: an active account matching a principal of the step.
-    let via: Vec<SqlJson<Value>> = sqlx::query_scalar(
-        "SELECT e.via FROM cmdb.workflow_approval_eligibility e JOIN cmdb.users u ON u.id = $3 AND u.is_active
-         WHERE e.request_id = $1 AND e.step_no = $2 AND (e.role = 'approver' OR $4)
-           AND ((e.principal_kind = 'user' AND e.principal_id = $3)
-             OR (e.principal_kind = 'profile' AND e.principal_id IN
-                   (SELECT profile_id FROM cmdb.user_permission_profiles WHERE user_id = $3))
-             OR (e.principal_kind = 'group' AND e.principal_id IN
-                   (SELECT group_id FROM cmdb.user_group_members WHERE user_id = $3)))
-         ORDER BY e.role, e.principal_kind, e.principal_id",
-    )
-    .bind(req.id)
-    .bind(s.step_no)
-    .bind(me.user_id)
-    .bind(overdue)
-    .fetch_all(&mut *conn)
-    .await?;
-    if via.is_empty() {
-        return Err(detail(
-            Forbidden,
+    let actors: Vec<(String, Uuid)> = if s.exclude_actors_of.is_empty() {
+        Vec::new()
+    } else {
+        sqlx::query_as(sqlx::AssertSqlSafe(actors_of("$1", "$2")))
+            .bind(row.id)
+            .bind(&s.exclude_actors_of)
+            .fetch_all(&mut *conn)
+            .await?
+    };
+    let earlier = |who: &str| {
+        detail(
+            SelfApproval,
             "decision",
-            "not_eligible",
-            format!("You are not an approver of step {} of this request", s.key),
-        ));
+            "earlier_step",
+            format!("{who} approved an earlier step of this request, so step {} needs someone else", s.key),
+        )
+    };
+    let actor = |who: &str, key: &str| {
+        detail(
+            SelfApproval,
+            "decision",
+            &format!("actor_of:{key}"),
+            format!("{who} took part in transition {key} of this instance, so step {} needs someone else", s.key),
+        )
+    };
+    let distinct = s.distinct_from_earlier && s.step_no > 1;
+    // The caller's own separation of duties binds a delegated decision too.
+    let mine: Option<AppError> = if distinct && approved_earlier(&mut *conn, req, s, me.user_id).await? {
+        Some(earlier("You"))
+    } else {
+        actors.iter().find(|(_, u)| *u == me.user_id).map(|(key, _)| actor("You", key))
+    };
+    let in_person = match &mine {
+        Some(e) => Err(e.clone()),
+        None => {
+            let via = via_of(&mut *conn, req, s, me.user_id, overdue).await?;
+            if via.is_empty() {
+                Err(detail(
+                    Forbidden,
+                    "decision",
+                    "not_eligible",
+                    format!("You are not an approver of step {} of this request", s.key),
+                ))
+            } else {
+                Ok(via)
+            }
+        }
+    };
+    // Delegations: one per principal (the first of `live`), lending only the
+    // principal's own eligibility, never visibility.
+    let mut delegated = Vec::new();
+    let mut refused = Vec::new();
+    let live = delegations::live(&mut *conn, me.user_id, Some(row.definition_id)).await?;
+    let mut seen = std::collections::HashSet::new();
+    let principals: Vec<Uuid> = live.iter().map(|l| l.principal_id).collect();
+    let permissions = auth_data::load_permissions_of(&mut *conn, &principals).await?;
+    for l in live {
+        if !seen.insert(l.principal_id) {
+            continue;
+        }
+        let who = l.principal_name.clone();
+        let refusal = if req.excluded_user_ids.contains(&l.principal_id) {
+            Some(detail(
+                SelfApproval,
+                "decision",
+                "on_behalf_of_requester",
+                format!("Four-eyes: {who} made this request, so no one can approve it on their behalf"),
+            ))
+        } else if let Some(e) = &mine {
+            Some(e.clone())
+        } else if distinct && approved_earlier(&mut *conn, req, s, l.principal_id).await? {
+            Some(earlier(&who))
+        } else if let Some((key, _)) = actors.iter().find(|(_, u)| *u == l.principal_id) {
+            Some(actor(&who, key))
+        } else if !permissions.get(&l.principal_id).is_some_and(|p| p.can(row.class_id, ClassOp::View)) {
+            Some(detail(
+                Forbidden,
+                "decision",
+                "not_eligible",
+                format!("{who} may not view this CI's type, so no one can decide on their behalf"),
+            ))
+        } else {
+            None
+        };
+        if let Some(e) = refusal {
+            refused.push((l.principal_id, e));
+            continue;
+        }
+        let via = via_of(&mut *conn, req, s, l.principal_id, overdue).await?;
+        if via.is_empty() {
+            refused.push((
+                l.principal_id,
+                detail(
+                    Forbidden,
+                    "decision",
+                    "not_eligible",
+                    format!("{who} is not an approver of step {} of this request", s.key),
+                ),
+            ));
+        } else {
+            delegated.push((l, via));
+        }
     }
-    Ok(Decider {
+    Ok(Standing { in_person, delegated, refused })
+}
+
+/// Whether the caller may decide step `s` of `req` now, for `on_behalf_of`
+/// (None: in person when they qualify, else their only principal), with the
+/// reason they may not as the error a decision would get. Reads only.
+async fn check_decider(
+    conn: &mut PgConnection,
+    ctx: &RequestContext,
+    req: &RequestRow,
+    row: &InstanceRow,
+    s: &PinnedStep,
+    overdue: bool,
+    on_behalf_of: Option<Uuid>,
+) -> Result<Decider, AppError> {
+    let st = standing(conn, ctx, req, row, s, overdue).await?;
+    let me = ctx.principal().ok_or_else(AppError::internal)?;
+    let (token_id, minted_by) = match me.credential {
+        Credential::Token { token_id, minted_by, .. } => (token_id, minted_by),
+        Credential::Session { .. } => (None, None),
+    };
+    let decider = |via: Vec<Value>, on_behalf_of: Option<delegations::Live>| Decider {
         user_id: me.user_id,
         name: me.username.clone(),
         token_id,
         minted_by,
-        via: via.into_iter().map(|v| v.0).collect(),
-    })
+        via,
+        on_behalf_of,
+    };
+    let Standing { in_person, mut delegated, mut refused } = st;
+    match on_behalf_of.filter(|p| *p != me.user_id) {
+        Some(p) => {
+            if let Some(i) = delegated.iter().position(|(l, _)| l.principal_id == p) {
+                let (l, via) = delegated.swap_remove(i);
+                return Ok(decider(via, Some(l)));
+            }
+            if let Some(i) = refused.iter().position(|(q, _)| *q == p) {
+                return Err(refused.swap_remove(i).1);
+            }
+            Err(detail(
+                ErrorCode::Forbidden,
+                "onBehalfOf",
+                "no_delegation",
+                "No live delegation from that user lets you decide this request for them".into(),
+            ))
+        }
+        None if on_behalf_of.is_some() => in_person.map(|via| decider(via, None)),
+        None => match in_person {
+            Ok(via) => Ok(decider(via, None)),
+            Err(e) => match delegated.len() {
+                1 => {
+                    let (l, via) = delegated.remove(0);
+                    Ok(decider(via, Some(l)))
+                }
+                0 if e.details.as_ref().and_then(|d| d.first()).is_some_and(|d| d.code == "not_eligible")
+                    && !refused.is_empty() =>
+                {
+                    // Not an approver in person: why the delegation does not help says more.
+                    Err(refused.swap_remove(0).1)
+                }
+                0 => Err(e),
+                _ => Err(AppError::validation(vec![FieldError {
+                    location: FieldLocation::Body,
+                    field: "onBehalfOf".into(),
+                    message: format!(
+                        "You may decide this step for {}: say for whom",
+                        delegated.iter().map(|(l, _)| l.principal_name.as_str()).collect::<Vec<_>>().join(", ")
+                    ),
+                    code: "required".into(),
+                }])),
+            },
+        },
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -674,16 +851,12 @@ pub async fn decide(
             format!("Step {} is not the active step of this request; step {} is. Reload and retry.", b.step_key, s.key),
         ));
     }
-    let decider = check_decider(&mut tx, ctx, &req, &row, s, overdue).await?;
-    let already: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM cmdb.workflow_approval_decisions
-                        WHERE request_id = $1 AND step_no = $2 AND (actor_id = $3 OR on_behalf_of_id = $3))",
-    )
-    .bind(req.id)
-    .bind(s.step_no)
-    .bind(decider.user_id)
-    .fetch_one(&mut *tx)
-    .await?;
+    let decider = check_decider(&mut tx, ctx, &req, &row, s, overdue, b.on_behalf_of).await?;
+    // One vote per person per step, cast in person or for someone (the unique indexes back it).
+    let voted = "SELECT EXISTS (SELECT 1 FROM cmdb.workflow_approval_decisions
+                 WHERE request_id = $1 AND step_no = $2 AND (actor_id = $3 OR on_behalf_of_id = $3))";
+    let already: bool =
+        sqlx::query_scalar(voted).bind(req.id).bind(s.step_no).bind(decider.user_id).fetch_one(&mut *tx).await?;
     if already {
         return Err(detail(
             ErrorCode::Conflict,
@@ -692,6 +865,19 @@ pub async fn decide(
             format!("You already decided step {} of this request", s.key),
         ));
     }
+    if let Some(l) = &decider.on_behalf_of {
+        let already: bool =
+            sqlx::query_scalar(voted).bind(req.id).bind(s.step_no).bind(l.principal_id).fetch_one(&mut *tx).await?;
+        if already {
+            return Err(detail(
+                ErrorCode::Conflict,
+                "onBehalfOf",
+                "already_decided",
+                format!("Step {} of this request was already decided by or for {}", s.key, l.principal_name),
+            ));
+        }
+    }
+    let behalf = decider.on_behalf_of.as_ref();
     let comment = b.comment.as_deref().map(str::trim).filter(|c| !c.is_empty());
     let credential = if decider.token_id.is_some() {
         WorkflowApprovalCredential::Token
@@ -701,8 +887,8 @@ pub async fn decide(
     sqlx::query(
         "INSERT INTO cmdb.workflow_approval_decisions
            (request_id, step_no, decision, actor_id, actor_name, credential, token_id, token_creator_id, via, comment,
-            http_request_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+            http_request_id, on_behalf_of_id, on_behalf_of_name, delegation_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
     )
     .bind(req.id)
     .bind(s.step_no)
@@ -715,6 +901,9 @@ pub async fn decide(
     .bind(SqlJson(&decider.via))
     .bind(comment)
     .bind(&ctx.request_id)
+    .bind(behalf.map(|l| l.principal_id))
+    .bind(behalf.map(|l| l.principal_name.as_str()))
+    .bind(behalf.map(|l| l.delegation_id))
     .execute(&mut *tx)
     .await?;
     let approvals: i64 = sqlx::query_scalar(
@@ -738,6 +927,7 @@ pub async fn decide(
             comment,
             field_changes: None,
             approval: Some((req.id, Some(s.step_no))),
+            on_behalf_of: behalf.map(|l| l.principal_name.as_str()),
         },
     )
     .await?;
@@ -751,6 +941,8 @@ pub async fn decide(
             "stepKey": s.key, "decision": b.decision.as_str(), "comment": comment,
             "credential": credential, "tokenId": decider.token_id,
             "tokenCreatorId": decider.token_id.and(decider.minted_by), "via": decider.via,
+            "onBehalfOf": behalf.map(|l| json!({ "id": l.principal_id, "name": l.principal_name })),
+            "delegationId": behalf.map(|l| l.delegation_id),
             "approvals": approvals, "required": s.required_approvals,
         })),
     };
@@ -794,24 +986,28 @@ pub async fn decide(
             .execute(&mut *tx)
             .await?;
             if let Some(n) = next {
-                // Its approvers were resolved with the request (GH#664). Only a
-                // request made before that has a step still unresolved; it is
-                // resolved now, before the audit row, so the audit chain head is
-                // held briefly (§9).
+                // Its approvers were resolved with the request (GH#664). A step
+                // still unresolved (a request made before that), or resolved
+                // before the workflow's approvers changed (§6.2), is resolved
+                // now, before the audit row, so the audit chain head is held
+                // briefly (§9).
                 let unresolved: bool = sqlx::query_scalar(
                     "UPDATE cmdb.workflow_approval_request_steps
                      SET status = 'active', activated_at = now(), due_at = now() + make_interval(mins => $3)
-                     WHERE request_id = $1 AND step_no = $2 RETURNING resolved_at IS NULL",
+                     WHERE request_id = $1 AND step_no = $2
+                     RETURNING resolved_at IS NULL
+                            OR resolved_at < (SELECT updated_at FROM cmdb.workflow_definitions WHERE id = $4)",
                 )
                 .bind(req.id)
                 .bind(n.step_no)
                 .bind(n.due_minutes)
+                .bind(row.definition_id)
                 .fetch_one(&mut *tx)
                 .await?;
                 if unresolved {
                     let model = Model::load(&mut tx).await?;
                     let values = current_values(&mut tx, &model, row.ci_id).await?;
-                    resolve(&mut tx, req.id, &row, &values, &t.key, n, &req.excluded_user_ids).await?;
+                    resolve(&mut tx, req.id, &row, &values, &t.key, n, &req.excluded_user_ids, false).await?;
                 }
                 sqlx::query(
                     "UPDATE cmdb.workflow_approval_requests SET current_step_no = $2, version = version + 1
@@ -1028,6 +1224,7 @@ async fn apply(
             comment: req.comment.as_deref(),
             field_changes: changes.clone(),
             approval: Some((req.id, None)),
+            on_behalf_of: None,
         },
     )
     .await?;
@@ -1112,6 +1309,7 @@ async fn close(
             comment,
             field_changes: None,
             approval: Some((id, None)),
+            on_behalf_of: None,
         },
     )
     .await?;
@@ -1280,11 +1478,11 @@ pub async fn refresh(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<Wo
     check_pending(&req)?;
     let p = pinned(&mut tx, req.version_id).await?;
     let t = p.transition(&req.transition_key).ok_or_else(AppError::internal)?;
-    let (s, _) = active_step(&mut tx, &p, t, &req).await?;
+    let (s, overdue) = active_step(&mut tx, &p, t, &req).await?;
     let model = Model::load(&mut tx).await?;
     let values = current_values(&mut tx, &model, row.ci_id).await?;
     let before = approvers_of(&mut tx, req.id, s.step_no).await?;
-    resolve(&mut tx, req.id, &row, &values, &t.key, s, &req.excluded_user_ids).await?;
+    resolve(&mut tx, req.id, &row, &values, &t.key, s, &req.excluded_user_ids, overdue).await?;
     let after = approvers_of(&mut tx, req.id, s.step_no).await?;
     let entry = AuditEntry {
         action: AuditAction::WorkflowApprovalRefresh,
@@ -1302,13 +1500,23 @@ pub async fn refresh(pool: &PgPool, ctx: &RequestContext, id: Uuid) -> Result<Wo
     Ok(out)
 }
 
+/// One eligibility row as the refresh audit row records it: an escalation
+/// row says so, an approver row keeps the shape it had before escalation.
+fn approver_json(role: &str, kind: &str, id: Uuid, via: Value) -> Value {
+    if role == "approver" {
+        json!({ "kind": kind, "id": id, "via": via })
+    } else {
+        json!({ "role": role, "kind": kind, "id": id, "via": via })
+    }
+}
+
 /// Who may decide step `step_no` of a request, as the refresh audit row
 /// records it: the eligibility principals, the count of eligible users and
 /// the sources dropped (GH#664).
 async fn approvers_of(conn: &mut PgConnection, request: Uuid, step_no: i16) -> Result<Value, AppError> {
-    let principals: Vec<(String, Uuid, SqlJson<Value>)> = sqlx::query_as(
-        "SELECT principal_kind, principal_id, via FROM cmdb.workflow_approval_eligibility
-         WHERE request_id = $1 AND step_no = $2 AND role = 'approver' ORDER BY principal_kind, principal_id",
+    let principals: Vec<(String, String, Uuid, SqlJson<Value>)> = sqlx::query_as(
+        "SELECT role, principal_kind, principal_id, via FROM cmdb.workflow_approval_eligibility
+         WHERE request_id = $1 AND step_no = $2 ORDER BY role, principal_kind, principal_id",
     )
     .bind(request)
     .bind(step_no)
@@ -1324,7 +1532,7 @@ async fn approvers_of(conn: &mut PgConnection, request: Uuid, step_no: i16) -> R
     .await?;
     let (count, dropped) = step.map_or((None, Value::Null), |(c, d)| (c, d.0));
     let approvers: Vec<Value> =
-        principals.into_iter().map(|(kind, id, via)| json!({ "kind": kind, "id": id, "via": via.0 })).collect();
+        principals.into_iter().map(|(role, kind, id, via)| approver_json(&role, &kind, id, via.0)).collect();
     Ok(json!({ "approvers": approvers, "eligibleCount": count, "droppedSources": dropped }))
 }
 
@@ -1453,18 +1661,47 @@ async fn view(
     let my_eligibility = if req.status != WorkflowApprovalStatus::Pending {
         WorkflowApprovalEligibility {
             can_decide: false,
+            in_person: false,
+            on_behalf_of: Vec::new(),
             reason: Some("not_pending".into()),
             message: Some("The request is closed".into()),
         }
     } else {
         let (s, overdue) = active_step(&mut *conn, p, t, req).await?;
-        match check_decider(&mut *conn, ctx, req, row, s, overdue).await {
-            Ok(_) => WorkflowApprovalEligibility { can_decide: true, reason: None, message: None },
-            Err(e) if e.code.status().is_server_error() => return Err(e),
-            Err(e) => WorkflowApprovalEligibility {
+        let refusal = |e: AppError| -> Result<WorkflowApprovalEligibility, AppError> {
+            if e.code.status().is_server_error() {
+                return Err(e);
+            }
+            Ok(WorkflowApprovalEligibility {
                 can_decide: false,
+                in_person: false,
+                on_behalf_of: Vec::new(),
                 reason: e.details.as_ref().and_then(|d| d.first()).map(|d| d.code.clone()),
                 message: Some(e.message),
+            })
+        };
+        match standing(&mut *conn, ctx, req, row, s, overdue).await {
+            Err(e) => refusal(e)?,
+            Ok(st) if st.in_person.is_err() && st.delegated.is_empty() => {
+                match check_decider(&mut *conn, ctx, req, row, s, overdue, None).await {
+                    Ok(_) => return Err(AppError::internal()),
+                    Err(e) => refusal(e)?,
+                }
+            }
+            Ok(st) => WorkflowApprovalEligibility {
+                can_decide: true,
+                in_person: st.in_person.is_ok(),
+                on_behalf_of: st
+                    .delegated
+                    .iter()
+                    .map(|(l, _)| WorkflowApprovalOnBehalfOf {
+                        user_id: l.principal_id,
+                        name: l.principal_name.clone(),
+                        delegation_id: l.delegation_id,
+                    })
+                    .collect(),
+                reason: None,
+                message: None,
             },
         }
     };
@@ -1521,4 +1758,283 @@ async fn view(
         closed_by_name: req.closed_by_name.clone(),
         version: req.version,
     })
+}
+
+// ---------------------------------------------------------------------------
+// The SLA sweep and re-resolution (§6.2, §7.2; slice A4)
+// ---------------------------------------------------------------------------
+
+/// Locks request `id` in the runtime order (CI, instance, request) for the
+/// system: no visibility check. None when it no longer exists.
+async fn lock_for_system(conn: &mut PgConnection, id: Uuid) -> Result<Option<(RequestRow, InstanceRow)>, AppError> {
+    let found: Option<(Uuid, Uuid)> = sqlx::query_as(
+        "SELECT r.instance_id, wi.ci_id FROM cmdb.workflow_approval_requests r
+         JOIN cmdb.workflow_instances wi ON wi.id = r.instance_id WHERE r.id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&mut *conn)
+    .await?;
+    let Some((instance_id, ci_id)) = found else { return Ok(None) };
+    if item_data::lock(conn, ci_id).await?.is_none() {
+        return Ok(None);
+    }
+    sqlx::query("SELECT 1 FROM cmdb.workflow_instances WHERE id = $1 FOR UPDATE")
+        .bind(instance_id)
+        .execute(&mut *conn)
+        .await?;
+    let Some(req) = load(conn, id, true).await? else { return Ok(None) };
+    let Some(row) = instance(conn, instance_id).await? else { return Ok(None) };
+    Ok(Some((req, row)))
+}
+
+/// The audit and event context of the sweep: actor `system`.
+pub(super) fn sweep_context() -> RequestContext {
+    RequestContext::system("system", format!("approval-sweep-{}", Uuid::new_v4().simple()))
+}
+
+/// What the sweep did to one step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Overdue {
+    /// Another server process (or a decision) got there first.
+    Skipped,
+    /// Marked overdue; its escalation approvers may decide it now.
+    Flagged,
+    /// `onOverdue: reject`: the request is closed as rejected, reason `overdue`.
+    Rejected,
+}
+
+/// Marks step `step_no` of request `request` overdue if it still is due and
+/// unmarked, in its own transaction under the runtime locks, so with several
+/// server processes on one database exactly one of them does it (§7.2).
+pub(super) async fn mark_overdue(pool: &PgPool, request: Uuid, step_no: i16) -> Result<Overdue, AppError> {
+    let ctx = sweep_context();
+    let mut tx = pool.begin().await?;
+    let Some((req, row)) = lock_for_system(&mut tx, request).await? else { return Ok(Overdue::Skipped) };
+    if req.status != WorkflowApprovalStatus::Pending || req.current_step_no != step_no {
+        return Ok(Overdue::Skipped);
+    }
+    let due: Option<DateTime<Utc>> = sqlx::query_scalar(
+        "UPDATE cmdb.workflow_approval_request_steps SET overdue_at = now()
+         WHERE request_id = $1 AND step_no = $2 AND status = 'active' AND overdue_at IS NULL AND due_at <= now()
+         RETURNING due_at",
+    )
+    .bind(req.id)
+    .bind(step_no)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(due) = due else { return Ok(Overdue::Skipped) };
+    let p = pinned(&mut tx, req.version_id).await?;
+    let t = p.transition(&req.transition_key).ok_or_else(AppError::internal)?;
+    let s = p.steps_of(t.id).find(|s| s.step_no == step_no).ok_or_else(AppError::internal)?;
+    let reject = s.on_overdue == WorkflowApprovalOverdue::Reject;
+    let mut escalated_to: Vec<String> = Vec::new();
+    if reject {
+        sqlx::query(
+            "UPDATE cmdb.workflow_approval_request_steps
+             SET status = CASE WHEN step_no = $2 THEN 'rejected' ELSE 'closed' END, completed_at = now()
+             WHERE request_id = $1 AND status IN ('active', 'waiting')",
+        )
+        .bind(req.id)
+        .bind(step_no)
+        .execute(&mut *tx)
+        .await?;
+        finish(&mut tx, &req, WorkflowApprovalStatus::Rejected, WorkflowApprovalCloseReason::Overdue, "system").await?;
+    } else {
+        // The escalation approvers join, resolved before the first audit row (§9).
+        escalated_to = approvers::load(&mut tx, row.definition_id)
+            .await?
+            .iter()
+            .filter(|a| a.transition_key == t.key && a.step_key == s.key && a.role == WorkflowApproverRole::Escalation)
+            .map(|a| a.source.label())
+            .collect();
+        let model = Model::load(&mut tx).await?;
+        let values = current_values(&mut tx, &model, row.ci_id).await?;
+        resolve(&mut tx, req.id, &row, &values, &t.key, s, &req.excluded_user_ids, true).await?;
+        bump_request(&mut tx, req.id).await?;
+    }
+    bump_instance(&mut tx, row.id).await?;
+    let comment = format!("Step {} is overdue: it was due at {}", s.name, due.to_rfc3339());
+    insert_event(
+        &mut tx,
+        &ctx,
+        NewEvent {
+            instance: row.id,
+            kind: "approval_overdue",
+            transition_key: None,
+            from_state_key: Some(&row.state_key),
+            to_state_key: &row.state_key,
+            to_version_no: row.version_no,
+            comment: Some(&comment),
+            field_changes: None,
+            approval: Some((req.id, Some(step_no))),
+            on_behalf_of: None,
+        },
+    )
+    .await?;
+    let eligible: Option<i32> = sqlx::query_scalar(
+        "SELECT eligible_count FROM cmdb.workflow_approval_request_steps WHERE request_id = $1 AND step_no = $2",
+    )
+    .bind(req.id)
+    .bind(step_no)
+    .fetch_one(&mut *tx)
+    .await?;
+    let mut entries = vec![AuditEntry {
+        action: AuditAction::WorkflowApprovalOverdue,
+        entity_type: "configuration_items",
+        entity_id: row.ci_id,
+        old_value: None,
+        new_value: Some(json!({
+            "instanceId": row.id, "requestId": req.id, "requestNo": req.request_no, "transitionKey": t.key,
+            "stepNo": step_no, "stepKey": s.key, "dueAt": due, "reason": "due",
+            "onOverdue": if reject { "reject" } else { "flag" }, "escalatedTo": escalated_to,
+            "eligibleCount": eligible,
+        })),
+    }];
+    if reject {
+        let comment = format!("Rejected: step {} was not decided in time", s.name);
+        insert_event(
+            &mut tx,
+            &ctx,
+            NewEvent {
+                instance: row.id,
+                kind: "approval_close",
+                transition_key: None,
+                from_state_key: Some(&row.state_key),
+                to_state_key: &row.state_key,
+                to_version_no: row.version_no,
+                comment: Some(&comment),
+                field_changes: None,
+                approval: Some((req.id, None)),
+                on_behalf_of: None,
+            },
+        )
+        .await?;
+        entries.push(AuditEntry {
+            action: AuditAction::WorkflowApprovalClose,
+            entity_type: "configuration_items",
+            entity_id: row.ci_id,
+            old_value: None,
+            new_value: Some(json!({ "instanceId": row.id, "requestId": req.id, "requestNo": req.request_no,
+                "transitionKey": t.key, "status": WorkflowApprovalStatus::Rejected,
+                "reason": WorkflowApprovalCloseReason::Overdue.as_str(), "comment": comment })),
+        });
+    }
+    crud::write_audit(&mut tx, &ctx, entries).await?;
+    tx.commit().await?;
+    Ok(if reject { Overdue::Rejected } else { Overdue::Flagged })
+}
+
+/// What re-resolving one step did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct Reresolved {
+    /// The step was still active and was resolved again.
+    pub(super) resolved: bool,
+    /// Its approvers changed (audited as `workflow.approval_refresh`).
+    pub(super) changed: bool,
+    /// It became known as understaffed (an `approval_overdue` event with reason `understaffed`, once per step).
+    pub(super) understaffed: bool,
+}
+
+/// Re-resolves the active step `step_no` of `request` from the workflow's
+/// current assignments and the CI's current values (§6.2): after a staffing
+/// change, or because the step is understaffed. A change of approvers is
+/// audited (actor `system`); an understaffed step raises the escalation seam
+/// once, without making anyone eligible.
+pub(super) async fn reresolve(pool: &PgPool, request: Uuid, step_no: i16) -> Result<Reresolved, AppError> {
+    let ctx = sweep_context();
+    let mut tx = pool.begin().await?;
+    let Some((req, row)) = lock_for_system(&mut tx, request).await? else { return Ok(Reresolved::default()) };
+    if req.status != WorkflowApprovalStatus::Pending || req.current_step_no != step_no {
+        return Ok(Reresolved::default());
+    }
+    let p = pinned(&mut tx, req.version_id).await?;
+    let t = p.transition(&req.transition_key).ok_or_else(AppError::internal)?;
+    let (s, overdue) = active_step(&mut tx, &p, t, &req).await?;
+    let model = Model::load(&mut tx).await?;
+    let values = current_values(&mut tx, &model, row.ci_id).await?;
+    let before = approvers_of(&mut tx, req.id, s.step_no).await?;
+    resolve(&mut tx, req.id, &row, &values, &t.key, s, &req.excluded_user_ids, overdue).await?;
+    let after = approvers_of(&mut tx, req.id, s.step_no).await?;
+    let changed = before != after;
+    let mut out = Reresolved { resolved: true, changed, understaffed: false };
+    let mut entries = Vec::new();
+    if changed {
+        entries.push(AuditEntry {
+            action: AuditAction::WorkflowApprovalRefresh,
+            entity_type: "configuration_items",
+            entity_id: row.ci_id,
+            new_value: Some(json!({ "instanceId": row.id, "requestId": req.id, "requestNo": req.request_no,
+                "transitionKey": req.transition_key, "stepNo": s.step_no, "stepKey": s.key, "changed": true,
+                "approvers": after["approvers"], "eligibleCount": after["eligibleCount"],
+                "droppedSources": after["droppedSources"], "trigger": "sweep" })),
+            old_value: Some(before),
+        });
+    }
+    // Understaffed: fewer users could decide it than approvals are still needed.
+    let (eligible, approvals): (Option<i32>, i64) = sqlx::query_as(
+        "SELECT st.eligible_count, (SELECT count(*) FROM cmdb.workflow_approval_decisions dc
+                                    WHERE dc.request_id = st.request_id AND dc.step_no = st.step_no
+                                      AND dc.decision = 'approve')
+         FROM cmdb.workflow_approval_request_steps st WHERE st.request_id = $1 AND st.step_no = $2",
+    )
+    .bind(req.id)
+    .bind(s.step_no)
+    .fetch_one(&mut *tx)
+    .await?;
+    let short = eligible.is_some_and(|n| i64::from(n) < i64::from(s.required_approvals) - approvals);
+    // Once per step: an overdue step has raised the seam already.
+    let raised: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM cmdb.workflow_instance_events
+                        WHERE instance_id = $1 AND kind = 'approval_overdue' AND approval_request_id = $2
+                          AND approval_step_no = $3)",
+    )
+    .bind(row.id)
+    .bind(req.id)
+    .bind(s.step_no)
+    .fetch_one(&mut *tx)
+    .await?;
+    if short && !raised && !overdue {
+        out.understaffed = true;
+        let comment = format!(
+            "Step {} is understaffed: {} user(s) could decide it, {} more approval(s) are needed",
+            s.name,
+            eligible.unwrap_or(0),
+            i64::from(s.required_approvals) - approvals
+        );
+        bump_request(&mut tx, req.id).await?;
+        bump_instance(&mut tx, row.id).await?;
+        insert_event(
+            &mut tx,
+            &ctx,
+            NewEvent {
+                instance: row.id,
+                kind: "approval_overdue",
+                transition_key: None,
+                from_state_key: Some(&row.state_key),
+                to_state_key: &row.state_key,
+                to_version_no: row.version_no,
+                comment: Some(&comment),
+                field_changes: None,
+                approval: Some((req.id, Some(s.step_no))),
+                on_behalf_of: None,
+            },
+        )
+        .await?;
+        entries.push(AuditEntry {
+            action: AuditAction::WorkflowApprovalOverdue,
+            entity_type: "configuration_items",
+            entity_id: row.ci_id,
+            old_value: None,
+            new_value: Some(json!({
+                "instanceId": row.id, "requestId": req.id, "requestNo": req.request_no, "transitionKey": t.key,
+                "stepNo": s.step_no, "stepKey": s.key, "reason": "understaffed", "eligibleCount": eligible,
+                "approvals": approvals, "required": s.required_approvals, "escalatedTo": Vec::<String>::new(),
+            })),
+        });
+    }
+    if !entries.is_empty() {
+        crud::write_audit(&mut tx, &ctx, entries).await?;
+    }
+    tx.commit().await?;
+    Ok(out)
 }

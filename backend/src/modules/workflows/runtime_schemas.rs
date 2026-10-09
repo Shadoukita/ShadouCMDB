@@ -466,6 +466,9 @@ pub struct WorkflowEvent {
     /// The step an `approval_request`, `approval_decision` or `approval_overdue` event is about
     #[schema(required = true)]
     pub approval_step_no: Option<i16>,
+    /// The principal a delegate decided for (`approval_decision` events only)
+    #[schema(required = true)]
+    pub on_behalf_of_name: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

@@ -7,7 +7,8 @@
 // script signs in to the running server as the scan's administrator, reads one id per resource from
 // its list endpoint (demo data from `seed --demo`), creates the objects the scan may damage (a user,
 // a profile, a group, an identity provider, an API token, an import job, a saved mapping, a saved view,
-// a workflow definition, a running workflow instance, a pending approval request, a CI note), and writes the
+// a workflow definition, a running workflow instance, a pending approval request, a CI note, two approval
+// delegations), and writes the
 // spec with those ids as examples.
 //
 //   DAST_USERNAME=... DAST_PASSWORD=... node tools/dast/path-examples.mjs <openapi.json> <out.json> [<examples.json>]
@@ -45,7 +46,7 @@ export const LISTED = [
  * Objects created for the scan. The scan changes, disables and deletes what it is given, so it gets
  * objects of its own: never its own account (a password change would end its session) or token.
  */
-export const CREATED = ["admin/profiles", "admin/groups", "admin/users", "admin/identity-providers", "admin/api-tokens", "imports", "import-mappings", "saved-views", "admin/workflow-definitions", "workflow-instances", "workflow-approval-requests", "ci-notes"];
+export const CREATED = ["admin/profiles", "admin/groups", "admin/users", "admin/identity-providers", "admin/api-tokens", "imports", "import-mappings", "saved-views", "admin/workflow-definitions", "workflow-instances", "workflow-approval-requests", "ci-notes", "me/approval-delegations", "admin/approval-delegations"];
 
 /**
  * Resources that may have no row yet; any well-formed value still reaches the handler (404). The
@@ -235,6 +236,23 @@ async function collect(request) {
   // A note on the example CI, written by the scan's administrator: the note is looked up by CI and
   // note id together, and the scan may edit and delete it.
   examples["ci-notes"] = (await request("POST", `configuration-items/${examples["configuration-items"]}/notes`, { body: name })).id;
+  // Two approval delegations the scan may revoke: the administrator's own, to the target user, and
+  // one an administrator made for the target user, to a deputy (never to themselves, SHAA-1872 C2).
+  const window = { startsAt: new Date(Date.now() - 60_000).toISOString(), endsAt: new Date(Date.now() + 86_400_000).toISOString() };
+  examples["me/approval-delegations"] = (
+    await request("POST", "me/approval-delegations", { delegateUserId: examples["admin/users"], ...window, reason: name })
+  ).id;
+  const deputy = (
+    await request("POST", "admin/users", {
+      username: "dast-deputy",
+      displayName: `${name} (deputy)`,
+      email: "dast-deputy@example.test",
+      password: randomBytes(24).toString("base64url"),
+    })
+  ).id;
+  examples["admin/approval-delegations"] = (
+    await request("POST", "admin/approval-delegations", { principalUserId: examples["admin/users"], delegateUserId: deputy, ...window, reason: name })
+  ).id;
   return examples;
 }
 

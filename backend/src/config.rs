@@ -332,6 +332,23 @@ impl Default for NotificationConfig {
     }
 }
 
+/// The approval SLA sweep of this server process (`WORKFLOW_APPROVAL_SWEEP*`,
+/// approvals design SHAA-1869 §7.2); see
+/// [`crate::modules::workflows::runtime::sweep`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ApprovalSweepConfig {
+    /// `WORKFLOW_APPROVAL_SWEEP` (`on` / `off`): off leaves the sweep to other processes.
+    pub enabled: bool,
+    /// `WORKFLOW_APPROVAL_SWEEP_INTERVAL_SECS` (10 to 3600).
+    pub interval: Duration,
+}
+
+impl Default for ApprovalSweepConfig {
+    fn default() -> Self {
+        ApprovalSweepConfig { enabled: true, interval: Duration::from_secs(60) }
+    }
+}
+
 /// Hard ceilings of the `BUSINESS_SERVICE_*` settings (the nesting ceiling is
 /// also the database trigger's, migration 0033).
 pub const BUSINESS_SERVICE_MAX_MEMBERS_CEILING: i64 = 50_000;
@@ -375,6 +392,7 @@ pub struct Config {
     pub business_services: BusinessServiceConfig,
     pub exports: ExportConfig,
     pub notifications: NotificationConfig,
+    pub approval_sweep: ApprovalSweepConfig,
 }
 
 /// The env file the variables were read from (`--env-file`, or `./.env`), as an absolute path.
@@ -444,6 +462,7 @@ impl std::fmt::Debug for Config {
             business_services,
             exports,
             notifications,
+            approval_sweep,
         } = self;
         f.debug_struct("Config")
             .field("api_host", api_host)
@@ -463,6 +482,7 @@ impl std::fmt::Debug for Config {
             .field("business_services", business_services)
             .field("exports", exports)
             .field("notifications", notifications)
+            .field("approval_sweep", approval_sweep)
             .finish()
     }
 }
@@ -895,6 +915,13 @@ impl Config {
                 .unwrap_or(NotificationConfig::default().retention_days),
         };
 
+        let approval_sweep = ApprovalSweepConfig {
+            enabled: r.one_of("WORKFLOW_APPROVAL_SWEEP", &["on", "off"], "on") == "on",
+            interval: r
+                .int::<u64>("WORKFLOW_APPROVAL_SWEEP_INTERVAL_SECS", 10, 3600)
+                .map_or(ApprovalSweepConfig::default().interval, Duration::from_secs),
+        };
+
         let encryption = EncryptionConfig {
             key_file: r.raw("ENCRYPTION_KEY_FILE").map(PathBuf::from),
             previous_key_file: r.raw("ENCRYPTION_KEY_PREVIOUS_FILE").map(PathBuf::from),
@@ -969,6 +996,7 @@ impl Config {
             business_services,
             exports,
             notifications,
+            approval_sweep,
         })
     }
 }
@@ -1056,6 +1084,25 @@ mod tests {
             "DATABASE_URL" => Some("postgres://cmdb@db/cmdb".into()),
             _ => vars.iter().find(|(k, _)| *k == key).map(|(_, v)| (*v).to_owned()),
         })
+    }
+
+    /// The approval sweep is on every 60 s by default; an operator turns it off
+    /// per process or sets the interval, and a bad value is refused at start.
+    #[test]
+    fn approval_sweep_settings() {
+        let cfg = load_with(&[]).unwrap();
+        assert_eq!(cfg.approval_sweep, ApprovalSweepConfig { enabled: true, interval: Duration::from_secs(60) });
+        let cfg =
+            load_with(&[("WORKFLOW_APPROVAL_SWEEP", "off"), ("WORKFLOW_APPROVAL_SWEEP_INTERVAL_SECS", "15")]).unwrap();
+        assert_eq!(cfg.approval_sweep, ApprovalSweepConfig { enabled: false, interval: Duration::from_secs(15) });
+        for (key, bad) in [
+            ("WORKFLOW_APPROVAL_SWEEP", "false"),
+            ("WORKFLOW_APPROVAL_SWEEP_INTERVAL_SECS", "5"),
+            ("WORKFLOW_APPROVAL_SWEEP_INTERVAL_SECS", "1m"),
+        ] {
+            let err = load_with(&[(key, bad)]).unwrap_err().to_string();
+            assert!(err.contains(key), "{key}={bad}: {err}");
+        }
     }
 
     #[test]

@@ -155,6 +155,7 @@ pub async fn start_created(
             comment: None,
             field_changes: None,
             approval: None,
+            on_behalf_of: None,
         };
         runtime::insert_event(conn, ctx, event).await?;
         entries.push(AuditEntry {
