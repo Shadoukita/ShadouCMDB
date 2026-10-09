@@ -62,6 +62,19 @@ pub enum ErrorCode {
     /// no longer hold, or the request stages a field the transition does not take. Nothing was written, not even
     /// the decision (409)
     WorkflowApprovalStale,
+    /// A workflow attribute action failed validation when the transition applied it; nothing was written. The
+    /// details name the action and each field (422)
+    // Raised once attribute actions are applied (v0.4.0 slice S2).
+    #[allow(dead_code)]
+    WorkflowActionInvalid,
+    /// The operator has not enabled webhooks (`WEBHOOKS_ALLOWED=false`), so no endpoint can be created or called (409)
+    // Raised once webhook endpoints exist (v0.4.0 slice S5).
+    #[allow(dead_code)]
+    WebhooksDisabled,
+    /// Outbound e-mail is off (`MAIL=off`), so no test message can be sent (409)
+    // Raised once outbound e-mail exists (v0.4.0 slice S4).
+    #[allow(dead_code)]
+    MailNotConfigured,
     /// The change would leave no active user holding the Administrator profile
     LastAdministrator,
     /// Too many failed password attempts, or too many impact analyses of one user in progress; retry after the
@@ -114,12 +127,15 @@ impl ErrorCode {
             | ErrorCode::LastAdministrator
             | ErrorCode::WorkflowControlledField
             | ErrorCode::WorkflowApprovalPending
-            | ErrorCode::WorkflowApprovalStale => StatusCode::CONFLICT,
+            | ErrorCode::WorkflowApprovalStale
+            | ErrorCode::WebhooksDisabled
+            | ErrorCode::MailNotConfigured => StatusCode::CONFLICT,
             ErrorCode::InvalidName
             | ErrorCode::SchemaChangeRefused
             | ErrorCode::SecretRequired
             | ErrorCode::IdempotencyKeyReused
-            | ErrorCode::WorkflowConditionFailed => StatusCode::UNPROCESSABLE_ENTITY,
+            | ErrorCode::WorkflowConditionFailed
+            | ErrorCode::WorkflowActionInvalid => StatusCode::UNPROCESSABLE_ENTITY,
             ErrorCode::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             ErrorCode::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             ErrorCode::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,

@@ -124,6 +124,19 @@ erDiagram
     workflow_approval_request_steps ||--o{ workflow_approval_eligibility : "request_id, step_no (CASCADE)"
     workflow_approval_request_steps ||--o{ workflow_approval_decisions : "request_id, step_no (RESTRICT)"
     workflow_approval_delegations |o--o{ workflow_approval_decisions : "delegation_id (RESTRICT)"
+    workflow_transitions ||--o{ workflow_transition_set_attributes : "transition_id (CASCADE)"
+    ci_attribute_definitions ||--o{ workflow_transition_set_attributes : "attribute_id (RESTRICT)"
+    workflow_definitions ||--o{ workflow_actions : "definition_id (CASCADE)"
+    webhook_endpoints |o--o{ workflow_actions : "endpoint_id (RESTRICT)"
+    workflow_actions ||--o{ workflow_action_recipients : "action_id (CASCADE)"
+    permission_profiles |o--o{ workflow_action_recipients : "profile_id (CASCADE)"
+    user_groups |o--o{ workflow_action_recipients : "group_id (CASCADE)"
+    users |o--o{ workflow_action_recipients : "user_id (CASCADE)"
+    ci_attribute_definitions |o--o{ workflow_action_recipients : "attribute_id (RESTRICT)"
+    workflow_actions |o--o{ workflow_action_runs : "action_id (SET NULL)"
+    workflow_action_runs ||--o{ workflow_action_deliveries : "run_id (CASCADE)"
+    users |o--o{ workflow_action_deliveries : "user_id (SET NULL)"
+    webhook_endpoints |o--o{ workflow_action_deliveries : "endpoint_id (SET NULL)"
 
     areas {
         uuid id PK
@@ -661,6 +674,74 @@ erDiagram
         uuid delegation_id FK
         jsonb via
     }
+    workflow_transition_set_attributes {
+        uuid transition_id PK,FK
+        smallint position PK
+        uuid attribute_id FK "one entry per attribute and transition"
+        text value_from "literal | now | today | actor | clear"
+        jsonb value "literal only"
+    }
+    webhook_allowed_hosts {
+        uuid id PK
+        text host_pattern UK "host, *.domain or IP literal"
+        integer port UK
+        boolean allow_http
+    }
+    webhook_endpoints {
+        uuid id PK
+        text key UK
+        text url
+        text status "active | paused | suspended"
+        text suspended_reason "set exactly when suspended"
+        bytea secret_ciphertext "sealed; never readable through the API"
+        bytea previous_secret_ciphertext "with its key id and valid-until, or none of them"
+        text auth_header_name "with its sealed value, or neither"
+        integer version
+    }
+    workflow_actions {
+        uuid id PK
+        uuid definition_id FK
+        text key UK
+        text kind "email | webhook | inbox"
+        text trigger "transition | approval_* | instance_cancelled | instance_forced"
+        text transition_key "NULL exactly for the instance triggers"
+        boolean enabled
+        uuid endpoint_id FK "set exactly for webhooks"
+        jsonb settings
+    }
+    workflow_action_recipients {
+        uuid action_id PK,FK
+        smallint position PK
+        text source "profile | group | user | ci_owner | ci_attribute | service_owner | participant | address"
+        uuid profile_id FK
+        uuid group_id FK
+        uuid user_id FK
+        uuid attribute_id FK
+        text service_owner_role "technical | business"
+        text participant "actor | starter | requester | approvers"
+        text address
+    }
+    workflow_action_runs {
+        bigint id PK
+        bigint event_id UK "no FK; one run per event and action"
+        uuid action_id UK,FK
+        text action_key
+        uuid instance_id "no FK"
+        uuid ci_id "no FK"
+        text status "pending | fanning_out | fanned_out | suppressed | cancelled"
+        text status_reason
+    }
+    workflow_action_deliveries {
+        uuid id PK "the idempotency key sent out"
+        bigint run_id UK,FK
+        text recipient_key UK "user:, addr: or endpoint:"
+        uuid user_id FK
+        uuid endpoint_id FK
+        text status "pending | sending | held | delivered | skipped | dead"
+        smallint attempts
+        timestamptz next_attempt_at
+        integer lease_epoch
+    }
 ```
 
 `schema_changes` is append-only like `audit_log` and, like it, has no foreign keys: it records what
@@ -700,3 +781,16 @@ unique index). `workflow_approval_decisions` is append-only like the events (the
 API role holds only SELECT and INSERT), with one vote per actor and per principal per step. The CI
 purge trigger archives each instance's requests, steps and decisions into
 `workflow_instance_archive.approvals` before deleting them.
+
+Workflow actions (0073): attribute actions (`workflow_transition_set_attributes`) are part of the
+version graph and as immutable as its transitions. Notification actions (`workflow_actions`, with
+exactly one source per recipient row) belong to the definition, at most 10 per trigger and transition,
+like grants and approvers. `workflow_action_runs` and `workflow_action_deliveries` are the outbox. A
+deferred trigger on `workflow_instance_events` writes one run per matching action in the event's
+transaction, and workers fan the runs out into deliveries after commit. A user's address is not
+stored on a delivery but read at send time. Webhook secrets are sealed like identity provider
+secrets. The CI purge trigger deletes a CI's runs and deliveries; they are operational data, not
+archived. A restore marks what was still to be sent `cancelled` or `dead` with reason `restored`, and
+suspends every endpoint. `workflow_action_rate_windows` and the one-row
+`workflow_action_queue_state` have no relationships. `users.locale` (`en`, `de` or NULL) is the
+language of a user's e-mails.

@@ -84,7 +84,8 @@ async fn the_upgrade_adds_notifications_without_a_backfill_and_changes_no_data()
 
     let before: Fingerprint = sqlx::query_as(FINGERPRINT).fetch_one(pool).await.unwrap();
 
-    MIGRATOR.run(&mut *migrator).await.expect("upgrade to the latest version");
+    // To 0072 only: 0073 adds users.locale, which the row hashes would see.
+    MIGRATOR.run_to(72, &mut *migrator).await.expect("upgrade to 0072");
     drop(migrator);
     reconcile_and_link(pool).await.expect("reconcile after the upgrade");
 
