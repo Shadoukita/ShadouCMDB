@@ -3017,7 +3017,6 @@ export const en = {
   "templates.loading": "Loading templates…",
   "templates.meta.count": "{n, plural, one {# template} other {# templates}}",
   "templates.meta.installed": "{n} of {total} installed",
-  "templates.meta.idempotent": "Installing again only adds what is missing; your changes are kept.",
   "templates.status.not_installed": "Not installed",
   "templates.status.partial": "Partly installed",
   "templates.status.installed": "Installed",

@@ -3031,7 +3031,6 @@ export const de: { [K in MessageKey]: string } = {
   "templates.loading": "Vorlagen werden geladen…",
   "templates.meta.count": "{n, plural, one {# Vorlage} other {# Vorlagen}}",
   "templates.meta.installed": "{n} von {total} installiert",
-  "templates.meta.idempotent": "Erneutes Installieren ergänzt nur, was fehlt; Ihre Änderungen bleiben erhalten.",
   "templates.status.not_installed": "Nicht installiert",
   "templates.status.partial": "Teilweise installiert",
   "templates.status.installed": "Installiert",

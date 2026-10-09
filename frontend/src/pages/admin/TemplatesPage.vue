@@ -102,7 +102,6 @@ const addedText = (r: InstallResult) =>
             <span v-if="templates.data.value.length > 0" :class="['badge', installedCount > 0 ? 'ok' : 'off']"
               ><span class="status-dot" aria-hidden="true" />{{ t("templates.meta.installed", { n: installedCount, total: templates.data.value.length }) }}</span
             >
-            <span class="record-meta-line">{{ t("templates.meta.idempotent") }}</span>
           </p>
         </div>
       </div>
