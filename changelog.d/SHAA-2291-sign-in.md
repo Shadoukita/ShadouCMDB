@@ -6,4 +6,7 @@ the hints (directory accounts, lost administrator access) under a rule at the bo
 two-factor step uses the same card, with a larger code field and the recovery-code and "someone else" links
 in the card's foot. The first-run setup, e-mail entry and two-factor enrolment pages use the same card.
 
+Fixed: input fields meant for codes and identifiers (the two-factor code, the API token secret, the
+identity provider settings) now use the monospace font, as intended.
+
 No URL, permission, API or sign-in behaviour changes.
