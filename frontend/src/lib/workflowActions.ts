@@ -426,15 +426,49 @@ export function problemsOfAction<P extends { path: string }>(problems: P[], i: n
 }
 
 /**
- * Paths, after `actions[i]`, the action editor shows next to a control. The e-mail lint names a
- * subject or intro as a whole (`settings.subject`: one language only, CI placeholders with minimal
- * content); the client-side checks name one language of it (`settings.subject.en`).
+ * The problems of action `i` that its editor does not show next to a field: about the action as a whole,
+ * a field without a control, a field hidden for this kind or trigger, or one more problem than the field
+ * has room for. Mirrors `ActionEditor.vue`: a field shows its first error; transition, recipients,
+ * subject and intro show every warning; a recipient row shows all of its problems. The e-mail lint names
+ * a subject or intro as a whole (`settings.subject`: one language only, CI placeholders with minimal
+ * content); those show under the pair of fields. The editor lists the rest above the form (GH#849).
  */
-const ON_A_FIELD = /^\.(key|name|kind|trigger|transition|endpoint|recipients(\[\d+\](\..*)?)?|settings\.(content|statuses|excludeActor|includeAttributes(\[\d+\])?|(subject|intro)(\.(en|de))?))$/;
-
-/** Problems of action `i` no control of its editor shows: about the action as a whole, or a field without a control. */
-export function unplacedProblems<P extends { path: string }>(problems: P[], i: number): P[] {
-  return problemsOfAction(problems, i).filter((p) => !ON_A_FIELD.test(p.path.slice(`actions[${i}]`.length)));
+export function unplacedProblems<P extends { path: string; severity: string }>(problems: P[], i: number, action: Pick<DraftAction, "kind" | "trigger">): P[] {
+  const people = notifiesPeople(action.kind);
+  const email = action.kind === "email";
+  const webhook = action.kind === "webhook";
+  const visible: Record<string, boolean> = {
+    key: true,
+    name: true,
+    kind: true,
+    trigger: true,
+    transition: triggerHasTransition(action.trigger),
+    recipients: people,
+    "settings.statuses": action.trigger === "approval_closed",
+    "settings.subject": email,
+    "settings.subject.en": email,
+    "settings.subject.de": email,
+    "settings.intro": email,
+    "settings.intro.en": email,
+    "settings.intro.de": email,
+    endpoint: webhook,
+    "settings.includeAttributes": webhook,
+  };
+  const withoutErrors = new Set(["settings.subject", "settings.intro"]);
+  const withWarnings = new Set(["transition", "recipients", "settings.subject", "settings.subject.en", "settings.subject.de", "settings.intro", "settings.intro.en", "settings.intro.de"]);
+  const base = `actions[${i}].`;
+  const firstError = new Map<string, P>();
+  for (const p of problems) {
+    if (p.severity === "error" && p.path.startsWith(base) && !firstError.has(p.path)) firstError.set(p.path, p);
+  }
+  return problemsOfAction(problems, i).filter((p) => {
+    if (!p.path.startsWith(base)) return true;
+    const field = p.path.slice(base.length);
+    if (people && /^recipients\[\d+\]/.test(field)) return false;
+    if (!visible[field]) return true;
+    if (p.severity === "error") return withoutErrors.has(field) || firstError.get(p.path) !== p;
+    return !withWarnings.has(field);
+  });
 }
 
 /** Problems about no action in particular. */

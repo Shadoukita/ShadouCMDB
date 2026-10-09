@@ -49,9 +49,12 @@ const fid = (f: string) => `wf-action-${props.index}-${f}`;
 const at = (field: string) => props.problems.filter((p) => p.path === `actions[${props.index}].${field}`);
 const errorAt = (field: string) => at(field).find((p) => p.severity === "error")?.message;
 const warningsAt = (field: string) => at(field).filter((p) => p.severity === "warning");
-/** Problems about the action as a whole, and about fields this form has no control for. */
-const otherProblems = computed(() => unplacedProblems(props.problems, props.index));
+/** Problems no field below shows: about the action as a whole, a field without a control, or a hidden one. */
+const otherProblems = computed(() => unplacedProblems(props.problems, props.index, props.action));
 const describedBy = (field: string, hint?: string) => (errorAt(field) ? `${fid(field)}-err` : hint);
+/** The field's error and every warning, plus its hint when it has one. */
+const describedByAll = (field: string, hint?: string) =>
+  [hint, errorAt(field) && `${fid(field)}-err`, ...warningsAt(field).map((_, k) => `${fid(field)}-warn-${k}`)].filter(Boolean).join(" ") || undefined;
 /** A subject or intro field: its own error or the placeholder hint, and the warnings about both languages. */
 const textDescribedBy = (text: "subject" | "intro", lang: "en" | "de") =>
   [errorAt(`settings.${text}.${lang}`) ? `${fid(`${text}-${lang}`)}-err` : fid("placeholders"), warningsAt(`settings.${text}`).length && `${fid(text)}-warn`]
@@ -174,13 +177,13 @@ function toggleInclude(key: string, on: boolean) {
           v-model="action.transition"
           aria-required="true"
           :aria-invalid="!!errorAt('transition')"
-          :aria-describedby="errorAt('transition') ? `${fid('transition')}-err` : warningsAt('transition').length ? `${fid('transition')}-warn` : undefined"
+          :aria-describedby="describedByAll('transition')"
         >
           <option :value="null" disabled>{{ t("wfApprovers.choose") }}</option>
           <option v-for="x in transitions" :key="x.key" :value="x.key">{{ x.orphan ? t("wfActions.field.orphanTransition", { key: x.key }) : `${x.name} (${x.key})` }}</option>
         </select>
         <span v-if="errorAt('transition')" :id="`${fid('transition')}-err`" class="error">{{ errorAt("transition") }}</span>
-        <span v-else-if="warningsAt('transition').length" :id="`${fid('transition')}-warn`" class="hint">{{ warningsAt("transition")[0].message }}</span>
+        <span v-for="(w, k) in warningsAt('transition')" :id="`${fid('transition')}-warn-${k}`" :key="k" class="hint">{{ w.message }}</span>
       </div>
     </div>
     <label class="checkbox-row"><input v-model="action.enabled" type="checkbox" /> {{ t("wfActions.field.enabled") }}</label>
@@ -198,10 +201,13 @@ function toggleInclude(key: string, on: boolean) {
     </fieldset>
 
     <!-- Who it tells: inbox and e-mail. -->
-    <fieldset v-if="notifiesPeople(action.kind)" class="group" :aria-describedby="`${fid('recipients')}-hint`" data-testid="wf-action-recipients">
+    <fieldset v-if="notifiesPeople(action.kind)" class="group" :aria-describedby="describedByAll('recipients', `${fid('recipients')}-hint`)" data-testid="wf-action-recipients">
       <legend>{{ t("wfActions.field.recipients") }}<span class="req" aria-hidden="true">*</span></legend>
       <p :id="`${fid('recipients')}-hint`" class="hint no-margin">{{ t("wfActions.field.recipientsHint", { n: MAX_RECIPIENTS }) }}</p>
-      <span v-if="errorAt('recipients')" class="error" role="alert">{{ errorAt("recipients") }}</span>
+      <span v-if="errorAt('recipients')" :id="`${fid('recipients')}-err`" class="error" role="alert">{{ errorAt("recipients") }}</span>
+      <p v-for="(w, k) in warningsAt('recipients')" :id="`${fid('recipients')}-warn-${k}`" :key="k" class="hint no-margin" data-testid="wf-action-recipients-warn">
+        <span class="badge warn">{{ t("wfApproval.warning") }}</span> {{ w.message }}
+      </p>
       <table v-if="action.recipients.length" class="data wf-approver-table">
         <caption class="sr-only">{{ t("wfActions.field.recipientsCaption", { name: action.name }) }}</caption>
         <thead>

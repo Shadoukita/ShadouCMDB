@@ -215,16 +215,37 @@ describe("notification actions", () => {
   test("the e-mail lint's subject and intro warnings land on their fields, not above the editor (GH#851)", () => {
     // The paths the backend lint gives missing_locale and minimal_placeholder: no language suffix.
     const problems = [
-      { path: "actions[0].settings.subject", code: "missing_locale" },
-      { path: "actions[0].settings.intro", code: "minimal_placeholder" },
-      { path: "actions[0].settings.subject.de", code: "unknown_placeholder" },
-      { path: "actions[0].settings.unknown", code: "unknown_setting" },
-      { path: "actions[0]", code: "too_many_actions" },
+      { path: "actions[0].settings.subject", code: "missing_locale", severity: "warning" },
+      { path: "actions[0].settings.intro", code: "minimal_placeholder", severity: "warning" },
+      { path: "actions[0].settings.subject.de", code: "unknown_placeholder", severity: "error" },
+      { path: "actions[0].settings.unknown", code: "unknown_setting", severity: "error" },
+      { path: "actions[0]", code: "too_many_actions", severity: "error" },
     ];
     assert.deepEqual(
-      unplacedProblems(problems, 0).map((p) => p.code),
+      unplacedProblems(problems, 0, { kind: "email", trigger: "transition" }).map((p) => p.code),
       ["unknown_setting", "too_many_actions"],
     );
+  });
+
+  test("a problem no field of the editor shows is listed above it (GH#849)", () => {
+    const p = (path: string, severity: "error" | "warning") => ({ path, severity });
+    const tooMany = p("actions[0].recipients", "warning");
+    const recipientRow = p("actions[0].recipients[1].group", "error");
+    const nameErr = p("actions[0].name", "error");
+    const secondNameErr = p("actions[0].name", "error");
+    const nameWarn = p("actions[0].name", "warning");
+    const whole = p("actions[0]", "error");
+    const content = p("actions[0].settings.content", "error");
+    const include = p("actions[0].settings.includeAttributes[2]", "error");
+    const subjectWarn = p("actions[0].settings.subject.en", "warning");
+    const all = [tooMany, recipientRow, nameErr, secondNameErr, nameWarn, whole, content, include, subjectWarn];
+
+    // An inbox action shows recipient warnings and rows; the subject is hidden for this kind.
+    assert.deepEqual(unplacedProblems(all, 0, { kind: "inbox", trigger: "transition" }), [secondNameErr, nameWarn, whole, content, include, subjectWarn]);
+    // E-mail shows the subject warning too.
+    assert.deepEqual(unplacedProblems(all, 0, { kind: "email", trigger: "transition" }), [secondNameErr, nameWarn, whole, content, include]);
+    // A webhook has no recipients: their problems go to the list.
+    assert.deepEqual(unplacedProblems(all, 0, { kind: "webhook", trigger: "transition" }), [tooMany, recipientRow, secondNameErr, nameWarn, whole, content, include, subjectWarn]);
   });
 
   test("a recipient is the same whatever its display name", () => {
