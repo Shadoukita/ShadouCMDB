@@ -182,10 +182,10 @@ pub enum WorkflowActionContent {
     Detailed,
 }
 
-/// The outcome of an approval request
+/// How an approval request closed (trigger `approval_closed`)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum WorkflowApprovalOutcome {
+pub enum WorkflowApprovalClosedStatus {
     Approved,
     Rejected,
     Withdrawn,
@@ -238,7 +238,7 @@ pub struct WorkflowActionSettings {
     /// Trigger `approval_closed`: only these outcomes (default all)
     #[schema(min_items = 1, max_items = 4)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub statuses: Option<Vec<WorkflowApprovalOutcome>>,
+    pub statuses: Option<Vec<WorkflowApprovalClosedStatus>>,
     /// E-mail: how much the message tells (default standard)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<WorkflowActionContent>,

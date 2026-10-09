@@ -7985,7 +7985,7 @@ export interface components {
             /** @description Inbox and e-mail: leave out who ran the event (default true), so nobody is told of their own action */
             excludeActor?: boolean | null;
             /** @description Trigger `approval_closed`: only these outcomes (default all) */
-            statuses?: components["schemas"]["WorkflowApprovalOutcome"][] | null;
+            statuses?: components["schemas"]["WorkflowApprovalClosedStatus"][] | null;
             content?: components["schemas"]["WorkflowActionContent"] | null;
             subject?: components["schemas"]["WorkflowActionSubject"] | null;
             intro?: components["schemas"]["WorkflowActionIntro"] | null;
@@ -8026,6 +8026,11 @@ export interface components {
         WorkflowApproval: {
             steps: components["schemas"]["WorkflowApprovalStep"][];
         };
+        /**
+         * @description How an approval request closed (trigger `approval_closed`)
+         * @enum {string}
+         */
+        WorkflowApprovalClosedStatus: "approved" | "rejected" | "withdrawn" | "cancelled";
         /** @description The step a request is at: the active one while pending, the last one reached once closed */
         WorkflowApprovalCurrentStep: {
             /** Format: int32 */
@@ -8158,11 +8163,12 @@ export interface components {
             /** Format: uuid */
             delegationId: string;
         };
-        /**
-         * @description The outcome of an approval request
-         * @enum {string}
-         */
-        WorkflowApprovalOutcome: "approved" | "rejected" | "withdrawn" | "cancelled";
+        /** @description A request and its instance after a decision, withdrawal or cancellation */
+        WorkflowApprovalOutcome: {
+            request: components["schemas"]["WorkflowApprovalRequest"];
+            /** @description Moved along the transition when the decision was the final approval */
+            instance: components["schemas"]["WorkflowInstance"];
+        };
         /** @description A principal who may decide the active step */
         WorkflowApprovalPrincipal: {
             /**

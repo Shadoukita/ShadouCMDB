@@ -51433,7 +51433,7 @@
               "null"
             ],
             "items": {
-              "$ref": "#/components/schemas/WorkflowApprovalOutcome"
+              "$ref": "#/components/schemas/WorkflowApprovalClosedStatus"
             },
             "description": "Trigger `approval_closed`: only these outcomes (default all)",
             "maxItems": 4,
@@ -51564,6 +51564,16 @@
           }
         },
         "additionalProperties": false
+      },
+      "WorkflowApprovalClosedStatus": {
+        "type": "string",
+        "description": "How an approval request closed (trigger `approval_closed`)",
+        "enum": [
+          "approved",
+          "rejected",
+          "withdrawn",
+          "cancelled"
+        ]
       },
       "WorkflowApprovalCurrentStep": {
         "type": "object",
@@ -51921,14 +51931,22 @@
         "additionalProperties": false
       },
       "WorkflowApprovalOutcome": {
-        "type": "string",
-        "description": "The outcome of an approval request",
-        "enum": [
-          "approved",
-          "rejected",
-          "withdrawn",
-          "cancelled"
-        ]
+        "type": "object",
+        "description": "A request and its instance after a decision, withdrawal or cancellation",
+        "required": [
+          "request",
+          "instance"
+        ],
+        "properties": {
+          "request": {
+            "$ref": "#/components/schemas/WorkflowApprovalRequest"
+          },
+          "instance": {
+            "$ref": "#/components/schemas/WorkflowInstance",
+            "description": "Moved along the transition when the decision was the final approval"
+          }
+        },
+        "additionalProperties": false
       },
       "WorkflowApprovalPrincipal": {
         "type": "object",

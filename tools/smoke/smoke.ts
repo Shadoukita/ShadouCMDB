@@ -1086,6 +1086,22 @@ async function workflows(x: Json) {
   const archive = await del(`/api/v1/attribute-definitions/${phase.id}`, 409);
   check(archive.json?.error?.code === 'IN_USE', 'a field a published workflow depends on cannot be archived');
 
+  // Actions S3 (SHAA-2733): an inbox action on a transition, its recipients previewed, then removed.
+  console.log('\n# Workflow actions');
+  const actions = `${base}/${def.id}/actions`;
+  const noActions = (await get(actions)).json;
+  check(noActions.actions.length === 0, 'a definition starts without actions');
+  const inbox = { key: 'notify_board', name: 'Notify the board', kind: 'inbox', trigger: 'transition', transition: 'approve', recipients: [{ source: 'profile', profile: builtin.name }] };
+  const withAction = (await put(actions, { version: noActions.version, actions: [inbox] })).json;
+  check(withAction.actions[0]?.recipients[0]?.profile?.id === builtin.id, 'an inbox action is saved with its recipients resolved');
+  await put(actions, { version: noActions.version, actions: [] }, 409);
+  const email = await put(actions, { version: withAction.version, actions: [{ ...inbox, kind: 'email' }] }, 400);
+  check(fields(email).includes('actions[0].kind'), 'a kind that is not available yet is refused per field');
+  const reach = (await get(`${actions}/notify_board/preview`)).json;
+  check(reach.key === 'notify_board' && Array.isArray(reach.users), 'the recipients of an action are previewed');
+  await get(`${actions}/nope/preview`, 404);
+  check((await put(actions, { version: withAction.version, actions: [] })).json.actions.length === 0, 'the action is removed');
+
   // Runtime (SHAA-1424): an instance on a CI is started, run, forced and cancelled.
   console.log('\n# Workflow instances');
   const current = (await get(`${base}/${def.id}`)).json;
