@@ -3,6 +3,7 @@ import { computed, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import BrandMark from "../../components/BrandMark.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
+import SignedInAs from "../../components/SignedInAs.vue";
 import { t } from "../../i18n";
 import { useDocumentTitle } from "../../lib/composables";
 import { safeRedirect } from "../../lib/signIn";
@@ -47,42 +48,22 @@ function enrolled() {
 
 <template>
   <main class="bare">
-    <div class="enrol-page stack">
+    <div class="bare-card wide" data-testid="two-factor-setup">
       <div class="bare-brand"><BrandMark /></div>
-      <div class="page-header">
-        <div class="title">
-          <h1>{{ alreadySetUp ? t("account.enrol.againTitle") : t("account.enrol.title") }}</h1>
-          <span v-if="session.user" class="muted">{{ session.user.displayName }} ({{ session.user.username }})</span>
-        </div>
-        <div v-if="!alreadySetUp" class="actions">
-          <button type="button" class="btn" @click="signOut">{{ t("account.enrol.signOut") }}</button>
-        </div>
-      </div>
+      <h1>{{ alreadySetUp ? t("account.enrol.againTitle") : t("account.enrol.title") }}</h1>
+      <p class="lead">{{ alreadySetUp ? t("account.enrol.alreadySetUp") : t("account.mfa.forced") }}</p>
       <ErrorAlert v-if="signOutError" :error="signOutError" :title="t('account.enrol.signOutFailed')" />
-      <section v-if="alreadySetUp" class="panel" aria-labelledby="mfa-again-title">
-        <div class="panel-header">
-          <h2 id="mfa-again-title">{{ t("account.mfa.title") }}</h2>
-          <span class="badges"><span class="badge ok">{{ t("account.mfa.on") }}</span><span class="badge warn">{{ t("account.mfa.required") }}</span></span>
-        </div>
-        <div class="panel-body stack">
-          <div class="alert alert-warn" role="note">
-            {{ t("account.enrol.alreadySetUp") }}
-          </div>
-          <p class="muted flush">
-            {{ t("account.enrol.noApp") }}
-          </p>
-          <div class="actions">
-            <button type="button" class="btn btn-primary" @click="signOut">{{ t("account.enrol.signOutAndIn") }}</button>
-          </div>
-        </div>
-      </section>
+      <template v-if="alreadySetUp">
+        <p class="hint">{{ t("account.enrol.noApp") }}</p>
+        <button type="button" class="btn btn-primary block" @click="signOut">{{ t("account.enrol.signOutAndIn") }}</button>
+      </template>
       <TwoFactorSettings v-else forced @enrolled="enrolled" />
+      <div class="bare-foot">
+        <SignedInAs v-if="session.user" :display-name="session.user.displayName" :username="session.user.username" data-testid="two-factor-setup-identity" />
+        <p v-if="!alreadySetUp">
+          <button type="button" class="btn-link" @click="signOut">{{ t("account.enrol.signOutLater") }}</button>
+        </p>
+      </div>
     </div>
   </main>
 </template>
-
-<style scoped>
-.enrol-page {
-  width: min(820px, 100%);
-}
-</style>

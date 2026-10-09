@@ -4,6 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import { ApiError } from "../../api/client";
 import BrandMark from "../../components/BrandMark.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
+import SignedInAs from "../../components/SignedInAs.vue";
 import { t } from "../../i18n";
 import { useDocumentTitle } from "../../lib/composables";
 import { vAutofocus } from "../../lib/directives";
@@ -28,13 +29,6 @@ const busy = ref(false);
 const error = ref<unknown>(null);
 const local = ref<string | undefined>();
 const signOutError = ref<unknown>(null);
-
-/** "Signed in as {name} ({username})." split around both slots, so the name is set in bold and the username in mono. */
-const signedInAs = computed(() => {
-  const [before = "", rest = ""] = t("people.entry.signedInAs", { name: "\u0000", username: "\u0001" }).split("\u0000");
-  const [middle = "", after = ""] = rest.split("\u0001");
-  return [before, middle, after];
-});
 
 /** A refused address is told next to the field; anything else (a lost connection, a server error) above the form. */
 const fieldError = computed(() => local.value ?? (error.value instanceof ApiError ? emailErrorMessage(error.value.details, true) : undefined));
@@ -103,9 +97,7 @@ async function signOut() {
       </FormField>
       <button type="submit" class="btn btn-primary block" :disabled="busy">{{ busy ? t("people.entry.saving") : t("people.entry.submit") }}</button>
       <div class="bare-foot">
-        <p v-if="session.user" class="hint" data-testid="email-entry-identity">
-          {{ signedInAs[0] }}<strong>{{ session.user.displayName }}</strong>{{ signedInAs[1] }}<code>{{ session.user.username }}</code>{{ signedInAs[2] }}
-        </p>
+        <SignedInAs v-if="session.user" :display-name="session.user.displayName" :username="session.user.username" data-testid="email-entry-identity" />
         <p>
           <button type="button" class="btn-link" @click="signOut">{{ t("people.entry.notYou") }}</button>
         </p>
