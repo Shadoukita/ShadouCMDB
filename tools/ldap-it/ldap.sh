@@ -21,8 +21,9 @@ MODE=${LDAP_IT_MODE:-docker}
 DIR=${LDAP_IT_DIR:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/ldap-it}
 PORT=${LDAP_IT_PORT:-6360}
 # osixia/openldap 1.5.0 (OpenLDAP 2.4, multi-arch index): only its slapd, schema and modules are used,
-# with the configuration below instead of the image's bootstrap.
-IMAGE=osixia/openldap:1.5.0@sha256:18742e9c449c9c1afe129d3f2f3ee15fb34cc43e5f940a20f3399728f41d7c28
+# with the configuration below instead of the image's bootstrap. LDAP_IT_REGISTRY pulls the same
+# digest from a Docker Hub mirror instead (CI uses mirror.gcr.io, SHAA-2894).
+IMAGE=${LDAP_IT_REGISTRY:-docker.io}/osixia/openldap:1.5.0@sha256:18742e9c449c9c1afe129d3f2f3ee15fb34cc43e5f940a20f3399728f41d7c28
 CONTAINER=ldap-it
 ROOT_DN=cn=admin,dc=shadoucmdb,dc=test
 ROOT_PW=ldap-it-admin-ci-only-password
