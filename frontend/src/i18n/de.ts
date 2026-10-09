@@ -587,6 +587,7 @@ export const de: { [K in MessageKey]: string } = {
   "auth.password.tooShort": "Zu kurz",
   "auth.password.mismatch": "Die Passwörter stimmen nicht überein",
   "account.title": "Mein Konto",
+  "account.localAccount": "Lokales Konto",
   "account.password.title": "Passwort",
   "account.password.provider":
     "Sie melden sich über {provider} an und haben kein Passwort in ShadouCMDB. Ändern Sie Ihr Passwort dort.",

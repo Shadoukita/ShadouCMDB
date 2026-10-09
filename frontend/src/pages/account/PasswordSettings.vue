@@ -77,32 +77,32 @@ function submit() {
         {{ providerNote[0] }}<strong>{{ provider.name }}</strong>{{ providerNote[1] }}
       </p>
     </div>
-    <form v-else class="panel-body stack" novalidate @submit.prevent="submit">
-      <p class="muted no-margin">
-        {{ t("account.password.intro") }}
-      </p>
-      <div v-if="done" class="alert alert-success" role="status">{{ t("account.password.changed") }}</div>
-      <ErrorAlert v-if="generalError" :error="generalError" :title="t('account.password.failed')" />
-      <div class="form-grid">
-        <FormField id="own-current-password" :label="t('account.password.current')" required :error="fieldErrors.currentPassword">
-          <template #default="{ id, invalid, describedBy }">
-            <input :id="id" v-model="current" type="password" autocomplete="current-password" :aria-invalid="invalid" :aria-describedby="describedBy" />
-          </template>
-        </FormField>
+    <form v-else novalidate @submit.prevent="submit">
+      <div class="panel-body stack">
+        <p class="muted no-margin">
+          {{ t("account.password.intro") }}
+        </p>
+        <div v-if="done" class="alert alert-success" role="status">{{ t("account.password.changed") }}</div>
+        <ErrorAlert v-if="generalError" :error="generalError" :title="t('account.password.failed')" />
+        <div class="form-grid">
+          <FormField id="own-current-password" :label="t('account.password.current')" required :error="fieldErrors.currentPassword">
+            <template #default="{ id, invalid, describedBy }">
+              <input :id="id" v-model="current" type="password" autocomplete="current-password" :aria-invalid="invalid" :aria-describedby="describedBy" />
+            </template>
+          </FormField>
+          <FormField id="own-new-password" :label="t('account.password.new')" required :error="fieldErrors.newPassword" :hint="t('auth.password.minLengthHint')">
+            <template #default="{ id, invalid, describedBy }">
+              <input :id="id" v-model="pw" type="password" autocomplete="new-password" :aria-invalid="invalid" :aria-describedby="describedBy" />
+            </template>
+          </FormField>
+          <FormField id="own-confirm-password" :label="t('account.password.repeat')" required :error="fieldErrors.confirm">
+            <template #default="{ id, invalid, describedBy }">
+              <input :id="id" v-model="pw2" type="password" autocomplete="new-password" :aria-invalid="invalid" :aria-describedby="describedBy" />
+            </template>
+          </FormField>
+        </div>
       </div>
-      <div class="form-grid">
-        <FormField id="own-new-password" :label="t('account.password.new')" required :error="fieldErrors.newPassword" :hint="t('auth.password.minLengthHint')">
-          <template #default="{ id, invalid, describedBy }">
-            <input :id="id" v-model="pw" type="password" autocomplete="new-password" :aria-invalid="invalid" :aria-describedby="describedBy" />
-          </template>
-        </FormField>
-        <FormField id="own-confirm-password" :label="t('account.password.repeat')" required :error="fieldErrors.confirm">
-          <template #default="{ id, invalid, describedBy }">
-            <input :id="id" v-model="pw2" type="password" autocomplete="new-password" :aria-invalid="invalid" :aria-describedby="describedBy" />
-          </template>
-        </FormField>
-      </div>
-      <div>
+      <div class="form-footer">
         <button type="submit" class="btn btn-primary" :disabled="change.isPending.value">{{ change.isPending.value ? t("account.password.submitting") : t("account.password.submit") }}</button>
       </div>
     </form>
