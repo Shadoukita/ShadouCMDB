@@ -13,6 +13,7 @@ import { useCiClasses } from "../../api/queries";
 import Breadcrumbs from "../../components/Breadcrumbs.vue";
 import ConfirmDialog from "../../components/ConfirmDialog.vue";
 import EmptyState from "../../components/EmptyState.vue";
+import PermissionDenied from "../../components/PermissionDenied.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
 import Icon from "../../components/Icon.vue";
 import KeyboardHints from "../../components/KeyboardHints.vue";
@@ -128,11 +129,10 @@ const rowMenu = (j: ImportJobSummary): RowMenuItem[] => [
 </script>
 
 <template>
-  <Breadcrumbs v-if="!permitted" :items="crumbs" />
-  <EmptyState v-if="!permitted" icon="lock" :title="t('imports.denied.title')">
+  <PermissionDenied v-if="!permitted" :crumbs="crumbs" :permissions="['cis.import']" :panel-title="t('imports.denied.panelTitle')">
     {{ t("imports.denied.body", { permission: t("permission.cis.import") }) }}
-    <template #actions><RouterLink class="btn" to="/cis">{{ t("imports.backToInventory") }}</RouterLink></template>
-  </EmptyState>
+    <template #actions><RouterLink class="btn btn-primary" to="/cis">{{ t("imports.backToInventory") }}</RouterLink></template>
+  </PermissionDenied>
 
   <template v-else>
     <div class="list-head">

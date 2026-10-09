@@ -6,6 +6,7 @@ import { useImportJob, type ImportJob } from "../../api/imports";
 import { useCiClasses } from "../../api/queries";
 import Breadcrumbs from "../../components/Breadcrumbs.vue";
 import EmptyState from "../../components/EmptyState.vue";
+import PermissionDenied from "../../components/PermissionDenied.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
 import Icon from "../../components/Icon.vue";
 import LoadingState from "../../components/LoadingState.vue";
@@ -101,12 +102,12 @@ const committedRows = computed(() => {
 </script>
 
 <template>
-  <Breadcrumbs v-if="!permitted || notFound" :items="crumbs" />
+  <Breadcrumbs v-if="permitted && notFound" :items="crumbs" />
 
-  <EmptyState v-if="!permitted" icon="lock" :title="t('imports.denied.title')">
+  <PermissionDenied v-if="!permitted" :crumbs="crumbs" :permissions="['cis.import']" :panel-title="t('imports.denied.panelTitle')">
     {{ t("imports.denied.body", { permission: t("permission.cis.import") }) }}
-    <template #actions><RouterLink class="btn" to="/cis">{{ t("imports.backToInventory") }}</RouterLink></template>
-  </EmptyState>
+    <template #actions><RouterLink class="btn btn-primary" to="/cis">{{ t("imports.backToInventory") }}</RouterLink></template>
+  </PermissionDenied>
 
   <EmptyState v-else-if="notFound" :title="t('imports.wizard.notFound.title')">
     {{ t("imports.wizard.notFound.body") }}

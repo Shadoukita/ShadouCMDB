@@ -10,6 +10,7 @@ import { useCiWorkflows, useWorkflowCounts } from "../api/workflowRuntime";
 import { useCiLayout } from "../api/uiSettings";
 import Breadcrumbs, { type Crumb } from "../components/Breadcrumbs.vue";
 import EmptyState from "../components/EmptyState.vue";
+import PermissionDenied from "../components/PermissionDenied.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
 import LoadingState from "../components/LoadingState.vue";
 import CiStateBadge from "../components/CiStateBadge.vue";
@@ -310,16 +311,23 @@ const crumbs = computed<Crumb[]>(() => {
 <template>
   <LoadingState v-if="ci.isLoading.value || serviceSettings.isLoading.value || redirecting" label="Loading configuration item…" />
   <template v-else-if="ci.isError.value">
-    <Breadcrumbs :items="[{ label: t('inventory.crumb'), to: '/cis' }, { label: forbidden ? 'Permission denied' : notFound ? 'Not found' : 'Error' }]" />
-    <EmptyState v-if="forbidden" title="Permission denied">
-      None of your permission profiles allows viewing this configuration item's class, so it cannot be shown.
-      <template #actions><RouterLink class="btn" to="/cis">Back to inventory</RouterLink></template>
-    </EmptyState>
-    <EmptyState v-else-if="notFound" title="Configuration item not found">
-      No CI has the id <code>{{ id }}</code>. It may have been removed, or the link is wrong.
-      <template #actions><RouterLink class="btn" to="/cis">Back to inventory</RouterLink></template>
-    </EmptyState>
-    <ErrorAlert v-else :error="ci.error.value" :on-retry="() => ci.refetch()" />
+    <PermissionDenied
+      v-if="forbidden"
+      :crumbs="[{ label: t('inventory.crumb'), to: '/cis' }]"
+      :requirement="t('denied.classView')"
+      :panel-title="t('denied.ci.panelTitle')"
+    >
+      {{ t("denied.ci.view") }}
+      <template #actions><RouterLink class="btn btn-primary" to="/cis">{{ t("inventory.denied.back") }}</RouterLink></template>
+    </PermissionDenied>
+    <template v-else>
+      <Breadcrumbs :items="[{ label: t('inventory.crumb'), to: '/cis' }, { label: notFound ? 'Not found' : 'Error' }]" />
+      <EmptyState v-if="notFound" title="Configuration item not found">
+        No CI has the id <code>{{ id }}</code>. It may have been removed, or the link is wrong.
+        <template #actions><RouterLink class="btn" to="/cis">Back to inventory</RouterLink></template>
+      </EmptyState>
+      <ErrorAlert v-else :error="ci.error.value" :on-retry="() => ci.refetch()" />
+    </template>
   </template>
   <template v-else-if="c && self">
     <div class="record-head">

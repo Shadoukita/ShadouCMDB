@@ -7,6 +7,7 @@ import { useServiceList, useServiceSettings, type Principal, type PrincipalRef, 
 import Breadcrumbs from "../../components/Breadcrumbs.vue";
 import CriticalityBadge from "../../components/CriticalityBadge.vue";
 import EmptyState from "../../components/EmptyState.vue";
+import PermissionDenied from "../../components/PermissionDenied.vue";
 import KeyboardHints from "../../components/KeyboardHints.vue";
 import LoadingState from "../../components/LoadingState.vue";
 import PaginationBar from "../../components/PaginationBar.vue";
@@ -148,24 +149,30 @@ const rowMenu = (s: ServiceSummary) => [
 </script>
 
 <template>
-  <Breadcrumbs :items="[{ label: t('services.title') }]" />
-  <div class="page-header">
-    <div class="title">
-      <h1>{{ t("services.title") }}</h1>
-      <span v-if="list.data.value" class="muted count">{{ t("common.total", { n: formatNumber(total) }) }}</span>
-      <span v-if="list.isFetching.value && !list.isPending.value" class="spinner" :aria-label="t('common.refreshing')" />
+  <template v-if="!forbidden">
+    <Breadcrumbs :items="[{ label: t('services.title') }]" />
+    <div class="page-header">
+      <div class="title">
+        <h1>{{ t("services.title") }}</h1>
+        <span v-if="list.data.value" class="muted count">{{ t("common.total", { n: formatNumber(total) }) }}</span>
+        <span v-if="list.isFetching.value && !list.isPending.value" class="spinner" :aria-label="t('common.refreshing')" />
+      </div>
+      <div v-if="canCreate" class="actions">
+        <RouterLink class="btn btn-primary" :to="createTo"><Icon name="plus" />{{ t("services.create") }}</RouterLink>
+      </div>
     </div>
-    <div v-if="canCreate" class="actions">
-      <RouterLink class="btn btn-primary" :to="createTo"><Icon name="plus" />{{ t("services.create") }}</RouterLink>
-    </div>
-  </div>
+  </template>
 
   <ServiceError v-if="settings.isError.value" :error="settings.error.value" :on-retry="() => settings.refetch()" />
   <LoadingState v-else-if="settings.isPending.value" :label="t('services.loading')" />
-  <EmptyState v-else-if="forbidden" icon="lock" :title="t('services.forbiddenTitle')">
+  <PermissionDenied
+    v-else-if="forbidden"
+    :crumbs="[{ label: t('services.title') }]"
+    :requirement="t('denied.serviceView')"
+    :panel-title="t('services.forbiddenPanelTitle')"
+  >
     {{ t("services.forbidden") }}
-    <template #actions><RouterLink class="btn" to="/">{{ t("services.backToDashboard") }}</RouterLink></template>
-  </EmptyState>
+  </PermissionDenied>
 
   <section v-else class="panel explorer" :aria-label="t('services.title')">
     <form class="toolbar" role="search" @submit.prevent>

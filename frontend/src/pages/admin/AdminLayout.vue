@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { RouterView, useRoute } from "vue-router";
-import EmptyState from "../../components/EmptyState.vue";
+import PermissionDenied from "../../components/PermissionDenied.vue";
 import { t } from "../../i18n";
 import { useSessionStore } from "../../stores/session";
 import AdminNav from "./AdminNav.vue";
@@ -18,23 +18,23 @@ const session = useSessionStore();
 const sections = computed(() => visibleSections(session.adminAccess));
 const required = computed(() => route.meta.permissions ?? []);
 const administratorOnly = computed(() => !!route.meta.administratorOnly);
+const crumbs = computed(() => [{ label: t("nav.page.administration") }]);
 const allowed = computed(() => sectionAllowed({ permissions: required.value, administratorOnly: administratorOnly.value }, session.adminAccess));
 </script>
 
 <template>
-  <EmptyState v-if="sections.length === 0" icon="lock" :title="t('admin.noAccess.title')">{{ t("admin.noAccess.body") }}</EmptyState>
+  <PermissionDenied v-if="sections.length === 0" :crumbs="crumbs" :panel-title="t('admin.noAccess.title')">{{ t("admin.noAccess.body") }}</PermissionDenied>
   <div v-else :class="['admin', { 'admin-with-nav': !adminNavInRail }]">
     <AdminNav v-if="!adminNavInRail" placement="page" />
     <div class="admin-body">
       <RouterView v-if="allowed" />
-      <EmptyState v-else-if="administratorOnly" icon="lock" :title="t('admin.denied.title')">
+      <PermissionDenied v-else-if="administratorOnly" :crumbs="crumbs" :requirement="t('denied.administrator')" :panel-title="t('admin.denied.panelTitle')">
         {{ t("admin.denied.administratorOnly") }}
         <template v-if="route.path.startsWith('/admin/identity-providers')">{{ t("admin.denied.identityProviders") }}</template>
-      </EmptyState>
-      <EmptyState v-else icon="lock" :title="t('admin.denied.title')">
-        {{ t("admin.denied.needs", { n: required.length }) }}
-        <span class="denied-permissions"><code v-for="p in required" :key="p">{{ p }}</code></span>
-      </EmptyState>
+      </PermissionDenied>
+      <PermissionDenied v-else :crumbs="crumbs" :permissions="required" :panel-title="t('admin.denied.panelTitle')">
+        {{ t("admin.denied.body") }}
+      </PermissionDenied>
     </div>
   </div>
 </template>
