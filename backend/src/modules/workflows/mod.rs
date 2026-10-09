@@ -13,6 +13,8 @@ pub mod adopt;
 mod adopt_tests;
 pub mod approval_schemas;
 #[cfg(test)]
+mod approvals_a4_edge_tests;
+#[cfg(test)]
 mod approvals_a4_tests;
 #[cfg(test)]
 mod approvals_runtime_tests;
