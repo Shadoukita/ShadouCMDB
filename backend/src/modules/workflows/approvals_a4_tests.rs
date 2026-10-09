@@ -377,6 +377,49 @@ async fn administrator_delegations_never_name_their_creator() {
     audit_ok(&w).await;
 }
 
+/// Windows are checked at the precision PostgreSQL stores (GH#822): one that
+/// is empty in microseconds is refused as `endsAt`/`out_of_range`, never with
+/// the table's constraint, and one of 90 days and a fraction of a microsecond
+/// is the 90 days the database holds.
+#[tokio::test]
+async fn delegation_windows_are_checked_in_microseconds() {
+    let Some(db) = scratch::database("approval_delegations_micros").await else { return };
+    let w = world(&db).await;
+    let p = setup(&w).await;
+    let mine = |starts: &str, ends: &str| json!({ "delegateUserId": p.a2.1, "startsAt": starts, "endsAt": ends });
+    let admin = |starts: &str, ends: &str| json!({ "principalUserId": p.a1.1, "delegateUserId": p.a3.1, "startsAt": starts, "endsAt": ends });
+    let (starts, ends) = ("2030-01-01T00:00:00.000000100Z", "2030-01-01T00:00:00.000000200Z");
+    for (creds, path, body) in [(&p.a1.0, MINE, mine(starts, ends)), (&w.admin, ADMIN, admin(starts, ends))] {
+        let (status, v) = w.call(creds, "POST", path, Some(body)).await;
+        assert_eq!((status, code(&v)), (400, "VALIDATION_ERROR"), "{path}: {v}");
+        assert_eq!(details(&v), pairs(&[("endsAt", "out_of_range")]), "{path}: {v}");
+        assert!(!v.to_string().contains("workflow_approval_delegations"), "{path}: {v}");
+    }
+
+    // 90 days and half a microsecond: the database holds exactly 90 days, the longest allowed.
+    let (starts, ends) = ("2030-01-01T00:00:00.000000500Z", "2030-04-01T00:00:00.000000999Z");
+    for (creds, path, body) in [(&p.a1.0, MINE, mine(starts, ends)), (&w.admin, ADMIN, admin(starts, ends))] {
+        let (status, v) = w.call(creds, "POST", path, Some(body)).await;
+        assert_eq!(status, 201, "{path}: {v}");
+        let stored: (String, String) = sqlx::query_as(
+            "SELECT to_char(starts_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS.US'),
+                    to_char(ends_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS.US')
+             FROM workflow_approval_delegations WHERE id = $1",
+        )
+        .bind(id(&v))
+        .fetch_one(&w.pool)
+        .await
+        .unwrap();
+        assert_eq!(stored, ("2030-01-01 00:00:00.000000".into(), "2030-04-01 00:00:00.000000".into()), "{path}");
+    }
+    // A microsecond more is refused by the API, not by the table.
+    let (starts, ends) = ("2030-01-01T00:00:00Z", "2030-04-01T00:00:00.000001Z");
+    for (creds, path, body) in [(&p.a1.0, MINE, mine(starts, ends)), (&w.admin, ADMIN, admin(starts, ends))] {
+        let (status, v) = w.call(creds, "POST", path, Some(body)).await;
+        assert_eq!((status, details(&v)), (400, pairs(&[("endsAt", "out_of_range")])), "{path}: {v}");
+    }
+}
+
 /// `approve`: technical review due in 15 minutes and flagged when overdue,
 /// with an escalation approver; CAB rejected when overdue.
 fn sla_graph() -> Value {

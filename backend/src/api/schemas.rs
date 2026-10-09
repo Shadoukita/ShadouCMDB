@@ -63,6 +63,14 @@ pub fn trimmed_opt<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D:
     Ok(Option::<String>::deserialize(d)?.map(|s| s.trim().to_owned()))
 }
 
+/// Deserialise a timestamp and truncate it to microseconds, the precision
+/// PostgreSQL stores, so checks in Rust see the value the database will hold
+/// (GH#822).
+pub fn micros<'de, D: Deserializer<'de>>(d: D) -> Result<DateTime<Utc>, D::Error> {
+    use chrono::SubsecRound;
+    Ok(DateTime::<Utc>::deserialize(d)?.trunc_subsecs(6))
+}
+
 /// An e-mail address as it is stored: in Unicode NFKC and trimmed, so
 /// look-alike forms (composed or decomposed, full-width) are one address
 /// (GH#531). Case is kept; the database compares addresses with
