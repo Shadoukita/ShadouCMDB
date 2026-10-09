@@ -125,6 +125,7 @@ function toggleRecovery() {
     <form v-if="step === 'password'" class="bare-card" aria-labelledby="login-title" @submit.prevent="submit">
       <div class="bare-brand"><BrandMark /></div>
       <h1 id="login-title">{{ t("auth.signIn.title") }}</h1>
+      <p class="lead">{{ t("auth.signIn.lead") }}</p>
       <div v-if="session.expired" class="alert alert-warn" role="status">
         {{ t("auth.signIn.sessionEnded") }}
       </div>
@@ -151,16 +152,18 @@ function toggleRecovery() {
         <input id="login-password" v-model="password" v-autofocus="!!username" type="password" autocomplete="current-password" required />
       </div>
       <button type="submit" class="btn btn-primary block" :disabled="busy">{{ busy ? t("auth.signIn.submitting") : t("auth.signIn.submit") }}</button>
-      <p v-if="directory" class="hint" data-testid="directory-hint">
-        {{ t("auth.signIn.directoryHint") }}
-      </p>
-      <p class="hint">{{ lostAdmin[0] }}<code>shadoucmdb create-admin</code>{{ lostAdmin[1] }}</p>
+      <div class="bare-foot">
+        <p v-if="directory" class="hint" data-testid="directory-hint">
+          {{ t("auth.signIn.directoryHint") }}
+        </p>
+        <p class="hint">{{ lostAdmin[0] }}<code>shadoucmdb create-admin</code>{{ lostAdmin[1] }}</p>
+      </div>
     </form>
 
     <form v-else class="bare-card" aria-labelledby="mfa-title" novalidate @submit.prevent="submitCode">
       <div class="bare-brand"><BrandMark /></div>
       <h1 id="mfa-title">{{ t("auth.mfa.title") }}</h1>
-      <p>
+      <p class="lead">
         {{ signingInAs[0] }}<strong>{{ username }}</strong>{{ signingInAs[1] }}
         {{ useRecovery ? t("auth.mfa.recoveryIntro") : t("auth.mfa.totpIntro") }}
       </p>
@@ -198,14 +201,15 @@ function toggleRecovery() {
         />
       </div>
       <button type="submit" class="btn btn-primary block" :disabled="busy || !code.trim()">{{ busy ? t("auth.mfa.verifying") : t("auth.mfa.verify") }}</button>
-      <p class="hint">
-        <button type="button" class="btn-link" @click="toggleRecovery">
-          {{ useRecovery ? t("auth.mfa.useApp") : t("auth.mfa.useRecovery") }}
-        </button>
-        ·
-        <button type="button" class="btn-link" @click="restart()">{{ t("auth.mfa.someoneElse") }}</button>
-      </p>
-      <p class="hint">{{ t("auth.mfa.noDevice") }}</p>
+      <div class="bare-foot">
+        <p class="mfa-links">
+          <button type="button" class="btn-link" @click="toggleRecovery">
+            {{ useRecovery ? t("auth.mfa.useApp") : t("auth.mfa.useRecovery") }}
+          </button>
+          <button type="button" class="btn-link" @click="restart()">{{ t("auth.mfa.someoneElse") }}</button>
+        </p>
+        <p class="hint">{{ t("auth.mfa.noDevice") }}</p>
+      </div>
     </form>
   </main>
 </template>
@@ -220,8 +224,8 @@ function toggleRecovery() {
   display: flex;
   align-items: center;
   gap: var(--sp-3);
-  font-size: var(--fs-xs);
-  color: var(--c-text-muted);
+  font-size: var(--fs-sm);
+  color: var(--c-text-secondary);
 }
 .sso-divider::before,
 .sso-divider::after {
@@ -230,7 +234,16 @@ function toggleRecovery() {
   border-top: 1px solid var(--c-border);
 }
 .code-input {
-  font-size: var(--fs-lg);
-  letter-spacing: 0.2em;
+  height: auto;
+  padding-block: var(--space-2);
+  font-size: var(--fs-h1);
+  letter-spacing: 0.3em;
+  text-align: center;
+}
+.mfa-links {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
 }
 </style>
