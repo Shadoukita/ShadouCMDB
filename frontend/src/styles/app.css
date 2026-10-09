@@ -251,6 +251,15 @@ dl.props .group-title:first-child {
   font-weight: var(--fw-semibold);
   color: var(--c-text);
 }
+/* First-run setup groups its fields; the card's gap already separates the groups. */
+.bare-card fieldset.group + fieldset.group {
+  margin-top: 0;
+}
+.bare-card fieldset.group legend {
+  font-weight: var(--fw-semibold);
+  color: var(--c-text);
+  padding-bottom: var(--space-2);
+}
 /* Hints and secondary links under the form, set off by a rule. */
 .bare-foot {
   display: flex;

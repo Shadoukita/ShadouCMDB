@@ -67,54 +67,64 @@ async function submit() {
     <form class="bare-card wide" aria-labelledby="setup-title" novalidate @submit.prevent="submit">
       <div class="bare-brand"><BrandMark /></div>
       <h1 id="setup-title">{{ t("auth.setup.title") }}</h1>
-      <p class="muted">
+      <p class="lead">
         {{ intro[0] }}<strong>{{ t("auth.setup.introProfile") }}</strong>{{ intro[1] }}
       </p>
       <FormErrorBanner v-if="error" :error="error" :unplaced="unplaced" />
       <div v-if="error instanceof ApiError && error.code === 'CONFLICT'" class="alert">
         <RouterLink to="/login">{{ t("auth.setup.goToSignIn") }}</RouterLink>
       </div>
-      <div class="form-grid">
-        <FormField
-          id="setup-setupToken"
-          :label="t('auth.setup.token')"
-          required
-          :error="fieldErrors.setupToken"
-          :hint="t('auth.setup.tokenHint')"
-        >
-          <template #default="{ id, invalid, describedBy }">
-            <input :id="id" v-model="form.setupToken" v-autofocus type="password" autocomplete="off" spellcheck="false" :aria-invalid="invalid" :aria-describedby="describedBy" />
-          </template>
-        </FormField>
-        <div />
-        <FormField id="setup-username" required :label="t('auth.setup.username')" :error="fieldErrors.username" :hint="t('auth.setup.usernameHint')">
-          <template #default="{ id, invalid, describedBy }">
-            <input :id="id" v-model="form.username" type="text" autocomplete="username" :aria-invalid="invalid" :aria-describedby="describedBy" />
-          </template>
-        </FormField>
-        <FormField id="setup-displayName" required :label="t('auth.setup.displayName')" :error="fieldErrors.displayName" :hint="t('auth.setup.displayNameHint')">
-          <template #default="{ id, invalid, describedBy }">
-            <input :id="id" v-model="form.displayName" type="text" autocomplete="name" :aria-invalid="invalid" :aria-describedby="describedBy" />
-          </template>
-        </FormField>
-        <FormField id="setup-email" :label="t('auth.setup.email')" required :error="fieldErrors.email" :hint="t('people.setup.emailHint')">
-          <template #default="{ id, invalid, describedBy }">
-            <input :id="id" v-model="form.email" type="email" autocomplete="email" :aria-invalid="invalid" :aria-describedby="describedBy" />
-          </template>
-        </FormField>
-        <div />
-        <FormField id="setup-password" required :label="t('auth.setup.password')" :error="fieldErrors.password" :hint="t('auth.password.minLengthHint')">
-          <template #default="{ id, invalid, describedBy }">
-            <input :id="id" v-model="form.password" type="password" autocomplete="new-password" :aria-invalid="invalid" :aria-describedby="describedBy" />
-          </template>
-        </FormField>
-        <FormField id="setup-confirm" :label="t('auth.setup.repeatPassword')" required :error="fieldErrors.confirm">
-          <template #default="{ id, invalid, describedBy }">
-            <input :id="id" v-model="form.confirm" type="password" autocomplete="new-password" :aria-invalid="invalid" :aria-describedby="describedBy" />
-          </template>
-        </FormField>
+      <fieldset class="group">
+        <legend>{{ t("auth.setup.sectionServer") }}</legend>
+        <div class="form-grid">
+          <FormField
+            id="setup-setupToken"
+            wide
+            :label="t('auth.setup.token')"
+            required
+            :error="fieldErrors.setupToken"
+            :hint="t('auth.setup.tokenHint')"
+          >
+            <template #default="{ id, invalid, describedBy }">
+              <input :id="id" v-model="form.setupToken" v-autofocus class="mono" type="password" autocomplete="off" spellcheck="false" :aria-invalid="invalid" :aria-describedby="describedBy" />
+            </template>
+          </FormField>
+        </div>
+      </fieldset>
+      <fieldset class="group">
+        <legend>{{ t("auth.setup.sectionAccount") }}</legend>
+        <div class="form-grid">
+          <FormField id="setup-username" required :label="t('auth.setup.username')" :error="fieldErrors.username" :hint="t('auth.setup.usernameHint')">
+            <template #default="{ id, invalid, describedBy }">
+              <input :id="id" v-model="form.username" type="text" autocomplete="username" :aria-invalid="invalid" :aria-describedby="describedBy" />
+            </template>
+          </FormField>
+          <FormField id="setup-displayName" required :label="t('auth.setup.displayName')" :error="fieldErrors.displayName" :hint="t('auth.setup.displayNameHint')">
+            <template #default="{ id, invalid, describedBy }">
+              <input :id="id" v-model="form.displayName" type="text" autocomplete="name" :aria-invalid="invalid" :aria-describedby="describedBy" />
+            </template>
+          </FormField>
+          <FormField id="setup-email" wide :label="t('auth.setup.email')" required :error="fieldErrors.email" :hint="t('people.setup.emailHint')">
+            <template #default="{ id, invalid, describedBy }">
+              <input :id="id" v-model="form.email" type="email" autocomplete="email" :aria-invalid="invalid" :aria-describedby="describedBy" />
+            </template>
+          </FormField>
+          <FormField id="setup-password" required :label="t('auth.setup.password')" :error="fieldErrors.password" :hint="t('auth.password.minLengthHint')">
+            <template #default="{ id, invalid, describedBy }">
+              <input :id="id" v-model="form.password" type="password" autocomplete="new-password" :aria-invalid="invalid" :aria-describedby="describedBy" />
+            </template>
+          </FormField>
+          <FormField id="setup-confirm" :label="t('auth.setup.repeatPassword')" required :error="fieldErrors.confirm">
+            <template #default="{ id, invalid, describedBy }">
+              <input :id="id" v-model="form.confirm" type="password" autocomplete="new-password" :aria-invalid="invalid" :aria-describedby="describedBy" />
+            </template>
+          </FormField>
+        </div>
+      </fieldset>
+      <button type="submit" class="btn btn-primary block" :disabled="busy">{{ busy ? t("auth.setup.submitting") : t("auth.setup.submit") }}</button>
+      <div class="bare-foot">
+        <p class="hint">{{ t("auth.setup.closesHint") }}</p>
       </div>
-      <button type="submit" class="btn btn-primary" :disabled="busy">{{ busy ? t("auth.setup.submitting") : t("auth.setup.submit") }}</button>
     </form>
   </main>
 </template>

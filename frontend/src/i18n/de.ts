@@ -567,6 +567,9 @@ export const de: { [K in MessageKey]: string } = {
   "auth.setup.intro":
     "Es gibt noch keinen Benutzer. Das Konto, das Sie hier anlegen, erhält das integrierte Profil {profile}: Es kann Benutzer, Berechtigungsprofile und alle Configuration Items verwalten. Weitere Benutzer können Sie anschließend unter Administration anlegen.",
   "auth.setup.introProfile": "Administrator",
+  "auth.setup.sectionServer": "Serverzugriff",
+  "auth.setup.sectionAccount": "Administratorkonto",
+  "auth.setup.closesHint": "Die Einrichtung schließt, sobald dieses Konto existiert. Alle anderen melden sich mit einem Konto an, das ein Administrator anlegt.",
   "auth.setup.goToSignIn": "Zur Anmeldung",
   "auth.setup.token": "Einrichtungstoken",
   "auth.setup.tokenHint":
