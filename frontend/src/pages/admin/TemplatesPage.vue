@@ -6,16 +6,19 @@ import { useInstallTemplate, useTemplates } from "../../api/datamodel";
 import Breadcrumbs from "../../components/Breadcrumbs.vue";
 import EmptyState from "../../components/EmptyState.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
+import Icon from "../../components/Icon.vue";
 import type { SchemaChange } from "../../api/schemaChanges";
 import LoadingState from "../../components/LoadingState.vue";
+import { t, type MessageKey } from "../../i18n";
 import { useDocumentTitle } from "../../lib/composables";
 
 /**
- * Administration › Data model › Templates. A fresh install has no classes or
- * lookups; a starter template adds a ready-made model in one click. Installing is
- * idempotent: rows that already exist (matched by key) are left alone.
+ * Administration › Data model › Starter templates. A fresh install has no classes or lookups; a starter
+ * template adds a ready-made model in one click. Installing is idempotent: rows that already exist (matched
+ * by key) are left alone. The page has the CI page's head band without tabs (design step 9c-4), each
+ * template is a panel with its status as a pill, and no style attribute is left (audit X16).
  */
-useDocumentTitle("Templates");
+useDocumentTitle(() => t("admin.section.templates"));
 const templates = useTemplates();
 const install = useInstallTemplate();
 const results = ref<Record<string, InstallResult>>({});
@@ -36,29 +39,34 @@ interface InstallResult {
   skipped: string[];
   schemaChange: SchemaChange | null;
 }
-const PARTS: { key: Part; label: string }[] = [
-  { key: "areas", label: "Areas" },
-  { key: "classes", label: "CI classes" },
-  { key: "attributeDefinitions", label: "Attributes" },
-  { key: "relationshipTypes", label: "Relationship types" },
-  { key: "relationshipRules", label: "Relationship rules" },
-  { key: "lookupLists", label: "Lookup lists" },
-  { key: "lookupListValues", label: "Lookup values" },
-];
-const STATUS: Record<Status, { label: string; tone: string }> = {
-  not_installed: { label: "Not installed", tone: "" },
-  partial: { label: "Partly installed", tone: "warn" },
-  installed: { label: "Installed", tone: "ok" },
+const PARTS: Part[] = ["areas", "classes", "attributeDefinitions", "relationshipTypes", "relationshipRules", "lookupLists", "lookupListValues"];
+const PART_LABEL: Record<Part, MessageKey> = {
+  areas: "templates.part.areas",
+  classes: "templates.part.classes",
+  attributeDefinitions: "templates.part.attributeDefinitions",
+  relationshipTypes: "templates.part.relationshipTypes",
+  relationshipRules: "templates.part.relationshipRules",
+  lookupLists: "templates.part.lookupLists",
+  lookupListValues: "templates.part.lookupListValues",
+};
+const STATUS_TONE: Record<Status, string> = { not_installed: "off", partial: "warn", installed: "ok" };
+const STATUS_LABEL: Record<Status, MessageKey> = {
+  not_installed: "templates.status.not_installed",
+  partial: "templates.status.partial",
+  installed: "templates.status.installed",
 };
 
 /** Nothing of any template is present yet: the empty-install state. */
-const emptyInstall = computed(() => (templates.data.value ?? []).every((t) => PARTS.every((p) => t.present[p.key] === 0)));
+const emptyInstall = computed(() => (templates.data.value ?? []).every((tpl) => PARTS.every((p) => tpl.present[p] === 0)));
+const installedCount = computed(() => (templates.data.value ?? []).filter((tpl) => tpl.status === "installed").length);
+/** The empty-state text around its two links, in the catalog's order. */
+const emptyBody = computed(() => t("templates.empty.body", { classes: "\u0000", dropdowns: "\u0000" }).split("\u0000"));
 
-async function run(t: Template) {
-  installing.value = t.key;
+async function run(tpl: Template) {
+  installing.value = tpl.key;
   install.reset();
   try {
-    results.value = { ...results.value, [t.key]: await install.mutateAsync(t.key) };
+    results.value = { ...results.value, [tpl.key]: await install.mutateAsync(tpl.key) };
   } catch {
     // shown from install.error
   } finally {
@@ -66,111 +74,131 @@ async function run(t: Template) {
   }
 }
 
-const total = (c: Counts) => PARTS.reduce((n, p) => n + c[p.key], 0);
-const buttonLabel = (t: Template) =>
-  t.status === "not_installed" ? `Install ${t.name} starter` : t.status === "partial" ? `Add the missing parts of ${t.name}` : "Installed";
+const total = (c: Counts) => PARTS.reduce((n, p) => n + c[p], 0);
+const buttonLabel = (tpl: Template) =>
+  tpl.status === "not_installed"
+    ? t("templates.install", { name: tpl.name })
+    : tpl.status === "partial"
+      ? t("templates.addMissing", { name: tpl.name })
+      : t("templates.status.installed");
+const addedText = (r: InstallResult) =>
+  total(r.existing) > 0
+    ? t("templates.result.addedExisting", { n: total(r.created), existing: total(r.existing) })
+    : t("templates.result.added", { n: total(r.created) });
 </script>
 
 <template>
-  <Breadcrumbs :items="adminCrumbs('templates')" />
-  <div class="page-header">
-    <div class="title"><h1>Starter templates</h1></div>
+  <div class="record-head record-head-plain">
+    <Breadcrumbs :items="adminCrumbs('templates')" />
+    <div class="page-header record-header">
+      <div class="record-heading">
+        <span class="class-tile class-tile-lg" aria-hidden="true"><Icon name="layers" class="class-icon" /></span>
+        <div class="record-title">
+          <div class="title">
+            <h1>{{ t("admin.section.templates") }}</h1>
+          </div>
+          <p v-if="templates.data.value" class="record-meta" data-testid="record-meta">
+            <span class="badge">{{ t("templates.meta.count", { n: templates.data.value.length }) }}</span>
+            <span v-if="templates.data.value.length > 0" :class="['badge', installedCount > 0 ? 'ok' : 'off']"
+              ><span class="status-dot" aria-hidden="true" />{{ t("templates.meta.installed", { n: installedCount, total: templates.data.value.length }) }}</span
+            >
+          </p>
+        </div>
+      </div>
+    </div>
   </div>
 
-  <LoadingState v-if="templates.isLoading.value" label="Loading templates…" />
+  <LoadingState v-if="templates.isLoading.value" :label="t('templates.loading')" />
   <ErrorAlert v-else-if="templates.isError.value" :error="templates.error.value" :on-retry="() => templates.refetch()" />
   <template v-else-if="templates.data.value">
-    <section v-if="emptyInstall" class="panel callout">
-      <EmptyState title="Your CMDB is empty">
-        There are no CI classes, relationship types or lookups yet, so nobody can record a configuration item. Install a
-        starter template to begin with a ready-made model you can change afterwards, or build your own under
-        <RouterLink to="/admin/classes">CI classes</RouterLink> and <RouterLink to="/admin/dropdowns">Dropdowns</RouterLink>.
+    <section v-if="emptyInstall && templates.data.value.length > 0" class="panel callout">
+      <EmptyState :title="t('templates.empty.title')">
+        {{ emptyBody[0] }}<RouterLink to="/admin/classes">{{ t("admin.section.classes") }}</RouterLink>{{ emptyBody[1]
+        }}<RouterLink to="/admin/dropdowns">{{ t("admin.section.dropdowns") }}</RouterLink>{{ emptyBody[2] }}
       </EmptyState>
     </section>
-    <p v-else class="muted">
-      Templates add a ready-made data model. Installing again only adds what is missing: existing classes, attributes and
-      lookups (matched by key) are left as they are, including your changes.
-    </p>
+    <p v-else-if="templates.data.value.length > 0" class="muted">{{ t("templates.intro") }}</p>
 
-    <section v-for="t in templates.data.value" :key="t.key" class="panel" :aria-labelledby="`tpl-${t.key}`">
+    <section v-for="tpl in templates.data.value" :key="tpl.key" class="panel" :aria-labelledby="`tpl-${tpl.key}`">
       <div class="panel-header">
-        <h2 :id="`tpl-${t.key}`">{{ t.name }}</h2>
-        <span :class="['badge', STATUS[t.status].tone]">{{ STATUS[t.status].label }}</span>
-        <button
-          type="button"
-          class="btn btn-primary"
-          style="margin-left: auto"
-          :disabled="t.status === 'installed' || installing !== null"
-          @click="run(t)"
-        >
-          {{ installing === t.key ? "Installing…" : buttonLabel(t) }}
+        <div class="template-title">
+          <h2 :id="`tpl-${tpl.key}`">{{ tpl.name }}</h2>
+          <span :class="['badge', STATUS_TONE[tpl.status]]"><span class="status-dot" aria-hidden="true" />{{ t(STATUS_LABEL[tpl.status]) }}</span>
+        </div>
+        <button type="button" class="btn btn-primary" :disabled="tpl.status === 'installed' || installing !== null" @click="run(tpl)">
+          {{ installing === tpl.key ? t("templates.installing") : buttonLabel(tpl) }}
         </button>
       </div>
-      <div class="panel-body">
-        <p style="margin-top: 0">{{ t.description }}</p>
-        <ErrorAlert v-if="install.isError.value && install.variables.value === t.key" :error="install.error.value" title="Installation failed; nothing was changed" />
-        <div v-if="results[t.key]" class="alert" role="status">
-          <strong>Installed {{ t.name }}.</strong>
-          Added {{ total(results[t.key].created) }} rows<template v-if="total(results[t.key].existing) > 0">; {{ total(results[t.key].existing) }} already existed and were left unchanged</template>.
-          <template v-if="results[t.key].skipped.length > 0">
-            Skipped because they clash with your data model:
+      <div class="panel-body stack">
+        <p class="no-margin">{{ tpl.description }}</p>
+        <ErrorAlert
+          v-if="install.isError.value && install.variables.value === tpl.key"
+          :error="install.error.value"
+          :title="t('templates.installFailed')"
+        />
+        <div v-if="results[tpl.key]" class="alert template-result" role="status">
+          <strong>{{ t("templates.result.title", { name: tpl.name }) }}</strong>
+          {{ addedText(results[tpl.key]) }}
+          <template v-if="results[tpl.key].skipped.length > 0">
+            {{ t("templates.result.skipped") }}
             <ul>
-              <li v-for="s in results[t.key].skipped" :key="s">{{ s }}</li>
+              <li v-for="s in results[tpl.key].skipped" :key="s">{{ s }}</li>
             </ul>
           </template>
-          <details v-if="results[t.key].schemaChange" class="import-changes">
-            <summary>Database changes: {{ results[t.key].schemaChange!.summary }}</summary>
+          <details v-if="results[tpl.key].schemaChange" class="import-changes">
+            <summary>{{ t("templates.result.schemaChange", { summary: results[tpl.key].schemaChange!.summary }) }}</summary>
             <ol class="sc-ddl">
-              <li v-for="(sql, i) in results[t.key].schemaChange!.statements" :key="i"><pre>{{ sql }}</pre></li>
+              <li v-for="(sql, i) in results[tpl.key].schemaChange!.statements" :key="i"><pre>{{ sql }}</pre></li>
             </ol>
           </details>
-          <div class="actions" style="margin-top: var(--sp-3)">
-            <RouterLink class="btn btn-sm" to="/admin/classes">Review the CI classes</RouterLink>
-            <RouterLink class="btn btn-sm" to="/cis/new">Create the first CI</RouterLink>
+          <div class="actions">
+            <RouterLink class="btn btn-sm" to="/admin/classes">{{ t("templates.result.reviewClasses") }}</RouterLink>
+            <RouterLink class="btn btn-sm" to="/cis/new">{{ t("templates.result.firstCi") }}</RouterLink>
           </div>
         </div>
         <div class="grid-2">
           <table class="data">
-            <caption class="sr-only">What {{ t.name }} contains</caption>
+            <caption class="sr-only">{{ t("templates.contents.caption", { name: tpl.name }) }}</caption>
             <thead>
               <tr>
-                <th scope="col">Contains</th>
-                <th scope="col" class="num">In template</th>
-                <th scope="col" class="num">Already present</th>
+                <th scope="col">{{ t("templates.contents.part") }}</th>
+                <th scope="col" class="num">{{ t("templates.contents.inTemplate") }}</th>
+                <th scope="col" class="num">{{ t("templates.contents.present") }}</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="p in PARTS" :key="p.key">
-                <th scope="row">{{ p.label }}</th>
-                <td class="num">{{ t.contents[p.key] }}</td>
+              <tr v-for="p in PARTS" :key="p">
+                <th scope="row">{{ t(PART_LABEL[p]) }}</th>
+                <td class="num mono">{{ tpl.contents[p] }}</td>
                 <td class="num">
-                  <span :class="t.present[p.key] >= t.contents[p.key] ? 'badge ok' : t.present[p.key] > 0 ? 'badge warn' : 'muted'">
-                    {{ t.present[p.key] }}
+                  <span :class="tpl.present[p] >= tpl.contents[p] ? 'badge ok' : tpl.present[p] > 0 ? 'badge warn' : 'muted mono'">
+                    {{ tpl.present[p] }}
                   </span>
                 </td>
               </tr>
             </tbody>
           </table>
           <table class="data">
-            <caption class="sr-only">Classes in {{ t.name }}</caption>
+            <caption class="sr-only">{{ t("templates.classes.caption", { name: tpl.name }) }}</caption>
             <thead>
               <tr>
-                <th scope="col">Class</th>
-                <th scope="col" class="num">Own attributes</th>
+                <th scope="col">{{ t("templates.classes.class") }}</th>
+                <th scope="col" class="num">{{ t("templates.classes.own") }}</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="c in t.classes" :key="c.key">
+              <tr v-for="c in tpl.classes" :key="c.key">
                 <th scope="row">
-                  {{ c.name }} <span v-if="c.isAbstract" class="badge warn" title="Groups other classes; holds no CIs itself">abstract</span>
+                  {{ c.name }}
+                  <span v-if="c.isAbstract" class="badge warn spaced" :title="t('templates.classes.abstractHint')">{{ t("templates.classes.abstract") }}</span>
                 </th>
-                <td class="num">{{ c.attributeCount }}</td>
+                <td class="num mono">{{ c.attributeCount }}</td>
               </tr>
             </tbody>
           </table>
         </div>
       </div>
     </section>
-    <EmptyState v-if="templates.data.value.length === 0" title="This server ships no starter templates" />
+    <EmptyState v-if="templates.data.value.length === 0" :title="t('templates.none')" />
   </template>
 </template>

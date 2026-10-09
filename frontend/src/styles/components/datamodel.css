@@ -81,3 +81,24 @@ dialog.schema-change section:first-of-type h3 {
   gap: var(--sp-1);
 }
 /* ---- 9a/D end ---- */
+
+/* ---- 9c-4 begin: starter templates ---- */
+/* A template panel's header: the name and its status pill on the left, the install button at the end. */
+.template-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.template-title h2 {
+  margin: 0;
+}
+.template-title .badge .status-dot {
+  width: 6px;
+  height: 6px;
+  background: currentColor;
+}
+.template-result .actions {
+  margin-top: var(--space-3);
+}
+/* ---- 9c-4 end ---- */
