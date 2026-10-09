@@ -242,3 +242,142 @@ async fn bulk_update_refuses_a_malformed_body() {
     }
     assert_eq!(w.updates(&[id]).await, 0);
 }
+
+/// A session must send its CSRF token; an API token acts with its scope's
+/// rights only, so a view-only scope changes nothing even for an
+/// administrator's token, and what an in-scope token writes is audited as
+/// the token.
+#[tokio::test]
+async fn bulk_update_needs_csrf_and_respects_the_token_scope() {
+    let Some(db) = scratch::database("bulk_update_needs_csrf_and_respects_the_token_scope").await else { return };
+    let w = world(&db).await;
+    let server = w.ci(w.server).await;
+    let body = json!({ "ids": [server], "attributes": { "cpu_cores": 2 } });
+
+    let no_csrf = Creds { csrf: None, ..w.admin.clone() };
+    let (status, v, _) = call(&w.app, "POST", BULK, &no_csrf, Some(body.clone())).await;
+    assert_eq!((status, code(&v)), (403, "CSRF_TOKEN_INVALID"), "{v}");
+    assert_eq!(w.updates(&[server]).await, 0);
+
+    let token = |edit: bool| {
+        let w = &w;
+        async move {
+            let profile: Uuid = sqlx::query_scalar("INSERT INTO permission_profiles (name) VALUES ($1) RETURNING id")
+                .bind(format!("scope edit={edit}"))
+                .fetch_one(&w.pool)
+                .await
+                .unwrap();
+            sqlx::query(
+                "INSERT INTO permission_profile_class_permissions (profile_id, class_id, can_view, can_edit)
+                 VALUES ($1, $2, true, $3)",
+            )
+            .bind(profile)
+            .bind(w.server)
+            .bind(edit)
+            .execute(&w.pool)
+            .await
+            .unwrap();
+            let expires = (chrono::Utc::now() + chrono::Duration::days(1)).to_rfc3339();
+            let create = json!({ "name": format!("script {edit}"), "profileId": profile, "expiresAt": expires });
+            let (status, v, _) = call(&w.app, "POST", "/api/v1/admin/api-tokens", &w.admin, Some(create)).await;
+            assert_eq!(status, 201, "{v}");
+            Creds { bearer: v["secret"].as_str().map(str::to_owned), ..Creds::default() }
+        }
+    };
+
+    let viewer = token(false).await;
+    let (status, v, _) = call(&w.app, "POST", BULK, &viewer, Some(body.clone())).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(v["results"][0]["error"]["code"], "FORBIDDEN", "{v}");
+    assert_eq!(w.updates(&[server]).await, 0);
+    assert_eq!(w.attribute(server, "cpu_cores").await, Value::Null);
+
+    let editor = token(true).await;
+    let (status, v, _) = call(&w.app, "POST", BULK, &editor, Some(body)).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!((v["succeeded"].as_i64(), v["committed"].as_bool()), (Some(1), Some(true)), "{v}");
+    let actor: String =
+        sqlx::query_scalar("SELECT actor_type FROM audit_log WHERE entity_id = $1 AND action = 'update'")
+            .bind(server)
+            .fetch_one(&w.pool)
+            .await
+            .unwrap();
+    assert_eq!(actor, "api_client");
+}
+
+/// A class-restricted user cannot point a reference at a CI of a class they
+/// may not view, and the refusal does not tell them the CI exists: it reads
+/// the same as a reference to a CI that does not exist at all.
+#[tokio::test]
+async fn bulk_update_hides_references_to_classes_the_caller_may_not_view() {
+    let Some(db) = scratch::database("bulk_update_hides_references_to_classes_the_caller_may_not_view").await else {
+        return;
+    };
+    let w = world(&db).await;
+    let def = json!({ "classId": w.server, "key": "uplink", "label": "Uplink", "dataType": "reference", "referenceClassId": w.switch });
+    let (status, v, _) = call(&w.app, "POST", "/api/v1/attribute-definitions", &w.admin, Some(def)).await;
+    assert_eq!(status, 201, "{v}");
+    let servers = [w.ci(w.server).await, w.ci(w.server).await];
+    let switch = w.ci(w.switch).await;
+    let editor = w.user("editor", true).await;
+
+    let refusal = |target: Uuid| {
+        let (w, editor) = (&w, &editor);
+        async move {
+            let body = json!({ "ids": servers, "attributes": { "uplink": target } });
+            let (status, v, _) = call(&w.app, "POST", BULK, editor, Some(body)).await;
+            assert_eq!(status, 200, "{v}");
+            assert_eq!((v["succeeded"].as_i64(), v["failed"].as_i64()), (Some(0), Some(2)), "{v}");
+            let mut e = v["results"][0]["error"].clone();
+            // Only the id in the message may differ.
+            e["message"] = Value::String(e["message"].as_str().unwrap().replace(&target.to_string(), "<id>"));
+            if let Some(details) = e["details"].as_array_mut() {
+                for d in details {
+                    if let Some(m) = d["message"].as_str() {
+                        d["message"] = Value::String(m.replace(&target.to_string(), "<id>"));
+                    }
+                }
+            }
+            e
+        }
+    };
+    let hidden = refusal(switch).await;
+    let missing = refusal(Uuid::new_v4()).await;
+    assert_eq!(hidden, missing, "a hidden CI reads as a missing one");
+    assert_eq!(w.updates(&servers).await, 0);
+
+    // The administrator, who sees the switch, may set it.
+    let body = json!({ "ids": servers, "attributes": { "uplink": switch } });
+    let (status, v, _) = call(&w.app, "POST", BULK, &w.admin, Some(body)).await;
+    assert_eq!((status, v["succeeded"].as_i64()), (200, Some(2)), "{v}");
+}
+
+/// The cap is inclusive: 500 CIs go through in one request, each with its own
+/// audit row, and a soft-deleted CI among them is refused as CONFLICT (it can
+/// still be restored), as a single PATCH answers.
+#[tokio::test]
+async fn bulk_update_takes_the_maximum_and_skips_deleted_cis() {
+    let Some(db) = scratch::database("bulk_update_takes_the_maximum_and_skips_deleted_cis").await else { return };
+    let w = world(&db).await;
+    let mut ids = Vec::with_capacity(BULK_UPDATE_MAX);
+    for _ in 1..BULK_UPDATE_MAX {
+        ids.push(w.ci(w.server).await);
+    }
+    let deleted = w.ci(w.server).await;
+    let (status, v, _) =
+        call(&w.app, "DELETE", &format!("/api/v1/configuration-items/{deleted}"), &w.admin, None).await;
+    assert_eq!(status, 204, "{v}");
+    ids.push(deleted);
+    assert_eq!(ids.len(), BULK_UPDATE_MAX);
+
+    let (status, v, _) =
+        call(&w.app, "POST", BULK, &w.admin, Some(json!({ "ids": ids, "attributes": { "cpu_cores": 32 } }))).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(
+        (v["succeeded"].as_i64(), v["failed"].as_i64(), v["committed"].as_bool()),
+        (Some(BULK_UPDATE_MAX as i64 - 1), Some(1), Some(true))
+    );
+    assert_eq!(v["results"][BULK_UPDATE_MAX - 1]["error"]["code"], "CONFLICT", "{}", v["results"][BULK_UPDATE_MAX - 1]);
+    assert_eq!(w.updates(&ids).await, BULK_UPDATE_MAX as i64 - 1, "one audit row per CI written");
+    assert_eq!(w.attribute(ids[0], "cpu_cores").await, json!(32));
+}
