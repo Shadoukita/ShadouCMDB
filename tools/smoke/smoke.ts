@@ -1206,6 +1206,26 @@ async function workflows(x: Json) {
   const cancelledRequest = (await post(`${requests}/${toCancel.requestId}/cancel`, { expectedVersion: toCancel.version, comment: 'Smoke cancel' }, 200)).json;
   check(cancelledRequest.request.status === 'cancelled', 'an administrator cancels a pending request');
 
+  // Approvals A4 (SHAA-2643): delegations, self-service and administrative; an administrator never names themselves.
+  console.log('\n# Workflow approval delegations');
+  const delegations = '/api/v1/me/approval-delegations';
+  const adminDelegations = '/api/v1/admin/approval-delegations';
+  const window = { startsAt: new Date(Date.now() - 60_000).toISOString(), endsAt: new Date(Date.now() + 86_400_000).toISOString() };
+  const mine = (await post(delegations, { delegateUserId: approver.id, ...window, reason: 'Smoke leave' })).json;
+  check(mine.status === 'active' && mine.principal.id === adminMe.user.id && mine.delegate.id === approver.id, 'a user delegates their approvals');
+  check((await get(delegations)).json.data.some((d: Json) => d.id === mine.id), 'the principal lists their delegations');
+  check((await post(`${delegations}/${mine.id}/revoke`, undefined, 200)).json.status === 'revoked', 'the principal revokes a delegation');
+  await post(`${delegations}/${mine.id}/revoke`, undefined, 409);
+  await post(delegations, { delegateUserId: adminMe.user.id, ...window }, 400);
+  const deputyPassword = `wf-deputy-${RUN}-password`;
+  const deputy = (await post('/api/v1/admin/users', { username: `smoke-wf-deputy-${RUN}`, displayName: 'Smoke deputy', email: `wf-deputy-${RUN}@example.com`, password: deputyPassword })).json;
+  const selfNamed = await post(adminDelegations, { principalUserId: approver.id, delegateUserId: adminMe.user.id, ...window }, 400);
+  check(selfNamed.json?.error?.details?.[0]?.code === 'creator', 'an administrator cannot name themselves as delegate');
+  const assigned = (await post(adminDelegations, { principalUserId: approver.id, delegateUserId: deputy.id, ...window })).json;
+  check(assigned.createdBy.id === adminMe.user.id && assigned.principal.id === approver.id, 'an administrator delegates for another user');
+  check((await get(`${adminDelegations}?principal=${approver.id}`)).json.data.some((d: Json) => d.id === assigned.id), 'administrators list delegations');
+  check((await post(`${adminDelegations}/${assigned.id}/revoke`, undefined, 200)).json.status === 'revoked', 'an administrator revokes a delegation');
+
   // A second draft, discarded; then the published version is retired.
   await put(`${base}/${def.id}/draft`, graph);
   await del(`${base}/${def.id}/draft`);
