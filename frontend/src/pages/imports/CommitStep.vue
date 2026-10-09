@@ -85,7 +85,7 @@ async function download() {
     <div class="panel-header"><h2 id="step-heading" tabindex="-1">{{ t("imports.step.import") }}</h2></div>
     <div class="panel-body">
       <p v-if="job.status === 'queued' && job.phase === 'commit'" role="status">
-        {{ t("imports.queued", { n: job.progress.queuePosition ?? 1 }) }}
+        {{ t("imports.step.waiting", { n: job.progress.queuePosition ?? 1 }) }}
       </p>
       <template v-if="job.status === 'committing'">
         <ImportProgress
@@ -110,11 +110,11 @@ async function download() {
           <RouterLink class="btn btn-primary" :to="inventoryTo">{{ t("imports.commit.openInventory") }}</RouterLink>
           <RouterLink v-if="session.can('audit.view')" class="btn" :to="auditTo">{{ t("imports.commit.audit") }}</RouterLink>
           <button v-if="hasReport" type="button" class="btn" :disabled="downloading" @click="download">
-            {{ downloading ? t("imports.report.preparing") : t("imports.report.download") }}
+            {{ downloading ? t("imports.check.reportPreparing") : t("imports.check.reportDownload") }}
           </button>
           <RouterLink v-if="!readOnly" class="btn btn-link" to="/imports/new">{{ t("imports.commit.another") }}</RouterLink>
         </div>
-        <ErrorAlert v-if="downloadError" :error="downloadError" :title="t('imports.report.failed')" />
+        <ErrorAlert v-if="downloadError" :error="downloadError" :title="t('imports.check.reportFailed')" />
       </template>
     </div>
   </section>
