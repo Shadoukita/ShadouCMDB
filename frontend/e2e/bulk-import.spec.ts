@@ -94,7 +94,7 @@ test("the administrator turns import on under Administration › Import, and the
   const toggle = page.getByLabel("Bulk import enabled");
   await expect(toggle).not.toBeChecked();
   await toggle.check();
-  await page.getByRole("button", { name: "Save" }).click();
+  await page.getByRole("button", { name: "Save changes" }).click();
   await expect(page.getByText("Bulk import is turned on.")).toBeVisible();
   await page.reload();
   await expect(page.getByLabel("Bulk import enabled")).toBeChecked();

@@ -5,19 +5,25 @@ import { RouterLink } from "vue-router";
 import { useImportSettings, useUpdateImportSettings } from "../../api/imports";
 import Breadcrumbs from "../../components/Breadcrumbs.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
+import Icon from "../../components/Icon.vue";
 import LoadingState from "../../components/LoadingState.vue";
+import SaveBar from "../../components/SaveBar.vue";
+import { formatNumber, t, tAround } from "../../i18n";
 import { useDocumentTitle } from "../../lib/composables";
 import { formatBytes } from "../../lib/format";
+import { useFlashStore } from "../../stores/flash";
 
 /**
  * Administration › Import (Administrator): the instance switch for bulk import. It is off after installation
  * (D4); turning it on or off is audited. The server configuration can forbid import altogether
  * (IMPORT_ALLOWED=false), and then the switch is locked off. The limits are server configuration too and only
- * shown here.
+ * shown here. The page has the CI page's head band without tabs and saves through the shared save bar
+ * (design §2.7, audit A3), like every other administration edit page.
  */
-useDocumentTitle("Import");
+useDocumentTitle(() => t("admin.section.import"));
 const settings = useImportSettings();
 const update = useUpdateImportSettings();
+const flash = useFlashStore();
 
 const enabled = ref(false);
 watch(
@@ -27,75 +33,94 @@ watch(
 );
 const locked = computed(() => !!settings.data.value?.locked);
 const dirty = computed(() => !!settings.data.value && enabled.value !== settings.data.value.enabled);
-const saved = ref<string | null>(null);
+const intro = computed(() => tAround("importSettings.intro", "link"));
+
+function discard() {
+  enabled.value = !!settings.data.value?.enabled;
+}
 
 async function save() {
-  saved.value = null;
+  if (!dirty.value) return;
   try {
     const s = await update.mutateAsync(enabled.value);
-    saved.value = s.enabled ? "Bulk import is turned on." : "Bulk import is turned off.";
+    flash.show(s.enabled ? t("importSettings.savedOn") : t("importSettings.savedOff"));
   } catch {
-    // shown by the ErrorAlert below
+    // shown by the ErrorAlert above the form
   }
 }
 </script>
 
 <template>
-  <Breadcrumbs :items="adminCrumbs('import')" />
-  <div class="page-header">
-    <div class="title"><h1>Import</h1></div>
+  <div class="record-head record-head-plain">
+    <Breadcrumbs :items="adminCrumbs('import')" />
+    <div class="page-header record-header">
+      <div class="record-heading">
+        <span class="class-tile class-tile-lg" aria-hidden="true"><Icon name="upload" class="class-icon" /></span>
+        <div class="record-title">
+          <div class="title">
+            <h1>{{ t("admin.section.import") }}</h1>
+          </div>
+          <p v-if="settings.data.value" class="record-meta" data-testid="record-meta">
+            <span v-if="locked" class="badge warn"><span class="status-dot" aria-hidden="true" />{{ t("importSettings.status.locked") }}</span>
+            <span v-else :class="['badge', settings.data.value.enabled ? 'ok' : 'off']"
+              ><span class="status-dot" aria-hidden="true" />{{ settings.data.value.enabled ? t("importSettings.status.on") : t("importSettings.status.off") }}</span
+            >
+            <span class="badge">{{ t("importSettings.adminOnly") }}</span>
+            <span class="record-meta-line">{{ t("importSettings.audited") }}</span>
+          </p>
+        </div>
+      </div>
+    </div>
   </div>
 
-  <LoadingState v-if="settings.isPending.value" label="Loading import settings…" />
+  <LoadingState v-if="settings.isPending.value" :label="t('imports.settingsLoading')" />
   <ErrorAlert v-else-if="settings.isError.value" :error="settings.error.value" :on-retry="() => settings.refetch()" />
   <template v-else-if="settings.data.value">
-    <section class="panel">
-      <div class="panel-header"><h2>Bulk import</h2></div>
-      <form class="panel-body" @submit.prevent="save">
-        <p>
-          Bulk import creates and updates configuration items from CSV and Excel files. Users also need the
-          <strong>Bulk import</strong> permission (<code>cis.import</code>) in one of their
-          <RouterLink to="/admin/profiles">permission profiles</RouterLink>, and every row is still limited by their
-          class rights. Turning import on or off is recorded in the audit log.
-        </p>
-        <div v-if="locked" class="alert" role="status">
-          <strong>Bulk import is disabled by the server configuration.</strong>
-          The server sets <code>IMPORT_ALLOWED=false</code>, so import stays off whatever is set here. Ask the operator of
-          this installation to change it.
+    <ErrorAlert v-if="update.isError.value" :error="update.error.value" :title="t('importSettings.notSaved')" />
+    <form id="import-settings-form" class="stack" :aria-label="t('importSettings.formLabel')" @submit.prevent="save">
+      <section class="panel" aria-labelledby="import-switch-title">
+        <div class="panel-header"><h2 id="import-switch-title">{{ t("importSettings.switch.title") }}</h2></div>
+        <div class="panel-body stack">
+          <p>
+            {{ intro[0] }}<RouterLink to="/admin/profiles">{{ t("importSettings.introLink") }}</RouterLink>{{ intro[1] }}
+          </p>
+          <div v-if="locked" class="alert alert-warn" role="status">
+            <strong>{{ t("imports.off.locked") }}</strong>
+            {{ t("importSettings.lockedBody") }}
+          </div>
+          <div class="field">
+            <label class="checkbox-row">
+              <input v-model="enabled" type="checkbox" :disabled="locked || update.isPending.value" aria-describedby="import-enabled-hint" />
+              {{ t("importSettings.switch.label") }}
+            </label>
+            <span id="import-enabled-hint" class="hint">{{ t("importSettings.switch.hint") }}</span>
+          </div>
         </div>
-        <label class="checkbox-row">
-          <input v-model="enabled" type="checkbox" :disabled="locked || update.isPending.value" aria-describedby="import-enabled-hint" />
-          Bulk import enabled
-        </label>
-        <p id="import-enabled-hint" class="muted">
-          When off, nobody can upload, map, check or commit a file. Users can still see, cancel and delete their
-          remaining imports, so uploaded files can be removed.
-        </p>
-        <ErrorAlert v-if="update.isError.value" :error="update.error.value" title="The setting was not saved" />
-        <p v-if="saved && !dirty" class="alert alert-success" role="status">{{ saved }}</p>
-        <div>
-          <button type="submit" class="btn btn-primary" :disabled="!dirty || locked || update.isPending.value">
-            {{ update.isPending.value ? "Saving…" : "Save" }}
-          </button>
-        </div>
-      </form>
-    </section>
+      </section>
 
-    <section class="panel" style="margin-top: var(--sp-4)">
-      <div class="panel-header"><h2>Limits</h2></div>
-      <div class="panel-body">
-        <p class="muted">Set in the server configuration (see the deployment guide); shown here for reference.</p>
-        <dl class="props">
-          <dt>Largest file</dt>
-          <dd>{{ formatBytes(settings.data.value.limits.maxFileBytes) }}</dd>
-          <dt>Rows per file</dt>
-          <dd>{{ settings.data.value.limits.maxRows.toLocaleString() }}</dd>
-          <dt>Columns per file</dt>
-          <dd>{{ settings.data.value.limits.maxColumns.toLocaleString() }}</dd>
-          <dt>Characters per cell</dt>
-          <dd>{{ settings.data.value.limits.maxCellChars.toLocaleString() }}</dd>
-        </dl>
-      </div>
-    </section>
+      <section class="panel" aria-labelledby="import-limits-title">
+        <div class="panel-header"><h2 id="import-limits-title">{{ t("importSettings.limits.title") }}</h2></div>
+        <div class="panel-body stack">
+          <p class="muted">{{ t("importSettings.limits.hint") }}</p>
+          <dl class="props">
+            <dt>{{ t("importSettings.limits.file") }}</dt>
+            <dd class="mono">{{ formatBytes(settings.data.value.limits.maxFileBytes) }}</dd>
+            <dt>{{ t("importSettings.limits.rows") }}</dt>
+            <dd class="mono">{{ formatNumber(settings.data.value.limits.maxRows) }}</dd>
+            <dt>{{ t("importSettings.limits.columns") }}</dt>
+            <dd class="mono">{{ formatNumber(settings.data.value.limits.maxColumns) }}</dd>
+            <dt>{{ t("importSettings.limits.cell") }}</dt>
+            <dd class="mono">{{ formatNumber(settings.data.value.limits.maxCellChars) }}</dd>
+          </dl>
+        </div>
+      </section>
+    </form>
+
+    <SaveBar :label="t('record.save.region')" :dirty="dirty">
+      <button v-if="dirty" type="button" class="btn" :disabled="update.isPending.value" @click="discard">{{ t("record.save.discard") }}</button>
+      <button type="submit" form="import-settings-form" class="btn btn-primary" :disabled="!dirty || locked || update.isPending.value">
+        {{ update.isPending.value ? t("common.saving") : t("common.saveChanges") }}
+      </button>
+    </SaveBar>
   </template>
 </template>
