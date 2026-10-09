@@ -714,42 +714,160 @@ async fn loops_are_broken_per_instance_and_on_echo() {
     db.drop().await;
 }
 
-/// A transition request's `X-ShadouCMDB-Cause` is recorded on its event.
-#[tokio::test]
-async fn the_cause_header_is_recorded_on_the_transition_event() {
+/// Runs transition `body` on `instance` as `creds`, claiming `cause`.
+async fn transition_caused_by(w: &World, creds: &Creds, instance: &str, body: Value, cause: Uuid) -> Value {
     use axum::body::Body;
     use axum::http::Request;
     use tower::ServiceExt;
 
+    let mut req = Request::builder()
+        .method("POST")
+        .uri(format!("{RUN}/{instance}/transitions"))
+        .header("content-type", "application/json")
+        .header("x-shadoucmdb-cause", cause.to_string());
+    if let Some(c) = &creds.cookie {
+        req = req.header("cookie", c).header("x-csrf-token", creds.csrf.clone().unwrap());
+    }
+    if let Some(b) = &creds.bearer {
+        req = req.header("authorization", format!("Bearer {b}"));
+    }
+    let res = w.app.clone().oneshot(req.body(Body::from(body.to_string())).unwrap()).await.unwrap();
+    let status = res.status().as_u16();
+    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let v: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    assert_eq!(status, 200, "{v}");
+    v
+}
+
+/// The last event's recorded cause.
+async fn last_cause(pool: &PgPool) -> Option<Uuid> {
+    sqlx::query_scalar("SELECT caused_by_delivery_id FROM workflow_instance_events ORDER BY id DESC LIMIT 1")
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// GH#845: a made-up `X-ShadouCMDB-Cause` is not recorded, so it cannot
+/// silence an instance's actions. A session's cause is never taken, a token's
+/// only when it names a webhook delivery sent for that instance within
+/// `WORKFLOW_ACTIONS_MAX_AGE_HOURS`.
+#[tokio::test]
+async fn only_a_tokens_cause_naming_a_sent_webhook_delivery_is_recorded() {
     let Some(db) = scratch::database("workflow_actions_cause").await else { return };
     let w = world(&db).await;
+    // A loop, so one instance can take a dozen transitions.
+    let graph = json!({
+        "initialState": "planned",
+        "states": [
+            { "key": "planned", "name": "Planned", "category": "open", "stateValue": "planned" },
+            { "key": "approved", "name": "Approved", "category": "active", "stateValue": "approved" },
+            { "key": "done", "name": "In production", "category": "done", "terminal": true, "stateValue": "live" }
+        ],
+        "transitions": [
+            { "key": "approve", "name": "Approve", "from": "planned", "to": "approved" },
+            { "key": "rework", "name": "Rework", "from": "approved", "to": "planned" },
+            { "key": "go_live", "name": "Go live", "from": "approved", "to": "done" }
+        ]
+    });
+    let draft = w.ok("PUT", &format!("{DEFS}/{}/draft", w.definition), graph).await;
+    w.ok(
+        "POST",
+        &format!("{DEFS}/{}/draft/publish", w.definition),
+        json!({ "expectedDraftChecksum": draft["checksum"], "changeNote": "loop" }),
+    )
+    .await;
+    let def = w.ok("GET", &format!("{DEFS}/{}", w.definition), json!(null)).await;
+    w.ok(
+        "PUT",
+        &format!("{DEFS}/{}/grants", w.definition),
+        json!({ "version": def["version"], "grants": [
+            { "transitionKey": "approve", "profiles": ["Approvers"] },
+            { "transitionKey": "rework", "profiles": ["Approvers"] },
+            { "transitionKey": "go_live", "profiles": ["Approvers"] }
+        ] }),
+    )
+    .await;
+    let version = version(&w).await;
+    let to_admin = json!([{ "source": "user", "user": "admin" }]);
+    w.ok(
+        "PUT",
+        &actions(&w),
+        json!({ "version": version, "actions": [
+            inbox("on_approve", "transition", Some("approve"), to_admin.clone()),
+            inbox("on_rework", "transition", Some("rework"), to_admin),
+        ] }),
+    )
+    .await;
     let ci = w.ci(w.server).await;
     let (status, v) = w.start(&w.admin, ci).await;
     assert_eq!(status, 201, "{v}");
     let instance = v["instance"]["id"].as_str().unwrap().to_owned();
-    w.ok("PATCH", &format!("/api/v1/configuration-items/{ci}"), json!({ "attributes": { "environment": "prod" } }))
-        .await;
-    let cause = Uuid::new_v4();
-    let body =
-        json!({ "transitionKey": "approve", "expectedVersion": 1, "fields": { "owner_team": "ops" }, "comment": "x" });
-    let Creds { cookie, csrf, .. } = w.admin.clone();
-    let req = Request::builder()
-        .method("POST")
-        .uri(format!("{RUN}/{instance}/transitions"))
-        .header("cookie", cookie.unwrap())
-        .header("x-csrf-token", csrf.unwrap())
-        .header("content-type", "application/json")
-        .header("x-shadoucmdb-cause", cause.to_string())
-        .body(Body::from(body.to_string()))
-        .unwrap();
-    let res = w.app.clone().oneshot(req).await.unwrap();
-    assert_eq!(res.status().as_u16(), 200);
-    let recorded: Vec<Option<Uuid>> =
-        sqlx::query_scalar("SELECT caused_by_delivery_id FROM workflow_instance_events ORDER BY id")
+    let mut expected = v["instance"]["version"].as_i64().unwrap();
+    let step = |i: usize| json!({ "transitionKey": if i.is_multiple_of(2) { "approve" } else { "rework" } });
+
+    // A signed-in user sends a random cause on 12 transitions: none is recorded, nothing is suppressed.
+    for i in 0..12 {
+        let mut body = step(i);
+        body["expectedVersion"] = json!(expected);
+        let v = transition_caused_by(&w, &w.admin, &instance, body, Uuid::new_v4()).await;
+        expected = v["version"].as_i64().unwrap();
+        assert_eq!(last_cause(&w.pool).await, None, "transition {}", i + 1);
+    }
+    let runs: Vec<(String, Option<String>)> =
+        sqlx::query_as("SELECT status, status_reason FROM workflow_action_runs ORDER BY id")
             .fetch_all(&w.pool)
             .await
             .unwrap();
-    assert_eq!(recorded, [None, Some(cause)], "start, then the transition");
+    assert_eq!(runs.len(), 12, "{runs:?}");
+    assert!(runs.iter().all(|r| r.0 == "pending"), "nothing suppressed: {runs:?}");
+
+    // An API token: a random id, and a delivery of another instance, are not taken.
+    let (_, robot) = w.user("robot", &[w.approvers]).await;
+    let token = w.token(robot, w.approvers).await;
+    let webhook_delivery = |instance: Uuid, attempts: i16, age: &str| {
+        let pool = w.pool.clone();
+        let age = age.to_owned();
+        async move {
+            let run: i64 = sqlx::query_scalar(
+                "INSERT INTO workflow_action_runs (event_id, action_key, kind, definition_id, instance_id, ci_id, status)
+                 VALUES (0, 'hook', 'webhook', gen_random_uuid(), $1, gen_random_uuid(), 'fanned_out') RETURNING id",
+            )
+            .bind(instance)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            sqlx::query_scalar::<_, Uuid>(sqlx::AssertSqlSafe(format!(
+                "INSERT INTO workflow_action_deliveries (run_id, recipient_key, status, attempts, created_at)
+                 VALUES ($1, 'endpoint:x', 'delivered', $2, now() - interval '{age}') RETURNING id"
+            )))
+            .bind(run)
+            .bind(attempts)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    let this: Uuid = instance.parse().unwrap();
+    let other = webhook_delivery(Uuid::new_v4(), 1, "1 minute").await;
+    let unsent = webhook_delivery(this, 0, "1 minute").await;
+    let stale = webhook_delivery(this, 1, "25 hours").await;
+    let sent = webhook_delivery(this, 1, "1 minute").await;
+    for (i, (cause, recorded)) in
+        [(Uuid::new_v4(), None), (other, None), (unsent, None), (stale, None), (sent, Some(sent))]
+            .into_iter()
+            .enumerate()
+    {
+        let mut body = step(i);
+        body["expectedVersion"] = json!(expected);
+        let v = transition_caused_by(&w, &token, &instance, body, cause).await;
+        expected = v["version"].as_i64().unwrap();
+        assert_eq!(last_cause(&w.pool).await, recorded, "case {i}");
+    }
+    // The same real delivery, claimed by a session, is not taken either.
+    let mut body = step(5);
+    body["expectedVersion"] = json!(expected);
+    transition_caused_by(&w, &w.admin, &instance, body, sent).await;
+    assert_eq!(last_cause(&w.pool).await, None);
     db.drop().await;
 }
 
