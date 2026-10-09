@@ -57,6 +57,18 @@ test("the CI record and its Impact tab are German", async ({ page }) => {
   await expect(page.locator("main")).toContainText("Allgemein");
   await expectNoEnglish(page);
 
+  // The delete confirmation keeps the class name as it is, and says what happens, in German.
+  await page.getByRole("button", { name: "Weitere Aktionen" }).click();
+  await page.getByRole("menuitem", { name: "Löschen" }).click();
+  const dialog = page.getByRole("dialog", { name: `Server „${ci.label}“ löschen?` });
+  await expect(dialog).toContainText("wird aus dem Inventar entfernt");
+  await expect(dialog).toContainText("Es hat keine Beziehungen, daher ist kein anderes CI betroffen.");
+  await expect(dialog.getByRole("button", { name: "CI löschen" })).toBeVisible();
+  const text = await dialog.innerText();
+  expect(ENGLISH.filter((s) => asWords(s).test(text))).toEqual([]);
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+
   await page.goto(`/cis/${ci.id}/impact`);
   await expect(page.getByRole("radiogroup", { name: "Richtung" })).toBeVisible();
   await expect(page.locator(".impact-summary, .empty-state").first()).toBeVisible();

@@ -6,6 +6,7 @@ import CiStateBadge from "../../components/CiStateBadge.vue";
 import ClassBadge from "../../components/ClassBadge.vue";
 import CriticalityBadge from "../../components/CriticalityBadge.vue";
 import Icon from "../../components/Icon.vue";
+import { t } from "../../i18n";
 import { isHostLike } from "../../lib/format";
 import { parentIndex, visibleRows, type TreeRow } from "../../lib/graphTree";
 import type { TrailStep } from "../../lib/trail";
@@ -115,7 +116,7 @@ function onKey(e: KeyboardEvent, r: TreeRow) {
           type="button"
           class="tree-toggle"
           tabindex="-1"
-          :aria-label="collapsed.has(r.key) ? `Expand ${r.node.label}` : `Collapse ${r.node.label}`"
+          :aria-label="t(collapsed.has(r.key) ? 'record.tree.expand' : 'record.tree.collapse', { name: r.node.label })"
           @click="toggle(r)"
         >
           <Icon :name="collapsed.has(r.key) ? 'chevron-right' : 'chevron-down'" :size="14" />
@@ -135,7 +136,7 @@ function onKey(e: KeyboardEvent, r: TreeRow) {
         <span class="tree-class" dir="auto">{{ r.node.className }}</span>
         <CriticalityBadge v-if="r.criticality !== undefined" :value="r.criticality" />
         <CiStateBadge :ci="r.node" />
-        <span v-if="r.repeat" class="tree-note">(shown above)</span>
+        <span v-if="r.repeat" class="tree-note">{{ t("record.tree.shownAbove") }}</span>
         <span v-if="r.note" class="tree-note">{{ r.note }}</span>
         <slot name="actions" :row="r" :tabindex="r.key === active ? 0 : -1" />
       </li>
