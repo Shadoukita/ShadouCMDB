@@ -16,6 +16,7 @@ import {
   recipientIdentity,
   recipientLabel,
   triggerHasTransition,
+  unplacedProblems,
   type ActionProblem,
   type ClosedStatus,
   type DraftAction,
@@ -49,9 +50,13 @@ const at = (field: string) => props.problems.filter((p) => p.path === `actions[$
 const errorAt = (field: string) => at(field).find((p) => p.severity === "error")?.message;
 const warningsAt = (field: string) => at(field).filter((p) => p.severity === "warning");
 /** Problems about the action as a whole, and about fields this form has no control for. */
-const SHOWN = /^\.(key|name|kind|trigger|transition|endpoint|recipients(\[\d+\](\..*)?)?|settings\.(content|statuses|excludeActor|includeAttributes(\[\d+\])?|subject\.(en|de)|intro\.(en|de)))$/;
-const otherProblems = computed(() => props.problems.filter((p) => !SHOWN.test(p.path.slice(`actions[${props.index}]`.length))));
+const otherProblems = computed(() => unplacedProblems(props.problems, props.index));
 const describedBy = (field: string, hint?: string) => (errorAt(field) ? `${fid(field)}-err` : hint);
+/** A subject or intro field: its own error or the placeholder hint, and the warnings about both languages. */
+const textDescribedBy = (text: "subject" | "intro", lang: "en" | "de") =>
+  [errorAt(`settings.${text}.${lang}`) ? `${fid(`${text}-${lang}`)}-err` : fid("placeholders"), warningsAt(`settings.${text}`).length && `${fid(text)}-warn`]
+    .filter(Boolean)
+    .join(" ");
 
 // The key: kept as typed until it is valid, like the transition's key.
 const keyText = ref(props.action.key);
@@ -259,10 +264,14 @@ function toggleInclude(key: string, on: boolean) {
             autocomplete="off"
             :lang="lang"
             :aria-invalid="!!errorAt(`settings.subject.${lang}`)"
-            :aria-describedby="errorAt(`settings.subject.${lang}`) ? `${fid(`subject-${lang}`)}-err` : `${fid('placeholders')}`"
+            :aria-describedby="textDescribedBy('subject', lang)"
           />
           <span v-if="errorAt(`settings.subject.${lang}`)" :id="`${fid(`subject-${lang}`)}-err`" class="error">{{ errorAt(`settings.subject.${lang}`) }}</span>
           <span v-for="(w, k) in warningsAt(`settings.subject.${lang}`)" :key="k" class="hint">{{ w.message }}</span>
+        </div>
+        <!-- Warnings about the subject in both languages: under the pair, on a row of their own. -->
+        <div v-if="warningsAt('settings.subject').length" :id="`${fid('subject')}-warn`" class="field wide" data-testid="wf-action-subject-warn">
+          <span v-for="(w, k) in warningsAt('settings.subject')" :key="k" class="hint">{{ w.message }}</span>
         </div>
         <div v-for="lang in ['en', 'de'] as const" :key="`i-${lang}`" class="field">
           <label :for="fid(`intro-${lang}`)">{{ t(`wfActions.field.intro.${lang}`) }}</label>
@@ -273,10 +282,13 @@ function toggleInclude(key: string, on: boolean) {
             maxlength="2000"
             :lang="lang"
             :aria-invalid="!!errorAt(`settings.intro.${lang}`)"
-            :aria-describedby="errorAt(`settings.intro.${lang}`) ? `${fid(`intro-${lang}`)}-err` : `${fid('placeholders')}`"
+            :aria-describedby="textDescribedBy('intro', lang)"
           />
           <span v-if="errorAt(`settings.intro.${lang}`)" :id="`${fid(`intro-${lang}`)}-err`" class="error">{{ errorAt(`settings.intro.${lang}`) }}</span>
           <span v-for="(w, k) in warningsAt(`settings.intro.${lang}`)" :key="k" class="hint">{{ w.message }}</span>
+        </div>
+        <div v-if="warningsAt('settings.intro').length" :id="`${fid('intro')}-warn`" class="field wide" data-testid="wf-action-intro-warn">
+          <span v-for="(w, k) in warningsAt('settings.intro')" :key="k" class="hint">{{ w.message }}</span>
         </div>
       </div>
       <p :id="fid('placeholders')" class="hint no-margin">

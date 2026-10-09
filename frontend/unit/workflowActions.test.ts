@@ -21,6 +21,7 @@ import {
   setTargetRefusal,
   sourcesFor,
   transitionChoices,
+  unplacedProblems,
   type DraftAction,
   type WorkflowAction,
 } from "../src/lib/workflowActions";
@@ -209,6 +210,21 @@ describe("notification actions", () => {
     assert.deepEqual(problemsOfAction(problems, 1), [problems[0], problems[2]]);
     assert.deepEqual(problemsOfAction(problems, 1, "recipients"), [problems[0]]);
     assert.deepEqual(generalProblems(problems), [problems[3]]);
+  });
+
+  test("the e-mail lint's subject and intro warnings land on their fields, not above the editor (GH#851)", () => {
+    // The paths the backend lint gives missing_locale and minimal_placeholder: no language suffix.
+    const problems = [
+      { path: "actions[0].settings.subject", code: "missing_locale" },
+      { path: "actions[0].settings.intro", code: "minimal_placeholder" },
+      { path: "actions[0].settings.subject.de", code: "unknown_placeholder" },
+      { path: "actions[0].settings.unknown", code: "unknown_setting" },
+      { path: "actions[0]", code: "too_many_actions" },
+    ];
+    assert.deepEqual(
+      unplacedProblems(problems, 0).map((p) => p.code),
+      ["unknown_setting", "too_many_actions"],
+    );
   });
 
   test("a recipient is the same whatever its display name", () => {

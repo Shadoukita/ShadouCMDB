@@ -425,6 +425,18 @@ export function problemsOfAction<P extends { path: string }>(problems: P[], i: n
   return problems.filter((p) => p.path === prefix || p.path.startsWith(`${prefix}.`) || p.path.startsWith(`${prefix}[`));
 }
 
+/**
+ * Paths, after `actions[i]`, the action editor shows next to a control. The e-mail lint names a
+ * subject or intro as a whole (`settings.subject`: one language only, CI placeholders with minimal
+ * content); the client-side checks name one language of it (`settings.subject.en`).
+ */
+const ON_A_FIELD = /^\.(key|name|kind|trigger|transition|endpoint|recipients(\[\d+\](\..*)?)?|settings\.(content|statuses|excludeActor|includeAttributes(\[\d+\])?|(subject|intro)(\.(en|de))?))$/;
+
+/** Problems of action `i` no control of its editor shows: about the action as a whole, or a field without a control. */
+export function unplacedProblems<P extends { path: string }>(problems: P[], i: number): P[] {
+  return problemsOfAction(problems, i).filter((p) => !ON_A_FIELD.test(p.path.slice(`actions[${i}]`.length)));
+}
+
 /** Problems about no action in particular. */
 export function generalProblems<P extends { path: string }>(problems: P[]): P[] {
   return problems.filter((p) => !/^actions\[\d+\]/.test(p.path));
