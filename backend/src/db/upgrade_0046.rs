@@ -44,8 +44,8 @@ INSERT INTO audit_log (actor_type, actor_name, action, entity_type, entity_id, o
   ('system', 'test', 'export', 'config', '00000000-0000-0000-0000-000000000000', NULL, '{\"kind\": \"config\"}');
 ";
 
-/// T8: the database accepts exactly the rights the server knows. Kept in the
-/// test of the latest migration that changes the list.
+/// T8: the database accepts exactly the rights the server knows. Called from
+/// the test of the latest migration that changes the list (0073).
 pub(crate) async fn assert_permissions_match(pool: &PgPool) {
     let known: BTreeSet<String> = GlobalPermission::ALL.iter().map(|p| p.as_str().to_owned()).collect();
     let def =
@@ -253,7 +253,12 @@ async fn modellers_gain_workflows_manage_and_the_audit_actions_are_validated_apa
     for c in ["audit_log_action_valid", "audit_log_values_present"] {
         assert!(validated(pool, c).await, "{c} is validated by 0047");
     }
-    assert_permissions_match(pool).await;
+    // T8 (exact match with `GlobalPermission::ALL`) runs in the test of 0073,
+    // which extends the list again.
+    let def =
+        constraint_def(pool, "permission_profile_global_permissions", "permission_profile_global_permissions_valid")
+            .await;
+    assert!(literals(&def).contains("workflows.manage"), "{def}");
 
     let actions = literals(&constraint_def(pool, "audit_log", "audit_log_action_valid").await);
     for a in WORKFLOW_ACTIONS {

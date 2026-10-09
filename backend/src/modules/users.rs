@@ -103,6 +103,16 @@ impl SignInStatus {
     }
 }
 
+/// The language of what the server writes to a user (e-mail); the web UI
+/// keeps its own choice in the browser and stores it here
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, sqlx::Type)]
+#[serde(rename_all = "lowercase")]
+#[sqlx(type_name = "text", rename_all = "lowercase")]
+pub enum Locale {
+    En,
+    De,
+}
+
 /// The identity provider an account signs in through
 #[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

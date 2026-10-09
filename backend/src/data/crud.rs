@@ -408,6 +408,39 @@ pub enum AuditAction {
     #[serde(rename = "workflow.approval_refresh")]
     #[sqlx(rename = "workflow.approval_refresh")]
     WorkflowApprovalRefresh,
+    /// A webhook endpoint's signing secret was replaced; `graceHours` the old one stays valid (never the secret).
+    #[serde(rename = "webhook_endpoint.rotate_secret")]
+    #[sqlx(rename = "webhook_endpoint.rotate_secret")]
+    WebhookEndpointRotateSecret,
+    /// A webhook endpoint was suspended (actor `system` for the circuit breaker), with the reason.
+    #[serde(rename = "webhook_endpoint.suspend")]
+    #[sqlx(rename = "webhook_endpoint.suspend")]
+    WebhookEndpointSuspend,
+    /// A suspended or paused webhook endpoint was resumed.
+    #[serde(rename = "webhook_endpoint.resume")]
+    #[sqlx(rename = "webhook_endpoint.resume")]
+    WebhookEndpointResume,
+    /// A workflow action delivery gave up (actor `system`): run, action, kind, CI, reason, attempts; no address.
+    #[serde(rename = "workflow.action_dead")]
+    #[sqlx(rename = "workflow.action_dead")]
+    WorkflowActionDead,
+    /// Dead workflow action deliveries were queued again by an administrator.
+    #[serde(rename = "workflow.action_retry")]
+    #[sqlx(rename = "workflow.action_retry")]
+    WorkflowActionRetry,
+    /// Dead workflow action deliveries were discarded by an administrator.
+    #[serde(rename = "workflow.action_discard")]
+    #[sqlx(rename = "workflow.action_discard")]
+    WorkflowActionDiscard,
+    /// Workflow action runs were suppressed (queue full, per-instance limit, echo loop; actor `system`), at most
+    /// one entry per minute per workflow and reason.
+    #[serde(rename = "workflow.action_suppressed")]
+    #[sqlx(rename = "workflow.action_suppressed")]
+    WorkflowActionSuppressed,
+    /// A test e-mail was sent to the caller's own address.
+    #[serde(rename = "mail.test")]
+    #[sqlx(rename = "mail.test")]
+    MailTest,
 }
 
 impl AuditAction {
@@ -447,6 +480,14 @@ impl AuditAction {
             AuditAction::WorkflowApprovalOverdue => "workflow.approval_overdue",
             AuditAction::BackupRestore => "backup.restore",
             AuditAction::WorkflowApprovalRefresh => "workflow.approval_refresh",
+            AuditAction::WebhookEndpointRotateSecret => "webhook_endpoint.rotate_secret",
+            AuditAction::WebhookEndpointSuspend => "webhook_endpoint.suspend",
+            AuditAction::WebhookEndpointResume => "webhook_endpoint.resume",
+            AuditAction::WorkflowActionDead => "workflow.action_dead",
+            AuditAction::WorkflowActionRetry => "workflow.action_retry",
+            AuditAction::WorkflowActionDiscard => "workflow.action_discard",
+            AuditAction::WorkflowActionSuppressed => "workflow.action_suppressed",
+            AuditAction::MailTest => "mail.test",
         }
     }
 }

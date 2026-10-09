@@ -41,10 +41,13 @@ pub enum GlobalPermission {
     /// Design, publish and retire workflows, edit who may run their transitions, and migrate or force instances
     #[serde(rename = "workflows.manage")]
     WorkflowsManage,
+    /// Create, edit and delete webhook endpoints and the webhook host allowlist (destinations outside the CMDB)
+    #[serde(rename = "webhooks.manage")]
+    WebhooksManage,
 }
 
 impl GlobalPermission {
-    pub const ALL: [GlobalPermission; 9] = [
+    pub const ALL: [GlobalPermission; 10] = [
         GlobalPermission::UsersManage,
         GlobalPermission::ProfilesManage,
         GlobalPermission::DatamodelManage,
@@ -54,6 +57,7 @@ impl GlobalPermission {
         GlobalPermission::CisImport,
         GlobalPermission::ViewsShare,
         GlobalPermission::WorkflowsManage,
+        GlobalPermission::WebhooksManage,
     ];
 
     /// The value stored in permission_profile_global_permissions.permission.
@@ -68,6 +72,7 @@ impl GlobalPermission {
             GlobalPermission::CisImport => "cis.import",
             GlobalPermission::ViewsShare => "views.share",
             GlobalPermission::WorkflowsManage => "workflows.manage",
+            GlobalPermission::WebhooksManage => "webhooks.manage",
         }
     }
 

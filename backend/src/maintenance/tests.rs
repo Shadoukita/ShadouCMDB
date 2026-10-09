@@ -821,6 +821,194 @@ async fn approvals_survive_backup_and_restore_and_go_with_a_factory_reset() {
     b.drop().await;
 }
 
+/// Workflow actions and their outbox (SHAA-2731): a backup holds every row, a
+/// restore brings them back, but sends nothing again: what was still to be
+/// sent is cancelled (runs) or dead (deliveries) with reason `restored`, and
+/// every webhook endpoint is suspended with reason `restored`. A factory reset
+/// empties the tables (the queue state is back to its one fresh row).
+#[tokio::test]
+async fn workflow_actions_survive_backup_and_restore_but_nothing_is_sent_again() {
+    use crate::db::upgrade_0046::{id, ok, workflow_fixture};
+    const KEPT: [&str; 6] = [
+        "workflow_transition_set_attributes",
+        "webhook_allowed_hosts",
+        "workflow_actions",
+        "workflow_action_recipients",
+        "workflow_action_rate_windows",
+        "workflow_action_queue_state",
+    ];
+    const HELD: [&str; 3] = ["webhook_endpoints", "workflow_action_runs", "workflow_action_deliveries"];
+    let Some(a) = scratch::database("workflow_actions_backup_a").await else { return };
+    let Some(b) = scratch::database("workflow_actions_backup_b").await else { return };
+    let pool = &a.pool;
+    let class = id(pool, "SELECT id FROM ci_classes WHERE system_role = 'business_service'").await;
+    let ci =
+        id(pool, &format!("INSERT INTO configuration_items (class_id, label) VALUES ('{class}', 'one') RETURNING id"))
+            .await;
+    let f = workflow_fixture(pool, "lifecycle", class, ci, None).await;
+    let def = f.definition;
+    let attribute = id(pool, "SELECT id FROM ci_attribute_definitions ORDER BY key LIMIT 1").await;
+    let draft = id(
+        pool,
+        &format!("INSERT INTO workflow_versions (definition_id, version_no, status) VALUES ('{def}', 2, 'draft') RETURNING id"),
+    )
+    .await;
+    let from = id(pool, &format!("INSERT INTO workflow_states (version_id, key, name, category) VALUES ('{draft}', 'a', 'A', 'open') RETURNING id")).await;
+    let to = id(pool, &format!("INSERT INTO workflow_states (version_id, key, name, category) VALUES ('{draft}', 'b', 'B', 'done') RETURNING id")).await;
+    let transition = id(
+        pool,
+        &format!(
+            "INSERT INTO workflow_transitions (version_id, key, name, from_state_id, to_state_id)
+             VALUES ('{draft}', 'retire', 'Retire', '{from}', '{to}') RETURNING id"
+        ),
+    )
+    .await;
+    let user = id(
+        pool,
+        "INSERT INTO users (username, display_name, password_hash, locale)
+         VALUES ('dora', 'Dora', '$argon2id$v=19$test', 'de') RETURNING id",
+    )
+    .await;
+    let endpoint = id(
+        pool,
+        "INSERT INTO webhook_endpoints (key, name, url, secret_ciphertext, secret_key_id)
+         VALUES ('itsm-prod', 'ITSM', 'https://itsm.corp.example/hook', '\\x0102', '\\x03') RETURNING id",
+    )
+    .await;
+    ok(
+        pool,
+        &format!(
+            "INSERT INTO workflow_transition_set_attributes (transition_id, position, attribute_id, value_from, value)
+               VALUES ('{transition}', 1, '{attribute}', 'literal', '\"retired\"');
+             INSERT INTO webhook_allowed_hosts (host_pattern, created_by_name) VALUES ('itsm.corp.example', 'admin');
+             INSERT INTO webhook_endpoints (key, name, url, secret_ciphertext, secret_key_id, status)
+               VALUES ('paused', 'Paused', 'https://itsm.corp.example/p', '\\x01', '\\x02', 'paused');
+             INSERT INTO workflow_actions (definition_id, key, name, kind, trigger, transition_key, endpoint_id)
+               VALUES ('{def}', 'sync', 'Sync', 'webhook', 'transition', 'finish', '{endpoint}');
+             INSERT INTO workflow_action_recipients (action_id, position, source, user_id)
+               SELECT id, 1, 'user', '{user}' FROM workflow_actions WHERE key = 'sync';
+             INSERT INTO workflow_action_rate_windows (scope, window_start, count)
+               VALUES ('endpoint:{endpoint}', date_trunc('minute', now()), 3);"
+        ),
+    )
+    .await;
+    // The next transition enqueues a run for the webhook action (the trigger),
+    // and a second run has already fanned out into one delivery of each state.
+    ok(
+        pool,
+        &format!(
+            "INSERT INTO workflow_instance_events (instance_id, kind, transition_key, from_state_key, to_state_key,
+               to_version_no, actor_type, actor_name)
+             VALUES ('{}', 'transition', 'finish', 'planned', 'done', 1, 'user', 'test')",
+            f.instance
+        ),
+    )
+    .await;
+    let fanned: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "INSERT INTO workflow_action_runs (event_id, action_key, kind, definition_id, instance_id, ci_id, status,
+           completed_at)
+         VALUES (1, 'sync', 'webhook', '{def}', '{}', '{ci}', 'fanned_out', now()) RETURNING id",
+        f.instance
+    )))
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    ok(
+        pool,
+        &format!(
+            "INSERT INTO workflow_action_deliveries (run_id, recipient_key, endpoint_id, status, status_reason, attempts,
+               lease_owner, lease_until)
+             VALUES ({fanned}, 'endpoint:1', '{endpoint}', 'pending', NULL, 1, NULL, NULL),
+                    ({fanned}, 'endpoint:2', '{endpoint}', 'sending', NULL, 2, 'worker-1', now() + interval '1 minute'),
+                    ({fanned}, 'endpoint:3', '{endpoint}', 'held', NULL, 0, NULL, NULL),
+                    ({fanned}, 'endpoint:4', '{endpoint}', 'delivered', NULL, 1, NULL, NULL),
+                    ({fanned}, 'endpoint:5', '{endpoint}', 'dead', 'http_404', 1, NULL, NULL)"
+        ),
+    )
+    .await;
+    let mut ca = a.pool.acquire().await.unwrap();
+    let mut cb = b.pool.acquire().await.unwrap();
+
+    let (buf, checked) = take_backup(&mut ca).await;
+    for (name, rows) in KEPT.iter().zip([1, 1, 1, 1, 1, 1]).chain(HELD.iter().zip([2, 2, 5])) {
+        let got = checked.header.tables.iter().find(|t| t.schema == "cmdb" && t.name == *name).map(|t| t.rows);
+        assert_eq!(got, Some(rows), "{name}");
+    }
+    let report = serial::restore(&mut cb, buf.as_slice(), &checked, true, true).await.unwrap();
+    assert_eq!((report.outbound_cancelled, report.endpoints_suspended), (4, 2));
+    for name in KEPT {
+        let table = Table::new("cmdb", name);
+        assert_eq!(fingerprint(&mut ca, &table).await, fingerprint(&mut cb, &table).await, "{name}");
+    }
+    let runs: Vec<(String, Option<String>)> =
+        sqlx::query_as("SELECT status, status_reason FROM workflow_action_runs ORDER BY id")
+            .fetch_all(&mut *cb)
+            .await
+            .unwrap();
+    assert_eq!(runs, [("cancelled".into(), Some("restored".into())), ("fanned_out".into(), None)]);
+    let deliveries: Vec<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT recipient_key, status, status_reason, lease_owner FROM workflow_action_deliveries ORDER BY recipient_key",
+    )
+    .fetch_all(&mut *cb)
+    .await
+    .unwrap();
+    let dead = |k: &str| (k.to_owned(), "dead".to_owned(), Some("restored".to_owned()), None);
+    assert_eq!(
+        deliveries,
+        [
+            dead("endpoint:1"),
+            dead("endpoint:2"),
+            dead("endpoint:3"),
+            ("endpoint:4".into(), "delivered".into(), None, None),
+            ("endpoint:5".into(), "dead".into(), Some("http_404".into()), None),
+        ],
+        "nothing is left to send"
+    );
+    let endpoints: Vec<(String, String, Option<String>, Vec<u8>)> =
+        sqlx::query_as("SELECT key, status, suspended_reason, secret_ciphertext FROM webhook_endpoints ORDER BY key")
+            .fetch_all(&mut *cb)
+            .await
+            .unwrap();
+    assert_eq!(
+        endpoints,
+        [
+            ("itsm-prod".into(), "suspended".into(), Some("restored".into()), vec![1, 2]),
+            ("paused".into(), "suspended".into(), Some("restored".into()), vec![1]),
+        ]
+    );
+    let locale: Option<String> =
+        sqlx::query_scalar("SELECT locale FROM users WHERE username = 'dora'").fetch_one(&mut *cb).await.unwrap();
+    assert_eq!(locale.as_deref(), Some("de"));
+    // The enqueue trigger is back on: the next transition enqueues again.
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "INSERT INTO workflow_instance_events (instance_id, kind, transition_key, from_state_key, to_state_key,
+           to_version_no, actor_type, actor_name)
+         VALUES ('{}', 'transition', 'finish', 'planned', 'done', 1, 'user', 'test')",
+        f.instance
+    )))
+    .execute(&mut *cb)
+    .await
+    .unwrap();
+    let pending: i64 = sqlx::query_scalar("SELECT count(*) FROM workflow_action_runs WHERE status = 'pending'")
+        .fetch_one(&mut *cb)
+        .await
+        .unwrap();
+    assert_eq!(pending, 1);
+
+    serial::factory_reset(&mut cb).await.unwrap();
+    for name in KEPT.into_iter().chain(HELD) {
+        let n: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM cmdb.{name}")))
+            .fetch_one(&mut *cb)
+            .await
+            .unwrap();
+        let fresh = if name == "workflow_action_queue_state" { 1 } else { 0 };
+        assert_eq!(n, fresh, "{name}");
+    }
+    drop((ca, cb));
+    a.drop().await;
+    b.drop().await;
+}
+
 /// GH#513 (SHAA-2143): `restore` refuses a backup whose seal it cannot check,
 /// unsigned or sealed under a key that is not configured, unless
 /// `--allow-unsigned` is given, and tells the operator what to do. The check

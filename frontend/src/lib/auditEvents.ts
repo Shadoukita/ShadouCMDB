@@ -80,6 +80,14 @@ export const AUDIT_ACTIONS = [
   "workflow.approval_close",
   "workflow.approval_overdue",
   "workflow.approval_refresh",
+  "webhook_endpoint.rotate_secret",
+  "webhook_endpoint.suspend",
+  "webhook_endpoint.resume",
+  "workflow.action_dead",
+  "workflow.action_retry",
+  "workflow.action_discard",
+  "workflow.action_suppressed",
+  "mail.test",
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 const ACTION_KEYS = new Set<string>(AUDIT_ACTIONS);

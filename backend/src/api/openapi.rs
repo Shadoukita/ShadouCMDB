@@ -232,6 +232,22 @@ fn error_status(code: ErrorCode) -> (u16, &'static str) {
              apply the transition: details[].field `fields.<key>` with code changed, not_a_transition_field, \
              state_field, required or condition). Nothing was changed, not even the decision",
         ),
+        ErrorCode::WebhooksDisabled => (
+            409,
+            "Conflict: CONFLICT (not allowed in this state), VERSION_CONFLICT, or WEBHOOKS_DISABLED (the operator has \
+             not enabled webhooks: WEBHOOKS_ALLOWED=false). Nothing was changed",
+        ),
+        ErrorCode::MailNotConfigured => (
+            409,
+            "Conflict: CONFLICT (not allowed in this state) or MAIL_NOT_CONFIGURED (outbound e-mail is off: MAIL=off). \
+             Nothing was sent",
+        ),
+        ErrorCode::WorkflowActionInvalid => (
+            422,
+            "The transition cannot run (code WORKFLOW_CONDITION_FAILED: a condition, required field or comment is not \
+             satisfied), or one of its attribute actions failed validation (code WORKFLOW_ACTION_INVALID: details[0] \
+             names the action as `action`, the other details each field as `attributes.<key>`). Nothing was changed",
+        ),
         ErrorCode::InvalidName | ErrorCode::SchemaChangeRefused => (
             422,
             "Refused: INVALID_NAME (technical name malformed, reserved or taken) or SCHEMA_CHANGE_REFUSED (the \

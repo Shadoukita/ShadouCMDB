@@ -1160,3 +1160,5 @@ mod upgrade_0070;
 mod upgrade_0071;
 #[cfg(test)]
 mod upgrade_0072;
+#[cfg(test)]
+mod upgrade_0073;
