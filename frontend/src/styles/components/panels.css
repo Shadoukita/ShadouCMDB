@@ -54,6 +54,13 @@
 .no-margin-top {
   margin-top: 0;
 }
+.space-above {
+  margin-top: var(--space-3);
+}
+/* A flex filler that pushes the items after it to the end of the row. */
+.spacer {
+  flex: 1;
+}
 
 /* ---------- Stat tile: an overline label, a mono value, a note ---------- */
 /* A row of tiles: 6 across at most, wrapping to 3 or 2 (record header, dashboard). */

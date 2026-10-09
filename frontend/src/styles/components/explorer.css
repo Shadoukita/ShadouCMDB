@@ -930,7 +930,7 @@ table.list-table .badge .status-dot {
 }
 .crit-bars {
   display: inline-flex;
-  gap: 2px;
+  gap: var(--space-0_5);
 }
 .crit-bars > span {
   width: 4px;

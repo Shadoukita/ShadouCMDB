@@ -81,6 +81,9 @@ input[type="radio"] {
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: var(--space-3) var(--space-5);
 }
+.form-grid.form-grid-1 {
+  grid-template-columns: minmax(0, 1fr);
+}
 .field {
   display: flex;
   flex-direction: column;
@@ -106,7 +109,8 @@ input[type="radio"] {
   line-height: 16px;
   color: var(--c-text-tertiary);
 }
-.field .error {
+.field .error,
+:is(p, span, div, li).error {
   display: flex;
   align-items: flex-start;
   gap: var(--space-1);
@@ -114,12 +118,13 @@ input[type="radio"] {
   line-height: 16px;
   color: var(--c-danger-text);
 }
-.field .error::before {
+.field .error::before,
+:is(p, span, div, li).error::before {
   content: "";
   flex: none;
   width: 14px;
   height: 14px;
-  margin-top: 1px;
+  margin-top: var(--space-px);
   background: currentColor;
   mask: var(--icon-circle-alert) center / contain no-repeat;
 }
