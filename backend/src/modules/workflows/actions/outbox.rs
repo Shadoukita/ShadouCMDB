@@ -704,11 +704,12 @@ pub async fn housekeeping(pool: &PgPool, cfg: &WorkflowActionsConfig) -> sqlx::R
     )
     .fetch_all(&mut *tx)
     .await?;
-    // Never sent late without notice.
+    // Never sent late without notice; a manual retry starts the clock again (0076).
     let expired: Vec<Uuid> = sqlx::query_scalar(
         "UPDATE cmdb.workflow_action_deliveries SET status = 'dead', status_reason = 'expired', completed_at = now()
          WHERE id IN (SELECT id FROM cmdb.workflow_action_deliveries
-                       WHERE status IN ('pending', 'held') AND created_at < now() - $1 * interval '1 hour'
+                       WHERE status IN ('pending', 'held')
+                         AND coalesce(retried_at, created_at) < now() - $1 * interval '1 hour'
                        LIMIT 1000 FOR UPDATE SKIP LOCKED)
          RETURNING id",
     )

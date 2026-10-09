@@ -3471,6 +3471,146 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/workflow-definitions/{id}/actions/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * How the workflow's actions are being delivered: counts by status, oldest pending, the queue
+         * @description Requires `workflows.manage`. Per action (in order, then deleted actions that still have deliveries): the deliveries queued in the last 24 hours and 7 days by their status now (`discarded` is a dead delivery an administrator gave up on), the runs suppressed in the last 24 hours (queue full or loop breaker: nothing was delivered for them), and when the oldest pending delivery was queued or retried. `queue` is the whole outbox, every workflow: `overloaded` while new runs are suppressed, the `backlog` the workers last counted and when (`checkedAt` grows old when no process runs workers), and the limits in force. Webhook actions are included only with `webhooks.manage`.
+         */
+        get: operations["getWorkflowActionsSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/workflow-definitions/{id}/action-deliveries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The workflow's action deliveries, newest first (paginated; filter by action, status, kind, time, instance, event or CI)
+         * @description Requires `workflows.manage`. One delivery per recipient of a run: its status (`pending`, `sending`, `held`, `delivered`, `skipped`, `dead`, or `discarded` for a dead one an administrator gave up on) with the reason, attempts since the last retry, when a pending one is due, and the last status code. `from` and `to` bound when the run queued it. A fixed e-mail address is shown masked; a user's address is never stored. `ciLabel` is null when the CI is gone or the caller may not view its type. Webhook deliveries are listed only with `webhooks.manage`.
+         */
+        get: operations["listWorkflowActionDeliveries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/workflow-definitions/{id}/action-deliveries/{deliveryId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One action delivery with its last error, its run and the event it tells of
+         * @description Requires `workflows.manage`. `event` is null once the event went to the archive with its CI. 404 for a delivery of another workflow, and for a webhook delivery without `webhooks.manage`.
+         */
+        get: operations["getWorkflowActionDelivery"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/workflow-definitions/{id}/action-deliveries/{deliveryId}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send a dead or held delivery again, with fresh attempts
+         * @description Requires `workflows.manage`. The delivery becomes `pending`, due now, with `attempts` 0; its max age (`WORKFLOW_ACTIONS_MAX_AGE_HOURS`) counts from the retry. The workers send it as any other, to the recipient's current address. Audited as `workflow.action_retry` (status before and after). 409 CONFLICT `not_retryable` unless it is `dead` or `held` and of an e-mail or webhook action (inbox entries are written when the run fans out). Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        post: operations["retryWorkflowActionDelivery"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/workflow-definitions/{id}/action-deliveries/{deliveryId}/discard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Give up on a pending, held or dead delivery
+         * @description Requires `workflows.manage`. The delivery becomes `discarded` (stored as `dead` with reason `discarded`) and is never sent; it is kept for `WORKFLOW_ACTIONS_DEAD_RETENTION_DAYS`. Audited as `workflow.action_discard` (status before and after). 409 CONFLICT `not_discardable` for a delivery being sent, delivered, skipped or already discarded. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        post: operations["discardWorkflowActionDelivery"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/workflow-definitions/{id}/action-deliveries/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry up to 1,000 deliveries, by id or by filter
+         * @description Requires `workflows.manage`. With `ids`, each dead or held delivery of an e-mail or webhook action is retried as by retryWorkflowActionDelivery; the others are listed in `refused` (`not_found`, `not_retryable`). With `filter`, the first 1,000 deliveries it selects that can be retried, oldest first; `more` tells that others remain. One transaction, one `workflow.action_retry` audit row per delivery (`bulk: true`). Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        post: operations["retryWorkflowActionDeliveries"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/workflow-definitions/{id}/action-deliveries/discard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Discard up to 1,000 deliveries, by id or by filter
+         * @description Requires `workflows.manage`. With `ids`, each pending, held or dead delivery is discarded as by discardWorkflowActionDelivery; the others are listed in `refused` (`not_found`, `not_discardable`). With `filter`, the first 1,000 deliveries it selects that can be discarded, oldest first; `more` tells that others remain. One transaction, one `workflow.action_discard` audit row per delivery (`bulk: true`). Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        post: operations["discardWorkflowActionDeliveries"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/workflow-definitions/{id}/instance-migrations": {
         parameters: {
             query?: never;
@@ -7876,6 +8016,173 @@ export interface components {
          * @enum {string}
          */
         WorkflowActionContent: "minimal" | "standard" | "detailed";
+        /** @description One message of an action to one recipient */
+        WorkflowActionDelivery: {
+            /** Format: uuid */
+            id: string;
+            /** Format: int64 */
+            runId: number;
+            /**
+             * Format: int64
+             * @description The instance event that queued the run
+             */
+            eventId: number;
+            actionKey: string;
+            /** @description The action's name; null once the action was deleted */
+            actionName?: string | null;
+            kind: components["schemas"]["WorkflowActionKind"];
+            /** Format: uuid */
+            instanceId: string;
+            /** Format: uuid */
+            ciId: string;
+            /** @description The CI's label; null when the CI is gone or the caller may not view its type */
+            ciLabel?: string | null;
+            recipient: components["schemas"]["WorkflowActionDeliveryRecipient"];
+            status: components["schemas"]["WorkflowActionDeliveryStatus"];
+            statusReason?: string | null;
+            /**
+             * Format: int32
+             * @description Attempts made (since the last retry)
+             */
+            attempts: number;
+            /**
+             * Format: date-time
+             * @description When a pending delivery is due; null otherwise
+             */
+            nextAttemptAt?: string | null;
+            /**
+             * Format: int32
+             * @description The last attempt's HTTP or SMTP status code
+             */
+            lastStatusCode?: number | null;
+            /**
+             * Format: date-time
+             * @description When the run queued it
+             */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description When it was delivered, skipped or given up
+             */
+            completedAt?: string | null;
+            /**
+             * Format: date-time
+             * @description When an administrator last retried it
+             */
+            retriedAt?: string | null;
+        };
+        /** @description What a bulk retry or discard did */
+        WorkflowActionDeliveryBulkResult: {
+            /**
+             * Format: int64
+             * @description Deliveries changed (one audit row each)
+             */
+            changed: number;
+            /** @description Their ids */
+            ids: string[];
+            /** @description With `ids`: those left as they were, and why */
+            refused: components["schemas"]["WorkflowActionDeliveryRefused"][];
+            /** @description With `filter`: more deliveries match than one request changes; send it again */
+            more: boolean;
+        };
+        /** @description Deliveries by status */
+        WorkflowActionDeliveryCounts: {
+            /** Format: int64 */
+            pending: number;
+            /** Format: int64 */
+            sending: number;
+            /** Format: int64 */
+            held: number;
+            /** Format: int64 */
+            delivered: number;
+            /** Format: int64 */
+            skipped: number;
+            /** Format: int64 */
+            dead: number;
+            /** Format: int64 */
+            discarded: number;
+        };
+        /** @description A delivery with its last error, its run and its event */
+        WorkflowActionDeliveryDetail: {
+            delivery: components["schemas"]["WorkflowActionDelivery"];
+            /** @description The last attempt's error (at most 1 KiB): connection, TLS or protocol detail */
+            lastError?: string | null;
+            /** @description The run's status: `fanned_out` once its deliveries were written */
+            runStatus: string;
+            runStatusReason?: string | null;
+            event?: components["schemas"]["WorkflowActionDeliveryEvent"] | null;
+        };
+        /** @description The instance event a delivery tells of */
+        WorkflowActionDeliveryEvent: {
+            /** @description `transition`, `start`, `cancel`, `force`, `approval_requested`, ... */
+            kind: string;
+            transitionKey?: string | null;
+            fromStateKey?: string | null;
+            toStateKey: string;
+            /** @description Who caused it, as recorded */
+            actorName?: string | null;
+            /** Format: date-time */
+            occurredAt: string;
+        };
+        /** @description The deliveries a bulk retry or discard selects (all optional; at most 1,000, oldest first) */
+        WorkflowActionDeliveryFilter: {
+            /** @description Stable machine key, lower_snake_case */
+            actionKey?: string;
+            status?: components["schemas"]["WorkflowActionDeliveryStatus"] | null;
+            kind?: components["schemas"]["WorkflowActionKind"] | null;
+            /**
+             * Format: date-time
+             * @description Queued at or after
+             */
+            from?: string | null;
+            /**
+             * Format: date-time
+             * @description Queued before
+             */
+            to?: string | null;
+            /** Format: uuid */
+            instanceId?: string | null;
+            /** Format: int64 */
+            eventId?: number | null;
+            /** Format: uuid */
+            ciId?: string | null;
+        };
+        WorkflowActionDeliveryList: {
+            data: components["schemas"]["WorkflowActionDelivery"][];
+            page: components["schemas"]["PageMeta"];
+        };
+        /** @description Who or what a delivery goes to */
+        WorkflowActionDeliveryRecipient: {
+            kind: components["schemas"]["WorkflowActionRecipientKind"];
+            /**
+             * Format: uuid
+             * @description The user's or the endpoint's id; null once it was deleted, and for an address
+             */
+            id?: string | null;
+            /** @description The user's display name or the endpoint's name; null once it was deleted, and for an address */
+            name?: string | null;
+            /** @description The user's username */
+            username?: string | null;
+            /** @description A fixed address, masked (`c***@corp.example`) */
+            address?: string | null;
+        };
+        /**
+         * @description Why a delivery was left as it was
+         * @enum {string}
+         */
+        WorkflowActionDeliveryRefusal: "not_found" | "not_retryable" | "not_discardable";
+        /** @description A delivery a bulk request left as it was */
+        WorkflowActionDeliveryRefused: {
+            /** Format: uuid */
+            id: string;
+            reason: components["schemas"]["WorkflowActionDeliveryRefusal"];
+            status?: components["schemas"]["WorkflowActionDeliveryStatus"] | null;
+        };
+        /**
+         * @description Where a delivery stands
+         * @enum {string}
+         */
+        WorkflowActionDeliveryStatus: "pending" | "sending" | "held" | "delivered" | "skipped" | "dead" | "discarded";
         /** @description A webhook endpoint, by key and name */
         WorkflowActionEndpointRef: {
             /** Format: uuid */
@@ -7949,6 +8256,41 @@ export interface components {
             /** @description The sources that name them, as `group CAB` */
             sources: string[];
         };
+        /** @description The whole action queue (every workflow) and its limits */
+        WorkflowActionQueue: {
+            /** @description Pending runs and deliveries reached `WORKFLOW_ACTIONS_QUEUE_MAX`: new runs are suppressed */
+            overloaded: boolean;
+            /**
+             * Format: int64
+             * @description Pending runs and pending or held deliveries, as the workers last counted them (capped at `queueMax`)
+             */
+            backlog: number;
+            /**
+             * Format: date-time
+             * @description When the workers last counted; old when no worker runs
+             */
+            checkedAt: string;
+            /**
+             * Format: int64
+             * @description `WORKFLOW_ACTIONS_QUEUE_MAX`
+             */
+            queueMax: number;
+            /**
+             * Format: int32
+             * @description `WORKFLOW_ACTIONS_MAX_PER_INSTANCE_PER_HOUR`, as the workers last wrote it
+             */
+            maxPerInstancePerHour: number;
+            /**
+             * Format: int32
+             * @description `WORKFLOW_ACTIONS_MAX_ATTEMPTS`
+             */
+            maxAttempts: number;
+            /**
+             * Format: int32
+             * @description `WORKFLOW_ACTIONS_MAX_AGE_HOURS`
+             */
+            maxAgeHours: number;
+        };
         /** @description One source of an action's recipients */
         WorkflowActionRecipient: {
             source: components["schemas"]["WorkflowActionRecipientSource"];
@@ -7976,6 +8318,11 @@ export interface components {
             address?: string;
         };
         /**
+         * @description What a delivery is addressed to
+         * @enum {string}
+         */
+        WorkflowActionRecipientKind: "user" | "address" | "endpoint";
+        /**
          * @description Where an action's recipients come from
          * @enum {string}
          */
@@ -7996,6 +8343,34 @@ export interface components {
         WorkflowActionSubject: {
             en?: string;
             de?: string;
+        };
+        /** @description One action's deliveries */
+        WorkflowActionSummary: {
+            key: string;
+            /** @description Null for an action deleted since (its deliveries keep its key) */
+            name?: string | null;
+            kind: components["schemas"]["WorkflowActionKind"];
+            /** @description False when disabled or deleted */
+            enabled: boolean;
+            /** @description Queued in the last 24 hours, by status now */
+            last24h: components["schemas"]["WorkflowActionDeliveryCounts"];
+            /** @description Queued in the last 7 days, by status now */
+            last7d: components["schemas"]["WorkflowActionDeliveryCounts"];
+            /**
+             * Format: int64
+             * @description Runs suppressed in the last 24 hours (queue full, loop breaker): nothing was delivered for them
+             */
+            suppressed24h: number;
+            /**
+             * Format: date-time
+             * @description When the oldest pending delivery was queued (or retried)
+             */
+            oldestPendingAt?: string | null;
+            /**
+             * Format: int64
+             * @description Its age in seconds
+             */
+            oldestPendingAgeSeconds?: number | null;
         };
         /**
          * @description What fires an action
@@ -8018,6 +8393,12 @@ export interface components {
              *     `minimal_placeholder` (e-mail)
              */
             problems: components["schemas"]["WorkflowProblem"][];
+        };
+        /** @description How a workflow's actions are being delivered */
+        WorkflowActionsSummary: {
+            /** @description The workflow's actions in order, then deleted actions that still have deliveries */
+            actions: components["schemas"]["WorkflowActionSummary"][];
+            queue: components["schemas"]["WorkflowActionQueue"];
         };
         /**
          * @description The approval policy of a transition: running it creates an approval request, and the instance moves only once
@@ -32545,6 +32926,697 @@ export interface operations {
             };
             /** @description Request not completed in time (code REQUEST_TIMEOUT) */
             408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getWorkflowActionsSummary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowActionsSummary"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listWorkflowActionDeliveries: {
+        parameters: {
+            query?: {
+                /** @description Page size (1-200) */
+                limit?: number;
+                /** @description Rows to skip */
+                offset?: number;
+                /** @description Stable machine key, lower_snake_case */
+                actionKey?: string;
+                /** @description Where a delivery stands */
+                status?: "pending" | "sending" | "held" | "delivered" | "skipped" | "dead" | "discarded";
+                /** @description How an action delivers */
+                kind?: "inbox" | "email" | "webhook";
+                /** @description Only deliveries queued at or after this time */
+                from?: string;
+                /** @description Only deliveries queued before this time */
+                to?: string;
+                /** @description Only deliveries of this instance */
+                instanceId?: string;
+                /** @description Only deliveries of this instance event */
+                eventId?: number;
+                /** @description Only deliveries about this CI */
+                ciId?: string;
+                /** @description Sort field; prefix with "-" for descending. One of: createdAt, completedAt, nextAttemptAt, attempts, status, actionKey */
+                sort?: "createdAt" | "-createdAt" | "completedAt" | "-completedAt" | "nextAttemptAt" | "-nextAttemptAt" | "attempts" | "-attempts" | "status" | "-status" | "actionKey" | "-actionKey";
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowActionDeliveryList"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getWorkflowActionDelivery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                deliveryId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowActionDeliveryDetail"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    retryWorkflowActionDelivery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                deliveryId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowActionDelivery"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    discardWorkflowActionDelivery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                deliveryId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowActionDelivery"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    retryWorkflowActionDeliveries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description These deliveries (1-1000) */
+                    ids?: string[] | null;
+                    filter?: components["schemas"]["WorkflowActionDeliveryFilter"] | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowActionDeliveryBulkResult"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    discardWorkflowActionDeliveries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description These deliveries (1-1000) */
+                    ids?: string[] | null;
+                    filter?: components["schemas"]["WorkflowActionDeliveryFilter"] | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowActionDeliveryBulkResult"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
                 headers: {
                     [name: string]: unknown;
                 };
