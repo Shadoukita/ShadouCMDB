@@ -392,7 +392,7 @@ tr.selected {
   white-space: nowrap;
 }
 .tpl-actions .btn + .btn {
-  margin-left: 4px;
+  margin-left: var(--space-1);
 }
 .tpl-actions [aria-disabled="true"] {
   opacity: 0.55;

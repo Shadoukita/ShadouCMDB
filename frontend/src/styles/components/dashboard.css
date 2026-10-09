@@ -104,8 +104,8 @@ table.count-table td.share {
 }
 /* The period switch: a pill group on the canvas; the checked segment is a raised surface in 600. */
 .segmented.period-switch {
-  padding: 3px;
-  gap: 2px;
+  padding: var(--space-0_5);
+  gap: var(--space-0_5);
   border-radius: var(--radius-md);
   background: var(--c-surface-sunken);
 }
@@ -166,7 +166,7 @@ table.count-table td.share {
   background: var(--c-surface-alt);
 }
 .delta-chip {
-  padding: 1px var(--space-2);
+  padding: var(--space-px) var(--space-2);
   border-radius: var(--radius-full);
   font-size: var(--fs-xs);
   font-weight: var(--fw-semibold);
@@ -189,7 +189,7 @@ table.count-table td.share {
 .kpi-bars {
   display: flex;
   align-items: flex-end;
-  gap: 3px;
+  gap: var(--space-0_5);
   height: 28px;
 }
 .kpi-bars > span {
@@ -204,6 +204,7 @@ table.count-table td.share {
 .kpi-meter {
   display: block;
   height: 8px;
+  /* token-lint-allow: geometry, not spacing; centres the 8 px meter in the 28 px row the mini bars take. */
   margin: 10px 0;
   border-radius: var(--radius-full);
   background: var(--c-surface-sunken);
