@@ -176,8 +176,8 @@ function codesSaved() {
 </script>
 
 <template>
-  <section class="panel" aria-labelledby="mfa-title">
-    <div class="panel-header">
+  <component :is="forced ? 'div' : 'section'" :class="forced ? 'mfa-forced' : 'panel'" :aria-labelledby="forced ? undefined : 'mfa-title'">
+    <div v-if="!forced" class="panel-header">
       <h2 id="mfa-title">{{ t("account.mfa.title") }}</h2>
       <span v-if="status.data.value" class="badges">
         <span v-if="enabled" class="badge ok">{{ t("account.mfa.on") }}</span>
@@ -186,10 +186,10 @@ function codesSaved() {
       </span>
     </div>
     <LoadingState v-if="status.isLoading.value" :label="t('account.mfa.loading')" />
-    <div v-else-if="status.isError.value" class="panel-body">
+    <div v-else-if="status.isError.value" :class="{ 'panel-body': !forced }">
       <ErrorAlert :error="status.error.value" :on-retry="() => status.refetch()" />
     </div>
-    <div v-else class="panel-body stack">
+    <div v-else :class="['stack', { 'panel-body': !forced }]">
       <RecoveryCodes v-if="codes" :codes="codes" :username="session.user?.username ?? 'user'" @done="codesSaved" />
 
       <template v-else>
@@ -201,21 +201,18 @@ function codesSaved() {
           {{ t("account.mfa.viaProvider", { provider: provider.name }) }}
         </p>
         <template v-else-if="!enabled && mode !== 'scan'">
-          <div v-if="forced" class="alert alert-warn" role="note">
-            {{ t("account.mfa.forced") }}
-          </div>
           <p class="muted flush">
             {{ t("account.mfa.intro") }}
           </p>
           <form class="stack" novalidate @submit.prevent="begin">
-            <div class="form-grid">
+            <div :class="{ 'form-grid': !forced }">
               <FormField id="mfa-currentPassword" :label="passwordLabel" required :error="fieldErrors.currentPassword" :hint="passwordHint ?? t('account.mfa.confirmsItsYou')">
                 <template #default="{ id, invalid, describedBy }">
                   <input :id="id" v-model="password" v-autofocus="forced" type="password" autocomplete="current-password" :aria-invalid="invalid" :aria-describedby="describedBy" />
                 </template>
               </FormField>
             </div>
-            <div><button type="submit" class="btn btn-primary" :disabled="busy">{{ start.isPending.value ? t("account.mfa.starting") : t("account.mfa.start") }}</button></div>
+            <div><button type="submit" :class="['btn btn-primary', { block: forced }]" :disabled="busy">{{ start.isPending.value ? t("account.mfa.starting") : t("account.mfa.start") }}</button></div>
           </form>
         </template>
 
@@ -303,7 +300,7 @@ function codesSaved() {
         </template>
       </template>
     </div>
-  </section>
+  </component>
 </template>
 
 <style scoped>

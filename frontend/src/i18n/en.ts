@@ -655,7 +655,7 @@ export const en = {
   "account.enrol.documentTitle": "Set up two-factor authentication",
   "account.enrol.title": "Set up two-factor authentication",
   "account.enrol.againTitle": "Sign in again with a code",
-  "account.enrol.signOut": "Sign out",
+  "account.enrol.signOutLater": "Set it up later? Sign out",
   "account.enrol.signOutFailed": "Sign-out failed",
   "account.enrol.alreadySetUp":
     "Your authenticator app is already set up, but this session was opened with your password alone. A permission profile you hold requires two-factor authentication: sign out, then sign in again with your password and a code from the app.",
@@ -1134,7 +1134,7 @@ export const en = {
     "A person who is not this account's already has this e-mail address. Change that person's e-mail first, or use another address.",
   "people.entry.documentTitle": "Enter your e-mail address",
   "people.entry.title": "Enter your e-mail address",
-  "people.entry.signedInAs": "Signed in as {name} ({username}).",
+  "account.signedInAs": "Signed in as {name} ({username}).",
   "people.entry.intro":
     "Your account was created before e-mail addresses were required. Enter yours to continue: it links your account to your person record in the inventory.",
   "people.entry.notYou": "Not you? Sign out",

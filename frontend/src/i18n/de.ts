@@ -669,7 +669,7 @@ export const de: { [K in MessageKey]: string } = {
   "account.enrol.documentTitle": "Zwei-Faktor-Authentifizierung einrichten",
   "account.enrol.title": "Zwei-Faktor-Authentifizierung einrichten",
   "account.enrol.againTitle": "Erneut mit Code anmelden",
-  "account.enrol.signOut": "Abmelden",
+  "account.enrol.signOutLater": "Später einrichten? Abmelden",
   "account.enrol.signOutFailed": "Abmelden fehlgeschlagen",
   "account.enrol.alreadySetUp":
     "Ihre Authenticator-App ist bereits eingerichtet, aber diese Sitzung wurde nur mit Ihrem Passwort geöffnet. Ein Berechtigungsprofil, das Sie haben, erfordert Zwei-Faktor-Authentifizierung: Melden Sie sich ab und anschließend erneut mit Ihrem Passwort und einem Code aus der App an.",
@@ -1148,7 +1148,7 @@ export const de: { [K in MessageKey]: string } = {
     "Eine Person, die nicht zu diesem Konto gehört, hat diese E-Mail-Adresse bereits. Ändern Sie zuerst deren E-Mail-Adresse oder verwenden Sie eine andere.",
   "people.entry.documentTitle": "E-Mail-Adresse eingeben",
   "people.entry.title": "E-Mail-Adresse eingeben",
-  "people.entry.signedInAs": "Angemeldet als {name} ({username}).",
+  "account.signedInAs": "Angemeldet als {name} ({username}).",
   "people.entry.intro":
     "Ihr Konto wurde angelegt, bevor E-Mail-Adressen Pflicht waren. Geben Sie Ihre ein, um fortzufahren: Sie verknüpft Ihr Konto mit Ihrem Personendatensatz im Inventar.",
   "people.entry.notYou": "Nicht Sie? Abmelden",
