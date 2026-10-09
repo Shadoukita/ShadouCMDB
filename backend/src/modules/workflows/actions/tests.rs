@@ -297,6 +297,85 @@ async fn an_inbox_action_reaches_viewers_only_and_a_refused_transition_queues_no
     db.drop().await;
 }
 
+/// GH#848: `WORKFLOW_ACTIONS_MAX_RECIPIENTS` counts only the users who are
+/// told, as the preview does. An inactive and a blind user who sort first by
+/// id are skipped without using up the cap; of two viewers, the first is told
+/// and the run ends `truncated`, with no row for the second.
+#[tokio::test]
+async fn the_recipient_cap_counts_only_users_who_are_told() {
+    let Some(db) = scratch::database("workflow_actions_cap").await else { return };
+    let w = world(&db).await;
+    let ops = w.profile("Ops", &[(w.server, false)]).await;
+    let blind = w.profile("Blind", &[(w.network, false)]).await;
+    let (approver, _) = w.user("approver", &[w.approvers]).await;
+    let (_, alice) = w.user("alice", &[ops]).await;
+    let (_, bob) = w.user("bob", &[ops]).await;
+    let (gone, dark) = (Uuid::from_u128(1), Uuid::from_u128(2));
+    for (user, name, active, profile) in [(gone, "gone", false, ops), (dark, "dark", true, blind)] {
+        sqlx::query(
+            "INSERT INTO users (id, username, display_name, password_hash, is_active) VALUES ($1, $2, $2, '$argon2id$x', $3)",
+        )
+        .bind(user)
+        .bind(name)
+        .bind(active)
+        .execute(&w.pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO user_permission_profiles (user_id, profile_id) VALUES ($1, $2)")
+            .bind(user)
+            .bind(profile)
+            .execute(&w.pool)
+            .await
+            .unwrap();
+    }
+    let version = version(&w).await;
+    w.ok(
+        "PUT",
+        &actions(&w),
+        json!({ "version": version, "actions": [inbox("tell", "transition", Some("approve"),
+            json!([{ "source": "profile", "profile": "Ops" }, { "source": "profile", "profile": "Blind" }]))] }),
+    )
+    .await;
+    let ci = w.ci(w.server).await;
+    let v = w.ok("GET", &format!("{}/tell/preview?ciId={ci}", actions(&w)), json!(null)).await;
+    assert_eq!(v["included"].as_i64(), Some(2), "{v}");
+
+    let (status, v) = w.start(&w.admin, ci).await;
+    assert_eq!(status, 201, "{v}");
+    let instance: Uuid = v["instance"]["id"].as_str().unwrap().parse().unwrap();
+    w.ok("PATCH", &format!("/api/v1/configuration-items/{ci}"), json!({ "attributes": { "environment": "prod" } }))
+        .await;
+    let body = json!({ "transitionKey": "approve", "expectedVersion": 1,
+        "fields": { "owner_team": "ops", "risk": 1 }, "comment": "ok" });
+    let (status, v) = w.transition(&approver, instance, body).await;
+    assert_eq!(status, 200, "{v}");
+
+    assert_eq!(drain(&w.pool, &WorkflowActionsConfig { max_recipients: 1, ..cfg() }).await, 1);
+    let deliveries: Vec<(Uuid, String, Option<String>)> =
+        sqlx::query_as("SELECT user_id, status, status_reason FROM workflow_action_deliveries ORDER BY user_id")
+            .fetch_all(&w.pool)
+            .await
+            .unwrap();
+    let first = alice.min(bob);
+    assert_eq!(
+        deliveries,
+        [
+            (gone, "skipped".to_owned(), Some("inactive".to_owned())),
+            (dark, "skipped".to_owned(), Some("no_view".to_owned())),
+            (first, "delivered".to_owned(), None),
+        ]
+    );
+    let told: Vec<Uuid> = sqlx::query_scalar("SELECT user_id FROM notifications WHERE kind = 'workflow_action'")
+        .fetch_all(&w.pool)
+        .await
+        .unwrap();
+    assert_eq!(told, [first]);
+    let run: (String, Option<String>) =
+        sqlx::query_as("SELECT status, status_reason FROM workflow_action_runs").fetch_one(&w.pool).await.unwrap();
+    assert_eq!(run, ("fanned_out".to_owned(), Some("truncated".to_owned())));
+    db.drop().await;
+}
+
 /// The SQL fixture of the upgrade tests with `n` transition events, each
 /// queueing one run of an inbox action for one user who may view the CI.
 async fn queued(pool: &PgPool, n: i64) -> (Fixture, Uuid) {
