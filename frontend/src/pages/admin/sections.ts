@@ -38,6 +38,8 @@ export const ADMIN_SECTIONS: AdminSection[] = [
   // users.manage may read profiles too, to know what they assign.
   { key: "profiles", label: t("admin.section.profiles"), group: ACCESS, to: "/admin/profiles", permissions: ["profiles.manage", "users.manage"] },
   { key: "api-tokens", label: t("admin.section.apiTokens"), group: ACCESS, to: "/admin/api-tokens", permissions: ["users.manage"] },
+  // Someone else's approvals for a time window, while they are away (the API needs users.manage).
+  { key: "approval-delegations", label: t("delegations.adminTitle"), group: ACCESS, to: "/admin/approval-delegations", permissions: ["users.manage"] },
   // Who may sign in, and with which profiles: the API allows only the Administrator profile, not users.manage alone.
   { key: "identity-providers", label: t("admin.section.identityProviders"), group: ACCESS, to: "/admin/identity-providers", permissions: [], administratorOnly: true },
   { key: "areas", label: t("admin.section.areas"), group: DATA_MODEL, to: "/admin/areas", permissions: ["datamodel.manage"] },
