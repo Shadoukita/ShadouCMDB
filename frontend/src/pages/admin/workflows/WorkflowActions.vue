@@ -36,6 +36,7 @@ import {
 import type { AttributeChoice } from "../../../lib/workflowApprovals";
 import ActionEditor from "./ActionEditor.vue";
 import ActionPreview from "./ActionPreview.vue";
+import ActionTestSend from "./ActionTestSend.vue";
 
 /**
  * The workflow's notification actions (SHAA-2725 §2.1, §3.1–3.3): inbox entries, e-mails and webhooks
@@ -225,6 +226,7 @@ function target(a: DraftAction): string {
   return a.recipients.length === 1 ? first : t("wfActions.andMore", { first, n: a.recipients.length - 1 });
 }
 const previewable = computed(() => previewableActions(actionsQ.data.value?.actions ?? []));
+const testable = computed(() => (actionsQ.data.value?.actions ?? []).map((a) => ({ key: a.key, name: a.name, kind: a.kind, endpoint: a.endpoint?.key })));
 const loading = computed(() => actionsQ.isLoading.value || draft.isLoading.value || current.isLoading.value);
 </script>
 
@@ -332,6 +334,14 @@ const loading = computed(() => actionsQ.isLoading.value || draft.isLoading.value
     :workflow-id="wid"
     :class-id="workflow.classId"
     :actions="previewable"
+    :dirty="dirty"
+    :selected-key="editing?.key"
+  />
+  <ActionTestSend
+    v-if="!loading && actionsQ.data.value"
+    :workflow-id="wid"
+    :class-id="workflow.classId"
+    :actions="testable"
     :dirty="dirty"
     :selected-key="editing?.key"
   />
