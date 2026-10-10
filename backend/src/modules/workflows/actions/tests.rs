@@ -539,6 +539,68 @@ async fn a_worker_lost_mid_fan_out_leaves_no_duplicate() {
     db.drop().await;
 }
 
+/// A run whose fan-out always fails (GH#846) is cancelled as `fan_out_failed`
+/// after the attempt limit, audited once, and no longer counted; a run left
+/// waiting past the maximum age is cancelled as `expired`.
+#[tokio::test]
+async fn a_poison_run_gives_up_after_the_attempt_limit() {
+    let Some(db) = scratch::database("workflow_actions_poison_run").await else { return };
+    let pool = &db.pool;
+    let cfg = WorkflowActionsConfig { max_attempts: 3, ..cfg() };
+    queued(pool, 2).await;
+    ok(
+        pool,
+        "CREATE FUNCTION poison() RETURNS trigger LANGUAGE plpgsql AS $$
+           BEGIN RAISE EXCEPTION 'poisoned'; END $$;
+         CREATE TRIGGER poison BEFORE INSERT ON notifications FOR EACH ROW EXECUTE FUNCTION poison();
+         UPDATE workflow_action_runs SET created_at = now() - interval '25 hours'
+           WHERE id = (SELECT max(id) FROM workflow_action_runs)",
+    )
+    .await;
+    let poison: i64 = count(pool, "SELECT min(id) FROM workflow_action_runs").await;
+
+    // The old run expires at once, before any attempt.
+    let h = outbox::housekeeping(pool, &cfg).await.unwrap();
+    assert_eq!((h.runs_cancelled, h.backlog), (1, 1), "the old run expired; the other one is waiting");
+
+    for cycle in 1..=10 {
+        for id in outbox::claim_runs(pool, "test-worker", 10).await.unwrap() {
+            assert!(outbox::fan_out(pool, &cfg, id, "test-worker").await.is_err(), "the fan-out fails");
+        }
+        if cycle == 1 {
+            let h = outbox::housekeeping(pool, &cfg).await.unwrap();
+            assert_eq!(h.backlog, 1, "a run being fanned out is counted");
+        }
+        ok(
+            pool,
+            "UPDATE workflow_action_runs SET lease_until = now() - interval '1 second' WHERE lease_until IS NOT NULL",
+        )
+        .await;
+        outbox::housekeeping(pool, &cfg).await.unwrap();
+    }
+    let (status, reason, attempts): (String, Option<String>, i16) =
+        sqlx::query_as("SELECT status, status_reason, attempts FROM workflow_action_runs WHERE id = $1")
+            .bind(poison)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!((status.as_str(), reason.as_deref(), attempts), ("cancelled", Some("fan_out_failed"), 3));
+    let reasons: Vec<(String, String, Value)> = sqlx::query_as(
+        "SELECT actor_type, entity_type, new_value FROM audit_log WHERE action = 'workflow.action_dead'
+         ORDER BY (new_value->>'runId')::bigint",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    assert_eq!(reasons.len(), 2, "each run audited once: {reasons:?}");
+    assert_eq!((reasons[0].0.as_str(), reasons[0].1.as_str()), ("system", "workflow_definitions"));
+    assert_eq!((&reasons[0].2["reason"], &reasons[0].2["attempts"]), (&json!("fan_out_failed"), &json!(3)));
+    assert_eq!((&reasons[1].2["reason"], &reasons[1].2["attempts"]), (&json!("expired"), &json!(0)));
+    assert_eq!(outbox::housekeeping(pool, &cfg).await.unwrap().backlog, 0);
+    assert_eq!(outbox::claim_runs(pool, "test-worker", 10).await.unwrap(), Vec::<i64>::new(), "never claimed again");
+    db.drop().await;
+}
+
 /// A delivery of a sending channel (a stand-in for e-mail): written pending, as S4's fan-out will.
 async fn delivery(pool: &PgPool) -> Uuid {
     let (f, _) = queued(pool, 0).await;
