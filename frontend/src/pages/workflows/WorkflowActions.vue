@@ -14,7 +14,8 @@ import TransitionDialog from "./TransitionDialog.vue";
  * What the caller may do with a running instance: the transitions they are granted (a blocked one is offered
  * too, marked, with its reasons; the dialog lists them) and cancelling it. The API leaves out transitions the
  * caller is not granted, so an operator without a grant sees none. `reload` asks the page to load the
- * instance again after a version conflict.
+ * instance again after a version conflict. While an approval request is pending the API refuses every
+ * transition (409 WORKFLOW_APPROVAL_PENDING), so none is offered: the pending banner shows the request.
  */
 const props = defineProps<{
   instance: WorkflowInstance;
@@ -27,6 +28,7 @@ const props = defineProps<{
 const emit = defineEmits<{ reload: [] }>();
 
 const flash = useFlashStore();
+const runnable = computed(() => (props.instance.pendingApproval ? [] : props.transitions));
 const running = ref<WorkflowAvailableTransition | null>(null);
 const cancelling = ref(false);
 const reason = ref("");
@@ -68,7 +70,7 @@ function reload() {
 <template>
   <div class="wf-actions">
     <button
-      v-for="t in transitions"
+      v-for="t in runnable"
       :key="t.key"
       type="button"
       :class="['btn', compact ? 'btn-sm' : '', t.blockedBy.length > 0 ? 'wf-blocked' : '']"
@@ -81,7 +83,7 @@ function reload() {
       <span v-if="t.blockedBy.length > 0" class="sr-only">(blocked: {{ t.blockedBy.map((b) => b.message).join("; ") }})</span>
     </button>
     <button v-if="canCancel" type="button" :class="['btn', 'btn-ghost', compact ? 'btn-sm' : '']" @click="openCancel">Cancel workflow</button>
-    <span v-if="transitions.length === 0 && !canCancel && !compact" class="muted">No transition you may run from this state.</span>
+    <span v-if="runnable.length === 0 && !instance.pendingApproval && !canCancel && !compact" class="muted">No transition you may run from this state.</span>
 
     <Teleport to="body">
       <TransitionDialog :open="!!running" :instance="instance" :transition="running" :class-id="classId" :ci="ci" @close="running = null" @reload="reload" />

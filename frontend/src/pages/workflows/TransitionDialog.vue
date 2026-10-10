@@ -8,6 +8,7 @@ import ErrorAlert from "../../components/ErrorAlert.vue";
 import FormDialog from "../../components/FormDialog.vue";
 import Icon from "../../components/Icon.vue";
 import { toApiValue, toFormValue, type AttributeShape } from "../../lib/attributeValues";
+import { t as msg } from "../../i18n";
 import { useFlashStore } from "../../stores/flash";
 import FormField from "../form/FormField.vue";
 import WorkflowStateBadge from "./WorkflowStateBadge.vue";
@@ -20,6 +21,9 @@ import WorkflowStateBadge from "./WorkflowStateBadge.vue";
  * The API answers 422 WORKFLOW_CONDITION_FAILED (a missing field or comment, a failing condition) and 400
  * VALIDATION_ERROR with `fields.<key>` or `comment`: those messages go next to their inputs. 409
  * VERSION_CONFLICT means someone moved the instance on: the operator reloads it (`reload`).
+ *
+ * A transition with an approval policy (`requiresApproval`) is checked the same way but only requests the
+ * change (202 with `pendingApproval`): the dialog says so and lists the steps before the operator submits.
  */
 const props = defineProps<{
   open: boolean;
@@ -90,13 +94,14 @@ async function submit() {
     fields[f.key] = values[f.key] === "" ? null : toApiValue(defFor(f.key, f.dataType), values[f.key]);
   }
   try {
-    await run.mutateAsync({
+    const after = await run.mutateAsync({
       id: props.instance.id,
       ciId: props.instance.ciId,
       // The spec gives `fields` as an object without properties (`Record<string, never>`); the API takes any field key.
       body: { transitionKey: tr.key, expectedVersion: props.instance.version, fields: fields as WorkflowTransitionBody["fields"], comment: comment.value.trim() || undefined },
     });
-    flash.show(`${tr.name}: ${props.instance.ciLabel} is now ${tr.toState.name}.`);
+    if (after.pendingApproval) flash.show(msg("approvalRun.requested", { transition: tr.name, ci: props.instance.ciLabel }));
+    else flash.show(`${tr.name}: ${props.instance.ciLabel} is now ${tr.toState.name}.`);
     emit("close");
   } catch (e) {
     error.value = e;
@@ -108,7 +113,7 @@ async function submit() {
   <FormDialog
     :open="open && !!t"
     :title="t ? `${t.name}: ${instance.definitionName}` : ''"
-    :submit-label="t?.name ?? 'Run'"
+    :submit-label="t?.requiresApproval ? msg('approvalRun.requestSubmit') : (t?.name ?? 'Run')"
     :busy="run.isPending.value"
     wide
     @submit="submit"
@@ -121,6 +126,16 @@ async function submit() {
         <WorkflowStateBadge :state="t.toState" />
         <span class="muted">on {{ instance.ciLabel }} ({{ instance.ciIdent }})</span>
       </p>
+      <div v-if="t.requiresApproval" class="alert" data-testid="wf-requires-approval">
+        <strong>{{ msg("approvalRun.requires.title") }}</strong>
+        <div>{{ msg("approvalRun.requires.body") }}</div>
+        <ol class="wf-approval-steps" :aria-label="msg('approvalRun.requires.steps')">
+          <li v-for="s in t.approvalSteps" :key="s.key">
+            <span dir="auto">{{ s.name }}</span>: {{ msg("approvalRun.requires.step", { n: s.requiredApprovals }) }}
+          </li>
+        </ol>
+        <div>{{ msg("approvalRun.requires.self") }}</div>
+      </div>
       <div v-if="conflict" class="alert alert-warn" role="alert" data-testid="wf-conflict">
         <strong>This workflow moved on since you opened it.</strong>
         <div>

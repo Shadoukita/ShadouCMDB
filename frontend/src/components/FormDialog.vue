@@ -5,9 +5,9 @@ import { t } from "../i18n";
 /**
  * Modal form (create/edit a row) on <dialog>, like ConfirmDialog: focus stays
  * inside, Esc cancels unless a save is running. The fields come from the slot;
- * submitting the form emits `submit`.
+ * submitting the form emits `submit`. `readonly` shows the content only: one Close button, no submit.
  */
-const props = defineProps<{ open: boolean; title: string; submitLabel: string; busy?: boolean; wide?: boolean }>();
+const props = defineProps<{ open: boolean; title: string; submitLabel: string; busy?: boolean; wide?: boolean; readonly?: boolean }>();
 const emit = defineEmits<{ submit: []; cancel: [] }>();
 const dialog = ref<HTMLDialogElement>();
 
@@ -28,12 +28,12 @@ function onCancel(e: Event) {
 
 <template>
   <dialog ref="dialog" :class="['confirm', 'form-dialog', { wide }]" :aria-label="title" @cancel="onCancel">
-    <form novalidate @submit.prevent="emit('submit')">
+    <form novalidate @submit.prevent="!readonly && emit('submit')">
       <h2>{{ title }}</h2>
       <div v-if="open" class="body"><slot /></div>
       <div class="footer">
-        <button type="button" class="btn" :disabled="busy" @click="emit('cancel')">{{ t("common.cancel") }}</button>
-        <button type="submit" class="btn btn-primary" :disabled="busy">{{ busy ? t("common.saving") : submitLabel }}</button>
+        <button type="button" class="btn" :disabled="busy" @click="emit('cancel')">{{ readonly ? t("approvalRun.close") : t("common.cancel") }}</button>
+        <button v-if="!readonly" type="submit" class="btn btn-primary" :disabled="busy">{{ busy ? t("common.saving") : submitLabel }}</button>
       </div>
     </form>
   </dialog>
