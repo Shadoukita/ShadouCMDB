@@ -127,6 +127,18 @@ export function describeNotification(n: Pick<Notification, "kind" | "data">): { 
         detail: join(str(d, "classKey"), str(d, "errorCode")),
       };
     }
+    case "webhook_suspended": {
+      const failures = d.consecutiveFailures;
+      return {
+        title: t("notifications.text.webhookSuspended", {
+          endpoint: str(d, "endpointName") ?? str(d, "endpointKey") ?? "",
+        }),
+        detail: join(
+          str(d, "endpointKey"),
+          typeof failures === "number" ? t("notifications.detail.failures", { count: String(failures) }) : null,
+        ),
+      };
+    }
     default:
       // A kind added on the server before this client knows it: say something rather than nothing.
       return { title: t("notifications.text.unknown"), detail: "" };
