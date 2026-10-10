@@ -21,6 +21,9 @@ import WorkflowStateBadge from "./WorkflowStateBadge.vue";
  * The API answers 422 WORKFLOW_CONDITION_FAILED (a missing field or comment, a failing condition) and 400
  * VALIDATION_ERROR with `fields.<key>` or `comment`: those messages go next to their inputs. 409
  * VERSION_CONFLICT means someone moved the instance on: the operator reloads it (`reload`).
+ *
+ * A transition with an approval policy (`requiresApproval`) is checked the same way but only requests the
+ * change (202 with `pendingApproval`): the dialog says so and lists the steps before the operator submits.
  */
 const props = defineProps<{
   open: boolean;
@@ -91,13 +94,14 @@ async function submit() {
     fields[f.key] = values[f.key] === "" ? null : toApiValue(defFor(f.key, f.dataType), values[f.key]);
   }
   try {
-    await run.mutateAsync({
+    const after = await run.mutateAsync({
       id: props.instance.id,
       ciId: props.instance.ciId,
       // The spec gives `fields` as an object without properties (`Record<string, never>`); the API takes any field key.
       body: { transitionKey: cur.key, expectedVersion: props.instance.version, fields: fields as WorkflowTransitionBody["fields"], comment: comment.value.trim() || undefined },
     });
-    flash.show(t("wfRun.transition.done", { transition: cur.name, ci: props.instance.ciLabel, state: cur.toState.name }));
+    if (after.pendingApproval) flash.show(t("approvalRun.requested", { transition: cur.name, ci: props.instance.ciLabel }));
+    else flash.show(t("wfRun.transition.done", { transition: cur.name, ci: props.instance.ciLabel, state: cur.toState.name }));
     emit("close");
   } catch (e) {
     error.value = e;
@@ -109,7 +113,7 @@ async function submit() {
   <FormDialog
     :open="open && !!tr"
     :title="tr ? t('wfRun.transition.title', { transition: tr.name, workflow: instance.definitionName }) : ''"
-    :submit-label="tr?.name ?? t('wfRun.transition.run')"
+    :submit-label="tr?.requiresApproval ? t('approvalRun.requestSubmit') : (tr?.name ?? t('wfRun.transition.run'))"
     :busy="run.isPending.value"
     wide
     @submit="submit"
@@ -122,10 +126,20 @@ async function submit() {
         <WorkflowStateBadge :state="tr.toState" />
         <span class="muted" dir="auto">{{ t("wfRun.transition.onCi", { ci: instance.ciLabel, ident: instance.ciIdent }) }}</span>
       </p>
+      <div v-if="tr.requiresApproval" class="alert" data-testid="wf-requires-approval">
+        <strong>{{ t("approvalRun.requires.title") }}</strong>
+        <div>{{ t("approvalRun.requires.body") }}</div>
+        <ol class="wf-approval-steps" :aria-label="t('approvalRun.requires.steps')">
+          <li v-for="s in tr.approvalSteps" :key="s.key">
+            <span dir="auto">{{ s.name }}</span>: {{ t("approvalRun.requires.step", { n: s.requiredApprovals }) }}
+          </li>
+        </ol>
+        <div>{{ t("approvalRun.requires.self") }}</div>
+      </div>
       <div v-if="conflict" class="alert alert-warn" role="alert" data-testid="wf-conflict">
         <strong>{{ t("wfRun.conflict.title") }}</strong>
         <div>
-          Someone ran a step or changed it in the meantime, so nothing was saved.
+          {{ t("wfRun.conflict.body") }}
           <button type="button" class="btn btn-sm" @click="emit('reload')">{{ t("wfRun.conflict.reload") }}</button>
         </div>
       </div>

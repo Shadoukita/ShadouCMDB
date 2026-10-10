@@ -21,6 +21,8 @@ import { useFlashStore } from "../../stores/flash";
 import { useSessionStore } from "../../stores/session";
 import FormField from "../form/FormField.vue";
 import ChangeValue from "../imports/ChangeValue.vue";
+import ApprovalRequestHistory from "./ApprovalRequestHistory.vue";
+import PendingApprovalBanner from "./PendingApprovalBanner.vue";
 import WorkflowActions from "./WorkflowActions.vue";
 import WorkflowStateBadge from "./WorkflowStateBadge.vue";
 import WorkflowStatusBadge from "./WorkflowStatusBadge.vue";
@@ -190,7 +192,8 @@ async function reload() {
         <div class="panel-header"><h2 id="wfi-next">{{ t("wfRun.instance.next") }}</h2></div>
         <div class="panel-body">
           <p v-if="inst.status !== 'active'" class="muted">{{ t("wfRun.instance.ended") }}</p>
-          <WorkflowActions v-else :instance="inst" :transitions="d.availableTransitions" :can-cancel="d.canCancel" :class-id="ciClass?.id" :ci="ci.data.value" @reload="reload" />
+          <PendingApprovalBanner v-if="inst.status === 'active' && inst.pendingApproval" :instance="{ ...inst, pendingApproval: inst.pendingApproval }" @reload="reload" />
+          <WorkflowActions v-if="inst.status === 'active'" :instance="inst" :transitions="d.availableTransitions" :can-cancel="d.canCancel" :class-id="ciClass?.id" :ci="ci.data.value" @reload="reload" />
         </div>
       </section>
     </div>
@@ -229,6 +232,8 @@ async function reload() {
         </table>
       </div>
     </section>
+
+    <ApprovalRequestHistory :instance-id="inst.id" :state-name="stateName" />
 
     <section class="panel" aria-labelledby="wfi-history" data-testid="wf-events">
       <div class="panel-header">

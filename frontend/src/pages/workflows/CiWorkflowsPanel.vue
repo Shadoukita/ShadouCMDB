@@ -13,6 +13,7 @@ import { t } from "../../i18n";
 import { formatDateTime, formatRelative } from "../../lib/format";
 import { useFlashStore } from "../../stores/flash";
 import FormField from "../form/FormField.vue";
+import PendingApprovalBanner from "./PendingApprovalBanner.vue";
 import WorkflowActions from "./WorkflowActions.vue";
 import WorkflowStateBadge from "./WorkflowStateBadge.vue";
 import WorkflowStatusBadge from "./WorkflowStatusBadge.vue";
@@ -26,6 +27,10 @@ const flash = useFlashStore();
 const wf = useCiWorkflows(() => props.ci.id);
 const rows = computed(() => wf.data.value?.data ?? []);
 const startable = computed(() => wf.data.value?.startable ?? []);
+/** Running instances waiting for an approval: a banner each above the table. */
+const pending = computed(() =>
+  rows.value.flatMap((v) => (v.instance.status === "active" && v.instance.pendingApproval ? [{ ...v.instance, pendingApproval: v.instance.pendingApproval }] : [])),
+);
 
 const starting = ref(false);
 const startId = ref("");
@@ -71,7 +76,10 @@ const startCommentError = computed(() =>
         <button type="button" class="btn btn-primary" @click="openStart"><Icon name="plus" />{{ t("wfRun.start.open") }}</button>
       </template>
     </EmptyState>
-    <div v-else class="table-wrap">
+    <div v-if="!wf.isLoading.value && !wf.isError.value && pending.length > 0" class="panel-body">
+      <PendingApprovalBanner v-for="i in pending" :key="i.id" :instance="i" @reload="wf.refetch()" />
+    </div>
+    <div v-if="!wf.isLoading.value && !wf.isError.value && rows.length > 0" class="table-wrap">
       <table class="data">
         <thead>
           <tr>
@@ -114,7 +122,8 @@ const startCommentError = computed(() =>
                 compact
                 @reload="wf.refetch()"
               />
-              <span v-if="v.instance.status === 'active' && v.availableTransitions.length === 0 && !v.canCancel" class="muted">{{
+              <span v-if="v.instance.pendingApproval" class="muted">{{ t("approvalRun.awaiting") }}</span>
+              <span v-else-if="v.instance.status === 'active' && v.availableTransitions.length === 0 && !v.canCancel" class="muted">{{
                 t("wfRun.actions.noneShort")
               }}</span>
             </td>
