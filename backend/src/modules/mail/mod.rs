@@ -530,4 +530,21 @@ mod tests {
             assert_eq!(mask_addresses(&once), once, "re-masking {text}");
         }
     }
+
+    /// QA (SHAA-3062): addresses as relays echo them in SMTP replies, next to
+    /// a command, a parameter or trailing punctuation.
+    #[test]
+    fn masking_covers_addresses_in_smtp_replies() {
+        for (text, masked) in [
+            ("RCPT TO:carol@corp.example", "RCPT TO:c***@corp.example"),
+            ("550 5.1.1 <carol@corp.example>... User unknown", "550 5.1.1 <c***@corp.example>... User unknown"),
+            ("<carol%relay@corp.example> relaying denied", "<c***@corp.example> relaying denied"),
+            ("ORCPT=rfc822;carol@corp.example", "ORCPT=rfc822;c***@corp.example"),
+            ("no mailbox root@localhost", "no mailbox r***@localhost"),
+        ] {
+            let once = mask_addresses(text);
+            assert_eq!(once, masked, "masking {text}");
+            assert_eq!(mask_addresses(&once), once, "re-masking {text}");
+        }
+    }
 }
