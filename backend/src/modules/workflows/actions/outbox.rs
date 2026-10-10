@@ -65,6 +65,8 @@ const BACKOFF_CAP: Duration = Duration::from_secs(60 * 60);
 const RETENTION_EVERY: Duration = Duration::from_secs(60 * 60);
 /// Rows deleted per retention statement.
 const RETENTION_BATCH: i64 = 10_000;
+/// Users one fan-out examines, told or skipped, per `WORKFLOW_ACTIONS_MAX_RECIPIENTS` (GH#876).
+const EXAMINED_PER_RECIPIENT: usize = 10;
 /// `last_error` is capped by the table.
 const MAX_ERROR: usize = 1024;
 
@@ -349,6 +351,8 @@ pub async fn fan_out(
     }
 
     // The inbox. Recipients, now, by user id. The cap counts only those who are told, as in the preview.
+    // At most EXAMINED_PER_RECIPIENT times the cap are examined (GH#876): skipped users get a delivery
+    // row and a permission lookup too, so past that the run ends `truncated` however few were told.
     let subject = Subject {
         ci_id: run.ci_id,
         class_id,
@@ -356,6 +360,9 @@ pub async fn fan_out(
     };
     let resolved = recipients::resolve(&mut tx, &model, &action.recipients, Some(&subject)).await?;
     let mut users: Vec<Uuid> = resolved.users.into_keys().collect();
+    let examined = cfg.max_recipients.saturating_mul(EXAMINED_PER_RECIPIENT);
+    let mut truncated = users.len() > examined;
+    users.truncate(examined);
     let active: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM cmdb.users WHERE id = ANY($1) AND is_active")
         .bind(&users)
         .fetch_all(&mut *tx)
@@ -404,7 +411,7 @@ pub async fn fan_out(
             notify.push(*u);
         }
     }
-    let truncated = end < users.len();
+    truncated |= end < users.len();
     users.truncate(end);
     sqlx::query(
         "INSERT INTO cmdb.workflow_action_deliveries
