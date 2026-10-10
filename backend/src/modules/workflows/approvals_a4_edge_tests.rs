@@ -188,6 +188,83 @@ async fn revoking_a_delegation_mid_request_keeps_the_votes_it_cast() {
     audit_ok(&w).await;
 }
 
+/// `myEligibility` agrees with a decision once votes are cast on the active
+/// step (GH#887): whoever cast a vote, and whoever one was cast for, may not
+/// decide it again, and a principal already voted for is no longer offered to
+/// their delegates. The inbox agrees with both.
+#[tokio::test]
+async fn my_eligibility_drops_whoever_already_decided_the_active_step() {
+    let Some(db) = scratch::database("approval_eligibility_already_decided").await else { return };
+    let w = world(&db).await;
+    let p = setup(&w).await;
+    let viewers = w.profile("Viewers", &[(w.server, false)]).await;
+    let dan = w.user("dan", &[viewers]).await;
+    let (_, instance) = started(&w).await;
+    let (status, v) = request(&w, &p.req.0, instance, "approve", json!({ "owner_team": "ops" })).await;
+    assert_eq!(status, 202, "{v}");
+    let (request_id, _, _) = pending(&w, instance).await;
+    let path = format!("{REQUESTS}/{request_id}");
+    let eligibility = |v: &Value| {
+        let mine = &v["myEligibility"];
+        let for_whom: Vec<String> = mine["onBehalfOf"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|o| o["name"].as_str().map(str::to_owned)).collect())
+            .unwrap_or_default();
+        (mine["canDecide"].as_bool(), mine["inPerson"].as_bool(), for_whom, mine["reason"].as_str().map(str::to_owned))
+    };
+    let already = (Some(false), Some(false), Vec::<String>::new(), Some("already_decided".to_owned()));
+
+    // In person: tech decides step 1 (one approval), then CAB is active; tech is
+    // done with step 1 but step 2 has its own rules (earlier_step).
+    let (status, v) = w.call(&p.tech.0, "GET", &path, None).await;
+    assert_eq!((status, eligibility(&v).0), (200, Some(true)), "{v}");
+    let (status, v) = decide(&w, &p.tech.0, instance, "approve", None).await;
+    assert_eq!(status, 200, "{v}");
+
+    // Delegated: a1 and a2 lend dan their CAB approval; a2 lends a3 theirs too.
+    delegated(&w, &p.a1.0, dan.1).await;
+    delegated(&w, &p.a2.0, dan.1).await;
+    delegated(&w, &p.a2.0, p.a3.1).await;
+    let (_, v) = w.call(&dan.0, "GET", &path, None).await;
+    assert_eq!(eligibility(&v), (Some(true), Some(false), vec!["a1".into(), "a2".into()], None), "{v}");
+    let (_, v) = w.call(&p.a3.0, "GET", &path, None).await;
+    assert_eq!(eligibility(&v), (Some(true), Some(true), vec!["a2".into()], None), "{v}");
+
+    // a3 votes for a2: 1 of 2.
+    let (status, v) = decide_for(&w, &p.a3.0, instance, Some(p.a2.1)).await;
+    assert_eq!((status, v["instance"]["pendingApproval"]["approvals"].as_i64()), (200, Some(1)), "{v}");
+
+    // a3 cast a vote: done, in person and for anyone; the decision path agrees.
+    let (status, v) = w.call(&p.a3.0, "GET", &path, None).await;
+    assert_eq!((status, eligibility(&v)), (200, already.clone()), "{v}");
+    assert_eq!(v["myEligibility"]["message"], "You already decided step cab of this request", "{v}");
+    let (status, v) = decide(&w, &p.a3.0, instance, "approve", None).await;
+    assert_eq!((status, details(&v)), (409, pairs(&[("decision", "already_decided")])), "{v}");
+    assert_eq!(inbox_total(&w, &p.a3.0).await, 0);
+    // a2 had a vote cast for them: done as well.
+    let (_, v) = w.call(&p.a2.0, "GET", &path, None).await;
+    assert_eq!(eligibility(&v), already.clone(), "{v}");
+    let (status, v) = decide(&w, &p.a2.0, instance, "approve", None).await;
+    assert_eq!((status, details(&v)), (409, pairs(&[("decision", "already_decided")])), "{v}");
+    assert_eq!(inbox_total(&w, &p.a2.0).await, 0);
+    // dan may still act for a1, no longer for a2.
+    let (_, v) = w.call(&dan.0, "GET", &path, None).await;
+    assert_eq!(eligibility(&v), (Some(true), Some(false), vec!["a1".into()], None), "{v}");
+    let (status, v) = decide_for(&w, &dan.0, instance, Some(p.a2.1)).await;
+    assert_eq!((status, details(&v)), (409, pairs(&[("onBehalfOf", "already_decided")])), "{v}");
+    assert_eq!(inbox_total(&w, &dan.0).await, 1);
+    // a1 is untouched.
+    let (_, v) = w.call(&p.a1.0, "GET", &path, None).await;
+    assert_eq!(eligibility(&v), (Some(true), Some(true), Vec::<String>::new(), None), "{v}");
+
+    // dan votes for a1: the quorum completes and the request closes.
+    let (status, v) = decide_for(&w, &dan.0, instance, Some(p.a1.1)).await;
+    assert_eq!((status, v["instance"]["state"]["key"].as_str()), (200, Some("approved")), "{v}");
+    let (_, v) = w.call(&dan.0, "GET", &path, None).await;
+    assert_eq!(v["myEligibility"]["reason"], "not_pending", "{v}");
+    audit_ok(&w).await;
+}
+
 /// Four-eyes binds a delegate who made the request: they decide it neither
 /// in person nor for anyone, see it in no inbox, and the reason says so.
 /// Accounts disabled at creation time are refused on either side.

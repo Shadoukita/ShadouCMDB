@@ -300,7 +300,7 @@ for (const locale of LOCALES) {
       await expect(view.getByRole("table", { name: L("approvalRun.steps.label") }).getByRole("row").nth(1)).toContainText(L("approvalRun.steps.count", { n: 1, required: 2 }));
       await expect(view.getByRole("table", { name: L("approvalRun.steps.label") })).toContainText(`${L("approvalRun.decision.approved")} ${L("approvalRun.decision.by", { name: APPROVER_A })}`);
       await expectNoEnglish(locale, view);
-      // Escape: whichever form the dialog takes (a decision form while GH#887 stands, read-only once fixed).
+      // Escape closes the read-only view (GH#887: A has decided).
       await page.keyboard.press("Escape");
       await expect(view).toBeHidden();
 
@@ -309,9 +309,8 @@ for (const locale of LOCALES) {
       await done(page);
     });
 
-    // GH#887: after deciding, the API still says canDecide, so the banner offers "Review and decide".
+    // GH#887: once A decided, the API says already_decided and the banner offers only to view the request.
     test(`${locale}: approver A, having decided CI 1, is offered only to view it (API and banner)`, async ({ browser }) => {
-      test.fixme(true, "GH#887: myEligibility.canDecide stays true after the caller decided the step");
       const page = await session(browser, APPROVER_A);
       const res = await asUser(page, "GET", `/workflow-approval-requests/${ci[1].requestId}`);
       const me = ((await res.json()) as { myEligibility: { canDecide: boolean; reason: string | null } }).myEligibility;

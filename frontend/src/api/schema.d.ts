@@ -9041,12 +9041,16 @@ export interface components {
             canDecide: boolean;
             /** @description May decide in person (a decision without `onBehalfOf` is cast in person when this is true) */
             inPerson: boolean;
-            /** @description The principals the caller may decide for through a live delegation, by name */
+            /**
+             * @description The principals the caller may decide for through a live delegation, by name; a principal someone
+             *     already decided the active step for is left out
+             */
             onBehalfOf: components["schemas"]["WorkflowApprovalOnBehalfOf"][];
             /**
              * @description Why not: the `details[0].code` a decision would be refused with (`not_pending`, `not_eligible`,
              *     `requester`, `token_creator`, `on_behalf_of_requester`, `earlier_step`, `actor_of:<key>`,
-             *     `session_required`, `token_not_self_minted`); null when `canDecide`
+             *     `session_required`, `token_not_self_minted`, `already_decided`: the caller, or someone for them, already
+             *     decided the active step, one vote per person per step); null when `canDecide`
              */
             reason: string | null;
             message: string | null;

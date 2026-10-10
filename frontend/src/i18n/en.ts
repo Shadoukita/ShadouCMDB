@@ -4050,6 +4050,7 @@ export const en = {
   "approvalRun.refusal.earlier_step": "You approved an earlier step of this request. This step needs a different approver.",
   "approvalRun.refusal.actorOf": "You took part in \"{transition}\" on this workflow. This step must be decided by someone who did not.",
   "approvalRun.refusal.not_eligible": "You are not one of the approvers of the current step, or you already decided it.",
+  "approvalRun.refusal.already_decided": "You already decided the current step, or someone decided it for you. Each person has one vote per step.",
   "approvalRun.refusal.not_pending": "This request is no longer pending.",
   "approvalRun.refusal.session_required": "This step must be decided in a signed-in session, not with an API token.",
   "approvalRun.refusal.token_not_self_minted": "Only an API token its owner created for themselves may decide approvals.",

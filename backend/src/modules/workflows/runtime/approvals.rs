@@ -1676,21 +1676,53 @@ async fn view(
                     Err(e) => refusal(e)?,
                 }
             }
-            Ok(st) => WorkflowApprovalEligibility {
-                can_decide: true,
-                in_person: st.in_person.is_ok(),
-                on_behalf_of: st
+            Ok(st) => {
+                // One vote per person per step, as `decide` enforces it (GH#887): once
+                // the caller cast a vote on it, or someone cast one for them, they are
+                // done; a principal someone already voted for is no longer open.
+                let me = ctx.principal().ok_or_else(AppError::internal)?.user_id;
+                let voted: Vec<Uuid> = sqlx::query_scalar(
+                    "SELECT x.id FROM cmdb.workflow_approval_decisions ad
+                     CROSS JOIN LATERAL (VALUES (ad.actor_id), (ad.on_behalf_of_id)) AS x(id)
+                     WHERE ad.request_id = $1 AND ad.step_no = $2 AND x.id IS NOT NULL",
+                )
+                .bind(req.id)
+                .bind(s.step_no)
+                .fetch_all(&mut *conn)
+                .await?;
+                let on_behalf_of: Vec<WorkflowApprovalOnBehalfOf> = st
                     .delegated
                     .iter()
+                    .filter(|(l, _)| !voted.contains(&l.principal_id))
                     .map(|(l, _)| WorkflowApprovalOnBehalfOf {
                         user_id: l.principal_id,
                         name: l.principal_name.clone(),
                         delegation_id: l.delegation_id,
                     })
-                    .collect(),
-                reason: None,
-                message: None,
-            },
+                    .collect();
+                let in_person = st.in_person.is_ok();
+                if voted.contains(&me) || (!in_person && on_behalf_of.is_empty()) {
+                    WorkflowApprovalEligibility {
+                        can_decide: false,
+                        in_person: false,
+                        on_behalf_of: Vec::new(),
+                        reason: Some("already_decided".into()),
+                        message: Some(if voted.contains(&me) {
+                            format!("You already decided step {} of this request", s.key)
+                        } else {
+                            format!("Step {} of this request was already decided for everyone you may act for", s.key)
+                        }),
+                    }
+                } else {
+                    WorkflowApprovalEligibility {
+                        can_decide: true,
+                        in_person,
+                        on_behalf_of,
+                        reason: None,
+                        message: None,
+                    }
+                }
+            }
         }
     };
     let approvers = if may_manage(ctx) || my_eligibility.can_decide {
