@@ -60,6 +60,17 @@ export function useAdminDelegations(query: MaybeRefOrGetter<AdminDelegationQuery
   });
 }
 
+export type DelegateCandidate = Schemas["WorkflowApprovalDelegateCandidate"];
+export type DelegateCandidateList = Schemas["WorkflowApprovalDelegateCandidateList"];
+
+/**
+ * Users you may delegate your approvals to (GET /me/approval-delegations/candidates). With the user lookup right
+ * a substring search; without it (`exactMatchOnly`), `q` is an exact username and the answer has at most one user.
+ */
+export function findDelegateCandidates(q: string, signal?: AbortSignal): Promise<DelegateCandidateList> {
+  return unwrap(api.GET("/api/v1/me/approval-delegations/candidates", { params: { query: { q } }, signal }));
+}
+
 /** A new or revoked delegation changes who may decide what: the delegation lists and the inbox (its count too). */
 function useInvalidateDelegations() {
   const qc = useQueryClient();
