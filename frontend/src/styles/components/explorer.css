@@ -196,11 +196,32 @@ table.data tbody tr:has(:focus-visible) > :first-child {
     display: flex;
   }
 }
-/* Search: the matched text in each result (audit Q2). */
+/* Search: the matched field and text in each result (audit Q2), the matched text highlighted. */
 table.data td.matches mark {
   background: var(--c-warning-subtle);
   color: var(--c-text);
   border-radius: var(--radius-sm);
+}
+.search-table .match + .match,
+.search-table .match + .badge {
+  margin-left: var(--space-3);
+}
+.search-table .match-key {
+  margin-right: var(--space-1_5);
+  font-size: var(--fs-sm);
+  color: var(--c-text-secondary);
+}
+.search-head .toolbar .field.search {
+  flex: 1 1 320px;
+}
+.search-head .toolbar .field.search input {
+  width: 100%;
+}
+.search-head .filter-chips {
+  margin-top: var(--space-3);
+  padding: 0;
+  border: 0;
+  background: none;
 }
 .page-header .title .count {
   font-variant-numeric: tabular-nums;
@@ -682,7 +703,8 @@ dialog.manage-views td.row-actions {
  * The page head is a surface band across the content area (breadcrumb, title with "x of y", actions,
  * then search, filter chips, Add filter and Save view); under it the facet panel sits on the canvas
  * beside the table card. Admin lists (design §0 step 12f) use the same band as .list-head: breadcrumb,
- * title with the count, actions, intro and their toolbar; search keeps the toolbar inside its panel.
+ * title with the count, actions, intro and their toolbar. Search (§1.12 N3, step 11-6a) uses .list-head too,
+ * with the term box taking the free width and the filter chips under the toolbar.
  */
 .inventory-head,
 .list-head {

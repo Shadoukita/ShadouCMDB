@@ -85,5 +85,6 @@ test("global search: '/' focuses it, type-ahead finds by IP, Enter opens results
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/\/search\?q=10\.20\.5\.21/);
   await expect(page.getByRole("link", { name: "crm-app-01", exact: true })).toBeVisible();
-  await expect(page.getByRole("cell", { name: /IP address: 10\.20\.5\.21/ })).toBeVisible();
+  // The matched field reads "<label>: <value>"; the colon is visually hidden, so Chromium may space it from the label.
+  await expect(page.getByRole("cell", { name: /IP address\s*:\s*10\.20\.5\.21/ })).toBeVisible();
 });

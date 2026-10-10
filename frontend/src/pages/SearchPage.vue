@@ -67,6 +67,7 @@ watch(debouncedQ, (v) => {
 });
 watch(q, (v) => (qText.value = v)); // back/forward and the header search
 const rows = computed(() => search.data.value?.data ?? []);
+const total = computed(() => search.data.value?.page.total ?? 0);
 const catalogue = computed(() =>
   classes.data.value && lookupLists.data.value && lookupValues.data.value
     ? { classes: classes.data.value, lists: lookupLists.data.value, values: lookupValues.data.value }
@@ -84,17 +85,19 @@ const inventoryLink = computed(() => {
 </script>
 
 <template>
-  <Breadcrumbs :items="[{ label: t('search.title') }]" />
-  <div class="page-header">
-    <div class="title">
-      <h1>{{ q ? t("search.resultsFor", { q }) : t("search.title") }}</h1>
-      <span v-if="search.data.value" class="muted count">{{ t("search.matches", { n: search.data.value.page.total }) }}</span>
+  <div class="list-head search-head">
+    <Breadcrumbs :items="[{ label: t('search.title') }]" />
+    <div class="page-header">
+      <div class="title">
+        <h1>{{ q ? t("search.resultsFor", { q }) : t("search.title") }}</h1>
+        <span v-if="search.data.value" class="count mono">{{ t("search.matches", { n: search.data.value.page.total }) }}</span>
+        <span v-if="search.isFetching.value && !search.isLoading.value" class="spinner" :aria-label="t('common.refreshing')" />
+      </div>
+      <div v-if="q" class="actions">
+        <RouterLink class="btn" :to="inventoryLink"><Icon name="list" />{{ t("search.openAsInventory") }}</RouterLink>
+      </div>
     </div>
-    <div v-if="q" class="actions">
-      <RouterLink class="btn" :to="inventoryLink"><Icon name="list" />{{ t("search.openAsInventory") }}</RouterLink>
-    </div>
-  </div>
-  <section class="panel explorer" :aria-label="t('search.region')">
+    <p class="page-intro">{{ t("search.intro") }}</p>
     <div class="toolbar" role="group" :aria-label="t('search.filterGroup')">
       <SavedViewMenu context="search" :state="state" :selection="selection" :classes="classes.data.value" :catalogue="catalogue" :total="settledTotal" />
       <div class="field search">
@@ -110,22 +113,30 @@ const inventoryLink = computed(() => {
       </template>
     </div>
     <InventoryFilterChips v-if="q" :state="state" />
+  </div>
+
+  <section class="panel explorer" :aria-label="t('search.region')">
     <EmptyState v-if="!q" icon="search" :title="t('search.empty.title')">
       {{ t("search.empty.body") }}
     </EmptyState>
-    <SkeletonRows v-if="search.isLoading.value" :label="t('common.searching')" />
-    <div v-if="search.isError.value" class="panel-body">
+    <div v-else-if="search.isError.value" class="panel-body">
       <ErrorAlert :error="search.error.value" :on-retry="() => search.refetch()" />
     </div>
-    <EmptyState v-if="search.data.value && rows.length === 0 && activeFilters.length > 0" icon="search" :title="t('search.noMatchFiltered', { q })">
+    <SkeletonRows v-else-if="search.isLoading.value" :label="t('common.searching')" />
+    <EmptyState v-else-if="search.data.value && total === 0 && activeFilters.length > 0" icon="search" :title="t('search.noMatchFiltered', { q })">
       {{ t("inventory.noMatch.body") }}
+      <template #actions><button type="button" class="btn" @click="state.clearFilters()">{{ t("inventory.clearFilters") }}</button></template>
     </EmptyState>
-    <EmptyState v-else-if="search.data.value && rows.length === 0" icon="search" :title="t('search.noMatch', { q })">
+    <EmptyState v-else-if="search.data.value && total === 0" icon="search" :title="t('search.noMatch', { q })">
       {{ t("search.noMatch.body") }}
     </EmptyState>
-    <template v-if="rows.length > 0">
+    <EmptyState v-else-if="search.data.value && rows.length === 0" :title="t('common.pastEnd')">
+      <template #actions><button type="button" class="btn" @click="state.update({}, true)">{{ t("common.firstPage") }}</button></template>
+    </EmptyState>
+    <template v-if="q && rows.length > 0 && !search.isError.value">
       <div class="table-wrap table-scroll">
-        <table :class="['data', { loading: search.isPlaceholderData.value }]" aria-describedby="search-keys">
+        <table :class="['data', 'list-table', 'search-table', { loading: search.isPlaceholderData.value }]" aria-describedby="search-keys">
+          <caption class="sr-only">{{ t("search.region") }}</caption>
           <thead>
             <tr>
               <th scope="col">{{ t("search.col.label") }}</th>
@@ -137,17 +148,21 @@ const inventoryLink = computed(() => {
           </thead>
           <tbody @keydown="onRowKeydown($event)">
             <tr v-for="{ item, matches } in rows" :key="item.id" :data-id="item.id">
-              <td><RouterLink :to="`/cis/${item.id}`" dir="auto">{{ item.label }}</RouterLink> <CiStateBadge :ci="item" /></td>
-              <td class="mono">{{ item.ident }}</td>
+              <td>
+                <span class="cell-clip"><RouterLink :to="`/cis/${item.id}`" class="list-name" dir="auto">{{ item.label }}</RouterLink></span>
+                <CiStateBadge :ci="item" />
+              </td>
+              <td class="mono muted">{{ item.ident }}</td>
               <td>
                 <ClassBadge v-if="classById(item.classId)" :icon="classById(item.classId)!.icon" :color="classById(item.classId)!.color" :name="item.class.name" />
                 <bdi v-else>{{ item.class.name }}</bdi>
               </td>
               <td class="matches" :title="matches.map((m) => `${m.label}: ${m.value}`).join('\n')">
                 <span v-for="(m, i) in matches.slice(0, 2)" :key="i" class="match">
-                  <template v-if="i > 0">, </template>
-                  <span class="muted"><bdi>{{ m.label }}</bdi>:</span> <span class="mono" dir="auto"><template v-for="(part, j) in highlight(m.value, q)" :key="j"><mark v-if="part.match">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></span>
+                  <span class="match-key"><bdi>{{ m.label }}</bdi><span class="sr-only">: </span></span>
+                  <span class="match-value mono" dir="auto"><template v-for="(part, j) in highlight(m.value, q)" :key="j"><mark v-if="part.match">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></span>
                 </span>
+                <span v-if="matches.length > 2" class="badge"><span aria-hidden="true">+{{ matches.length - 2 }}</span><span class="sr-only">{{ t("search.moreMatches", { n: matches.length - 2 }) }}</span></span>
               </td>
               <td class="row-actions">
                 <RowMenu :label="t('inventory.rowMenu', { name: item.label })" :items="ciRowMenu(item)" />
@@ -156,7 +171,9 @@ const inventoryLink = computed(() => {
           </tbody>
         </table>
       </div>
-      <PaginationBar :total="search.data.value!.page.total" :limit="limit" :offset="offset" @change="state.onPage" />
+      <div class="table-footer">
+        <PaginationBar numbered :total="total" :limit="limit" :offset="offset" @change="state.onPage" />
+      </div>
       <KeyboardHints id="search-keys" />
     </template>
   </section>

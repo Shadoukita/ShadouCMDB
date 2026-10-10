@@ -1832,6 +1832,8 @@ export const de: { [K in MessageKey]: string } = {
   "search.col.label": "Bezeichnung",
   "search.col.ident": "Ident",
   "search.col.class": "Klasse",
+  "search.intro": "Treffer in den Bezeichnungen, Idents und Attributwerten, die Sie sehen dürfen, der beste zuerst. Öffnen Sie die Ergebnisse als Inventar, um sie zu sortieren oder Spalten zu wählen.",
+  "search.moreMatches": "{n, plural, one {und # weiteres gefundenes Feld} other {und # weitere gefundene Felder}}",
   "search.col.matched": "Gefunden in",
   "admin.group.access": "Zugriff",
   "admin.group.dataModel": "Datenmodell",

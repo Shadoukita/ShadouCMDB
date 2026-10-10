@@ -1818,6 +1818,8 @@ export const en = {
   "search.col.label": "Label",
   "search.col.ident": "Ident",
   "search.col.class": "Class",
+  "search.intro": "Matches in the labels, idents and attribute values you may view, best match first. Open the results as an inventory to sort them or choose columns.",
+  "search.moreMatches": "{n, plural, one {and # more matched field} other {and # more matched fields}}",
   "search.col.matched": "Matched on",
   "admin.group.access": "Access",
   "admin.group.dataModel": "Data model",
