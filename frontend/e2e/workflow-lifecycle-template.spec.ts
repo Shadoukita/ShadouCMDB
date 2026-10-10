@@ -177,14 +177,15 @@ test("publish it and move a CI Planned → Active → Retired", async ({ page, r
 test("the published lifecycle goes through the configuration export and import (format 8)", async ({ request }) => {
   const res = await request.get("/api/v1/admin/config/export", { headers: { "X-CSRF-Token": await csrf(request) } });
   expect(res.ok(), `export → ${res.status()}`).toBeTruthy();
-  const file = (await res.json()) as { format: string; workflows?: { key: string; name: string }[] };
+  const file = (await res.json()) as { format: string; formatVersion: number; workflows?: { key: string; name: string }[] };
   const exported = file.workflows?.find((w) => w.key === KEY);
   expect(exported, "the lifecycle is in the export").toBeTruthy();
 
-  // The same workflow under a new key: the import creates it and publishes its version 1.
+  // The same workflow under a new key, inactive (the original already drives the field): the import creates it and
+  // publishes its version 1.
   const copyKey = `${KEY}_copy`;
   const imported = await request.post("/api/v1/admin/config/import?mode=apply", {
-    data: { format: file.format, workflows: [{ ...exported, key: copyKey, name: `${NAME} copy` }] },
+    data: { format: file.format, formatVersion: file.formatVersion, workflows: [{ ...exported, key: copyKey, name: `${NAME} copy`, isActive: false }] },
     headers: { "X-CSRF-Token": await csrf(request) },
   });
   expect(imported.ok(), `import → ${imported.status()} ${await imported.text()}`).toBeTruthy();
