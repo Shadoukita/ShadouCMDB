@@ -3985,7 +3985,7 @@ export interface paths {
         };
         /**
          * Find a user to delegate your approvals to
-         * @description For the delegate picker of `createMyApprovalDelegation`: active users other than you, with only their id, username and display name. A caller who may look up users (`GET /principals`: edit on business services or `users.manage`) gets a substring search on display name and username, at most 20. Anyone else gets `exactMatchOnly: true` and at most the one user whose username is `q` (case-insensitive): no listing, and no answer that tells a disabled account, your own or none apart (GH#839). 400 VALIDATION_ERROR on `q` (`required`, `too_small`, `too_big`); 429 RATE_LIMITED past 30 exact-username lookups a minute. Needs a signed-in session. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description For the delegate picker of `createMyApprovalDelegation`: active users other than you, with only their id, username and display name. A caller who may look up users (the rights of `searchPrincipals`) gets a substring search on display name and username, at most 20. No other right is needed: anyone else gets `exactMatchOnly: true` and at most the one user whose username is `q` (case-insensitive): no listing, and no answer that tells a disabled account, your own or none apart (GH#839). 400 VALIDATION_ERROR on `q` (`required`, `too_small`, `too_big`); 429 RATE_LIMITED past 30 exact-username lookups a minute. Needs a signed-in session. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         get: operations["listMyApprovalDelegateCandidates"];
         put?: never;
