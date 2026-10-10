@@ -12,7 +12,7 @@ import type { StateValueOption } from "../../../lib/workflowTemplates";
  * What a template creates, beside the new-workflow form: its states (with the state field value each is
  * kept in step with) and transitions, and the permission profiles that may run the transitions. Without
  * a granted profile only administrators could run them, which the lint reports; the Grants tab changes
- * them later. Listing profiles needs `profiles.manage` or `users.manage`; without it the grants are left
+ * them later. Approval steps are listed with a note that their approvers are chosen after creating. Listing profiles needs `profiles.manage` or `users.manage`; without it the grants are left
  * to the Grants tab.
  */
 const props = defineProps<{ draft: Draft; stateValues: StateValueOption[] | null }>();
@@ -22,6 +22,9 @@ const profiles = useAllProfiles();
 const cannotList = computed(() => profiles.error.value instanceof ApiError && profiles.error.value.status === 403);
 const stateName = (key: string) => props.draft.states.find((s) => s.key === key)?.name ?? key;
 const valueName = (key: string) => props.stateValues?.find((v) => v.key === key)?.name ?? key;
+const transitionName = (key: string) => props.draft.transitions.find((x) => x.key === key)?.name ?? key;
+/** Approval steps start without approvers: they are chosen on the Approvers tab once the workflow exists. */
+const hasApproval = computed(() => props.draft.transitions.some((x) => x.approval.length > 0));
 
 function toggle(id: string, on: boolean) {
   profileIds.value = on ? [...profileIds.value, id] : profileIds.value.filter((p) => p !== id);
@@ -64,9 +67,13 @@ function toggle(id: string, on: boolean) {
         <ul class="plain-list">
           <li v-for="x in draft.transitions" :key="x.key">
             <strong>{{ x.name }}</strong>: {{ t("wfTemplate.preview.fromTo", { from: stateName(x.from), to: stateName(x.to) }) }}
+            <div v-for="st in x.approval" :key="st.key" class="hint">
+              {{ t("wfTemplate.preview.approval", { step: st.name, n: st.requiredApprovals, excluded: st.excludeActorsOf.map(transitionName).join(", ") }) }}
+            </div>
           </li>
         </ul>
       </div>
+      <div v-if="hasApproval" class="alert alert-warn" data-testid="wf-template-approvers">{{ t("wfTemplate.preview.approvers") }}</div>
       <fieldset class="group" aria-describedby="wf-template-grants-hint">
         <legend>{{ t("wfTemplate.grants.legend") }}</legend>
         <p id="wf-template-grants-hint" class="hint no-margin">{{ t("wfTemplate.grants.hint") }}</p>
