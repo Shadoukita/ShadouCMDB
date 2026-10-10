@@ -260,11 +260,13 @@ pub struct WorkflowApprovalEligibility {
     pub can_decide: bool,
     /// May decide in person (a decision without `onBehalfOf` is cast in person when this is true)
     pub in_person: bool,
-    /// The principals the caller may decide for through a live delegation, by name
+    /// The principals the caller may decide for through a live delegation, by name; a principal someone
+    /// already decided the active step for is left out
     pub on_behalf_of: Vec<WorkflowApprovalOnBehalfOf>,
     /// Why not: the `details[0].code` a decision would be refused with (`not_pending`, `not_eligible`,
     /// `requester`, `token_creator`, `on_behalf_of_requester`, `earlier_step`, `actor_of:<key>`,
-    /// `session_required`, `token_not_self_minted`); null when `canDecide`
+    /// `session_required`, `token_not_self_minted`, `already_decided`: the caller, or someone for them, already
+    /// decided the active step, one vote per person per step); null when `canDecide`
     #[schema(required = true)]
     pub reason: Option<String>,
     #[schema(required = true)]

@@ -56447,14 +56447,14 @@
             "items": {
               "$ref": "#/components/schemas/WorkflowApprovalOnBehalfOf"
             },
-            "description": "The principals the caller may decide for through a live delegation, by name"
+            "description": "The principals the caller may decide for through a live delegation, by name; a principal someone\nalready decided the active step for is left out"
           },
           "reason": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Why not: the `details[0].code` a decision would be refused with (`not_pending`, `not_eligible`,\n`requester`, `token_creator`, `on_behalf_of_requester`, `earlier_step`, `actor_of:<key>`,\n`session_required`, `token_not_self_minted`); null when `canDecide`"
+            "description": "Why not: the `details[0].code` a decision would be refused with (`not_pending`, `not_eligible`,\n`requester`, `token_creator`, `on_behalf_of_requester`, `earlier_step`, `actor_of:<key>`,\n`session_required`, `token_not_self_minted`, `already_decided`: the caller, or someone for them, already\ndecided the active step, one vote per person per step); null when `canDecide`"
           },
           "message": {
             "type": [
