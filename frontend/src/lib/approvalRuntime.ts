@@ -1,8 +1,9 @@
 // Run-time approvals (SHAA-2916, design SHAA-1869 A6): the words for request statuses and close reasons, the
 // progress of a pending request, and plain-language explanations of why a decision is refused, both before it
 // is tried (`myEligibility.reason`) and after the API refused it (403 WORKFLOW_APPROVAL_SELF / FORBIDDEN,
-// 409 WORKFLOW_APPROVAL_STALE / CONFLICT / VERSION_CONFLICT). Pure functions, so the unit tests cover them.
-import { ApiError } from "../api/client";
+// 409 WORKFLOW_APPROVAL_STALE / CONFLICT / VERSION_CONFLICT). Pure functions, so the unit tests cover them: an
+// error is recognised by its shape, not by `instanceof ApiError`, which would load the API client.
+import type { ApiError } from "../api/client";
 import type { WorkflowApprovalCloseReason, WorkflowApprovalStatus, WorkflowPendingApproval } from "../api/workflowRuntime";
 import { hasMessage, t } from "../i18n";
 
@@ -47,9 +48,13 @@ export type DecisionProblem =
   | { kind: "comment"; message: string }
   | { kind: "other" };
 
+function isApiError(e: unknown): e is ApiError {
+  return e instanceof Error && e.name === "ApiError" && typeof (e as ApiError).code === "string" && Array.isArray((e as ApiError).details);
+}
+
 /** Sorts a refused decision into what the dialog shows. */
 export function decisionProblem(e: unknown, transitionName?: (key: string) => string): DecisionProblem | null {
-  if (!(e instanceof ApiError)) return e ? { kind: "other" } : null;
+  if (!isApiError(e)) return e ? { kind: "other" } : null;
   const first = e.details[0];
   if (e.code === "WORKFLOW_APPROVAL_STALE") return { kind: "stale", details: e.details.map((d) => d.message).filter(Boolean) };
   if (e.code === "WORKFLOW_APPROVAL_SELF" || e.code === "FORBIDDEN") return { kind: "refused", message: refusalMessage(first?.code, e.message, transitionName) };
