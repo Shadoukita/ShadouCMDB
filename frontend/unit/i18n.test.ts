@@ -157,7 +157,7 @@ describe("app shell and dashboard", () => {
     assert.equal(pageLabel("inventory"), "All configuration items");
     assert.equal(widgetLabel("count_by_class"), "CIs by class");
     setLocaleForTests("de");
-    assert.equal(pageLabel("inventory"), "Alle Configuration Items");
+    assert.equal(pageLabel("inventory"), "Alle CIs");
     assert.equal(widgetLabel("saved_search"), "Gespeicherte Suche");
   });
   test("built-in field names come from the catalog, for columns, forms and sort choices (SHAA-2406)", () => {
