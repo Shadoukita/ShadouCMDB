@@ -6,9 +6,11 @@ import { configApi, useImportConfig, type ImportResult } from "../../../api/uiSe
 import Breadcrumbs from "../../../components/Breadcrumbs.vue";
 import ConfirmDialog from "../../../components/ConfirmDialog.vue";
 import ErrorAlert from "../../../components/ErrorAlert.vue";
+import Icon from "../../../components/Icon.vue";
+import SaveBar from "../../../components/SaveBar.vue";
 import SchemaChangeList from "../../../components/SchemaChangeList.vue";
+import { hasMessage, t, type MessageKey } from "../../../i18n";
 import { useDocumentTitle } from "../../../lib/composables";
-import { plural } from "../../../lib/format";
 import { useBrandingStore } from "../../../stores/branding";
 import { useSessionStore } from "../../../stores/session";
 
@@ -17,8 +19,11 @@ import { useSessionStore } from "../../../stores/session";
  * lookup lists, permission profiles, UI settings) as one JSON file. Importing is
  * always a dry run first: the API runs every change and rolls back, and this
  * page shows exactly what applying would do before the operator applies it.
+ * The page has the CI page's head band without tabs (the chosen file and its
+ * state as chips), and the dry run's Apply / Cancel sit on the shared save bar
+ * (design §2.7, audit N4).
  */
-useDocumentTitle("Export / import");
+useDocumentTitle(() => t("admin.section.config"));
 const session = useSessionStore();
 const branding = useBrandingStore();
 const MAX_BYTES = 16 * 1024 * 1024;
@@ -64,13 +69,13 @@ async function onFile(e: Event) {
   if (!file) return;
   fileName.value = file.name;
   if (file.size > MAX_BYTES) {
-    readError.value = `${file.name} is ${(file.size / 1024 / 1024).toFixed(1)} MiB; a configuration file can be at most 16 MiB.`;
+    readError.value = t("configTransfer.import.tooLarge", { file: file.name, size: (file.size / 1024 / 1024).toFixed(1) });
     return;
   }
   try {
     parsed.value = JSON.parse(await file.text());
   } catch {
-    readError.value = `${file.name} is not a JSON file. Choose a file downloaded with “Download configuration”.`;
+    readError.value = t("configTransfer.import.notJson", { file: file.name });
     return;
   }
   await run("dry_run");
@@ -117,98 +122,116 @@ function show(v: unknown): string {
   const s = typeof v === "string" ? v : JSON.stringify(v);
   return s.length > 120 ? `${s.slice(0, 117)}…` : s;
 }
-const SECTION_NAMES: Record<string, string> = {
-  areas: "Areas",
-  classes: "CI classes",
-  attributes: "Attributes",
-  relationshipTypes: "Relationship types",
-  relationshipRules: "Relationship rules",
-  lookupLists: "Lookup lists",
-  lookupListValues: "Lookup list values",
-  permissionProfiles: "Permission profiles",
-  uiSettings: "UI settings",
-  uiAssets: "Logo and favicon",
-};
-const sectionName = (s: string) => SECTION_NAMES[s] ?? s;
+/** The translated name of an export section; a section this version does not know shows as sent. */
+function sectionName(s: string): string {
+  const key = `configTransfer.section.${s}`;
+  return hasMessage(key) ? t(key) : s;
+}
+function actionLabel(action: string): string {
+  const key = `configTransfer.action.${action}`;
+  return hasMessage(key) ? t(key) : action;
+}
+const actionTone = (action: string) => (action === "create" ? "ok" : action === "delete" ? "danger" : "warn");
+
+/** The state chip in the head band: what happened to the chosen file. */
+const state = computed<{ tone: string; key: MessageKey } | null>(() => {
+  if (applied.value) return { tone: "ok", key: "configTransfer.state.imported" };
+  if (validation.value || error.value || readError.value) return { tone: "danger", key: "configTransfer.state.refused" };
+  if (noChanges.value) return { tone: "off", key: "configTransfer.state.noChanges" };
+  if (dryRun.value) return { tone: "warn", key: "configTransfer.state.dryRun" };
+  return null;
+});
 </script>
 
 <template>
-  <Breadcrumbs :items="adminCrumbs('config')" />
-  <div class="page-header">
-    <div class="title"><h1>Export / import</h1></div>
+  <div class="record-head record-head-plain">
+    <Breadcrumbs :items="adminCrumbs('config')" />
+    <div class="page-header record-header">
+      <div class="record-heading">
+        <span class="class-tile class-tile-lg" aria-hidden="true"><Icon name="arrow-left-right" class="class-icon" /></span>
+        <div class="record-title">
+          <div class="title">
+            <h1>{{ t("admin.section.config") }}</h1>
+          </div>
+          <p class="record-meta" data-testid="record-meta">
+            <span v-if="fileName" class="badge mono" dir="auto">{{ fileName }}</span>
+            <span v-if="state" :class="['badge', state.tone]"><span class="status-dot" aria-hidden="true" />{{ t(state.key) }}</span>
+            <span class="record-meta-line">{{ t("configTransfer.meta") }}</span>
+          </p>
+        </div>
+      </div>
+    </div>
   </div>
 
-  <section class="panel">
-    <div class="panel-header"><h2>Export</h2></div>
-    <div class="panel-body">
-      <p>
-        One JSON file with the configuration of this installation: the data model (classes, attributes, relationship
-        types and rules), the lookup lists and their values (such as status, environment, location and owner), permission
-        profiles and the
-        customization, logo and favicon included. It never contains users, passwords, sessions, configuration items or
-        their relationships.
-      </p>
-      <button type="button" class="btn btn-primary" :disabled="exporting" @click="download">{{ exporting ? "Preparing…" : "Download configuration" }}</button>
-      <ErrorAlert v-if="exportError" :error="exportError" title="Export failed" />
-    </div>
-  </section>
-
-  <section class="panel" style="margin-top: var(--space-3)">
-    <div class="panel-header"><h2>Import</h2></div>
-    <div class="panel-body">
-      <p>
-        Choose a configuration file to see what importing it would change. Nothing changes until you apply it. Rows are
-        matched by key and created or updated; nothing is deleted, except that the customization, logo and favicon are
-        replaced by the file's.
-      </p>
-      <div class="inline-control">
-        <label class="btn" for="config-file">{{ importer.isPending.value && !dryRun ? "Checking…" : "Choose a file…" }}</label>
-        <input id="config-file" class="sr-only" type="file" accept=".json,application/json" :disabled="importer.isPending.value" @change="onFile" />
-        <span v-if="fileName" class="muted">{{ fileName }}</span>
+  <div class="stack">
+    <section class="panel" aria-labelledby="config-export-title">
+      <div class="panel-header"><h2 id="config-export-title">{{ t("configTransfer.export.title") }}</h2></div>
+      <div class="panel-body stack">
+        <p>{{ t("configTransfer.export.body") }}</p>
+        <div>
+          <button type="button" class="btn btn-primary" :disabled="exporting" @click="download">
+            <Icon name="arrow-down-to-line" />{{ exporting ? t("configTransfer.export.preparing") : t("configTransfer.export.download") }}
+          </button>
+        </div>
+        <ErrorAlert v-if="exportError" :error="exportError" :title="t('configTransfer.export.failed')" />
       </div>
-      <div v-if="readError" class="alert alert-error" role="alert">{{ readError }}</div>
+    </section>
 
-      <div v-if="validation" class="alert alert-error" role="alert">
-        <strong>The file cannot be imported: {{ plural(validation.details.length, "problem") }}.</strong>
-        <div>{{ validation.message }} Nothing was changed.</div>
-        <ul>
-          <li v-for="(d, i) in validation.details" :key="i"><code v-if="d.field">{{ d.field }}</code> {{ d.message }}</li>
-        </ul>
-      </div>
-      <ErrorAlert v-else-if="error" :error="error" :title="dryRun ? 'Import failed; nothing was changed' : 'The dry run failed; nothing was changed'" />
+    <section class="panel" aria-labelledby="config-import-title">
+      <div class="panel-header"><h2 id="config-import-title">{{ t("configTransfer.import.title") }}</h2></div>
+      <div class="panel-body stack">
+        <p>{{ t("configTransfer.import.body") }}</p>
+        <div class="inline-control">
+          <label class="btn" for="config-file"
+            ><Icon name="upload" />{{ importer.isPending.value && !dryRun ? t("configTransfer.import.checking") : t("configTransfer.import.choose") }}</label
+          >
+          <input id="config-file" class="sr-only" type="file" accept=".json,application/json" :disabled="importer.isPending.value" @change="onFile" />
+          <span v-if="fileName" class="muted mono" dir="auto">{{ fileName }}</span>
+        </div>
+        <div v-if="readError" class="alert alert-error" role="alert">{{ readError }}</div>
 
-      <div v-if="applied" class="alert alert-success" role="status">
-        <strong>Imported {{ fileName }}.</strong>
-        {{ plural(totals(applied).created, "row") }} created, {{ plural(totals(applied).updated, "row") }} updated. Every change is in the audit log.
-      </div>
-      <div v-if="applied && (applied.warnings.length > 0 || applied.uiSettingsIssues.length > 0)" class="alert alert-warn" role="status">
-        <strong>Imported with warnings</strong>
-        <ul>
-          <li v-for="(w, i) in applied.warnings" :key="`w${i}`"><code>{{ w.path }}</code> {{ w.message }}</li>
-          <li v-for="(w, i) in applied.uiSettingsIssues" :key="`u${i}`"><code>uiSettings.settings.{{ w.path }}</code> {{ w.message }}</li>
-        </ul>
-      </div>
-    </div>
+        <div v-if="validation" class="alert alert-error" role="alert">
+          <strong>{{ t("configTransfer.import.invalid", { n: validation.details.length }) }}</strong>
+          <div>{{ validation.message }} {{ t("configTransfer.import.nothingChanged") }}</div>
+          <ul>
+            <li v-for="(d, i) in validation.details" :key="i"><code v-if="d.field">{{ d.field }}</code> {{ d.message }}</li>
+          </ul>
+        </div>
+        <ErrorAlert v-else-if="error" :error="error" :title="dryRun ? t('configTransfer.import.applyFailed') : t('configTransfer.import.dryRunFailed')" />
 
-    <template v-if="dryRun">
+        <div v-if="applied" class="alert alert-success" role="status">
+          <strong>{{ t("configTransfer.applied.title", { file: fileName }) }}</strong>
+          {{ t("configTransfer.applied.body", { created: totals(applied).created, updated: totals(applied).updated }) }}
+        </div>
+        <div v-if="applied && (applied.warnings.length > 0 || applied.uiSettingsIssues.length > 0)" class="alert alert-warn" role="status">
+          <strong>{{ t("configTransfer.applied.warnings") }}</strong>
+          <ul>
+            <li v-for="(w, i) in applied.warnings" :key="`w${i}`"><code>{{ w.path }}</code> {{ w.message }}</li>
+            <li v-for="(w, i) in applied.uiSettingsIssues" :key="`u${i}`"><code>uiSettings.settings.{{ w.path }}</code> {{ w.message }}</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section v-if="dryRun" class="panel" aria-labelledby="config-dry-run-title">
+      <div class="panel-header">
+        <h2 id="config-dry-run-title">{{ t("configTransfer.dry.title", { file: fileName }) }}</h2>
+      </div>
       <div class="panel-body">
-        <h3 class="subhead">Dry run of {{ fileName }}</h3>
-        <p v-if="noChanges" class="alert" role="status">Importing this file changes nothing: this installation already matches it.</p>
-        <p v-else>
-          Applying it would create {{ plural(pending!.created, "row") }} and update {{ plural(pending!.updated, "row") }}<template v-if="pending!.deleted">
-            and remove {{ plural(pending!.deleted, "row") }}</template>.
-        </p>
+        <p v-if="noChanges" class="alert" role="status">{{ t("configTransfer.dry.noChanges") }}</p>
+        <p v-else-if="pending!.deleted">{{ t("configTransfer.dry.summaryRemove", { created: pending!.created, updated: pending!.updated, deleted: pending!.deleted }) }}</p>
+        <p v-else>{{ t("configTransfer.dry.summary", { created: pending!.created, updated: pending!.updated }) }}</p>
       </div>
       <div class="panel-body flush">
-        <table class="data" aria-label="Import summary">
+        <table class="data" :aria-label="t('configTransfer.dry.tableLabel')">
           <thead>
             <tr>
-              <th scope="col">Section</th>
-              <th scope="col" class="num">Create</th>
-              <th scope="col" class="num">Update</th>
-              <th scope="col" class="num">Remove</th>
-              <th scope="col" class="num">Unchanged</th>
-              <th scope="col" class="num">Only here (kept)</th>
+              <th scope="col">{{ t("configTransfer.col.section") }}</th>
+              <th scope="col" class="num">{{ t("configTransfer.col.create") }}</th>
+              <th scope="col" class="num">{{ t("configTransfer.col.update") }}</th>
+              <th scope="col" class="num">{{ t("configTransfer.col.remove") }}</th>
+              <th scope="col" class="num">{{ t("configTransfer.col.unchanged") }}</th>
+              <th scope="col" class="num">{{ t("configTransfer.col.notInFile") }}</th>
             </tr>
           </thead>
           <tbody>
@@ -225,32 +248,35 @@ const sectionName = (s: string) => SECTION_NAMES[s] ?? s;
       </div>
       <div v-if="dryRun.warnings.length > 0 || dryRun.uiSettingsIssues.length > 0" class="panel-body">
         <div class="alert alert-warn" role="status">
-          <strong>Worth a look before applying</strong>
+          <strong>{{ t("configTransfer.dry.warnings") }}</strong>
           <ul>
             <li v-for="(w, i) in dryRun.warnings" :key="`w${i}`"><code>{{ w.path }}</code> {{ w.message }}</li>
             <li v-for="(w, i) in dryRun.uiSettingsIssues" :key="`u${i}`"><code>uiSettings.settings.{{ w.path }}</code> {{ w.message }}</li>
           </ul>
         </div>
       </div>
-      <div v-if="dryRun.schemaChanges.length > 0" class="panel-body">
-        <h3 class="subhead">Database changes</h3>
-        <p class="muted" style="margin-top: 0">
-          Areas, classes and attributes are PostgreSQL schemas, tables and columns. Applying the import runs this SQL in the
-          same transaction.
-        </p>
+    </section>
+
+    <section v-if="dryRun && dryRun.schemaChanges.length > 0" class="panel" aria-labelledby="config-ddl-title">
+      <div class="panel-header"><h2 id="config-ddl-title">{{ t("configTransfer.ddl.title") }}</h2></div>
+      <div class="panel-body stack">
+        <p class="muted">{{ t("configTransfer.ddl.hint") }}</p>
         <SchemaChangeList :changes="dryRun.schemaChanges" />
       </div>
-      <div v-if="dryRun.changes.length > 0" class="panel-body">
-        <h3 class="subhead">Changes</h3>
+    </section>
+
+    <section v-if="dryRun && dryRun.changes.length > 0" class="panel" aria-labelledby="config-changes-title">
+      <div class="panel-header"><h2 id="config-changes-title">{{ t("configTransfer.changes.title") }}</h2></div>
+      <div class="panel-body">
         <details v-for="[sec, changes] in bySection(dryRun)" :key="sec" class="import-changes" open>
           <summary>{{ sectionName(sec) }} ({{ changes.length }})</summary>
           <table class="data">
             <tbody>
               <tr v-for="(c, i) in changes" :key="i">
-                <td style="width: 90px">
-                  <span :class="['badge', c.action === 'create' ? 'ok' : c.action === 'delete' ? 'danger' : 'warn']">{{ c.action }}</span>
+                <td class="config-change-action">
+                  <span :class="['badge', actionTone(c.action)]">{{ actionLabel(c.action) }}</span>
                 </td>
-                <td class="mono" style="width: 30%">{{ c.key }}</td>
+                <td class="mono config-change-key">{{ c.key }}</td>
                 <td>
                   <div v-for="f in c.fields" :key="f.field">
                     <code>{{ f.field }}</code>: <span class="diff-from">{{ show(f.from) }}</span> → <span class="diff-to">{{ show(f.to) }}</span>
@@ -261,27 +287,35 @@ const sectionName = (s: string) => SECTION_NAMES[s] ?? s;
           </table>
         </details>
       </div>
-      <div class="form-footer">
-        <button type="button" class="btn btn-primary" :disabled="noChanges || importer.isPending.value" @click="confirming = true">Apply import</button>
-        <button type="button" class="btn" :disabled="importer.isPending.value" @click="reset">Cancel</button>
-      </div>
-    </template>
-  </section>
+    </section>
+  </div>
 
-  <ConfirmDialog :open="confirming" title="Apply this import?" confirm-label="Apply import" :busy="importer.isPending.value" @confirm="run('apply')" @cancel="confirming = false">
+  <SaveBar v-if="dryRun" :label="t('configTransfer.applyRegion')">
+    <button type="button" class="btn" :disabled="importer.isPending.value" @click="reset">{{ t("common.cancel") }}</button>
+    <button type="button" class="btn btn-primary" :disabled="noChanges || importer.isPending.value" @click="confirming = true">
+      {{ t("configTransfer.apply") }}
+    </button>
+  </SaveBar>
+
+  <ConfirmDialog
+    :open="confirming"
+    :title="t('configTransfer.confirm.title')"
+    :confirm-label="t('configTransfer.apply')"
+    :busy="importer.isPending.value"
+    @confirm="run('apply')"
+    @cancel="confirming = false"
+  >
     <template v-if="pending">
-      {{ plural(pending.created, "row") }} will be created and {{ plural(pending.updated, "row") }} updated<template v-if="pending.deleted">,
-        {{ plural(pending.deleted, "row") }} removed</template>, in one transaction, as the dry run showed. Every change is recorded in the audit
-      log under your name.
+      {{
+        pending.deleted
+          ? t("configTransfer.confirm.bodyRemove", { created: pending.created, updated: pending.updated, deleted: pending.deleted })
+          : t("configTransfer.confirm.body", { created: pending.created, updated: pending.updated })
+      }}
     </template>
   </ConfirmDialog>
 </template>
 
 <style scoped>
-.subhead {
-  font-size: var(--fs-md);
-  margin: 0 0 var(--space-2);
-}
 .import-changes + .import-changes {
   margin-top: var(--space-2);
 }
@@ -289,5 +323,11 @@ const sectionName = (s: string) => SECTION_NAMES[s] ?? s;
   cursor: pointer;
   font-weight: var(--fw-semibold);
   padding: var(--space-1) 0;
+}
+.config-change-action {
+  width: 7rem;
+}
+.config-change-key {
+  width: 30%;
 }
 </style>
