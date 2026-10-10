@@ -795,7 +795,7 @@ pub async fn change_one(
     op: Op,
 ) -> Result<WorkflowActionDelivery, AppError> {
     let mut tx = pool.begin().await?;
-    let d = service::load_for(&mut tx, ctx, path.0, false, service::Access::Read).await?;
+    let d = service::load_for(&mut tx, ctx, path.0, false, service::Access::Write).await?;
     let kinds = kinds(ctx);
     let before = load_row(&mut tx, d.id, &kinds, path.1).await?;
     if apply(&mut tx, ctx, d.id, &kinds, op, &[path.1], false).await?.is_empty() {
@@ -841,7 +841,7 @@ pub async fn change_many(
     op: Op,
 ) -> Result<WorkflowActionDeliveryBulkResult, AppError> {
     let mut tx = pool.begin().await?;
-    let d = service::load_for(&mut tx, ctx, id, false, service::Access::Read).await?;
+    let d = service::load_for(&mut tx, ctx, id, false, service::Access::Write).await?;
     let kinds = kinds(ctx);
     let (ids, more) = match (&b.ids, &b.filter) {
         (Some(ids), _) => {

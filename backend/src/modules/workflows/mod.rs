@@ -670,7 +670,8 @@ pub fn routes() -> Vec<Route> {
                  (`WORKFLOW_ACTIONS_MAX_AGE_HOURS`) counts from the retry. The workers send it as any other, to the \
                  recipient's current address. Audited as `workflow.action_retry` (status before and after). 409 \
                  CONFLICT `not_retryable` unless it is `dead` or `held` and of an e-mail or webhook action (inbox \
-                 entries are written when the run fans out).",
+                 entries are written when the run fans out). 403 FORBIDDEN unless the caller may also edit every type \
+                 the workflow covers.",
             )
             .requires(manage)
             .session_only()
@@ -691,7 +692,8 @@ pub fn routes() -> Vec<Route> {
                 "The delivery becomes `discarded` (stored as `dead` with reason `discarded`) and is never sent; \
                  it is kept for `WORKFLOW_ACTIONS_DEAD_RETENTION_DAYS`. Audited as `workflow.action_discard` \
                  (status before and after). 409 CONFLICT `not_discardable` for a delivery being sent, delivered, \
-                 skipped or already discarded.",
+                 skipped or already discarded. 403 FORBIDDEN unless the caller may also edit every type the \
+                 workflow covers.",
             )
             .requires(manage)
             .session_only()
@@ -713,7 +715,7 @@ pub fn routes() -> Vec<Route> {
                  retryWorkflowActionDelivery; the others are listed in `refused` (`not_found`, `not_retryable`). \
                  With `filter`, the first 1,000 deliveries it selects that can be retried, oldest first; `more` \
                  tells that others remain. One transaction, one `workflow.action_retry` audit row per delivery \
-                 (`bulk: true`).",
+                 (`bulk: true`). 403 FORBIDDEN unless the caller may also edit every type the workflow covers.",
             )
             .requires(manage)
             .session_only()
@@ -735,7 +737,8 @@ pub fn routes() -> Vec<Route> {
                 "With `ids`, each pending, held or dead delivery is discarded as by discardWorkflowActionDelivery; \
                  the others are listed in `refused` (`not_found`, `not_discardable`). With `filter`, the first \
                  1,000 deliveries it selects that can be discarded, oldest first; `more` tells that others remain. \
-                 One transaction, one `workflow.action_discard` audit row per delivery (`bulk: true`).",
+                 One transaction, one `workflow.action_discard` audit row per delivery (`bulk: true`). 403 \
+                 FORBIDDEN unless the caller may also edit every type the workflow covers.",
             )
             .requires(manage)
             .session_only()

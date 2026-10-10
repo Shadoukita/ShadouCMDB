@@ -3562,7 +3562,7 @@ export interface paths {
         put?: never;
         /**
          * Send a dead or held delivery again, with fresh attempts
-         * @description Requires `workflows.manage`. The delivery becomes `pending`, due now, with `attempts` 0; its max age (`WORKFLOW_ACTIONS_MAX_AGE_HOURS`) counts from the retry. The workers send it as any other, to the recipient's current address. Audited as `workflow.action_retry` (status before and after). 409 CONFLICT `not_retryable` unless it is `dead` or `held` and of an e-mail or webhook action (inbox entries are written when the run fans out). Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `workflows.manage`. The delivery becomes `pending`, due now, with `attempts` 0; its max age (`WORKFLOW_ACTIONS_MAX_AGE_HOURS`) counts from the retry. The workers send it as any other, to the recipient's current address. Audited as `workflow.action_retry` (status before and after). 409 CONFLICT `not_retryable` unless it is `dead` or `held` and of an e-mail or webhook action (inbox entries are written when the run fans out). 403 FORBIDDEN unless the caller may also edit every type the workflow covers. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["retryWorkflowActionDelivery"];
         delete?: never;
@@ -3582,7 +3582,7 @@ export interface paths {
         put?: never;
         /**
          * Give up on a pending, held or dead delivery
-         * @description Requires `workflows.manage`. The delivery becomes `discarded` (stored as `dead` with reason `discarded`) and is never sent; it is kept for `WORKFLOW_ACTIONS_DEAD_RETENTION_DAYS`. Audited as `workflow.action_discard` (status before and after). 409 CONFLICT `not_discardable` for a delivery being sent, delivered, skipped or already discarded. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `workflows.manage`. The delivery becomes `discarded` (stored as `dead` with reason `discarded`) and is never sent; it is kept for `WORKFLOW_ACTIONS_DEAD_RETENTION_DAYS`. Audited as `workflow.action_discard` (status before and after). 409 CONFLICT `not_discardable` for a delivery being sent, delivered, skipped or already discarded. 403 FORBIDDEN unless the caller may also edit every type the workflow covers. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["discardWorkflowActionDelivery"];
         delete?: never;
@@ -3602,7 +3602,7 @@ export interface paths {
         put?: never;
         /**
          * Retry up to 1,000 deliveries, by id or by filter
-         * @description Requires `workflows.manage`. With `ids`, each dead or held delivery of an e-mail or webhook action is retried as by retryWorkflowActionDelivery; the others are listed in `refused` (`not_found`, `not_retryable`). With `filter`, the first 1,000 deliveries it selects that can be retried, oldest first; `more` tells that others remain. One transaction, one `workflow.action_retry` audit row per delivery (`bulk: true`). Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `workflows.manage`. With `ids`, each dead or held delivery of an e-mail or webhook action is retried as by retryWorkflowActionDelivery; the others are listed in `refused` (`not_found`, `not_retryable`). With `filter`, the first 1,000 deliveries it selects that can be retried, oldest first; `more` tells that others remain. One transaction, one `workflow.action_retry` audit row per delivery (`bulk: true`). 403 FORBIDDEN unless the caller may also edit every type the workflow covers. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["retryWorkflowActionDeliveries"];
         delete?: never;
@@ -3622,7 +3622,7 @@ export interface paths {
         put?: never;
         /**
          * Discard up to 1,000 deliveries, by id or by filter
-         * @description Requires `workflows.manage`. With `ids`, each pending, held or dead delivery is discarded as by discardWorkflowActionDelivery; the others are listed in `refused` (`not_found`, `not_discardable`). With `filter`, the first 1,000 deliveries it selects that can be discarded, oldest first; `more` tells that others remain. One transaction, one `workflow.action_discard` audit row per delivery (`bulk: true`). Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `workflows.manage`. With `ids`, each pending, held or dead delivery is discarded as by discardWorkflowActionDelivery; the others are listed in `refused` (`not_found`, `not_discardable`). With `filter`, the first 1,000 deliveries it selects that can be discarded, oldest first; `more` tells that others remain. One transaction, one `workflow.action_discard` audit row per delivery (`bulk: true`). 403 FORBIDDEN unless the caller may also edit every type the workflow covers. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["discardWorkflowActionDeliveries"];
         delete?: never;
