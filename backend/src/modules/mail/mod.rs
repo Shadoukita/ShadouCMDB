@@ -291,8 +291,11 @@ pub fn mask(address: &str) -> String {
 /// An address as a relay may quote it: a quoted local part (escapes allowed)
 /// or a bare one, then a domain; both may be non-ASCII (SMTPUTF8, IDN), so
 /// they run up to the delimiters rather than over an ASCII class (GH#883).
+/// The domain may also be an address literal (`[192.0.2.1]`, `[IPv6:::1]`),
+/// which holds `:` and so needs its own branch (GH#893).
 static ADDRESS_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?:"(?:[^"\\\r\n]|\\.)*"|[^\s<>()\[\],;:@"]+)@[^\s<>()\[\],;:@"]+"#).expect("address regex")
+    Regex::new(r#"(?:"(?:[^"\\\r\n]|\\.)*"|[^\s<>()\[\],;:@"]+)@(?:\[[^\[\]\s@]*\]|[^\s<>()\[\],;:@"]+)"#)
+        .expect("address regex")
 });
 
 /// `text` with every e-mail address in it masked: a relay's error names the
@@ -512,6 +515,11 @@ mod tests {
             (r#"550 <"carol@home"@corp.example>"#, "550 <c***@corp.example>"),
             (r#"550 <"carol \"cs\" smith"@corp.example>"#, "550 <c***@corp.example>"),
             (r#"550 <""@corp.example>"#, "550 <****@corp.example>"),
+            // GH#893: address-literal domains.
+            ("550 carol@[192.0.2.1]", "550 c***@[192.0.2.1]"),
+            ("550 carol@[::1]", "550 c***@[::1]"),
+            ("550 <carol@[IPv6:2001:db8::1]>", "550 <c***@[IPv6:2001:db8::1]>"),
+            (r#"550 <"carol smith"@[192.0.2.1]>"#, "550 <c***@[192.0.2.1]>"),
             (
                 "rcpt carol@corp.example, bob@corp.example: rejected",
                 "rcpt c***@corp.example, b***@corp.example: rejected",
