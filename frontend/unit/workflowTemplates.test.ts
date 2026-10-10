@@ -102,6 +102,39 @@ describe("matchStateValue", () => {
     assert.equal(matchStateValue(["retired"], "Retired", [{ key: "retired", name: "Retired", isActive: false }]), null);
     assert.equal(matchStateValue(["planned"], "Planned", []), null);
   });
+
+  // QA (SHAA-3062): a retired candidate is passed over for the next active one, also when its name matches.
+  test("a retired first candidate yields to the next active candidate", () => {
+    const values: StateValueOption[] = [
+      { key: "active", name: "Active", isActive: false },
+      { key: "live", name: "Live", isActive: true },
+    ];
+    assert.equal(matchStateValue(["active", "in_service", "live"], "Active", values), "live");
+  });
+
+  // QA (SHAA-3062): a list without the candidate keys is matched by the state names of the active locale.
+  test("in German, the states match a list by their German names", () => {
+    setLocaleForTests("de");
+    try {
+      const body = toDraftBody(
+        lifecycleDraft([
+          { key: "s1", name: "geplant", isActive: true },
+          { key: "s2", name: "Aktiv", isActive: true },
+          { key: "s3", name: "Außer Betrieb", isActive: true },
+        ]),
+      );
+      assert.deepEqual(
+        body.states.map((s) => [s.key, s.stateValue]),
+        [
+          ["planned", "s1"],
+          ["active", "s2"],
+          ["retired", "s3"],
+        ],
+      );
+    } finally {
+      setLocaleForTests("en");
+    }
+  });
 });
 
 describe("templates", () => {

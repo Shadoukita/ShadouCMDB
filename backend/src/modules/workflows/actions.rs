@@ -27,6 +27,8 @@ mod email_tests;
 pub mod outbox;
 #[cfg(test)]
 mod qa_deliveries_edge_tests;
+#[cfg(test)]
+mod qa_test_send_edge_tests;
 pub mod recipients;
 pub mod test_send;
 #[cfg(test)]
