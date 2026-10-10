@@ -31,7 +31,7 @@
 //!
 //! Workers hold no CI, instance or request lock and never write CI data.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -43,12 +43,14 @@ use tokio::sync::watch;
 use tokio::task::{JoinHandle, JoinSet};
 use uuid::Uuid;
 
-use super::{WorkflowActionKind, WorkflowActionRecipient, WorkflowActionRecipientSource, WorkflowActionSettings};
+use super::recipients::{self, EventRef, RunRef, Subject};
+use super::{WorkflowAction, WorkflowActionKind, email};
 use crate::api::context::RequestContext;
 use crate::auth::permissions::ClassOp;
-use crate::config::WorkflowActionsConfig;
+use crate::config::{MailConfig, WorkflowActionsConfig};
 use crate::data::auth as auth_data;
 use crate::data::crud::{self, AuditAction, AuditEntry};
+use crate::schema::model::Model;
 
 /// How long a fan-out may take before another worker may take the run over.
 const FAN_OUT_LEASE: Duration = Duration::from_secs(60);
@@ -68,8 +70,6 @@ const MAX_ERROR: usize = 1024;
 
 const ACTOR: &str = "workflow actions";
 
-/// A recipient source of an action: the source and its profile, group or user.
-type RecipientIds = (WorkflowActionRecipientSource, Option<Uuid>, Option<Uuid>, Option<Uuid>);
 /// The definition, transition, from and to state names and the request number of an event.
 type EventNames = (Option<String>, Option<String>, Option<String>, Option<String>, Option<i32>);
 /// A dead delivery: id, run, action key, kind, CI, reason, attempts.
@@ -122,6 +122,11 @@ pub enum Outcome {
     Held {
         reason: String,
     },
+    /// Nothing to send any more, and nothing wrong: the recipient lost the view right on every CI of the
+    /// message, was disabled or lost their address since the fan-out. `skipped`, with `reason`.
+    Skipped {
+        reason: String,
+    },
 }
 
 /// Sends one delivery; never inside a database transaction.
@@ -134,20 +139,29 @@ pub struct Channel {
     pub timeout: Duration,
 }
 
-/// The sending channels of this process, by kind. The inbox needs none: its
-/// fan-out delivers. E-mail (S4) and webhooks (S5) register theirs here.
+/// The sending channels of this process, by kind, and the mail settings the
+/// e-mail fan-out judges by. The inbox needs no channel: its fan-out
+/// delivers. E-mail registers its channel with `MAIL=smtp`; without it,
+/// e-mail runs are still fanned out (their deliveries skipped `mail_off`).
 #[derive(Clone, Default)]
-pub struct Channels(HashMap<WorkflowActionKind, Channel>);
+pub struct Channels {
+    by_kind: HashMap<WorkflowActionKind, Channel>,
+    pub mail: Arc<MailConfig>,
+}
 
 impl Channels {
-    #[allow(dead_code)]
     pub fn with(mut self, kind: WorkflowActionKind, channel: Channel) -> Self {
-        self.0.insert(kind, channel);
+        self.by_kind.insert(kind, channel);
+        self
+    }
+
+    pub fn with_mail(mut self, mail: MailConfig) -> Self {
+        self.mail = Arc::new(mail);
         self
     }
 
     fn kinds(&self) -> Vec<WorkflowActionKind> {
-        let mut k: Vec<_> = self.0.keys().copied().collect();
+        let mut k: Vec<_> = self.by_kind.keys().copied().collect();
         k.sort();
         k
     }
@@ -171,8 +185,12 @@ fn jitter() -> f64 {
     0.8 + f64::from(u16::from_le_bytes(b)) / f64::from(u16::MAX) * 0.4
 }
 
+/// The error as stored: e-mail addresses masked (a relay's `550 <carol@…>`
+/// would otherwise show a fixed address the API masks everywhere else, N-Q3),
+/// then cut to `MAX_ERROR` bytes.
 fn capped(error: &str) -> String {
-    let mut e: String = error.chars().take(MAX_ERROR).collect();
+    let masked = super::deliveries::mask_addresses(error);
+    let mut e: String = masked.chars().take(MAX_ERROR).collect();
     while e.len() > MAX_ERROR {
         e.pop();
     }
@@ -182,44 +200,6 @@ fn capped(error: &str) -> String {
 // ---------------------------------------------------------------------------
 // Recipients
 // ---------------------------------------------------------------------------
-
-/// The users the profile, group and named-user sources name, inactive ones
-/// included, each with the sources that name them (`group CAB`).
-pub async fn resolve_static(
-    conn: &mut PgConnection,
-    recipients: &[WorkflowActionRecipient],
-) -> sqlx::Result<BTreeMap<Uuid, BTreeSet<String>>> {
-    let ids = |source: WorkflowActionRecipientSource| -> Vec<Uuid> {
-        recipients
-            .iter()
-            .filter(|r| r.source == source)
-            .filter_map(|r| r.profile.as_ref().or(r.group.as_ref()).or(r.user.as_ref()).map(|p| p.id))
-            .collect()
-    };
-    let members: Vec<(Uuid, Uuid)> = sqlx::query_as(
-        "SELECT profile_id, user_id FROM cmdb.user_permission_profiles WHERE profile_id = ANY($1)
-         UNION ALL
-         SELECT group_id, user_id FROM cmdb.user_group_members WHERE group_id = ANY($2)
-         UNION ALL
-         SELECT id, id FROM cmdb.users WHERE id = ANY($3)",
-    )
-    .bind(ids(WorkflowActionRecipientSource::Profile))
-    .bind(ids(WorkflowActionRecipientSource::Group))
-    .bind(ids(WorkflowActionRecipientSource::User))
-    .fetch_all(&mut *conn)
-    .await?;
-    let labels: HashMap<Uuid, String> = recipients
-        .iter()
-        .filter_map(|r| {
-            r.profile.as_ref().or(r.group.as_ref()).or(r.user.as_ref()).map(|p| (p.id, super::source_label(r)))
-        })
-        .collect();
-    let mut out: BTreeMap<Uuid, BTreeSet<String>> = BTreeMap::new();
-    for (source, user) in members {
-        out.entry(user).or_default().insert(labels.get(&source).cloned().unwrap_or_default());
-    }
-    Ok(out)
-}
 
 // ---------------------------------------------------------------------------
 // Fan-out
@@ -246,10 +226,11 @@ pub async fn claim_runs(pool: &PgPool, owner: &str, n: i64) -> sqlx::Result<Vec<
 struct RunRow {
     event_id: i64,
     action_id: Option<Uuid>,
-    action_key: String,
     kind: WorkflowActionKind,
+    definition_id: Uuid,
     instance_id: Uuid,
     ci_id: Uuid,
+    http_request_id: Option<String>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -265,6 +246,17 @@ struct EventRow {
     approval_step_no: Option<i16>,
 }
 
+impl EventRow {
+    fn as_ref(&self) -> EventRef {
+        EventRef {
+            kind: self.kind.clone(),
+            actor_type: self.actor_type.clone(),
+            actor_id: self.actor_id.clone(),
+            approval_request_id: self.approval_request_id,
+        }
+    }
+}
+
 /// What a fan-out came to, for tests and logs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FanOut {
@@ -277,11 +269,17 @@ pub enum FanOut {
 }
 
 /// Fans out run `id`, claimed by `owner`, in one transaction.
-pub async fn fan_out(pool: &PgPool, cfg: &WorkflowActionsConfig, id: i64, owner: &str) -> sqlx::Result<FanOut> {
+pub async fn fan_out(
+    pool: &PgPool,
+    cfg: &WorkflowActionsConfig,
+    channels: &Channels,
+    id: i64,
+    owner: &str,
+) -> sqlx::Result<FanOut> {
     let mut tx = pool.begin().await?;
     let run: Option<RunRow> = sqlx::query_as(
-        "SELECT event_id, action_id, action_key, kind, instance_id, ci_id FROM cmdb.workflow_action_runs
-         WHERE id = $1 AND status = 'fanning_out' AND lease_owner = $2 FOR UPDATE",
+        "SELECT event_id, action_id, kind, definition_id, instance_id, ci_id, http_request_id
+         FROM cmdb.workflow_action_runs WHERE id = $1 AND status = 'fanning_out' AND lease_owner = $2 FOR UPDATE",
     )
     .bind(id)
     .bind(owner)
@@ -290,24 +288,10 @@ pub async fn fan_out(pool: &PgPool, cfg: &WorkflowActionsConfig, id: i64, owner:
     let Some(run) = run else {
         return Ok(FanOut::Lost);
     };
-    let cancel = |reason: &'static str| async move {
-        sqlx::query(
-            "UPDATE cmdb.workflow_action_runs SET status = 'cancelled', status_reason = $2, completed_at = now(),
-               lease_owner = NULL, lease_until = NULL WHERE id = $1",
-        )
-        .bind(id)
-        .bind(reason)
+    let action = match run.action_id {
+        Some(a) => super::load_one(&mut tx, a).await.map_err(app_to_sqlx)?,
+        None => None,
     };
-    let action: Option<(bool, WorkflowActionKind, String, sqlx::types::Json<WorkflowActionSettings>)> =
-        match run.action_id {
-            Some(a) => {
-                sqlx::query_as("SELECT enabled, kind, name, settings FROM cmdb.workflow_actions WHERE id = $1")
-                    .bind(a)
-                    .fetch_optional(&mut *tx)
-                    .await?
-            }
-            None => None,
-        };
     let event: Option<EventRow> = sqlx::query_as(
         "SELECT kind, transition_key, from_state_key, to_state_key, actor_type, actor_id, actor_name,
                 approval_request_id, approval_step_no
@@ -323,39 +307,62 @@ pub async fn fan_out(pool: &PgPool, cfg: &WorkflowActionsConfig, id: i64, owner:
             .await?;
     let reason = match (&action, &event, &ci) {
         (None, ..) => Some("action_deleted"),
-        (Some((false, ..)), ..) => Some("action_disabled"),
-        (Some((_, kind, ..)), ..) if *kind != run.kind => Some("action_changed"),
+        (Some(a), ..) if !a.enabled => Some("action_disabled"),
+        (Some(a), ..) if a.kind != run.kind => Some("action_changed"),
         (_, None, _) => Some("event_gone"),
         (_, _, None) => Some("ci_deleted"),
-        _ if run.kind == WorkflowActionKind::Email => Some("kind_unavailable"),
         _ => None,
     };
     if let Some(reason) = reason {
-        cancel(reason).await.execute(&mut *tx).await?;
+        cancel(&mut tx, &[id], reason).await?;
         tx.commit().await?;
         return Ok(FanOut::Cancelled);
     }
-    let (Some((_, _, action_name, settings)), Some(event), Some((class_id, ci_label, ci_ident))) = (action, event, ci)
-    else {
+    let (Some(action), Some(event), Some((class_id, ci_label, ci_ident))) = (action, event, ci) else {
         return Ok(FanOut::Lost);
     };
     if run.kind == WorkflowActionKind::Webhook {
-        return fan_out_webhook(tx, id, run.action_id.unwrap_or_default()).await;
+        return fan_out_webhook(tx, id, action.id).await;
+    }
+    let model = Model::load(&mut tx).await?;
+
+    if run.kind == WorkflowActionKind::Email {
+        let lead = email::GroupRun { id, event_id: run.event_id, instance_id: run.instance_id, ci_id: run.ci_id };
+        let written = email::fan_out(
+            &mut tx,
+            cfg,
+            &channels.mail,
+            &model,
+            owner,
+            lead,
+            run.http_request_id.as_deref(),
+            run.definition_id,
+            &action,
+        )
+        .await?;
+        cancel(&mut tx, &written.gone, "ci_deleted").await?;
+        for (run, truncated) in written.runs {
+            fanned_out(&mut tx, run, truncated).await?;
+        }
+        tx.commit().await?;
+        return Ok(FanOut::Done);
     }
 
-    // Recipients, now, by user id. The cap counts only those who are told, as in the preview.
-    let recipients = recipients_of(&mut tx, run.action_id.unwrap_or_default()).await?;
-    let mut users: Vec<Uuid> = resolve_static(&mut tx, &recipients).await?.into_keys().collect();
+    // The inbox. Recipients, now, by user id. The cap counts only those who are told, as in the preview.
+    let subject = Subject {
+        ci_id: run.ci_id,
+        class_id,
+        run: Some(RunRef { instance_id: run.instance_id, definition_id: run.definition_id, event: event.as_ref() }),
+    };
+    let resolved = recipients::resolve(&mut tx, &model, &action.recipients, Some(&subject)).await?;
+    let mut users: Vec<Uuid> = resolved.users.into_keys().collect();
     let active: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM cmdb.users WHERE id = ANY($1) AND is_active")
         .bind(&users)
         .fetch_all(&mut *tx)
         .await?;
     let permissions = auth_data::load_permissions_of(&mut tx, &active).await?;
     let active: HashSet<Uuid> = active.into_iter().collect();
-    let actor = (event.actor_type == "user" || event.actor_type == "api_client")
-        .then(|| event.actor_id.as_deref().and_then(|a| a.parse::<Uuid>().ok()))
-        .flatten()
-        .filter(|_| settings.exclude_actor.unwrap_or(true));
+    let actor = event.as_ref().actor().filter(|_| action.settings.exclude_actor.unwrap_or(true));
     // The users the built-in notifications of 0072 already told of this event.
     let builtin: HashSet<Uuid> = sqlx::query_scalar::<_, Uuid>(
         "SELECT DISTINCT user_id FROM cmdb.notifications WHERE user_id = ANY($1) AND dedupe_key = ANY($2)",
@@ -415,7 +422,7 @@ pub async fn fan_out(pool: &PgPool, cfg: &WorkflowActionsConfig, id: i64, owner:
     .await?;
 
     let approval = event.approval_request_id;
-    let data = inbox_data(&mut tx, &run, &event, &action_name, &ci_label, ci_ident.as_deref()).await?;
+    let data = inbox_data(&mut tx, &run, &event, &action, &ci_label, ci_ident.as_deref()).await?;
     sqlx::query(
         "INSERT INTO cmdb.notifications (user_id, kind, entity_type, entity_id, ci_id, data, dedupe_key)
          SELECT u, 'workflow_action', $2, $3, $4, $5, $6 FROM unnest($1::uuid[]) AS u
@@ -429,6 +436,27 @@ pub async fn fan_out(pool: &PgPool, cfg: &WorkflowActionsConfig, id: i64, owner:
     .bind(format!("action:{id}"))
     .execute(&mut *tx)
     .await?;
+    fanned_out(&mut tx, id, truncated).await?;
+    tx.commit().await?;
+    Ok(FanOut::Done)
+}
+
+async fn cancel(tx: &mut PgConnection, ids: &[i64], reason: &str) -> sqlx::Result<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    sqlx::query(
+        "UPDATE cmdb.workflow_action_runs SET status = 'cancelled', status_reason = $2, completed_at = now(),
+           lease_owner = NULL, lease_until = NULL WHERE id = ANY($1)",
+    )
+    .bind(ids)
+    .bind(reason)
+    .execute(&mut *tx)
+    .await?;
+    Ok(())
+}
+
+async fn fanned_out(tx: &mut PgConnection, id: i64, truncated: bool) -> sqlx::Result<()> {
     sqlx::query(
         "UPDATE cmdb.workflow_action_runs SET status = 'fanned_out', status_reason = $2, completed_at = now(),
            lease_owner = NULL, lease_until = NULL WHERE id = $1",
@@ -437,8 +465,7 @@ pub async fn fan_out(pool: &PgPool, cfg: &WorkflowActionsConfig, id: i64, owner:
     .bind(truncated.then_some("truncated"))
     .execute(&mut *tx)
     .await?;
-    tx.commit().await?;
-    Ok(FanOut::Done)
+    Ok(())
 }
 
 /// A webhook run: one delivery to the action's endpoint, held while the
@@ -486,28 +513,9 @@ async fn fan_out_webhook(mut tx: sqlx::Transaction<'_, sqlx::Postgres>, id: i64,
     Ok(FanOut::Done)
 }
 
-async fn recipients_of(conn: &mut PgConnection, action: Uuid) -> sqlx::Result<Vec<WorkflowActionRecipient>> {
-    let rows: Vec<RecipientIds> = sqlx::query_as(
-        "SELECT source, profile_id, group_id, user_id FROM cmdb.workflow_action_recipients WHERE action_id = $1
-         ORDER BY position",
-    )
-    .bind(action)
-    .fetch_all(&mut *conn)
-    .await?;
-    let named = |id: Option<Uuid>| id.map(|id| super::WorkflowPrincipalRef { id, name: String::new() });
-    Ok(rows
-        .into_iter()
-        .map(|(source, profile, group, user)| WorkflowActionRecipient {
-            source,
-            profile: named(profile),
-            group: named(group),
-            user: named(user),
-            attribute: None,
-            service_owner_role: None,
-            participant: None,
-            address: None,
-        })
-        .collect())
+/// The service layer's errors inside a worker are database errors or bugs.
+fn app_to_sqlx(e: crate::http::error::AppError) -> sqlx::Error {
+    sqlx::Error::Protocol(format!("{:?}: {}", e.code, e.message))
 }
 
 /// The dedupe keys the 0072 triggers give their notifications about this event.
@@ -529,10 +537,11 @@ async fn inbox_data(
     conn: &mut PgConnection,
     run: &RunRow,
     e: &EventRow,
-    action_name: &str,
+    action: &WorkflowAction,
     ci_label: &str,
     ci_ident: Option<&str>,
 ) -> sqlx::Result<Value> {
+    let (action_key, action_name) = (&action.key, &action.name);
     let names: EventNames = sqlx::query_as(
         "SELECT d.name, tr.name, fs.name, ts.name, r.request_no
          FROM cmdb.workflow_instances i
@@ -555,7 +564,7 @@ async fn inbox_data(
     let (definition_name, transition_name, from_name, to_name, request_no) = names;
     Ok(json!({
         "instanceId": run.instance_id, "ciId": run.ci_id, "ciLabel": ci_label, "ciIdent": ci_ident,
-        "definitionName": definition_name, "actionKey": run.action_key, "actionName": action_name,
+        "definitionName": definition_name, "actionKey": action_key, "actionName": action_name,
         "event": e.kind, "transitionKey": e.transition_key, "transitionName": transition_name,
         "fromStateKey": e.from_state_key, "fromStateName": from_name,
         "toStateKey": e.to_state_key, "toStateName": to_name, "actorName": e.actor_name,
@@ -748,6 +757,17 @@ pub async fn record(pool: &PgPool, cfg: &WorkflowActionsConfig, c: &Claimed, out
         .bind(c.id)
         .bind(c.epoch)
         .bind(reason)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected(),
+        Outcome::Skipped { reason } => sqlx::query(
+            "UPDATE cmdb.workflow_action_deliveries SET status = 'skipped', status_reason = $3, completed_at = now(),
+               lease_owner = NULL, lease_until = NULL
+             WHERE id = $1 AND lease_epoch = $2 AND status = 'sending'",
+        )
+        .bind(c.id)
+        .bind(c.epoch)
+        .bind(capped(&reason))
         .execute(&mut *tx)
         .await?
         .rows_affected(),
@@ -1123,9 +1143,11 @@ impl Outbox {
         let (stop, rx) = watch::channel(false);
         let owner = Uuid::new_v4().to_string();
         let mut tasks: Vec<JoinHandle<()>> = (0..cfg.concurrency)
-            .map(|i| tokio::spawn(fan_out_loop(pool.clone(), cfg, format!("{owner}/{i}"), rx.clone())))
+            .map(|i| {
+                tokio::spawn(fan_out_loop(pool.clone(), cfg, channels.clone(), format!("{owner}/{i}"), rx.clone()))
+            })
             .collect();
-        if !channels.0.is_empty() {
+        if !channels.by_kind.is_empty() {
             tasks.push(tokio::spawn(delivery_loop(pool.clone(), cfg, channels, format!("{owner}/send"), rx.clone())));
         }
         tasks.push(tokio::spawn(housekeeping_loop(pool, cfg, rx)));
@@ -1153,7 +1175,13 @@ async fn idle(stop: &mut watch::Receiver<bool>, wait: Duration) -> bool {
     }
 }
 
-async fn fan_out_loop(pool: PgPool, cfg: WorkflowActionsConfig, owner: String, mut stop: watch::Receiver<bool>) {
+async fn fan_out_loop(
+    pool: PgPool,
+    cfg: WorkflowActionsConfig,
+    channels: Channels,
+    owner: String,
+    mut stop: watch::Receiver<bool>,
+) {
     loop {
         if *stop.borrow() {
             return;
@@ -1162,7 +1190,7 @@ async fn fan_out_loop(pool: PgPool, cfg: WorkflowActionsConfig, owner: String, m
             Ok(ids) if ids.is_empty() => cfg.poll,
             Ok(ids) => {
                 for id in ids {
-                    if let Err(e) = fan_out(&pool, &cfg, id, &owner).await {
+                    if let Err(e) = fan_out(&pool, &cfg, &channels, id, &owner).await {
                         // The run stays leased; housekeeping returns it when the lease ends, or
                         // cancels it after WORKFLOW_ACTIONS_MAX_ATTEMPTS.
                         tracing::warn!(run = id, error = %e, "workflow action fan-out failed; retried after its lease");
@@ -1195,7 +1223,7 @@ async fn delivery_loop(
         }
         let mut busy = false;
         for kind in channels.kinds() {
-            let channel = channels.0[&kind].clone();
+            let channel = channels.by_kind[&kind].clone();
             let claimed = match claim_deliveries(&pool, &owner, kind, channel.timeout, n).await {
                 Ok(c) => c,
                 Err(e) => {

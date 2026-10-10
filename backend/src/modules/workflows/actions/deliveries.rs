@@ -19,7 +19,10 @@
 //! `workflow.action_discard`, the caller as actor), with the status before and
 //! after and the CI in `ciId`, never the recipient's address.
 
+use std::sync::LazyLock;
+
 use chrono::{DateTime, Utc};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::{PgConnection, PgPool, QueryBuilder};
@@ -533,6 +536,17 @@ fn mask(address: &str) -> String {
     }
 }
 
+static ADDRESS_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*").expect("address regex")
+});
+
+/// `text` with every e-mail address in it masked: a relay's error names the
+/// recipient (`550 5.1.1 <carol@corp.example>`), so a stored `last_error`
+/// must not show what the recipient column masks.
+pub(super) fn mask_addresses(text: &str) -> String {
+    ADDRESS_RE.replace_all(text, |c: &regex::Captures<'_>| mask(&c[0])).into_owned()
+}
+
 fn recipient(r: &Row) -> WorkflowActionDeliveryRecipient {
     use WorkflowActionRecipientKind as K;
     let (kind, rest) = r.recipient_key.split_once(':').unwrap_or(("", ""));
@@ -677,6 +691,8 @@ pub async fn get(
     .fetch_optional(&mut *conn)
     .await?;
     let (last_error, run_status, run_status_reason) = more;
+    // Masked on write as well; this covers rows written before that.
+    let last_error = last_error.as_deref().map(mask_addresses);
     Ok(WorkflowActionDeliveryDetail { delivery: delivery(ctx, row), last_error, run_status, run_status_reason, event })
 }
 

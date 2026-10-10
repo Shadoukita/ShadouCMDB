@@ -60,6 +60,8 @@ pub struct Api {
     pub workflow_actions: crate::config::WorkflowActionsConfig,
     /// Webhook settings and sending (`WEBHOOK*`).
     pub webhooks: Arc<crate::modules::webhooks::Webhooks>,
+    /// Outbound e-mail (`MAIL`, `SMTP_*`).
+    pub mail: Arc<crate::modules::mail::Mail>,
     /// Saved-view count requests running at once.
     pub view_counts: Arc<tokio::sync::Semaphore>,
     /// Inventory exports in progress.
@@ -1005,6 +1007,7 @@ impl RouteBuilder {
                         business_services: state.business_services,
                         workflow_actions: state.workflow_actions,
                         webhooks: state.webhooks,
+                        mail: state.mail.clone(),
                         view_counts: state.view_counts,
                         exports: state.exports,
                     };

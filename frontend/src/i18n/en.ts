@@ -3731,6 +3731,7 @@ export const en = {
   "wfActions.preview.reason.no_view": "Cannot view the CI",
   "wfActions.preview.reason.inactive": "Account disabled",
   "wfActions.preview.reason.truncated": "Over the recipient limit",
+  "wfActions.preview.reason.no_email": "No e-mail address",
   "wfActions.inspector.tabs": "Transition sections",
   "wfActions.inspector.tab.rules": "Rules",
   "wfActions.inspector.tab.actions": "Actions",

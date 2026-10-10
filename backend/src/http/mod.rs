@@ -69,6 +69,8 @@ pub struct AppState {
     pub workflow_actions: crate::config::WorkflowActionsConfig,
     /// Webhook settings and sending (`WEBHOOK*`).
     pub webhooks: Arc<crate::modules::webhooks::Webhooks>,
+    /// Outbound e-mail (`MAIL`, `SMTP_*`); off unless [`AppState::with_mail`].
+    pub mail: Arc<crate::modules::mail::Mail>,
     /// Saved-view count requests running at once (GH#780).
     pub view_counts: Arc<tokio::sync::Semaphore>,
     /// Inventory exports in progress (`EXPORT_MAX_CONCURRENT`, GH#801).
@@ -101,6 +103,7 @@ impl AppState {
             imports: Arc::default(),
             business_services: Default::default(),
             workflow_actions: Default::default(),
+            mail: Default::default(),
             view_counts: Arc::new(tokio::sync::Semaphore::new(crate::modules::saved_views::service::count_slots(
                 pool.options().get_max_connections(),
             ))),
@@ -150,6 +153,11 @@ impl AppState {
 
     pub fn with_webhooks(mut self, webhooks: Arc<crate::modules::webhooks::Webhooks>) -> Self {
         self.webhooks = webhooks;
+        self
+    }
+
+    pub fn with_mail(mut self, mail: Arc<crate::modules::mail::Mail>) -> Self {
+        self.mail = mail;
         self
     }
 
@@ -834,6 +842,8 @@ pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'sta
         cfg.auth.public_url.clone(),
     )?);
     let pool = db::lazy_pool(&cfg.database)?;
+    // MAIL=smtp: the password and CA files are read now; a broken one stops the server here.
+    let mail = Arc::new(crate::modules::mail::Mail::build(&cfg.mail, cfg.workflow_actions.concurrency)?);
     if cfg.auth.trusted_proxies.is_empty() {
         tracing::warn!(
             "TRUSTED_PROXIES is empty: the sign-in throttle keys on the TCP peer address. Behind a reverse proxy, \
@@ -847,6 +857,7 @@ pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'sta
         .with_business_services(cfg.business_services)
         .with_workflow_actions(cfg.workflow_actions)
         .with_webhooks(webhooks.clone())
+        .with_mail(mail.clone())
         .with_exports(cfg.exports)
         .importing(&cfg.imports);
     // Before listening: rows under a key that is not configured stop the server
@@ -871,14 +882,19 @@ pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'sta
     let note_retention = crate::modules::ci_notes::service::spawn_retention(pool.clone());
     let notifications = crate::modules::notifications::service::Retention::spawn(pool.clone(), cfg.notifications);
     let approval_sweep = crate::modules::workflows::runtime::sweep::Sweep::spawn(pool.clone(), cfg.approval_sweep);
-    let action_outbox = crate::modules::workflows::actions::outbox::Outbox::spawn(
-        pool.clone(),
-        cfg.workflow_actions,
-        crate::modules::workflows::actions::outbox::Channels::default().with(
+    let mut channels =
+        crate::modules::workflows::actions::outbox::Channels::default().with_mail(cfg.mail.clone()).with(
             crate::modules::workflows::actions::WorkflowActionKind::Webhook,
             crate::modules::webhooks::channel::channel(pool.clone(), webhooks),
-        ),
-    );
+        );
+    if mail.enabled() {
+        channels = channels.with(
+            crate::modules::workflows::actions::WorkflowActionKind::Email,
+            crate::modules::workflows::actions::email::channel(pool.clone(), mail.clone()),
+        );
+    }
+    let action_outbox =
+        crate::modules::workflows::actions::outbox::Outbox::spawn(pool.clone(), cfg.workflow_actions, channels);
 
     let listener = TcpListener::bind((cfg.api_host.as_str(), cfg.api_port))
         .await
@@ -1613,6 +1629,7 @@ mod tests {
             approval_sweep: Default::default(),
             workflow_actions: Default::default(),
             webhooks: Default::default(),
+            mail: Default::default(),
         };
         configure(&mut cfg);
         router(AppState::new(pool, auth, crate::secrets::Keyring::for_tests()), &cfg)

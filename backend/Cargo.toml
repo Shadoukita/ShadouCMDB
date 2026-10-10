@@ -37,6 +37,9 @@ hyper-util = { version = "0.1", features = ["tokio", "server", "server-auto", "s
 # TOTP codes (RFC 6238 is HMAC-SHA1); both already in the tree through sqlx.
 hmac = "0.13"
 ipnetwork = "0.21"
+# Workflow e-mail (MAIL=smtp): the SMTP client only (no sendmail or file transport), pooled,
+# rustls with ring and the Mozilla roots, so no OpenSSL and no second crypto library.
+lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "pool", "builder", "tokio1", "tokio1-rustls", "ring", "webpki-roots"] }
 # LDAP/AD sign-in: rustls with ring (LDAPS and StartTLS), no OpenSSL.
 ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ring"] }
 mime_guess = "2"

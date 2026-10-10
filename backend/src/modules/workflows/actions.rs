@@ -12,18 +12,20 @@
 //! 0075) writes a run per matching action in the event's transaction, and the
 //! workers of [`outbox`] deliver it after commit.
 //!
-//! The in-app inbox goes to profiles, groups and named users; a webhook to a
-//! registered endpoint (`modules::webhooks`). The schema and its checks cover
-//! every kind and source; e-mail and the CI-dependent and participant sources
-//! (S4) are refused with `kind_unavailable` / `source_unavailable` until their
-//! slice ships, so nothing is saved that would never be delivered.
+//! The in-app inbox (S3), e-mail (S4, [`email`]) and webhooks (S5, to a
+//! registered endpoint, `modules::webhooks`) are delivered, to every
+//! recipient source ([`recipients`]).
 
 pub mod deliveries;
 #[cfg(test)]
 mod deliveries_tests;
 #[cfg(test)]
 mod edge_tests;
+pub mod email;
+#[cfg(test)]
+mod email_tests;
 pub mod outbox;
+pub mod recipients;
 #[cfg(test)]
 mod tests;
 
@@ -54,6 +56,18 @@ use crate::modules::business_services::service::may_browse_directory;
 
 /// Actions per (trigger, transition) of one definition; also the database's limit (0073).
 pub const MAX_PER_TRIGGER: usize = 10;
+
+/// The operator's settings the API judges actions by.
+#[derive(Debug, Clone, Copy)]
+pub struct Limits<'a> {
+    /// `WORKFLOW_ACTIONS_MAX_RECIPIENTS`.
+    pub max_recipients: usize,
+    /// `MAIL`, `MAIL_ALLOW_EXTERNAL_ADDRESSES`, `MAIL_ALLOWED_DOMAINS`.
+    pub mail: &'a crate::config::MailConfig,
+    /// `WEBHOOKS_ALLOWED`.
+    pub webhooks_on: bool,
+}
+
 /// Users a preview lists.
 const PREVIEW_USERS: usize = 500;
 
@@ -68,7 +82,7 @@ const PREVIEW_USERS: usize = 500;
 pub enum WorkflowActionKind {
     /// An entry in each recipient's in-app notifications
     Inbox,
-    /// An e-mail to each recipient (not available yet)
+    /// An e-mail to each recipient (sent only with `MAIL=smtp`)
     Email,
     /// A signed HTTPS request to a registered endpoint
     Webhook,
@@ -125,15 +139,16 @@ pub enum WorkflowActionRecipientSource {
     Group,
     /// One named user
     User,
-    /// The CI's owner (not available yet)
+    /// The user linked to the Person the type's owner field points at
     CiOwner,
-    /// The user linked to the Person a reference field of the CI points at (not available yet)
+    /// The user linked to the Person a reference field of the CI points at
     CiAttribute,
-    /// The owners of the business services the CI is a direct member of (not available yet)
+    /// The owners of the business services the CI is a direct member of
     ServiceOwner,
-    /// Someone taking part in the event (not available yet)
+    /// Someone taking part in the event
     Participant,
-    /// A fixed e-mail address, e-mail only (not available yet)
+    /// A fixed e-mail address, e-mail only; minimal content, and only where the operator allows the domain
+    /// (`MAIL_ALLOW_EXTERNAL_ADDRESSES`, `MAIL_ALLOWED_DOMAINS`)
     Address,
 }
 
@@ -149,16 +164,6 @@ impl WorkflowActionRecipientSource {
             WorkflowActionRecipientSource::Participant => "participant",
             WorkflowActionRecipientSource::Address => "address",
         }
-    }
-
-    /// Sources this release resolves.
-    fn available(self) -> bool {
-        matches!(
-            self,
-            WorkflowActionRecipientSource::Profile
-                | WorkflowActionRecipientSource::Group
-                | WorkflowActionRecipientSource::User
-        )
     }
 }
 
@@ -639,8 +644,10 @@ pub struct WorkflowActions {
     pub actions: Vec<WorkflowAction>,
     /// Warnings: `unknown_transition` (the current version lacks it; kept for instances on older versions),
     /// `recipients_cannot_view` (no active user of a source may view the workflow's type), `too_many_recipients`
-    /// (more than `WORKFLOW_ACTIONS_MAX_RECIPIENTS` users; the rest are left out), `missing_locale` and
-    /// `minimal_placeholder` (e-mail), `endpoint_not_active` and `webhooks_disabled` (webhook)
+    /// (more than `WORKFLOW_ACTIONS_MAX_RECIPIENTS` users; the rest are left out), `owner_not_person` (the type's
+    /// owner field names no account, so `ci_owner` reaches nobody), for e-mail `missing_locale`,
+    /// `minimal_placeholder`, `mail_off` (`MAIL=off`: nothing is sent) and `address_not_allowed` (the operator no
+    /// longer allows a fixed address), and for webhooks `endpoint_not_active` and `webhooks_disabled`
     pub problems: Vec<WorkflowProblem>,
 }
 
@@ -684,7 +691,7 @@ fn participant_of(s: &str) -> Option<WorkflowActionParticipant> {
     serde_json::from_value(Value::String(s.to_owned())).ok()
 }
 
-fn participant_str(p: WorkflowActionParticipant) -> &'static str {
+pub(crate) fn participant_str(p: WorkflowActionParticipant) -> &'static str {
     match p {
         WorkflowActionParticipant::Actor => "actor",
         WorkflowActionParticipant::Starter => "starter",
@@ -705,6 +712,33 @@ pub async fn load(conn: &mut PgConnection, id: Uuid) -> Result<Vec<WorkflowActio
     .fetch_all(&mut *conn)
     .await?;
     let ids: Vec<Uuid> = rows.iter().map(|r| r.id).collect();
+    let mut by_action = load_recipients(&mut *conn, &ids).await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| WorkflowAction {
+            recipients: by_action.remove(&r.id).unwrap_or_default(),
+            endpoint: r.endpoint_id.map(|id| WorkflowActionEndpointRef {
+                id,
+                key: r.endpoint_key.unwrap_or_default(),
+                name: r.endpoint_name.unwrap_or_default(),
+            }),
+            id: r.id,
+            key: r.key,
+            name: r.name,
+            kind: r.kind,
+            trigger: r.trigger,
+            transition: r.transition_key,
+            enabled: r.enabled,
+            settings: r.settings.0,
+        })
+        .collect())
+}
+
+/// The recipient sources of these actions, in order, with their names.
+pub async fn load_recipients(
+    conn: &mut PgConnection,
+    ids: &[Uuid],
+) -> sqlx::Result<HashMap<Uuid, Vec<WorkflowActionRecipient>>> {
     let recipients: Vec<RecipientRow> = sqlx::query_as(
         "SELECT r.action_id, r.source, r.profile_id, p.name AS profile_name, r.group_id, g.name AS group_name,
                 r.user_id, u.username, r.attribute_id, ad.key AS attribute_key, r.service_owner_role, r.participant,
@@ -716,7 +750,7 @@ pub async fn load(conn: &mut PgConnection, id: Uuid) -> Result<Vec<WorkflowActio
          LEFT JOIN cmdb.ci_attribute_definitions ad ON ad.id = r.attribute_id
          WHERE r.action_id = ANY($1) ORDER BY r.action_id, r.position",
     )
-    .bind(&ids)
+    .bind(ids)
     .fetch_all(&mut *conn)
     .await?;
     let mut by_action: HashMap<Uuid, Vec<WorkflowActionRecipient>> = HashMap::new();
@@ -737,25 +771,19 @@ pub async fn load(conn: &mut PgConnection, id: Uuid) -> Result<Vec<WorkflowActio
             address: r.address,
         });
     }
-    Ok(rows
-        .into_iter()
-        .map(|r| WorkflowAction {
-            recipients: by_action.remove(&r.id).unwrap_or_default(),
-            endpoint: r.endpoint_id.map(|id| WorkflowActionEndpointRef {
-                id,
-                key: r.endpoint_key.unwrap_or_default(),
-                name: r.endpoint_name.unwrap_or_default(),
-            }),
-            id: r.id,
-            key: r.key,
-            name: r.name,
-            kind: r.kind,
-            trigger: r.trigger,
-            transition: r.transition_key,
-            enabled: r.enabled,
-            settings: r.settings.0,
-        })
-        .collect())
+    Ok(by_action)
+}
+
+/// One action of any definition, by id.
+pub async fn load_one(conn: &mut PgConnection, id: Uuid) -> Result<Option<WorkflowAction>, AppError> {
+    let definition: Option<Uuid> = sqlx::query_scalar("SELECT definition_id FROM cmdb.workflow_actions WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&mut *conn)
+        .await?;
+    match definition {
+        Some(d) => Ok(load(conn, d).await?.into_iter().find(|a| a.id == id)),
+        None => Ok(None),
+    }
 }
 
 /// The actions in the audit log's form: by key, recipients and endpoint by name.
@@ -845,9 +873,19 @@ async fn problems(
     conn: &mut PgConnection,
     d: &WorkflowDefinition,
     actions: &[WorkflowAction],
-    max_recipients: usize,
-    webhooks_on: bool,
+    limits: &Limits<'_>,
 ) -> Result<Vec<WorkflowProblem>, AppError> {
+    let max_recipients = limits.max_recipients;
+    // Whether the type's owner field (own or inherited) names a Person, for `ci_owner`.
+    let owner_reaches =
+        if actions.iter().flat_map(|a| &a.recipients).any(|r| r.source == WorkflowActionRecipientSource::CiOwner) {
+            let fields = super::graph::Fields::load(&mut *conn, d.class_id).await?;
+            let person = super::approvers::PersonFields::load(&mut *conn).await?;
+            let owner = fields.model.quality_field(d.class_id, crate::schema::model::QualityField::Owner).map(|f| f.id);
+            owner.is_some_and(|f| person.problem(&fields, f).is_none())
+        } else {
+            true
+        };
     let (_, current) = transition_keys(&mut *conn, d.id).await?;
     let endpoint_ids: Vec<Uuid> = actions.iter().filter_map(|a| a.endpoint.as_ref().map(|e| e.id)).collect();
     let endpoint_status: HashMap<Uuid, String> =
@@ -884,7 +922,7 @@ async fn problems(
             ));
         }
         if let Some(e) = &a.endpoint {
-            if !webhooks_on {
+            if !limits.webhooks_on {
                 out.push(warning(
                     format!("{path}.endpoint"),
                     "webhooks_disabled",
@@ -903,8 +941,40 @@ async fn problems(
                 ));
             }
         }
+        if a.kind == WorkflowActionKind::Email && !limits.mail.enabled {
+            out.push(warning(
+                format!("{path}.kind"),
+                "mail_off",
+                format!(
+                    "Outbound e-mail is off (MAIL=off): action {} sends nothing until the operator sets it up",
+                    a.key
+                ),
+            ));
+        }
         let mut reached: HashSet<Uuid> = HashSet::new();
         for (j, r) in a.recipients.iter().enumerate() {
+            match r.source {
+                WorkflowActionRecipientSource::CiOwner if !owner_reaches => out.push(warning(
+                    format!("{path}.recipients[{j}]"),
+                    "owner_not_person",
+                    format!(
+                        "The owner field of type {} is not a reference to the Person type: the CI owner reaches nobody",
+                        d.class_key
+                    ),
+                )),
+                WorkflowActionRecipientSource::Address
+                    if !r.address.as_deref().is_some_and(|x| limits.mail.address_allowed(x)) =>
+                {
+                    out.push(warning(
+                        format!("{path}.recipients[{j}]"),
+                        "address_not_allowed",
+                        "The operator no longer allows this address (MAIL_ALLOW_EXTERNAL_ADDRESSES, \
+                         MAIL_ALLOWED_DOMAINS): it receives nothing"
+                            .into(),
+                    ))
+                }
+                _ => {}
+            }
             let Some(p) = r.profile.as_ref().or(r.group.as_ref()).or(r.user.as_ref()) else { continue };
             let seen = viewers.get(&p.id).cloned().unwrap_or_default();
             if seen.is_empty() {
@@ -977,22 +1047,43 @@ pub async fn get(
     pool: &PgPool,
     ctx: &RequestContext,
     id: Uuid,
-    max_recipients: usize,
-    webhooks_on: bool,
+    limits: &Limits<'_>,
 ) -> Result<WorkflowActions, AppError> {
     let mut conn = pool.acquire().await?;
     let d = service::load_for(&mut conn, ctx, id, false, service::Access::Read).await?;
     let actions = load(&mut conn, id).await?;
-    let problems = problems(&mut conn, &d, &actions, max_recipients, webhooks_on).await?;
+    let problems = problems(&mut conn, &d, &actions, limits).await?;
     Ok(WorkflowActions { version: d.version, actions, problems })
 }
 
 /// A recipient source resolved to what it is stored by.
+#[derive(Default)]
 struct Resolved {
-    source: WorkflowActionRecipientSource,
+    source: Option<WorkflowActionRecipientSource>,
     profile: Option<Uuid>,
     group: Option<Uuid>,
     user: Option<Uuid>,
+    attribute: Option<Uuid>,
+    service_owner_role: Option<&'static str>,
+    participant: Option<&'static str>,
+    address: Option<String>,
+}
+
+impl Resolved {
+    /// What makes two sources the same recipient.
+    fn identity(&self) -> String {
+        format!(
+            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
+            self.source,
+            self.profile,
+            self.group,
+            self.user,
+            self.attribute,
+            self.service_owner_role,
+            self.participant,
+            self.address
+        )
+    }
 }
 
 pub async fn replace(
@@ -1000,8 +1091,7 @@ pub async fn replace(
     ctx: &RequestContext,
     id: Uuid,
     b: &WorkflowActionsReplace,
-    max_recipients: usize,
-    webhooks_on: bool,
+    limits: &Limits<'_>,
 ) -> Result<WorkflowActions, AppError> {
     let mut tx = pool.begin().await?;
     let before = service::load_for(&mut tx, ctx, id, true, service::Access::Write).await?;
@@ -1014,11 +1104,8 @@ pub async fn replace(
             .bind(&endpoint_keys)
             .fetch_all(&mut *tx)
             .await?;
-    let fields = if b.actions.iter().any(|a| a.settings.include_attributes.is_some()) {
-        Some(super::graph::Fields::load(&mut tx, before.class_id).await?)
-    } else {
-        None
-    };
+    let fields = super::graph::Fields::load(&mut tx, before.class_id).await?;
+    let person = super::approvers::PersonFields::load(&mut tx).await?;
     let named = |f: fn(&WorkflowActionRecipientInput) -> &Option<String>| -> Vec<String> {
         b.actions
             .iter()
@@ -1067,14 +1154,6 @@ pub async fn replace(
     let mut endpoint_ids: Vec<Option<Uuid>> = Vec::with_capacity(b.actions.len());
     for (i, a) in b.actions.iter().enumerate() {
         let path = format!("actions[{i}]");
-        match a.kind {
-            WorkflowActionKind::Inbox | WorkflowActionKind::Webhook => {}
-            WorkflowActionKind::Email => errors.push(body_error(
-                format!("{path}.kind"),
-                "kind_unavailable",
-                "E-mail actions are not available yet: they need the outbound mail settings of a later release".into(),
-            )),
-        }
         let endpoint = a.endpoint.as_deref().and_then(|k| endpoints.iter().find(|(_, key, _)| key == k));
         match (a.endpoint.as_deref(), endpoint) {
             (Some(k), None) => errors.push(body_error(
@@ -1097,7 +1176,7 @@ pub async fn replace(
             _ => {}
         }
         endpoint_ids.push(endpoint.map(|e| e.0));
-        if let (Some(keys), Some(fields)) = (&a.settings.include_attributes, &fields) {
+        if let Some(keys) = &a.settings.include_attributes {
             for (j, k) in keys.iter().enumerate() {
                 if fields.by_key(k).is_none() {
                     errors.push(body_error(
@@ -1121,53 +1200,91 @@ pub async fn replace(
         let mut seen = HashSet::new();
         for (j, r) in a.recipients.iter().enumerate() {
             let rpath = format!("{path}.recipients[{j}]");
-            if !r.source.available() {
-                errors.push(body_error(
-                    format!("{rpath}.source"),
-                    "source_unavailable",
-                    format!(
-                        "Recipient source {} is not available yet; use a profile, a group or a named user",
-                        r.source.as_str()
-                    ),
-                ));
-                continue;
-            }
-            let (list_of, given, what) = match r.source {
-                WorkflowActionRecipientSource::Profile => (&profiles, r.profile.as_deref(), "permission profile"),
-                WorkflowActionRecipientSource::Group => (&groups, r.group.as_deref(), "user group"),
-                _ => (&users, r.user.as_deref(), "user"),
-            };
-            let given = given.unwrap_or_default();
-            let field = match r.source {
-                WorkflowActionRecipientSource::Profile => "profile",
-                WorkflowActionRecipientSource::Group => "group",
-                _ => "user",
-            };
-            let checked = match r.source {
-                WorkflowActionRecipientSource::Profile => Ok(()),
-                WorkflowActionRecipientSource::Group => {
-                    service::directory_ref(directory, &kept_groups, given, format!("{rpath}.{field}"), what)
+            let source = r.source;
+            let found: Result<Resolved, FieldError> = match source {
+                WorkflowActionRecipientSource::Profile
+                | WorkflowActionRecipientSource::Group
+                | WorkflowActionRecipientSource::User => {
+                    let (list_of, given, what, field) = match source {
+                        WorkflowActionRecipientSource::Profile => {
+                            (&profiles, r.profile.as_deref(), "permission profile", "profile")
+                        }
+                        WorkflowActionRecipientSource::Group => (&groups, r.group.as_deref(), "user group", "group"),
+                        _ => (&users, r.user.as_deref(), "user", "user"),
+                    };
+                    let given = given.unwrap_or_default();
+                    let checked = match source {
+                        WorkflowActionRecipientSource::Profile => Ok(()),
+                        WorkflowActionRecipientSource::Group => {
+                            service::directory_ref(directory, &kept_groups, given, format!("{rpath}.{field}"), what)
+                        }
+                        _ => service::directory_ref(directory, &kept_users, given, format!("{rpath}.{field}"), what),
+                    };
+                    checked.and_then(|()| {
+                        find(list_of, given)
+                            .map(|found| Resolved {
+                                source: Some(source),
+                                profile: (source == WorkflowActionRecipientSource::Profile).then_some(found),
+                                group: (source == WorkflowActionRecipientSource::Group).then_some(found),
+                                user: (source == WorkflowActionRecipientSource::User).then_some(found),
+                                ..Resolved::default()
+                            })
+                            .ok_or_else(|| {
+                                body_error(format!("{rpath}.{field}"), "not_found", format!("No {what} \"{given}\""))
+                            })
+                    })
                 }
-                _ => service::directory_ref(directory, &kept_users, given, format!("{rpath}.{field}"), what),
+                WorkflowActionRecipientSource::CiOwner => Ok(Resolved { source: Some(source), ..Resolved::default() }),
+                WorkflowActionRecipientSource::CiAttribute => person
+                    .resolve(&fields, r.attribute.as_deref().unwrap_or_default())
+                    .map(|found| Resolved {
+                        source: Some(source),
+                        attribute: match found {
+                            super::approvers::Source::Attribute { id, .. } => Some(id),
+                            _ => None,
+                        },
+                        ..Resolved::default()
+                    })
+                    .map_err(|(code, message)| body_error(format!("{rpath}.attribute"), code, message)),
+                WorkflowActionRecipientSource::ServiceOwner => Ok(Resolved {
+                    source: Some(source),
+                    service_owner_role: r.service_owner_role.map(|s| s.as_str()),
+                    ..Resolved::default()
+                }),
+                WorkflowActionRecipientSource::Participant => Ok(Resolved {
+                    source: Some(source),
+                    participant: r.participant.map(participant_str),
+                    ..Resolved::default()
+                }),
+                WorkflowActionRecipientSource::Address => {
+                    let address = r.address.as_deref().unwrap_or_default().trim().to_lowercase();
+                    if limits.mail.address_allowed(&address) {
+                        Ok(Resolved { source: Some(source), address: Some(address), ..Resolved::default() })
+                    } else {
+                        Err(body_error(
+                            format!("{rpath}.address"),
+                            "address_not_allowed",
+                            if limits.mail.allow_external_addresses {
+                                format!(
+                                    "The operator allows fixed addresses only in {} (MAIL_ALLOWED_DOMAINS)",
+                                    limits.mail.allowed_domains.join(", ")
+                                )
+                            } else {
+                                "The operator does not allow fixed addresses (MAIL_ALLOW_EXTERNAL_ADDRESSES); name \
+                                 users, groups or profiles instead"
+                                    .into()
+                            },
+                        ))
+                    }
+                }
             };
-            if let Err(e) = checked {
-                errors.push(e);
-                continue;
+            match found {
+                Ok(found) if !seen.insert(found.identity()) => {
+                    errors.push(body_error(rpath, "duplicate", "The same recipient is listed more than once".into()));
+                }
+                Ok(found) => list.push(found),
+                Err(e) => errors.push(e),
             }
-            let Some(found) = find(list_of, given) else {
-                errors.push(body_error(format!("{rpath}.{field}"), "not_found", format!("No {what} \"{given}\"")));
-                continue;
-            };
-            if !seen.insert((r.source, found)) {
-                errors.push(body_error(rpath, "duplicate", "The same recipient is listed more than once".into()));
-                continue;
-            }
-            list.push(Resolved {
-                source: r.source,
-                profile: (r.source == WorkflowActionRecipientSource::Profile).then_some(found),
-                group: (r.source == WorkflowActionRecipientSource::Group).then_some(found),
-                user: (r.source == WorkflowActionRecipientSource::User).then_some(found),
-            });
         }
         resolved.push(list);
     }
@@ -1177,7 +1294,7 @@ pub async fn replace(
 
     let version = store(&mut tx, ctx, &before, &old, &b.actions, &resolved, &endpoint_ids).await?;
     let actions = load(&mut tx, id).await?;
-    let problems = problems(&mut tx, &before, &actions, max_recipients, webhooks_on).await?;
+    let problems = problems(&mut tx, &before, &actions, limits).await?;
     tx.commit().await?;
     Ok(WorkflowActions { version, actions, problems })
 }
@@ -1247,19 +1364,26 @@ async fn store(
     let mut positions = Vec::new();
     let mut sources = Vec::new();
     let (mut profiles, mut groups, mut users) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut attributes, mut roles, mut participants, mut addresses) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for (action, list) in action_ids.iter().zip(resolved) {
         for (j, r) in list.iter().enumerate() {
             owners.push(*action);
             positions.push(i16::try_from(j + 1).unwrap_or(i16::MAX));
-            sources.push(r.source.as_str());
+            sources.push(r.source.map(WorkflowActionRecipientSource::as_str));
             profiles.push(r.profile);
             groups.push(r.group);
             users.push(r.user);
+            attributes.push(r.attribute);
+            roles.push(r.service_owner_role);
+            participants.push(r.participant);
+            addresses.push(r.address.clone());
         }
     }
     sqlx::query(
-        "INSERT INTO cmdb.workflow_action_recipients (action_id, position, source, profile_id, group_id, user_id)
-         SELECT * FROM unnest($1::uuid[], $2::smallint[], $3::text[], $4::uuid[], $5::uuid[], $6::uuid[])",
+        "INSERT INTO cmdb.workflow_action_recipients (action_id, position, source, profile_id, group_id, user_id,
+           attribute_id, service_owner_role, participant, address)
+         SELECT * FROM unnest($1::uuid[], $2::smallint[], $3::text[], $4::uuid[], $5::uuid[], $6::uuid[],
+           $7::uuid[], $8::text[], $9::text[], $10::text[])",
     )
     .bind(&owners)
     .bind(&positions)
@@ -1267,6 +1391,10 @@ async fn store(
     .bind(&profiles)
     .bind(&groups)
     .bind(&users)
+    .bind(&attributes)
+    .bind(&roles)
+    .bind(&participants)
+    .bind(&addresses)
     .execute(&mut *tx)
     .await?;
 
@@ -1378,6 +1506,8 @@ pub enum WorkflowActionPreviewReason {
     NoView,
     /// The account is disabled
     Inactive,
+    /// E-mail: the account has no e-mail address
+    NoEmail,
     /// Beyond `WORKFLOW_ACTIONS_MAX_RECIPIENTS`
     Truncated,
 }
@@ -1390,8 +1520,26 @@ pub struct WorkflowActionPreviewUser {
     pub username: String,
     pub display_name: String,
     pub reason: WorkflowActionPreviewReason,
-    /// The sources that name them, as `group CAB`
+    /// The sources that name them, as `group CAB` or `participant starter`
     pub sources: Vec<String>,
+}
+
+/// Whether a fixed address would be sent to
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowActionPreviewAddressReason {
+    /// Would be sent minimal content: no CI, no field values, only the workflow, the transition and a link
+    MinimalOnly,
+    /// The operator does not allow it (`MAIL_ALLOW_EXTERNAL_ADDRESSES`, `MAIL_ALLOWED_DOMAINS`): gets nothing
+    AddressNotAllowed,
+}
+
+/// One fixed address of an e-mail action
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowActionPreviewAddress {
+    pub address: String,
+    pub reason: WorkflowActionPreviewAddressReason,
 }
 
 /// Who an action would notify now
@@ -1413,6 +1561,13 @@ pub struct WorkflowActionPreview {
     pub users_hidden: bool,
     /// Whoever runs the event is left out as well (`excludeActor`, the default)
     pub excludes_actor: bool,
+    /// E-mail: the fixed addresses
+    pub addresses: Vec<WorkflowActionPreviewAddress>,
+    /// Sources resolved only when the action runs: the CI-dependent ones without `ciId`, the participants always
+    pub unresolved: Vec<String>,
+    /// E-mail: the subject as the caller would get it, in the caller's language (with `ciId`, for that CI;
+    /// otherwise without a CI)
+    pub subject: Option<String>,
 }
 
 pub async fn preview(
@@ -1420,7 +1575,7 @@ pub async fn preview(
     ctx: &RequestContext,
     path: &ActionKeyPath,
     q: &WorkflowActionPreviewQuery,
-    max_recipients: usize,
+    limits: &Limits<'_>,
 ) -> Result<WorkflowActionPreview, AppError> {
     let mut conn = pool.acquire().await?;
     let d = service::load_for(&mut conn, ctx, path.0, false, service::Access::Read).await?;
@@ -1428,38 +1583,50 @@ pub async fn preview(
         load(&mut conn, d.id).await?.into_iter().find(|a| a.key == path.1).ok_or_else(|| {
             AppError::new(ErrorCode::NotFound, format!("Workflow {} has no action {}", d.key, path.1))
         })?;
-    let class_id = match q.ci_id {
+    let ci: Option<(Uuid, Uuid, String, Option<String>)> = match q.ci_id {
         Some(ci) => {
-            let class: Option<Uuid> = sqlx::query_scalar("SELECT class_id FROM cmdb.configuration_items WHERE id = $1")
-                .bind(ci)
-                .fetch_optional(&mut *conn)
-                .await?;
-            class.filter(|c| ctx.may_view_all(&[*c])).ok_or_else(|| AppError::missing("Configuration item", ci))?
+            let row: Option<(Uuid, String, Option<String>)> =
+                sqlx::query_as("SELECT class_id, label, ident FROM cmdb.configuration_items WHERE id = $1")
+                    .bind(ci)
+                    .fetch_optional(&mut *conn)
+                    .await?;
+            let (class, label, ident) = row
+                .filter(|(c, ..)| ctx.may_view_all(&[*c]))
+                .ok_or_else(|| AppError::missing("Configuration item", ci))?;
+            Some((ci, class, label, ident))
         }
-        None => d.class_id,
+        None => None,
     };
-    let resolved = outbox::resolve_static(&mut conn, &action.recipients).await?;
-    let ids: Vec<Uuid> = resolved.keys().copied().collect();
+    let class_id = ci.as_ref().map_or(d.class_id, |c| c.1);
+    let model = crate::schema::model::Model::load(&mut conn).await?;
+    let subject = ci.as_ref().map(|(ci, class, ..)| recipients::Subject { ci_id: *ci, class_id: *class, run: None });
+    let resolved = recipients::resolve(&mut conn, &model, &action.recipients, subject.as_ref()).await?;
+    let ids: Vec<Uuid> = resolved.users.keys().copied().collect();
     let permissions = auth_data::load_permissions_of(&mut conn, &ids).await?;
-    let people: Vec<(Uuid, String, String, bool)> =
-        sqlx::query_as("SELECT id, username, display_name, is_active FROM cmdb.users WHERE id = ANY($1) ORDER BY id")
-            .bind(&ids)
-            .fetch_all(&mut *conn)
-            .await?;
+    let people: Vec<(Uuid, String, String, bool, Option<String>)> = sqlx::query_as(
+        "SELECT id, username, display_name, is_active, email FROM cmdb.users WHERE id = ANY($1) ORDER BY id",
+    )
+    .bind(&ids)
+    .fetch_all(&mut *conn)
+    .await?;
+    let email = action.kind == WorkflowActionKind::Email;
     let mut users = Vec::with_capacity(people.len());
     let mut included = 0usize;
-    for (id, username, display_name, active) in people {
+    for (id, username, display_name, active, address) in people {
         let reason = if !active {
             WorkflowActionPreviewReason::Inactive
         } else if !permissions.get(&id).is_some_and(|p| p.can(class_id, ClassOp::View)) {
             WorkflowActionPreviewReason::NoView
-        } else if included >= max_recipients {
+        } else if email && address.as_deref().is_none_or(|a| a.trim().is_empty()) {
+            WorkflowActionPreviewReason::NoEmail
+        } else if included >= limits.max_recipients {
             WorkflowActionPreviewReason::Truncated
         } else {
             included += 1;
             WorkflowActionPreviewReason::Included
         };
-        let sources = resolved.get(&id).cloned().unwrap_or_default().into_iter().collect();
+        let sources =
+            resolved.users.get(&id).map(|w| w.iter().map(recipients::why_label).collect()).unwrap_or_default();
         users.push(WorkflowActionPreviewUser { id, username, display_name, reason, sources });
     }
     users.sort_by(|a, b| a.reason.cmp(&b.reason).then_with(|| a.username.cmp(&b.username)));
@@ -1470,6 +1637,47 @@ pub async fn preview(
     if users_hidden {
         users.clear();
     }
+    let addresses = resolved
+        .addresses
+        .iter()
+        .map(|a| WorkflowActionPreviewAddress {
+            address: a.clone(),
+            reason: if limits.mail.address_allowed(a) {
+                WorkflowActionPreviewAddressReason::MinimalOnly
+            } else {
+                WorkflowActionPreviewAddressReason::AddressNotAllowed
+            },
+        })
+        .collect();
+    let subject = if email {
+        let locale: Option<String> = match ctx.principal() {
+            Some(p) => sqlx::query_scalar("SELECT locale FROM cmdb.users WHERE id = $1")
+                .bind(p.user_id)
+                .fetch_optional(&mut *conn)
+                .await?
+                .flatten(),
+            None => None,
+        };
+        let locale = crate::modules::mail::render::Locale::of(locale.as_deref(), limits.mail.default_locale);
+        let class_name = model.class(class_id).map(|c| c.key.clone()).unwrap_or_default();
+        let class_name: Option<String> = sqlx::query_scalar("SELECT name FROM cmdb.ci_classes WHERE id = $1")
+            .bind(class_id)
+            .fetch_optional(&mut *conn)
+            .await?
+            .or(Some(class_name));
+        Some(
+            email::preview_subject(
+                &mut conn,
+                &d,
+                &action,
+                ci.map(|(_, _, label, ident)| (label, ident, class_name.unwrap_or_default())),
+                locale,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
     Ok(WorkflowActionPreview {
         key: action.key,
         kind: action.kind,
@@ -1479,11 +1687,8 @@ pub async fn preview(
         truncated,
         users_hidden,
         excludes_actor: action.settings.exclude_actor.unwrap_or(true),
+        addresses,
+        unresolved: resolved.unresolved,
+        subject,
     })
-}
-
-/// Sources named by a principal, for messages: `group CAB`.
-pub(crate) fn source_label(r: &WorkflowActionRecipient) -> String {
-    let name = r.profile.as_ref().or(r.group.as_ref()).or(r.user.as_ref()).map(|p| p.name.as_str()).unwrap_or_default();
-    format!("{} {name}", r.source.as_str())
 }

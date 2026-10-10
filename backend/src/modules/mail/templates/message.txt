@@ -1,0 +1,7 @@
+{{intro}}{{lead}}
+
+{{details}}{{list}}{{link_text}}:
+{{link}}
+
+--
+{{footer}}

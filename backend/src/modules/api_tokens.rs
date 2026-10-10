@@ -613,8 +613,20 @@ pub(crate) mod tests {
             |_| {},
             imports,
             Default::default(),
-            None,
-            None,
+            |s| s,
+        )
+    }
+
+    /// The real router with this outbound mail (its settings are the actions API's address gate).
+    pub(crate) fn app_with_mail(pool: sqlx::PgPool, mail: std::sync::Arc<crate::modules::mail::Mail>) -> Router {
+        build_app_full(
+            pool,
+            CookieSecure::Never,
+            crate::http::Capacity::new(512, StdDuration::from_secs(10)),
+            |_| {},
+            Default::default(),
+            Default::default(),
+            |s| s.with_mail(mail),
         )
     }
 
@@ -630,8 +642,7 @@ pub(crate) mod tests {
             |_| {},
             Default::default(),
             limits,
-            None,
-            None,
+            |s| s,
         )
     }
 
@@ -647,8 +658,7 @@ pub(crate) mod tests {
             |_| {},
             Default::default(),
             Default::default(),
-            None,
-            Some(webhooks),
+            |s| s.with_webhooks(webhooks),
         )
     }
 
@@ -661,8 +671,7 @@ pub(crate) mod tests {
             |_| {},
             Default::default(),
             Default::default(),
-            Some(exports),
-            None,
+            |s| s.with_exports(exports),
         )
     }
 
@@ -672,10 +681,9 @@ pub(crate) mod tests {
         capacity: crate::http::Capacity,
         configure: impl FnOnce(&mut AuthConfig),
     ) -> Router {
-        build_app_full(pool, cookie_secure, capacity, configure, Default::default(), Default::default(), None, None)
+        build_app_full(pool, cookie_secure, capacity, configure, Default::default(), Default::default(), |s| s)
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn build_app_full(
         pool: sqlx::PgPool,
         cookie_secure: CookieSecure,
@@ -683,8 +691,7 @@ pub(crate) mod tests {
         configure: impl FnOnce(&mut AuthConfig),
         imports: crate::config::ImportConfig,
         business_services: crate::config::BusinessServiceConfig,
-        exports: Option<crate::config::ExportConfig>,
-        webhooks: Option<std::sync::Arc<crate::modules::webhooks::Webhooks>>,
+        adjust: impl FnOnce(AppState) -> AppState,
     ) -> Router {
         let mut auth = AuthConfig {
             session_idle: StdDuration::from_secs(3600),
@@ -738,16 +745,13 @@ pub(crate) mod tests {
             approval_sweep: Default::default(),
             workflow_actions: Default::default(),
             webhooks: Default::default(),
+            mail: Default::default(),
         };
-        let mut state = AppState::new(pool, auth, crate::secrets::Keyring::for_tests())
-            .importing(&imports)
-            .with_business_services(business_services);
-        if let Some(exports) = exports {
-            state = state.with_exports(exports);
-        }
-        if let Some(webhooks) = webhooks {
-            state = state.with_webhooks(webhooks);
-        }
+        let state = adjust(
+            AppState::new(pool, auth, crate::secrets::Keyring::for_tests())
+                .importing(&imports)
+                .with_business_services(business_services),
+        );
         router(AppState { capacity, ..state }, &cfg)
     }
 
