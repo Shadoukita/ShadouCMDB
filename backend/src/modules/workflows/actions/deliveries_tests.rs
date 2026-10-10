@@ -70,10 +70,15 @@ async fn status_of(pool: &PgPool, d: Uuid) -> (String, Option<String>, i16) {
         .unwrap()
 }
 
-/// A user with `workflows.manage` (and `webhooks.manage` when `webhooks`) and these class rights.
-async fn manager(w: &World, name: &str, classes: &[Uuid], webhooks: bool) -> crate::modules::api_tokens::tests::Creds {
-    let rights: Vec<(Uuid, bool)> = classes.iter().map(|c| (*c, false)).collect();
-    let profile = w.profile(name, &rights).await;
+/// A user with `workflows.manage` (and `webhooks.manage` when `webhooks`) and
+/// these class rights: view, and edit as well when the flag is set.
+async fn manager(
+    w: &World,
+    name: &str,
+    classes: &[(Uuid, bool)],
+    webhooks: bool,
+) -> crate::modules::api_tokens::tests::Creds {
+    let profile = w.profile(name, classes).await;
     let mut global = vec!["workflows.manage"];
     if webhooks {
         global.push("webhooks.manage");
@@ -156,21 +161,42 @@ async fn deliveries_are_listed_retried_discarded_and_audited() {
     assert_eq!((status, code(&v)), (400, "VALIDATION_ERROR"), "{v}");
 
     // Rights: without webhooks.manage no webhook delivery; without view on the type, 404.
-    let ops = manager(&w, "ops", &[w.server], false).await;
+    let ops = manager(&w, "ops", &[(w.server, true)], false).await;
     let (status, v) = w.call(&ops, "GET", &base(&w), None).await;
     assert_eq!((status, v["page"]["total"].as_i64()), (200, Some(5)), "{v}");
     let (status, _) = w.call(&ops, "GET", &format!("{}/{hook_dead}", base(&w)), None).await;
     assert_eq!(status, 404);
     let (status, _) = w.call(&ops, "POST", &format!("{}/{hook_dead}/retry", base(&w)), None).await;
     assert_eq!(status, 404, "a webhook delivery is not changed without webhooks.manage");
-    let hooks = manager(&w, "hooks", &[w.server], true).await;
+    let hooks = manager(&w, "hooks", &[(w.server, true)], true).await;
     let (_, v) = w.call(&hooks, "GET", &base(&w), None).await;
     assert_eq!(v["page"]["total"], 6);
-    let blind = manager(&w, "blind", &[w.network], true).await;
+    let blind = manager(&w, "blind", &[(w.network, true)], true).await;
     let (status, v) = w.call(&blind, "GET", &base(&w), None).await;
     assert_eq!((status, code(&v)), (404, "NOT_FOUND"), "{v}");
     let (status, v) = w.call(&blind, "GET", &format!("{DEFS}/{}/actions/summary", w.definition), None).await;
     assert_eq!(status, 404, "{v}");
+    // GH#877: view without edit on the type reads the deliveries but changes none (403), as for
+    // every other change to the workflow (GH#667).
+    let viewer = manager(&w, "viewer", &[(w.server, false)], true).await;
+    let (status, v) = w.call(&viewer, "GET", &base(&w), None).await;
+    assert_eq!((status, v["page"]["total"].as_i64()), (200, Some(6)), "{v}");
+    let (status, _) = w.call(&viewer, "GET", &format!("{}/{dead}", base(&w)), None).await;
+    assert_eq!(status, 200);
+    let (status, _) = w.call(&viewer, "GET", &format!("{DEFS}/{}/actions/summary", w.definition), None).await;
+    assert_eq!(status, 200);
+    for (path, body) in [
+        (format!("{}/{dead}/retry", base(&w)), None),
+        (format!("{}/{pending}/discard", base(&w)), None),
+        (format!("{}/retry", base(&w)), Some(json!({ "ids": [dead, held] }))),
+        (format!("{}/discard", base(&w)), Some(json!({ "filter": { "status": "pending" } }))),
+    ] {
+        let (status, v) = w.call(&viewer, "POST", &path, body).await;
+        assert_eq!((status, code(&v)), (403, "FORBIDDEN"), "{path}: {v}");
+    }
+    assert_eq!(status_of(&w.pool, dead).await, ("dead".into(), Some("max_attempts".into()), 8));
+    assert_eq!(status_of(&w.pool, pending).await, ("pending".into(), None, 0));
+    assert_eq!(status_of(&w.pool, held).await, ("held".into(), Some("endpoint_suspended".into()), 0));
 
     // Detail: the last error, the run and the event.
     let (status, v) = w.call(&w.admin, "GET", &format!("{}/{dead}", base(&w)), None).await;
