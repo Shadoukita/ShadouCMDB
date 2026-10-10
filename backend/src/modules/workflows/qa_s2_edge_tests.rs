@@ -349,9 +349,15 @@ async fn qa_s2_a_target_is_not_archived_while_a_version_that_runs_sets_it() {
     let (status, v) = w.call(&w.admin, "DELETE", &path, None).await;
     assert_eq!((status, code(&v)), (409, "IN_USE"), "{v}");
 
-    // An instance on version 2; version 3 no longer sets the field.
+    // An instance on version 2; version 3 no longer sets the field. Version 2
+    // is still published (publishing does not retire), so it stays in use.
     let (ci, i) = approved(&w).await;
     publish(&w, graph(json!([]))).await;
+    let (status, v) = w.call(&w.admin, "PATCH", &path, Some(json!({ "isActive": false }))).await;
+    assert_eq!((status, code(&v)), (409, "IN_USE"), "{v}");
+    assert!(v["error"]["message"].as_str().unwrap().contains("v2 (published)"), "{v}");
+    let (status, v) = w.call(&w.admin, "POST", &format!("{DEFS}/{}/versions/2/retire", w.definition), None).await;
+    assert_eq!(status, 200, "{v}");
     let (status, v) = w.call(&w.admin, "PATCH", &path, Some(json!({ "isActive": false }))).await;
     assert_eq!((status, code(&v)), (409, "IN_USE"), "the retired version 2 still runs: {v}");
     assert!(v["error"]["message"].as_str().unwrap().contains("v2 (retired)"), "{v}");
@@ -377,8 +383,9 @@ async fn qa_s2_a_target_is_not_archived_while_a_version_that_runs_sets_it() {
 /// who may only view the type gets 403 on a direct run and nothing written;
 /// one who may edit the type but not view Person still gets `valueFrom:
 /// actor` (the documented exception); an API token writes as its owner with
-/// actor type api_client; an actor linked to no Person fails with 422
-/// `no_person` and nothing written.
+/// actor type api_client; an incomplete account linked to no Person is
+/// refused before the run (401 by session and by its API token), so nothing
+/// is written.
 #[tokio::test]
 async fn qa_s2_actions_write_with_the_runner_rights_and_add_none() {
     let Some(db) = scratch::database("qa_s2_rights").await else { return };
@@ -429,13 +436,21 @@ async fn qa_s2_actions_write_with_the_runner_rights_and_add_none() {
     assert_eq!((rows[0].0.as_str(), rows[0].1.as_deref()), ("api_client", Some(approver_str.as_str())), "{rows:?}");
     assert_eq!(w.ci_values(ci2).await["attributes"]["retired_by"], json!(me.unwrap().to_string()));
 
-    // No Person (as an account without an e-mail address): 422 no_person, nothing written.
-    sqlx::query("UPDATE users SET person_ci_id = NULL WHERE id = $1").bind(approver_id).execute(&w.pool).await.unwrap();
+    // No Person (an incomplete account an interrupted upgrade could leave): refused before the run.
+    let mut c = w.pool.acquire().await.unwrap();
+    sqlx::query("ALTER TABLE users DISABLE TRIGGER users_person_link").execute(&mut *c).await.unwrap();
+    sqlx::query("UPDATE users SET person_ci_id = NULL WHERE id = $1").bind(approver_id).execute(&mut *c).await.unwrap();
+    sqlx::query("ALTER TABLE users ENABLE TRIGGER users_person_link").execute(&mut *c).await.unwrap();
+    drop(c);
     let (ci3, i3) = approved(&w).await;
     let before = w.ci_values(ci3).await;
-    let (status, v) = run_as(&w, &approver, i3, "go_live", json!({})).await;
-    assert_eq!((status, code(&v)), (422, "WORKFLOW_ACTION_INVALID"), "{v}");
-    assert_eq!(details(&v), pairs(&[("action", "set_attributes"), ("attributes.retired_by", "no_person")]), "{v}");
+    for creds in [&approver, &token] {
+        let (status, v) = run_as(&w, creds, i3, "go_live", json!({})).await;
+        assert!(status == 401 || status == 422, "refused, never written: {status} {v}");
+        if status == 422 {
+            assert_eq!(details(&v), pairs(&[("action", "set_attributes"), ("attributes.retired_by", "no_person")]), "{v}");
+        }
+    }
     assert_eq!(w.ci_values(ci3).await, before);
     assert!(action_rows(&w, ci3).await.is_empty());
     db.drop().await;
