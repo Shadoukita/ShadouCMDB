@@ -952,7 +952,7 @@ export const de: { [K in MessageKey]: string } = {
   "notifications.fallback.file": "eine Datei",
   "shell.toast.dismissHint": "Benachrichtigung schließen (Esc)",
   "nav.page.dashboard": "Dashboard",
-  "nav.page.inventory": "Alle Configuration Items",
+  "nav.page.inventory": "Alle CIs",
   "nav.page.search": "Suche",
   "nav.page.audit_log": "Audit-Protokoll",
   "nav.page.administration": "Administration",

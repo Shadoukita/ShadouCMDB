@@ -46,7 +46,11 @@ test("the shell and the dashboard are German with the German catalog", async ({ 
   await expect(page.locator(".count-value").first()).toHaveAttribute("title", /^(<1|\d+) % aller CIs$/);
 
   const nav = page.getByRole("navigation", { name: "Hauptmenü" });
-  await expect(nav.getByRole("link", { name: "Alle Configuration Items" })).toBeVisible();
+  const inventory = nav.getByRole("link", { name: "Alle CIs", exact: true });
+  await expect(inventory).toBeVisible();
+  // GH#888: at 1440 px with the count badge shown, the German label fits without an ellipsis.
+  await expect(inventory.locator(".nav-count")).toHaveText(/\S/);
+  expect(await inventory.locator(".nav-label").evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
   await expect(page.getByRole("navigation", { name: "Navigationspfad" })).toBeVisible();
   // In the banner: the dashboard's own "Neues CI" button would otherwise match too.
   await expect(page.getByRole("banner").getByRole("link", { name: "Neues CI", exact: true })).toBeVisible();

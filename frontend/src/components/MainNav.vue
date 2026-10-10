@@ -195,9 +195,10 @@ function active(item: NavLinkItem): (r: RouteLocationNormalizedLoaded) => boolea
     </template>
     <template v-for="item in g.area ? [] : g.items" :key="item.id">
       <template v-if="item.page">
-        <NavLink :to="item.to" :active="active(item)" :title="collapsed ? item.label : undefined">
+        <!-- The title also carries a long renamed page's full name, which the expanded rail ends with an ellipsis. -->
+        <NavLink :to="item.to" :active="active(item)" :title="item.label">
           <Icon :name="PAGE_ICONS[item.page]" :size="collapsed ? 20 : 16" />
-          <span class="nav-label">{{ item.label }}</span>
+          <span class="nav-label" dir="auto">{{ item.label }}</span>
           <span
             v-if="item.page === 'inventory' && !collapsed && total.data.value !== undefined"
             class="nav-count"

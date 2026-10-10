@@ -34,8 +34,8 @@ test("customization: the Navigation section is German with the German catalog", 
   await expect(editor.getByRole("heading", { name: "Hauptmenü", exact: true })).toBeVisible();
   for (const name of ["Eintrag", "Angezeigt als", "Sichtbar"]) await expect(editor.getByRole("columnheader", { name, exact: true })).toBeVisible();
   const table = editor.locator("table");
-  await expect(table.getByLabel("Name für Alle Configuration Items")).toBeVisible();
-  await expect(table.getByRole("button", { name: "Alle Configuration Items nach unten verschieben" })).toBeVisible();
+  await expect(table.getByLabel("Name für Alle CIs")).toBeVisible();
+  await expect(table.getByRole("button", { name: "Alle CIs nach unten verschieben" })).toBeVisible();
   // A section brings the "Into section…" choice and its Remove button.
   await page.getByLabel("Neuer Abschnitt").fill("Rechenzentrum");
   await page.getByRole("button", { name: "Abschnitt hinzufügen" }).click();
