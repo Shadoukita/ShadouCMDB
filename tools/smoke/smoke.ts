@@ -1099,6 +1099,8 @@ async function workflows(x: Json) {
   // Actions S4 (SHAA-2734): the action becomes an e-mail; with MAIL=off it is saved with a warning.
   const mail = (await get('/api/v1/admin/mail/status')).json;
   check(typeof mail.enabled === 'boolean' && /^(en|de)$/.test(mail.defaultLocale), 'the mail status reports the settings');
+  const mailTest = await post('/api/v1/admin/mail/test', undefined, mail.enabled ? 200 : 409);
+  check(mail.enabled ? typeof mailTest.json.sent === 'boolean' : mailTest.json.error?.code === 'MAIL_NOT_CONFIGURED', 'a test message is sent, or refused with MAIL=off');
   const email = (await put(actions, { version: withAction.version, actions: [{ ...inbox, kind: 'email' }] })).json;
   check(email.actions[0]?.kind === 'email', 'an e-mail action is saved');
   check(mail.enabled || email.problems.some((p: Json) => p.code === 'mail_off'), 'with MAIL=off an e-mail action is saved with a warning');
