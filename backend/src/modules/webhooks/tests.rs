@@ -1471,8 +1471,8 @@ async fn a_webhook_action_test_does_not_show_the_url_to_a_designer() {
     let (status, v) = e.w.call(&designer, "POST", &test, None).await;
     assert_eq!((status, v["reason"].as_str()), (200, Some("unreachable")), "{v}");
     let text = v.to_string();
-    for secret in ["T0SECRET", "qs-secret-123", "hook.example.test"] {
-        assert!(!text.contains(secret), "{secret} leaks to a designer: {v}");
+    for part in ["T0SECRET", "qs-secret-123", "hook.example.test"] {
+        assert!(!text.contains(part), "a part of the URL leaks to a designer: {v}");
     }
     e.db.drop().await;
 }
