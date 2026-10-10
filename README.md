@@ -259,9 +259,11 @@ not followed, and at most 64 KiB of an answer is read.
 IPv6 forms that carry an IPv4 address (IPv4-mapped, SIIT, NAT64 `64:ff9b::/96`, 6to4, Teredo) are
 also judged by that IPv4 address. The local-use NAT64 prefix `64:ff9b:1::/48` is refused; if webhook
 egress goes through such a gateway, open it with `WEBHOOK_ALLOW_PRIVATE_CIDRS` and the IPv4 address in
-its low 32 bits is still checked. A site-specific NAT64 prefix (any other /96 your DNS64 synthesises)
-cannot be recognised by the server: on the NAT64 gateway, deny translation towards your internal IPv4
-ranges and `169.254.0.0/16` for traffic from the ShadouCMDB host.
+its low 32 bits is still checked. That check assumes the gateway uses a /96 prefix; a gateway that
+uses a shorter RFC 6052 prefix (/32 to /64) places the IPv4 address elsewhere, and the server cannot
+tell the layouts apart. A site-specific NAT64 prefix (any other prefix your DNS64 synthesises) cannot be
+recognised by the server either. In both cases, deny translation on the NAT64 gateway towards your
+internal IPv4 ranges and `169.254.0.0/16` for traffic from the ShadouCMDB host.
 
 After 20 failures in a row with no success for 15 minutes an endpoint is suspended: its deliveries are
 held, an audit entry is written, and the holders of `webhooks.manage` get an in-app notice. `resume`
