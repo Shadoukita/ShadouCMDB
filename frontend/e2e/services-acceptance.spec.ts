@@ -183,7 +183,7 @@ test("2: create a service, land in the Owners editor, save a user and a group; t
 test("3: the picker selects across two pages, keeps members disabled, and adds 3", async ({ page, request }, testInfo) => {
   await apiSend(request, "POST", `/business-services/${ids.shop}/members`, { memberIds: [ids[pg(1)]] });
   await page.goto(`/services/${ids.shop}?tab=members`);
-  await expect(page.getByRole("tab", { name: "Members (1)" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: /^Members/ }).filter({ has: page.locator(`[data-count="1"]`) })).toHaveAttribute("aria-selected", "true");
   const add = page.locator(".service-members-actions").getByRole("button", { name: "Add members" });
   await add.click();
   const dialog = picker(page, SHOP);
@@ -206,7 +206,7 @@ test("3: the picker selects across two pages, keeps members disabled, and adds 3
   await expect(dialog).toBeHidden();
   await expect(page.locator(".service-members-live")).toHaveText("3 members added.");
   await expect(add).toBeFocused();
-  await expect(page.getByRole("tab", { name: "Members (4)" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: /^Members/ }).filter({ has: page.locator(`[data-count="4"]`) })).toBeVisible();
   await expect(memberLinks(page)).toHaveCount(4);
   await checkA11y(page, testInfo, "service detail members", { strict: true });
 });
@@ -233,7 +233,7 @@ test("4: a service that includes this one is refused in the tray, and nothing is
   await page.keyboard.press("Escape");
   await page.getByRole("dialog", { name: "Discard your selection?" }).getByRole("button", { name: "Discard" }).click();
   await expect(dialog).toBeHidden();
-  await expect(page.getByRole("tab", { name: "Members (4)" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: /^Members/ }).filter({ has: page.locator(`[data-count="4"]`) })).toBeVisible();
 });
 
 test("5: remove selected confirms with the number; the row menu removes one", async ({ page, request }) => {
@@ -244,14 +244,14 @@ test("5: remove selected confirms with the number; the row menu removes one", as
   await expect(confirm).toContainText(`Remove 2 members from ${SHOP}? The CIs themselves are not deleted.`);
   await confirm.getByRole("button", { name: "Remove", exact: true }).click();
   await expect(page.locator(".service-members-live")).toHaveText("2 members removed.");
-  await expect(page.getByRole("tab", { name: "Members (2)" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: /^Members/ }).filter({ has: page.locator(`[data-count="2"]`) })).toBeVisible();
 
   await page.getByRole("button", { name: `Actions for ${pg(52)}` }).click();
   await page.getByRole("menu", { name: `Actions for ${pg(52)}` }).getByRole("menuitem", { name: "Remove from service" }).click();
   await expect(confirm).toContainText(`Remove 1 member from ${SHOP}?`);
   await confirm.getByRole("button", { name: "Remove", exact: true }).click();
   await expect(page.locator(".service-members-live")).toHaveText("1 member removed.");
-  await expect(page.getByRole("tab", { name: "Members (1)" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: /^Members/ }).filter({ has: page.locator(`[data-count="1"]`) })).toBeVisible();
   expect((await members(request, ids.shop)).data.map((m) => m.ci.id)).toEqual([ids[pg(1)]]);
   // Back to three members for the scenarios below.
   await apiSend(request, "POST", `/business-services/${ids.shop}/members`, { memberIds: [ids[pg(2)], ids[pg(3)]] });
@@ -296,7 +296,7 @@ test("9: a restricted user sees 2 members, the note, and never the hidden CI", a
     await expect(row.locator("td").nth(5)).toHaveText("2");
 
     await page.goto(`/services/${ids.rsvc}?tab=members`);
-    await expect(page.getByRole("tab", { name: "Members (2)" })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("tab", { name: /^Members/ }).filter({ has: page.locator(`[data-count="2"]`) })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByRole("note")).toHaveText("Members of classes you are not allowed to view are not listed.");
     await expect(memberLinks(page)).toHaveText([WEB1, WEB2]);
     await expect(page.locator(".service-members")).not.toContainText(DB1);
@@ -333,7 +333,7 @@ test("10: deleting a nested service names its memberships and parents; the paren
   await expect(page).toHaveURL(/\/services$/);
 
   await page.goto(`/services/${ids.parentA}?tab=members`);
-  await expect(page.getByRole("tab", { name: "Members (0)" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: /^Members/ }).filter({ has: page.locator(`[data-count="0"]`) })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("link", { name: INNER10 })).toHaveCount(0);
   expect((await members(request, ids.parentB)).page.total).toBe(0);
   // The member CIs are still there.
@@ -407,7 +407,7 @@ test("13: with the locale forced to German, the list, picker and dialogs are Ger
   await expect(page.getByRole("link", { name: "Business-Service anlegen" }).first()).toBeVisible();
 
   await page.goto(`/services/${ids.shop}?tab=members`);
-  await expect(page.getByRole("tab", { name: "Mitglieder (3)" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: /^Mitglieder/ }).filter({ has: page.locator(`[data-count="3"]`) })).toHaveAttribute("aria-selected", "true");
   // The table cells too (GH#478): the state and criticality badges come from the catalog.
   await expect(page.getByRole("cell", { name: "Aktiv", exact: true }).first()).toBeVisible();
   await expect(page.getByRole("cell", { name: "Active", exact: true })).toHaveCount(0);

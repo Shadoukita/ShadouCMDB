@@ -13,7 +13,7 @@ import PermissionDenied from "../../components/PermissionDenied.vue";
 import LoadingState from "../../components/LoadingState.vue";
 import RowMenu, { type RowMenuItem } from "../../components/RowMenu.vue";
 import SaveBar from "../../components/SaveBar.vue";
-import { t } from "../../i18n";
+import { formatNumber, t } from "../../i18n";
 import { useAppSettings } from "../../lib/appSettings";
 import { useDocumentTitle } from "../../lib/composables";
 import { formatDateTime, formatRelative } from "../../lib/format";
@@ -41,9 +41,9 @@ import ServiceMembersPanel from "./ServiceMembersPanel.vue";
  * (SHAA-1644, GH#588) the Overview's fields open as inputs, and once something was changed a bar offers
  * Save and Discard; leaving the service with unsaved changes asks first.
  *
- * The title row is the record page's (design §2.7, audit B2 and R2): class icon, name and a meta line
- * (state, ident, class, criticality, last update), the views as secondary buttons, Delete in the `⋯`
- * menu; then the stat tiles.
+ * The page head is the record page's band (design §0 step 12d, §2.7, audit B2, R2 and N3): the class tile,
+ * the name and a meta line (class, state, criticality, ident, last update), the views as secondary buttons,
+ * Delete in the `⋯` menu, the stat tiles, then the tabs on the band's edge with the member count.
  */
 type Tab = "overview" | "members" | "impact" | "graph" | "history";
 
@@ -81,6 +81,7 @@ const canDelete = computed(() => !!s.value && session.canOnClass(s.value.classId
 const settings = useAppSettings();
 const classes = useCiClasses();
 const cls = computed(() => classes.data.value?.find((k) => k.id === c.value?.classId));
+const classTile = computed(() => (cls.value?.color ? { "--tile-c": cls.value.color } : undefined));
 const classKey = computed(() => cls.value?.key);
 const attrs = useClassAttributes(() => c.value?.classId);
 const defs = computed(() => (attrs.data.value ?? []).filter((d) => d.isActive || c.value?.attributes[d.key] != null));
@@ -149,9 +150,9 @@ function onBeforeUnload(e: BeforeUnloadEvent) {
 onMounted(() => window.addEventListener("beforeunload", onBeforeUnload));
 onBeforeUnmount(() => window.removeEventListener("beforeunload", onBeforeUnload));
 
-const TABS = computed<[Tab, string][]>(() => [
+const TABS = computed<[Tab, string, number?][]>(() => [
   ["overview", t("services.tab.overview")],
-  ["members", t("services.tab.members", { n: (s.value?.memberCount ?? 0).toLocaleString() })],
+  ["members", t("services.tab.members"), s.value?.memberCount ?? 0],
   ["impact", t("services.tab.impact")],
   ["graph", t("services.tab.graph")],
   ...(session.can("audit.view") ? [["history", t("services.tab.history")] as [Tab, string]] : []),
@@ -221,55 +222,56 @@ watch(
     </template>
   </template>
   <template v-else-if="s && c && self">
-    <Breadcrumbs :items="crumbs" />
-    <div class="page-header record-header">
-      <div class="record-heading">
-        <div class="title">
-          <ClassBadge :icon="cls?.icon" :color="cls?.color" />
-          <h1 dir="auto">{{ s.name }}</h1>
+    <div class="record-head">
+      <Breadcrumbs :items="crumbs" />
+      <div class="page-header record-header">
+        <div class="record-heading">
+          <span class="class-tile class-tile-lg" :style="classTile" aria-hidden="true"><ClassBadge :icon="cls?.icon" :color="cls?.color" /></span>
+          <div class="record-title">
+            <div class="title">
+              <h1 dir="auto" class="mono">{{ s.name }}</h1>
+            </div>
+            <p class="record-meta" data-testid="record-meta">
+              <RouterLink class="badge record-class-chip" to="/services" dir="auto">{{ c.class.name }}</RouterLink>
+              <span v-if="c.active" class="badge ok"><span class="status-dot ok" aria-hidden="true" />{{ t("ciState.active") }}</span>
+              <CiStateBadge :ci="c" />
+              <CriticalityBadge v-if="s.criticality" :value="s.criticality" />
+              <span class="record-meta-line">
+                <span class="ident" :title="t('record.meta.ident')">{{ s.ident }}</span>
+                <span class="sep" aria-hidden="true">·</span>
+                <time :datetime="s.updatedAt" :title="formatDateTime(s.updatedAt)">{{ t("record.meta.updated", { when: formatRelative(s.updatedAt) }) }}</time>
+              </span>
+            </p>
+          </div>
         </div>
-        <p class="record-meta" data-testid="record-meta">
-          <span v-if="c.active" class="status"><span class="status-dot ok" aria-hidden="true" />{{ t("ciState.active") }}</span>
-          <CiStateBadge :ci="c" />
-          <span class="sep" aria-hidden="true">·</span>
-          <span class="ident" :title="t('record.meta.ident')">{{ s.ident }}</span>
-          <span class="sep" aria-hidden="true">·</span>
-          <RouterLink to="/services" dir="auto">{{ c.class.name }}</RouterLink>
-          <template v-if="s.criticality">
-            <span class="sep" aria-hidden="true">·</span>
-            <CriticalityBadge :value="s.criticality" />
-          </template>
-          <span class="sep" aria-hidden="true">·</span>
-          <time :datetime="s.updatedAt" :title="formatDateTime(s.updatedAt)">{{ t("record.meta.updated", { when: formatRelative(s.updatedAt) }) }}</time>
-        </p>
+        <div class="actions">
+          <RouterLink v-if="current !== 'impact'" class="btn" :to="`/services/${s.id}/impact`">{{ t("record.actions.impact") }}</RouterLink>
+          <button v-if="current !== 'graph'" type="button" class="btn" @click="selectTab('graph')">{{ t("record.actions.map") }}</button>
+          <button v-if="hasTab('history') && current !== 'history'" type="button" class="btn" @click="selectTab('history')">{{ t("record.actions.history") }}</button>
+          <RowMenu v-if="moreActions.length > 0" :label="t('record.actions.more')" :items="moreActions" large />
+          <DeleteServiceDialog v-if="moreActions.length > 0" v-model:open="deleting" :service="s" />
+        </div>
       </div>
-      <div class="actions">
-        <RouterLink v-if="current !== 'impact'" class="btn" :to="`/services/${s.id}/impact`">{{ t("record.actions.impact") }}</RouterLink>
-        <button v-if="current !== 'graph'" type="button" class="btn" @click="selectTab('graph')">{{ t("record.actions.map") }}</button>
-        <button v-if="hasTab('history') && current !== 'history'" type="button" class="btn" @click="selectTab('history')">{{ t("record.actions.history") }}</button>
-        <RowMenu v-if="moreActions.length > 0" :label="t('record.actions.more')" :items="moreActions" large />
-        <DeleteServiceDialog v-if="moreActions.length > 0" v-model:open="deleting" :service="s" />
+      <RecordStats :ci="c" :service="s" />
+      <div class="tabs record-tabs" role="tablist" :aria-label="t('services.tabsLabel')">
+        <button
+          v-for="[key, label, n] in TABS"
+          :id="`service-tab-${key}`"
+          :key="key"
+          type="button"
+          role="tab"
+          :aria-selected="current === key"
+          :aria-controls="`service-panel-${key}`"
+          :tabindex="current === key ? 0 : -1"
+          @click="selectTab(key)"
+          @keydown="onTabKey"
+        >
+          <!-- The count is generated content, as on a CI's tabs: part of the tab's accessible name, not of its text. -->
+          {{ label }}<span v-if="n !== undefined" class="tab-count mono" :data-count="formatNumber(n)" />
+        </button>
       </div>
     </div>
-    <RecordStats :ci="c" :service="s" />
     <FormErrorBanner v-if="draft.error != null && draft.dirty" :error="draft.error" :unplaced="draft.unplaced" :on-reload="loadCurrent" />
-
-    <div class="tabs" role="tablist" :aria-label="t('services.tabsLabel')">
-      <button
-        v-for="[key, label] in TABS"
-        :id="`service-tab-${key}`"
-        :key="key"
-        type="button"
-        role="tab"
-        :aria-selected="current === key"
-        :aria-controls="`service-panel-${key}`"
-        :tabindex="current === key ? 0 : -1"
-        @click="selectTab(key)"
-        @keydown="onTabKey"
-      >
-        {{ label }}
-      </button>
-    </div>
 
     <div :id="`service-panel-${current}`" role="tabpanel" :aria-labelledby="`service-tab-${current}`">
       <template v-if="current === 'overview'">

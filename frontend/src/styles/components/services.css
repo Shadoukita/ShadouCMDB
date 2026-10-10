@@ -12,6 +12,10 @@
   margin-left: var(--space-1);
   font-family: var(--font-mono);
 }
+/* The filters in the list band line up on their labels, so the owner field's hint hangs below the row. */
+.services-head .toolbar {
+  align-items: flex-start;
+}
 /* The chosen owner filter: a chip at the control height, so it lines up with the toolbar's inputs. */
 .toolbar .owner-chip {
   min-height: var(--control-h);

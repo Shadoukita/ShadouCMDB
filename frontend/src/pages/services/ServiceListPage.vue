@@ -149,33 +149,20 @@ const rowMenu = (s: ServiceSummary) => [
 </script>
 
 <template>
-  <template v-if="!forbidden">
+  <div v-if="!forbidden" class="list-head services-head">
     <Breadcrumbs :items="[{ label: t('services.title') }]" />
     <div class="page-header">
       <div class="title">
         <h1>{{ t("services.title") }}</h1>
-        <span v-if="list.data.value" class="muted count">{{ t("common.total", { n: formatNumber(total) }) }}</span>
+        <span v-if="list.data.value" class="count mono">{{ t("common.total", { n: formatNumber(total) }) }}</span>
         <span v-if="list.isFetching.value && !list.isPending.value" class="spinner" :aria-label="t('common.refreshing')" />
       </div>
       <div v-if="canCreate" class="actions">
         <RouterLink class="btn btn-primary" :to="createTo"><Icon name="plus" />{{ t("services.create") }}</RouterLink>
       </div>
     </div>
-  </template>
-
-  <ServiceError v-if="settings.isError.value" :error="settings.error.value" :on-retry="() => settings.refetch()" />
-  <LoadingState v-else-if="settings.isPending.value" :label="t('services.loading')" />
-  <PermissionDenied
-    v-else-if="forbidden"
-    :crumbs="[{ label: t('services.title') }]"
-    :requirement="t('denied.serviceView')"
-    :panel-title="t('services.forbiddenPanelTitle')"
-  >
-    {{ t("services.forbidden") }}
-  </PermissionDenied>
-
-  <section v-else class="panel explorer" :aria-label="t('services.title')">
-    <form class="toolbar" role="search" @submit.prevent>
+    <p class="page-intro">{{ t("services.intro") }}</p>
+    <form v-if="settings.data.value" class="toolbar" role="search" :aria-label="t('services.filters')" @submit.prevent>
       <div class="field search">
         <label for="svc-q">{{ t("services.filter.search") }}</label>
         <div class="input-icon">
@@ -239,7 +226,20 @@ const rowMenu = (s: ServiceSummary) => [
       </div>
       <button v-if="filtered" type="button" class="btn btn-ghost" @click="clearFilters"><Icon name="x" />{{ t("services.filter.clear") }}</button>
     </form>
+  </div>
 
+  <ServiceError v-if="settings.isError.value" :error="settings.error.value" :on-retry="() => settings.refetch()" />
+  <LoadingState v-else-if="settings.isPending.value" :label="t('services.loading')" />
+  <PermissionDenied
+    v-else-if="forbidden"
+    :crumbs="[{ label: t('services.title') }]"
+    :requirement="t('denied.serviceView')"
+    :panel-title="t('services.forbiddenPanelTitle')"
+  >
+    {{ t("services.forbidden") }}
+  </PermissionDenied>
+
+  <section v-else class="panel explorer" :aria-label="t('services.title')">
     <div v-if="list.isError.value" class="panel-body">
       <ServiceError :error="list.error.value" :on-retry="() => list.refetch()" />
     </div>
@@ -259,7 +259,8 @@ const rowMenu = (s: ServiceSummary) => [
 
     <template v-if="rows.length > 0 && !list.isError.value">
       <div class="table-wrap table-scroll">
-        <table :class="['data', 'service-table', { loading: list.isPlaceholderData.value }]" aria-describedby="services-keys">
+        <table :class="['data', 'list-table', 'service-table', { loading: list.isPlaceholderData.value }]" aria-describedby="services-keys">
+          <caption class="sr-only">{{ t("services.title") }}</caption>
           <thead>
             <tr>
               <th
@@ -277,8 +278,10 @@ const rowMenu = (s: ServiceSummary) => [
           </thead>
           <tbody @keydown="onRowKeydown($event)">
             <tr v-for="s in rows" :key="s.id" :data-id="s.id">
-              <td><RouterLink :to="`/services/${s.id}`" dir="auto">{{ s.name }}</RouterLink></td>
-              <td class="mono">{{ s.ident }}</td>
+              <td>
+                <span class="cell-clip"><RouterLink :to="`/services/${s.id}`" class="list-name" dir="auto">{{ s.name }}</RouterLink></span>
+              </td>
+              <td class="mono muted">{{ s.ident }}</td>
               <td><CriticalityBadge :value="s.criticality" show-unset /></td>
               <td v-for="role in ['technical', 'business'] as const" :key="role" class="owner-cell">
                 <template v-if="s.owners[role].length">
@@ -291,8 +294,8 @@ const rowMenu = (s: ServiceSummary) => [
                 </template>
                 <span v-else class="muted">{{ t("services.owners.noneCell") }}</span>
               </td>
-              <td class="num">{{ s.memberCount.toLocaleString() }}</td>
-              <td class="num">{{ s.serviceMemberCount.toLocaleString() }}</td>
+              <td class="num mono">{{ formatNumber(s.memberCount) }}</td>
+              <td class="num mono">{{ formatNumber(s.serviceMemberCount) }}</td>
               <td><CiStateBadge :ci="s" show-active /></td>
               <td><time :datetime="s.updatedAt" :title="formatDateTime(s.updatedAt)">{{ formatRelative(s.updatedAt) }}</time></td>
               <td class="row-actions">
@@ -302,12 +305,15 @@ const rowMenu = (s: ServiceSummary) => [
           </tbody>
         </table>
       </div>
-      <PaginationBar
-        :total="total"
-        :limit="state.limit"
-        :offset="(state.page - 1) * state.limit"
-        @change="(p) => update({ page: Math.floor(p.offset / p.limit) + 1, limit: p.limit }, { keepPage: true })"
-      />
+      <div class="table-footer">
+        <PaginationBar
+          numbered
+          :total="total"
+          :limit="state.limit"
+          :offset="(state.page - 1) * state.limit"
+          @change="(p) => update({ page: Math.floor(p.offset / p.limit) + 1, limit: p.limit }, { keepPage: true })"
+        />
+      </div>
       <KeyboardHints id="services-keys" />
     </template>
   </section>

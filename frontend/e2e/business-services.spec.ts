@@ -251,13 +251,13 @@ test("a service's CI URL redirects; its Impact tab defaults to Upstream and a li
   await apiSend(request, "POST", `/business-services/${ids.shop}/members`, { memberIds: [ids.web, ids.pay] });
   await page.goto(`/cis/${ids.shop}`);
   await expect(page).toHaveURL(new RegExp(`/services/${ids.shop}$`));
-  await expect(page.getByRole("tab", { name: "Members (2)" })).toBeVisible();
-  await page.getByRole("tab", { name: "Members (2)" }).click();
+  await expect(page.getByRole("tab", { name: /^Members/ }).filter({ has: page.locator(`[data-count="2"]`) })).toBeVisible();
+  await page.getByRole("tab", { name: /^Members/ }).filter({ has: page.locator(`[data-count="2"]`) }).click();
   await expect(page).toHaveURL(/tab=members/);
   await expect(page.getByRole("link", { name: WEB })).toHaveAttribute("href", `/cis/${ids.web}`);
   await expect(page.getByRole("link", { name: PAY })).toHaveAttribute("href", `/services/${ids.pay}`);
   await page.reload();
-  await expect(page.getByRole("tab", { name: "Members (2)" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: /^Members/ }).filter({ has: page.locator(`[data-count="2"]`) })).toHaveAttribute("aria-selected", "true");
 
   await page.getByRole("tab", { name: "Impact" }).click();
   await expect(page).toHaveURL(new RegExp(`/services/${ids.shop}/impact$`));
