@@ -1096,6 +1096,10 @@ async function workflows(x: Json) {
   const withAction = (await put(actions, { version: noActions.version, actions: [inbox] })).json;
   check(withAction.actions[0]?.recipients[0]?.profile?.id === builtin.id, 'an inbox action is saved with its recipients resolved');
   await put(actions, { version: noActions.version, actions: [] }, 409);
+  // Test send (SHAA-3042): an inbox action notifies the caller only; an unsaved action is 404.
+  const tested = (await post(`${actions}/notify_board/test`, undefined, 200)).json;
+  check(tested.key === 'notify_board' && tested.kind === 'inbox' && tested.ok === true, 'a test send of an inbox action notifies the caller');
+  await post(`${actions}/nope/test`, undefined, 404);
   // Actions S4 (SHAA-2734): the action becomes an e-mail; with MAIL=off it is saved with a warning.
   const mail = (await get('/api/v1/admin/mail/status')).json;
   check(typeof mail.enabled === 'boolean' && /^(en|de)$/.test(mail.defaultLocale), 'the mail status reports the settings');
@@ -1107,6 +1111,8 @@ async function workflows(x: Json) {
   const reach = (await get(`${actions}/notify_board/preview`)).json;
   check(reach.key === 'notify_board' && Array.isArray(reach.users), 'the recipients of an action are previewed');
   await get(`${actions}/nope/preview`, 404);
+  const mailSend = await call('POST', `${actions}/notify_board/test`, undefined, undefined, {}, { accept: mail.enabled ? [200, 409] : [409] });
+  check(mail.enabled || mailSend.json.error?.code === 'MAIL_NOT_CONFIGURED', 'with MAIL=off a test e-mail is refused');
   check((await put(actions, { version: email.version, actions: [] })).json.actions.length === 0, 'the action is removed');
 
   // Actions S3b (SHAA-2831): the deliveries list, the summary, retry and discard.
