@@ -6,6 +6,7 @@ import { useCancelWorkflow, type WorkflowAvailableTransition, type WorkflowInsta
 import ErrorAlert from "../../components/ErrorAlert.vue";
 import FormDialog from "../../components/FormDialog.vue";
 import Icon from "../../components/Icon.vue";
+import { t } from "../../i18n";
 import { useFlashStore } from "../../stores/flash";
 import FormField from "../form/FormField.vue";
 import TransitionDialog from "./TransitionDialog.vue";
@@ -36,13 +37,19 @@ const cancel = useCancelWorkflow();
 const cancelError = computed(() => (cancel.error.value instanceof ApiError ? cancel.error.value : null));
 const reasonMissing = ref(false);
 const reasonError = computed(() => {
-  if (reasonMissing.value) return "Give a reason.";
+  if (reasonMissing.value) return t("wfRun.reasonMissing");
   if (cancelError.value?.code === "VALIDATION_ERROR") return cancelError.value.fieldErrors().reason;
   return undefined;
 });
-const blockedTitle = (t: WorkflowAvailableTransition) =>
-  t.blockedBy.length > 0 ? `Cannot run as the CI stands: ${t.blockedBy.map((b) => b.message).join("; ")}` : `Move to ${t.toState.name}`;
+const blockedReasons = (tr: WorkflowAvailableTransition) => tr.blockedBy.map((b) => b.message).join("; ");
+const blockedTitle = (tr: WorkflowAvailableTransition) =>
+  tr.blockedBy.length > 0 ? t("wfRun.actions.blockedTitle", { reasons: blockedReasons(tr) }) : t("wfRun.actions.moveTo", { state: tr.toState.name });
 
+/** The cancel text around the state and the CI, which are bold. Both catalogs name the state before the CI. */
+const cancelBody = computed(() => {
+  const [before = "", middle = "", after = ""] = t("wfRun.cancel.body", { state: "\u0000", ci: "\u0000" }).split("\u0000");
+  return [before, middle, after];
+});
 function openCancel() {
   reason.value = "";
   reasonMissing.value = false;
@@ -54,7 +61,7 @@ async function confirmCancel() {
   if (reasonMissing.value) return;
   try {
     await cancel.mutateAsync({ id: props.instance.id, ciId: props.instance.ciId, expectedVersion: props.instance.version, reason: reason.value.trim() });
-    flash.show(`Cancelled ${props.instance.definitionName} on ${props.instance.ciLabel}.`);
+    flash.show(t("wfRun.cancel.done", { workflow: props.instance.definitionName, ci: props.instance.ciLabel }));
     cancelling.value = false;
   } catch {
     // shown in the dialog
@@ -70,41 +77,42 @@ function reload() {
 <template>
   <div class="wf-actions">
     <button
-      v-for="t in runnable"
-      :key="t.key"
+      v-for="tr in runnable"
+      :key="tr.key"
       type="button"
-      :class="['btn', compact ? 'btn-sm' : '', t.blockedBy.length > 0 ? 'wf-blocked' : '']"
-      :title="blockedTitle(t)"
-      :data-testid="`wf-transition-${t.key}`"
-      @click="running = t"
+      :class="['btn', compact ? 'btn-sm' : '', tr.blockedBy.length > 0 ? 'wf-blocked' : '']"
+      :title="blockedTitle(tr)"
+      :data-testid="`wf-transition-${tr.key}`"
+      @click="running = tr"
     >
-      <Icon v-if="t.blockedBy.length > 0" name="triangle-alert" :size="14" />
-      {{ t.name }}
-      <span v-if="t.blockedBy.length > 0" class="sr-only">(blocked: {{ t.blockedBy.map((b) => b.message).join("; ") }})</span>
+      <Icon v-if="tr.blockedBy.length > 0" name="triangle-alert" :size="14" />
+      <span dir="auto">{{ tr.name }}</span>
+      <span v-if="tr.blockedBy.length > 0" class="sr-only">{{ t("wfRun.actions.blockedSr", { reasons: blockedReasons(tr) }) }}</span>
     </button>
-    <button v-if="canCancel" type="button" :class="['btn', 'btn-ghost', compact ? 'btn-sm' : '']" @click="openCancel">Cancel workflow</button>
-    <span v-if="runnable.length === 0 && !instance.pendingApproval && !canCancel && !compact" class="muted">No transition you may run from this state.</span>
+    <button v-if="canCancel" type="button" :class="['btn', 'btn-ghost', compact ? 'btn-sm' : '']" @click="openCancel">{{ t("wfRun.cancel.submit") }}</button>
+    <span v-if="runnable.length === 0 && !instance.pendingApproval && !canCancel && !compact" class="muted">{{ t("wfRun.actions.none") }}</span>
 
     <Teleport to="body">
       <TransitionDialog :open="!!running" :instance="instance" :transition="running" :class-id="classId" :ci="ci" @close="running = null" @reload="reload" />
     <FormDialog
       :open="cancelling"
-      :title="`Cancel ${instance.definitionName}?`"
-      submit-label="Cancel workflow"
+      :title="t('wfRun.cancel.title', { workflow: instance.definitionName })"
+      :submit-label="t('wfRun.cancel.submit')"
       :busy="cancel.isPending.value"
       @submit="confirmCancel"
       @cancel="cancelling = false"
     >
       <div v-if="cancelError?.code === 'VERSION_CONFLICT'" class="alert alert-warn" role="alert">
-        <strong>This workflow moved on since you opened it.</strong>
-        <div>Nothing was cancelled. <button type="button" class="btn btn-sm" @click="reload">Reload the workflow</button></div>
+        <strong>{{ t("wfRun.conflict.title") }}</strong>
+        <div>
+          {{ t("wfRun.conflict.nothingCancelled") }} <button type="button" class="btn btn-sm" @click="reload">{{ t("wfRun.conflict.reload") }}</button>
+        </div>
       </div>
-      <ErrorAlert v-else-if="cancel.isError.value && !reasonError" :error="cancel.error.value" title="The workflow was not cancelled" />
+      <ErrorAlert v-else-if="cancel.isError.value && !reasonError" :error="cancel.error.value" :title="t('wfRun.cancel.failed')" />
       <p>
-        The workflow stops in <strong dir="auto">{{ instance.state.name }}</strong> on <strong dir="auto">{{ instance.ciLabel }}</strong>. The CI and its
-        fields stay as they are; the instance and its history are kept.
+        {{ cancelBody[0] }}<strong dir="auto">{{ instance.state.name }}</strong>{{ cancelBody[1] }}<strong dir="auto">{{ instance.ciLabel }}</strong>{{ cancelBody[2] }}
       </p>
-      <FormField id="wf-cancel-reason" v-slot="p" label="Reason" required :error="reasonError" hint="Kept in the workflow history and the audit log.">
+      <FormField id="wf-cancel-reason" v-slot="p" :label="t('wfRun.reason')" required :error="reasonError" :hint="t('wfRun.cancel.reasonHint')">
         <textarea :id="p.id" v-model="reason" rows="3" maxlength="4000" required :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy" />
       </FormField>
     </FormDialog>

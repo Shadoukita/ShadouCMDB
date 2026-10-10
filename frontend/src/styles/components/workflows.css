@@ -1,0 +1,88 @@
+/* ---------- Workflow runtime (11-5a, audit N2) ----------
+ * Workflow instances list, an instance's page and the CI's Workflows tab. The list uses the inventory head band
+ * (.list-head) and the instance the record head band (.record-head-plain); these rules only place what is
+ * particular to workflows: the transitions of an instance, the per-state summary and an instance's states. */
+.wf-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.wf-actions .btn.wf-blocked {
+  border-color: var(--c-warning-border);
+  background: var(--c-warning-subtle);
+  color: var(--c-warning-text);
+}
+.wf-transition-route {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+}
+.wf-summary-states {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+table.data tr.row-current td {
+  background: var(--c-primary-subtle);
+}
+.wf-comment {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin-bottom: var(--space-1);
+}
+.wf-grid {
+  margin-bottom: var(--space-4);
+}
+/* A column that takes the rest of the table (transitions, comments, actions) and wraps its text. */
+table.data th.wf-fill,
+table.data td.wf-fill {
+  width: 100%;
+}
+table.data td.wf-wrap,
+table.data td.wf-summary-cell {
+  white-space: normal;
+}
+table.data.wf-summary-table td.wf-summary-cell {
+  width: 100%;
+}
+/* A state's badge and its flags (initial, current, final), spaced like words. */
+table.data td.wf-state-cell > * + * {
+  margin-left: var(--space-2);
+}
+table.data.wf-events td {
+  vertical-align: top;
+}
+.wf-summary-states .btn {
+  gap: var(--space-2);
+}
+/* Run-time approvals (SHAA-2916): the steps of a policy in the transition dialog, decisions in a step row,
+   and the banner of a pending request above the instance table. */
+.wf-approval-steps {
+  margin: var(--space-1) 0;
+  padding-left: var(--space-5);
+}
+.wf-decisions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.wf-decisions li + li {
+  margin-top: var(--space-1);
+}
+.wf-pending {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  margin: 0 0 var(--space-2);
+}
+.wf-pending .wf-pending-text {
+  flex: 1 1 24rem;
+}
+.wf-pending .wf-pending-actions {
+  display: flex;
+  gap: var(--space-2);
+}

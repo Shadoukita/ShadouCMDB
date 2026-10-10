@@ -7,7 +7,7 @@ import EmptyState from "../../../components/EmptyState.vue";
 import ErrorAlert from "../../../components/ErrorAlert.vue";
 import LoadingState from "../../../components/LoadingState.vue";
 import { formatDateTime } from "../../../lib/format";
-import { autoLayout, CATEGORIES, describeConditions, draftFromVersion } from "../../../lib/workflowDraft";
+import { autoLayout, categoryLabel, describeConditions, draftFromVersion } from "../../../lib/workflowDraft";
 import WorkflowGraph from "./WorkflowGraph.vue";
 import WorkflowMigrate from "./WorkflowMigrate.vue";
 
@@ -31,7 +31,6 @@ const viewedDraft = computed(() => {
   return d;
 });
 const stateName = (key: string) => viewed.data.value?.states.find((s) => s.key === key)?.name ?? key;
-const categoryLabel = (c: string) => CATEGORIES.find((x) => x.value === c)?.label ?? c;
 
 function view(v: WorkflowVersionSummary) {
   if (v.status === "draft") {

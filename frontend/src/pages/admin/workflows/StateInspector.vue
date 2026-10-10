@@ -2,7 +2,7 @@
 import { computed, ref, watch } from "vue";
 import type { LookupListValue } from "../../../api/datamodel";
 import { keyError } from "../../../lib/keys";
-import { CATEGORIES, renameState, type Draft, type DraftState, type PlacedProblem } from "../../../lib/workflowDraft";
+import { CATEGORIES, categoryLabel, renameState, type Draft, type DraftState, type PlacedProblem } from "../../../lib/workflowDraft";
 import ProblemList from "./ProblemList.vue";
 
 /** One state of the draft: key, name, category, terminal flag, the state field's value it maps to, and whether it is the initial state. */
@@ -78,7 +78,7 @@ const fid = (f: string) => `wf-state-${f}`;
         <div class="field">
           <label :for="fid('category')">Category</label>
           <select :id="fid('category')" v-model="state.category" :aria-describedby="`${fid('category')}-hint`">
-            <option v-for="c in CATEGORIES" :key="c.value" :value="c.value">{{ c.label }}</option>
+            <option v-for="c in CATEGORIES" :key="c.value" :value="c.value">{{ categoryLabel(c.value) }}</option>
           </select>
           <span :id="`${fid('category')}-hint`" class="hint">What reaching this state means, for lists and reports.</span>
         </div>

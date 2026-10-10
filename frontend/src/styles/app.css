@@ -18,6 +18,7 @@
 @import "./components/admin.css";
 @import "./components/datamodel.css";
 @import "./components/imports.css";
+@import "./components/workflows.css";
 
 /*
  * Page and shell rules. The primitives (SHAA-1670 design document, §2.7) live in base.css and
@@ -1713,69 +1714,6 @@ table.data.wf-approver-table th:first-child {
   overflow-wrap: anywhere;
 }
 
-/* Workflow runtime: the transitions of an instance, the per-state summary and an instance's states. */
-.wf-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-}
-.wf-actions .btn.wf-blocked {
-  border-color: var(--c-warning-border);
-  background: var(--c-warning-subtle);
-  color: var(--c-warning-text);
-}
-.wf-transition-route {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-  margin: 0 0 var(--space-3);
-}
-.wf-summary-states {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-table.data tr.row-current td {
-  background: var(--c-primary-subtle);
-}
-.wf-comment {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  margin-bottom: var(--space-1);
-}
-.wf-grid {
-  margin-bottom: var(--space-4);
-}
-/* Run-time approvals (SHAA-2916): the steps of a policy in the transition dialog, decisions in a step row,
-   and the banner of a pending request above the instance table. */
-.wf-approval-steps {
-  margin: var(--space-1) 0;
-  padding-left: var(--space-5);
-}
-.wf-decisions {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.wf-decisions li + li {
-  margin-top: var(--space-1);
-}
-.wf-pending {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2) var(--space-3);
-  margin: 0 0 var(--space-2);
-}
-.wf-pending .wf-pending-text {
-  flex: 1 1 24rem;
-}
-.wf-pending .wf-pending-actions {
-  display: flex;
-  gap: var(--space-2);
-}
 /* Approval delegations (SHAA-2916): the user pickers span the form, and a problem turns the hint they are
    described by into an error. */
 .delegation-picker {

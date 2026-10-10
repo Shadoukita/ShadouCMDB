@@ -8,7 +8,7 @@ import ErrorAlert from "../../components/ErrorAlert.vue";
 import FormDialog from "../../components/FormDialog.vue";
 import Icon from "../../components/Icon.vue";
 import { toApiValue, toFormValue, type AttributeShape } from "../../lib/attributeValues";
-import { t as msg } from "../../i18n";
+import { t } from "../../i18n";
 import { useFlashStore } from "../../stores/flash";
 import FormField from "../form/FormField.vue";
 import WorkflowStateBadge from "./WorkflowStateBadge.vue";
@@ -45,7 +45,7 @@ const refNames = reactive<Record<string, string>>({});
 const comment = ref("");
 const error = ref<unknown>(null);
 
-const t = computed(() => props.transition);
+const tr = computed(() => props.transition);
 const fieldId = (key: string) => `wf-field-${key}`;
 /** The class's definition of a transition field, or the field's own data type when the definition is not loaded. */
 function defFor(key: string, dataType: string): AttributeShape {
@@ -54,11 +54,11 @@ function defFor(key: string, dataType: string): AttributeShape {
 }
 
 watch(
-  () => [props.open, t.value?.key] as const,
+  () => [props.open, tr.value?.key] as const,
   ([open]) => {
-    if (!open || !t.value) return;
+    if (!open || !tr.value) return;
     for (const k of Object.keys(values)) delete values[k];
-    for (const f of t.value.fields) {
+    for (const f of tr.value.fields) {
       values[f.key] = toFormValue({ dataType: f.dataType }, f.currentValue);
       initial[f.key] = values[f.key];
       const r = props.ci?.attributeReferences[f.key];
@@ -79,17 +79,17 @@ const fieldErrors = computed<Record<string, string>>(() => {
   if (!e || !["WORKFLOW_CONDITION_FAILED", "VALIDATION_ERROR"].includes(e.code)) return {};
   return e.fieldErrors();
 });
-const placed = computed(() => new Set([...(t.value?.fields ?? []).map((f) => `fields.${f.key}`), "comment"]));
+const placed = computed(() => new Set([...(tr.value?.fields ?? []).map((f) => `fields.${f.key}`), "comment"]));
 const unplaced = computed(() => (apiError.value?.details ?? []).filter((d) => !placed.value.has(d.field)));
 const commentError = computed(() => fieldErrors.value.comment);
 
 async function submit() {
-  const tr = t.value;
-  if (!tr) return;
+  const cur = tr.value;
+  if (!cur) return;
   error.value = null;
   // Only the fields the operator changed: the others keep the CI's values, which the API reads itself.
   const fields: Record<string, unknown> = {};
-  for (const f of tr.fields) {
+  for (const f of cur.fields) {
     if (values[f.key] === initial[f.key]) continue;
     fields[f.key] = values[f.key] === "" ? null : toApiValue(defFor(f.key, f.dataType), values[f.key]);
   }
@@ -98,10 +98,10 @@ async function submit() {
       id: props.instance.id,
       ciId: props.instance.ciId,
       // The spec gives `fields` as an object without properties (`Record<string, never>`); the API takes any field key.
-      body: { transitionKey: tr.key, expectedVersion: props.instance.version, fields: fields as WorkflowTransitionBody["fields"], comment: comment.value.trim() || undefined },
+      body: { transitionKey: cur.key, expectedVersion: props.instance.version, fields: fields as WorkflowTransitionBody["fields"], comment: comment.value.trim() || undefined },
     });
-    if (after.pendingApproval) flash.show(msg("approvalRun.requested", { transition: tr.name, ci: props.instance.ciLabel }));
-    else flash.show(`${tr.name}: ${props.instance.ciLabel} is now ${tr.toState.name}.`);
+    if (after.pendingApproval) flash.show(t("approvalRun.requested", { transition: cur.name, ci: props.instance.ciLabel }));
+    else flash.show(t("wfRun.transition.done", { transition: cur.name, ci: props.instance.ciLabel, state: cur.toState.name }));
     emit("close");
   } catch (e) {
     error.value = e;
@@ -111,56 +111,56 @@ async function submit() {
 
 <template>
   <FormDialog
-    :open="open && !!t"
-    :title="t ? `${t.name}: ${instance.definitionName}` : ''"
-    :submit-label="t?.requiresApproval ? msg('approvalRun.requestSubmit') : (t?.name ?? 'Run')"
+    :open="open && !!tr"
+    :title="tr ? t('wfRun.transition.title', { transition: tr.name, workflow: instance.definitionName }) : ''"
+    :submit-label="tr?.requiresApproval ? t('approvalRun.requestSubmit') : (tr?.name ?? t('wfRun.transition.run'))"
     :busy="run.isPending.value"
     wide
     @submit="submit"
     @cancel="emit('close')"
   >
-    <template v-if="t">
+    <template v-if="tr">
       <p class="wf-transition-route">
         <WorkflowStateBadge :state="instance.state" />
-        <Icon name="arrow-right" :size="14" aria-hidden="true" /><span class="sr-only">to</span>
-        <WorkflowStateBadge :state="t.toState" />
-        <span class="muted">on {{ instance.ciLabel }} ({{ instance.ciIdent }})</span>
+        <Icon name="arrow-right" :size="14" aria-hidden="true" /><span class="sr-only">{{ t("wfRun.transition.srTo") }}</span>
+        <WorkflowStateBadge :state="tr.toState" />
+        <span class="muted" dir="auto">{{ t("wfRun.transition.onCi", { ci: instance.ciLabel, ident: instance.ciIdent }) }}</span>
       </p>
-      <div v-if="t.requiresApproval" class="alert" data-testid="wf-requires-approval">
-        <strong>{{ msg("approvalRun.requires.title") }}</strong>
-        <div>{{ msg("approvalRun.requires.body") }}</div>
-        <ol class="wf-approval-steps" :aria-label="msg('approvalRun.requires.steps')">
-          <li v-for="s in t.approvalSteps" :key="s.key">
-            <span dir="auto">{{ s.name }}</span>: {{ msg("approvalRun.requires.step", { n: s.requiredApprovals }) }}
+      <div v-if="tr.requiresApproval" class="alert" data-testid="wf-requires-approval">
+        <strong>{{ t("approvalRun.requires.title") }}</strong>
+        <div>{{ t("approvalRun.requires.body") }}</div>
+        <ol class="wf-approval-steps" :aria-label="t('approvalRun.requires.steps')">
+          <li v-for="s in tr.approvalSteps" :key="s.key">
+            <span dir="auto">{{ s.name }}</span>: {{ t("approvalRun.requires.step", { n: s.requiredApprovals }) }}
           </li>
         </ol>
-        <div>{{ msg("approvalRun.requires.self") }}</div>
+        <div>{{ t("approvalRun.requires.self") }}</div>
       </div>
       <div v-if="conflict" class="alert alert-warn" role="alert" data-testid="wf-conflict">
-        <strong>This workflow moved on since you opened it.</strong>
+        <strong>{{ t("wfRun.conflict.title") }}</strong>
         <div>
-          Someone ran a step or changed it in the meantime, so nothing was saved.
-          <button type="button" class="btn btn-sm" @click="emit('reload')">Reload the workflow</button>
+          {{ t("wfRun.conflict.body") }}
+          <button type="button" class="btn btn-sm" @click="emit('reload')">{{ t("wfRun.conflict.reload") }}</button>
         </div>
       </div>
       <div v-else-if="apiError && (apiError.code === 'WORKFLOW_CONDITION_FAILED' || apiError.code === 'VALIDATION_ERROR')" class="alert alert-error" role="alert">
-        <strong>{{ apiError.code === "WORKFLOW_CONDITION_FAILED" ? "The transition's conditions are not met." : "Check the values entered." }}</strong>
+        <strong>{{ apiError.code === "WORKFLOW_CONDITION_FAILED" ? t("wfRun.transition.conditionsFailed") : t("wfRun.transition.checkValues") }}</strong>
         <ul v-if="unplaced.length > 0">
           <li v-for="(d, i) in unplaced" :key="i">{{ d.message }}</li>
         </ul>
-        <div v-else>See the messages next to the fields.</div>
+        <div v-else>{{ t("wfRun.transition.seeFields") }}</div>
       </div>
-      <ErrorAlert v-else-if="error" :error="error" title="The transition was not run" />
-      <div v-if="t.blockedBy.length > 0 && !apiError" class="alert alert-warn" data-testid="wf-blocked">
-        <strong>As the CI stands, this transition cannot run:</strong>
+      <ErrorAlert v-else-if="error" :error="error" :title="t('wfRun.transition.failed')" />
+      <div v-if="tr.blockedBy.length > 0 && !apiError" class="alert alert-warn" data-testid="wf-blocked">
+        <strong>{{ t("wfRun.transition.blocked") }}</strong>
         <ul>
-          <li v-for="(b, i) in t.blockedBy" :key="i">{{ b.message }}</li>
+          <li v-for="(b, i) in tr.blockedBy" :key="i">{{ b.message }}</li>
         </ul>
-        <div v-if="t.fields.length > 0">A value entered below may meet the condition.</div>
+        <div v-if="tr.fields.length > 0">{{ t("wfRun.transition.mayMeet") }}</div>
       </div>
       <div class="form-grid">
         <FormField
-          v-for="f in t.fields"
+          v-for="f in tr.fields"
           :id="fieldId(f.key)"
           :key="f.key"
           v-slot="p"
@@ -178,8 +178,15 @@ async function submit() {
             @reference-name="(n) => (refNames[f.key] = n)"
           />
         </FormField>
-        <FormField id="wf-comment" v-slot="p" label="Comment" :required="t.requiresComment" :error="commentError" wide
-          :hint="t.requiresComment ? 'This transition needs a comment. It is kept in the workflow history.' : 'Optional; kept in the workflow history.'">
+        <FormField
+          id="wf-comment"
+          v-slot="p"
+          :label="t('wfRun.comment')"
+          :required="tr.requiresComment"
+          :error="commentError"
+          wide
+          :hint="tr.requiresComment ? t('wfRun.transition.commentRequired') : t('wfRun.commentOptional')"
+        >
           <textarea :id="p.id" v-model="comment" rows="3" maxlength="4000" :aria-invalid="p.invalid || undefined" :aria-describedby="p.describedBy" />
         </FormField>
       </div>
