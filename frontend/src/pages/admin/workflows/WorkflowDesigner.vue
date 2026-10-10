@@ -122,6 +122,8 @@ const save = useSaveDraft();
 const savedAttempt = ref<WorkflowDraftBody | null>(null);
 let timer: ReturnType<typeof setTimeout> | undefined;
 let again = false;
+/** The latest lint; an older answer is dropped. Declared before the seeding watcher below, which lints at once when the draft is already cached. */
+let lintSeq = 0;
 
 watch(
   () => draftQ.data.value,
@@ -181,7 +183,6 @@ async function flush(): Promise<boolean> {
   return true;
 }
 
-let lintSeq = 0;
 async function runLint() {
   const seq = ++lintSeq;
   status.value = status.value === "saving" ? "saving" : "linting";
