@@ -276,15 +276,23 @@ impl Mail {
 }
 
 /// `c***@corp.example`: enough to tell lists apart, not to harvest them (N-Q3).
+/// A quoted local part (`"carol smith"@corp.example`) may itself hold an `@`,
+/// so the domain is what follows the last one, and the first character kept
+/// is the one inside the quotes.
 pub fn mask(address: &str) -> String {
-    match address.split_once('@') {
-        Some((local, domain)) => format!("{}***@{domain}", local.chars().next().unwrap_or('*')),
+    match address.rsplit_once('@') {
+        Some((local, domain)) => {
+            format!("{}***@{domain}", local.trim_start_matches('"').chars().next().unwrap_or('*'))
+        }
         None => "***".into(),
     }
 }
 
+/// An address as a relay may quote it: a quoted local part (escapes allowed)
+/// or a bare one, then a domain; both may be non-ASCII (SMTPUTF8, IDN), so
+/// they run up to the delimiters rather than over an ASCII class (GH#883).
 static ADDRESS_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*").expect("address regex")
+    Regex::new(r#"(?:"(?:[^"\\\r\n]|\\.)*"|[^\s<>()\[\],;:@"]+)@[^\s<>()\[\],;:@"]+"#).expect("address regex")
 });
 
 /// `text` with every e-mail address in it masked: a relay's error names the
@@ -492,5 +500,26 @@ mod tests {
         let once = mask_addresses("to carol@corp.example and bob.smith@mail.corp.example");
         assert_eq!(once, "to c***@corp.example and b***@mail.corp.example");
         assert_eq!(mask_addresses(&once), once);
+    }
+
+    /// GH#883: non-ASCII and quoted local parts are masked as a whole.
+    #[test]
+    fn masking_covers_utf8_and_quoted_local_parts() {
+        for (text, masked) in [
+            ("550 <jörg@corp.example>", "550 <j***@corp.example>"),
+            ("550 <carol@bücher.example>", "550 <c***@bücher.example>"),
+            (r#"550 <"carol smith"@corp.example>"#, "550 <c***@corp.example>"),
+            (r#"550 <"carol@home"@corp.example>"#, "550 <c***@corp.example>"),
+            (r#"550 <"carol \"cs\" smith"@corp.example>"#, "550 <c***@corp.example>"),
+            (r#"550 <""@corp.example>"#, "550 <****@corp.example>"),
+            (
+                "rcpt carol@corp.example, bob@corp.example: rejected",
+                "rcpt c***@corp.example, b***@corp.example: rejected",
+            ),
+        ] {
+            let once = mask_addresses(text);
+            assert_eq!(once, masked, "masking {text}");
+            assert_eq!(mask_addresses(&once), once, "re-masking {text}");
+        }
     }
 }
