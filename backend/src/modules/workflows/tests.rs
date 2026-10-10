@@ -272,6 +272,15 @@ async fn workflow_definitions_are_designed_published_and_retired() {
     assert!(codes.contains(&("states[3]", "unreachable_state", "error")), "{codes:?}");
     assert!(codes.contains(&("states[3]", "dead_end", "error")), "{codes:?}");
     assert!(codes.contains(&("transitions[0]", "ungranted_transition", "warning")), "{codes:?}");
+    // The params carry what the message names (SHAA-3003); a problem without any has none.
+    let params = |path: &str, code: &str| {
+        let found = v["problems"].as_array().unwrap().iter().find(|p| p["path"] == path && p["code"] == code);
+        found.unwrap_or_else(|| panic!("{path} {code}")).get("params").cloned()
+    };
+    assert_eq!(params("states[3]", "unreachable_state"), Some(json!({ "state": "limbo" })));
+    assert_eq!(params("states[3]", "dead_end"), Some(json!({ "state": "limbo" })));
+    let key = lifecycle_graph()["transitions"][0]["key"].clone();
+    assert_eq!(params("transitions[0]", "ungranted_transition"), Some(json!({ "transition": key })));
     let (status, v) =
         w.call("POST", &format!("{draft}/publish"), Some(json!({ "expectedDraftChecksum": broken_sum }))).await;
     assert_eq!((status, code(&v)), (400, "VALIDATION_ERROR"), "{v}");
@@ -389,11 +398,9 @@ async fn workflow_definitions_are_designed_published_and_retired() {
     // The lint now flags the archived field in the draft.
     let (_, v) = w.call("POST", &format!("{draft}/validate"), None).await;
     assert!(
-        v["problems"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|p| p["code"] == "inactive_attribute" && p["path"] == "transitions[1].fields[0].attribute"),
+        v["problems"].as_array().unwrap().iter().any(|p| p["code"] == "inactive_attribute"
+            && p["path"] == "transitions[1].fields[0].attribute"
+            && p["params"] == json!({ "attribute": "notes" })),
         "{v}"
     );
 

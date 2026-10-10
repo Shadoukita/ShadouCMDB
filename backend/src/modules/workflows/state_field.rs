@@ -34,6 +34,12 @@ pub struct Driver {
 }
 
 impl Driver {
+    /// The problem param that names it: `workflow` (its key), or
+    /// `hiddenWorkflow` when [`Driver::named`] must not name it.
+    pub fn param(&self) -> (&'static str, String) {
+        if self.hidden { ("hiddenWorkflow", "true".to_owned()) } else { ("workflow", self.definition_key.clone()) }
+    }
+
     /// "the active workflow `key`", or a phrase that does not name it when it
     /// is hidden from the caller.
     pub fn named(&self) -> String {

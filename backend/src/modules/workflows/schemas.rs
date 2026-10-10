@@ -1,6 +1,6 @@
 //! Request and response bodies of the workflow definitions API.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -59,6 +59,22 @@ fn literal_schema() -> Schema {
              3339), an IP address or CIDR; enum and lookup values by key. Checked against the field's rules when the \
              version is published, and again when the transition runs. Not for reference fields (CI ids do not \
              travel between installs): use `valueFrom: actor` or `clear`.",
+        ))
+        .into()
+}
+
+fn problem_params_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::Object)
+        .additional_properties(Some(ObjectBuilder::new().schema_type(SchemaType::from_iter([Type::String, Type::Number]))))
+        .description(Some(
+            "The data `message` is built from, by name, so a client can word the problem in its own language: \
+             `state`, `transition`, `step` (keys), `attribute` (a field key), `class` (a type key), `dataType`, \
+             `value`, `op`, `valueFrom`, `expected` (`date_or_datetime`, `date` or `person_reference`), `workflow` \
+             (another workflow's key, or `hiddenWorkflow` when the caller may not see which), `approverKind` (`profile`, `group` or `user`) and `approver` (its name), \
+             `refersTo` (a type key), `excluded` (a transition key), `options`, `pattern`, and the numbers `limit`, \
+             `required` and `available`. Only the names that apply are present; left out when there are none. More \
+             names may be added.",
         ))
         .into()
 }
@@ -871,6 +887,32 @@ pub struct WorkflowProblem {
     pub message: String,
     #[schema(inline)]
     pub severity: WorkflowProblemSeverity,
+    #[schema(schema_with = problem_params_schema)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub params: BTreeMap<String, Value>,
+}
+
+impl WorkflowProblem {
+    pub fn new(
+        path: impl Into<String>,
+        severity: WorkflowProblemSeverity,
+        code: &str,
+        message: impl Into<String>,
+    ) -> Self {
+        WorkflowProblem {
+            path: path.into(),
+            code: code.into(),
+            message: message.into(),
+            severity,
+            params: BTreeMap::new(),
+        }
+    }
+
+    /// Adds `params[name]`, the data the message was built from.
+    pub fn with(mut self, name: &str, value: impl Into<Value>) -> Self {
+        self.params.insert(name.to_owned(), value.into());
+        self
+    }
 }
 
 /// The lint of the draft

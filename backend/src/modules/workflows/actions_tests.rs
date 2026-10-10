@@ -192,6 +192,35 @@ async fn the_publish_lint_refuses_every_forbidden_target_and_value() {
         ("transitions[1].setAttributes[9].valueFrom", "required_attribute"),
     ]);
     assert_eq!(action_problems(&v), expected, "{v}");
+    // The params carry what each message names, for a client to word it (SHAA-3003).
+    let params = |path: &str| {
+        let p =
+            v["problems"].as_array().unwrap().iter().find(|p| p["path"] == path).unwrap_or_else(|| panic!("{path}"));
+        p.get("params").cloned().unwrap_or(json!({}))
+    };
+    assert_eq!(
+        params("transitions[0].setAttributes[0].attribute"),
+        json!({ "attribute": "owner_team", "transition": "approve" })
+    );
+    assert_eq!(params("transitions[1].setAttributes[0].attribute"), json!({ "attribute": "lifecycle" }));
+    assert_eq!(params("transitions[1].setAttributes[1].attribute"), json!({ "attribute": "serial" }));
+    assert_eq!(params("transitions[1].setAttributes[3].value"), json!({ "attribute": "retired_by" }));
+    assert_eq!(
+        params("transitions[1].setAttributes[5].valueFrom"),
+        json!({ "attribute": "retired_on", "dataType": "date", "valueFrom": "actor", "expected": "person_reference" })
+    );
+    assert_eq!(
+        params("transitions[1].setAttributes[6].valueFrom"),
+        json!({ "attribute": "monitoring_ref", "dataType": "text", "valueFrom": "now", "expected": "date_or_datetime" })
+    );
+    let enum_value = params("transitions[1].setAttributes[7].value");
+    assert_eq!((&enum_value["attribute"], &enum_value["value"]), (&json!("environment"), &json!("staging")));
+    assert!(enum_value["options"].as_str().is_some_and(|o| o.contains("prod")), "{enum_value}");
+    assert_eq!(
+        params("transitions[1].setAttributes[8].value"),
+        json!({ "attribute": "ops_status", "value": "scrapped" })
+    );
+    assert_eq!(params("transitions[1].setAttributes[9].valueFrom"), json!({ "attribute": "mandatory" }));
     let (status, p) = w
         .call(&w.admin, "POST", &format!("{draft}/publish"), Some(json!({ "expectedDraftChecksum": v["checksum"] })))
         .await;
@@ -220,6 +249,9 @@ async fn the_publish_lint_refuses_every_forbidden_target_and_value() {
         pairs(&[("transitions[1].setAttributes[0].attribute", "workflow_managed_attribute")]),
         "{v}"
     );
+    let managed = v["problems"].as_array().unwrap().iter().find(|p| p["code"] == "workflow_managed_attribute").unwrap();
+    assert_eq!(managed["params"]["attribute"], "other_state", "{managed}");
+    assert_eq!(managed["params"]["workflow"], "other", "{managed}");
 
     // (e) the key fields of the built-in Person type are read-only.
     let email: String =

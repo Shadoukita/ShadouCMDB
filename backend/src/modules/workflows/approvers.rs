@@ -76,6 +76,14 @@ impl Source {
         }
     }
 
+    /// The name of a profile, group or named user.
+    fn name(&self) -> Option<&str> {
+        match self {
+            Source::Profile { name, .. } | Source::Group { name, .. } | Source::User { name, .. } => Some(name),
+            _ => None,
+        }
+    }
+
     /// Profiles, groups and named users resolve to the same people on every CI.
     fn is_static(&self) -> bool {
         matches!(self, Source::Profile { .. } | Source::Group { .. } | Source::User { .. })
@@ -295,21 +303,24 @@ impl PersonFields {
         Ok(PersonFields { person, targets: targets.into_iter().collect() })
     }
 
-    /// Why field `id` cannot name approvers (an error), or None.
-    pub fn problem(&self, fields: &Fields, id: Uuid) -> Option<(&'static str, String)> {
+    /// Why field `id` cannot name approvers (an error), with the params of
+    /// the message, or None.
+    pub fn problem(&self, fields: &Fields, id: Uuid) -> Option<(&'static str, String, Params)> {
         let Some(f) = fields.model.field(id) else {
-            return Some(("unknown_attribute", "The field no longer exists".into()));
+            return Some(("unknown_attribute", "The field no longer exists".into(), Vec::new()));
         };
         if !fields.on_type(f) {
             return Some((
                 "unknown_attribute",
                 format!("{} is not a field of type {} (own or inherited)", f.key, fields.class_key),
+                vec![("attribute", f.key.clone()), ("class", fields.class_key.clone())],
             ));
         }
         if f.data_type != AttributeDataType::Reference {
             return Some((
                 "attribute_type",
                 format!("Field {} is a {} field, not a reference to the Person type", f.key, f.data_type.as_str()),
+                vec![("attribute", f.key.clone()), ("dataType", f.data_type.as_str().into())],
             ));
         }
         let target = self.targets.get(&id).copied().flatten();
@@ -318,8 +329,11 @@ impl PersonFields {
             _ => false,
         };
         if !is_person {
-            let to = target.and_then(|t| fields.model.class(t)).map_or("another type", |c| c.key.as_str());
-            return Some(("attribute_type", format!("Field {} refers to {to}, not to the Person type", f.key)));
+            let class = target.and_then(|t| fields.model.class(t)).map(|c| c.key.as_str());
+            let to = class.unwrap_or("another type");
+            let mut params = vec![("attribute", f.key.clone())];
+            params.extend(class.map(|c| ("refersTo", c.to_owned())));
+            return Some(("attribute_type", format!("Field {} refers to {to}, not to the Person type", f.key), params));
         }
         None
     }
@@ -337,8 +351,8 @@ impl PersonFields {
                 format!("Type {} has no field {given} (own or inherited)", fields.class_key),
             ));
         };
-        if let Some(p) = self.problem(fields, f.id) {
-            return Err(p);
+        if let Some((code, message, _)) = self.problem(fields, f.id) {
+            return Err((code, message));
         }
         let class_key = fields.model.class(f.class_id).map(|c| c.key.clone()).unwrap_or_default();
         Ok(Source::Attribute { id: f.id, key: f.key.clone(), class_key, label: f.label.clone() })
@@ -359,7 +373,7 @@ pub struct Facts {
     viewers: Vec<Option<HashSet<Uuid>>>,
     /// Per assignment: why a field source cannot name approvers (error), or
     /// that the field is archived (warning).
-    attribute: Vec<Option<(WorkflowProblemSeverity, &'static str, String)>>,
+    attribute: Vec<Option<(WorkflowProblemSeverity, &'static str, String, Params)>>,
 }
 
 impl Facts {
@@ -409,11 +423,12 @@ impl Facts {
             .iter()
             .map(|a| match &a.source {
                 Source::Attribute { id, key, .. } => match person.problem(fields, *id) {
-                    Some((code, message)) => Some((WorkflowProblemSeverity::Error, code, message)),
+                    Some((code, message, params)) => Some((WorkflowProblemSeverity::Error, code, message, params)),
                     None if fields.model.field(*id).is_some_and(|f| !f.is_active) => Some((
                         WorkflowProblemSeverity::Warning,
                         "inactive_attribute",
                         format!("Field {key} is archived; its values still name approvers"),
+                        vec![("attribute", key.clone())],
                     )),
                     None => None,
                 },
@@ -436,12 +451,8 @@ impl Facts {
         path: &dyn Fn(usize, usize) -> String,
     ) -> Vec<WorkflowProblem> {
         let mut out = Vec::new();
-        let problem = |path: String, severity, code: &str, message: String| WorkflowProblem {
-            path,
-            code: code.into(),
-            message,
-            severity,
-        };
+        let problem =
+            |path: String, severity, code: &str, message: String| WorkflowProblem::new(path, severity, code, message);
         for (i, t) in g.transitions.iter().enumerate() {
             for (j, s) in g.steps_of(t.id).enumerate() {
                 let here: Vec<usize> =
@@ -452,21 +463,26 @@ impl Facts {
                     .filter(|n| self.assignments[*n].role == WorkflowApproverRole::Approver)
                     .collect();
                 for n in &here {
-                    if let Some((severity, code, message)) = &self.attribute[*n] {
-                        out.push(problem(path(i, j), *severity, code, message.clone()));
+                    if let Some((severity, code, message, params)) = &self.attribute[*n] {
+                        let p = problem(path(i, j), *severity, code, message.clone());
+                        out.push(params.iter().fold(p, |p, (name, value)| p.with(name, value.as_str())));
                     }
                 }
                 if approvers.is_empty() {
-                    out.push(problem(
-                        path(i, j),
-                        WorkflowProblemSeverity::Warning,
-                        "no_approvers",
-                        format!(
-                            "Nobody is assigned to approve step {} of transition {}: its requests would wait until \
+                    out.push(
+                        problem(
+                            path(i, j),
+                            WorkflowProblemSeverity::Warning,
+                            "no_approvers",
+                            format!(
+                                "Nobody is assigned to approve step {} of transition {}: its requests would wait until \
                              someone is",
-                            s.key, t.key
-                        ),
-                    ));
+                                s.key, t.key
+                            ),
+                        )
+                        .with("step", s.key.as_str())
+                        .with("transition", t.key.as_str()),
+                    );
                     continue;
                 }
                 let mut available: HashSet<Uuid> = HashSet::new();
@@ -483,7 +499,11 @@ impl Facts {
                                     self.assignments[*n].source.label(),
                                     s.key
                                 ),
-                            ));
+                            )
+                            .with("step", s.key.as_str())
+                            .with("class", class_key)
+                            .with("approverKind", self.assignments[*n].source.kind().as_str())
+                            .with("approver", self.assignments[*n].source.name().unwrap_or_default()));
                         }
                         available.extend(viewers);
                     }
@@ -504,7 +524,12 @@ impl Facts {
                              type {class_key} are assigned (the requester never counts)",
                             s.key, t.key, s.required_approvals
                         ),
-                    ));
+                    )
+                    .with("step", s.key.as_str())
+                    .with("transition", t.key.as_str())
+                    .with("class", class_key)
+                    .with("required", s.required_approvals)
+                    .with("available", most));
                 }
             }
         }
@@ -524,15 +549,19 @@ impl Facts {
             .iter()
             .filter(|a| !steps.contains(&(a.transition_key.as_str(), a.step_key.as_str())))
             .filter(|a| seen.insert((a.transition_key.clone(), a.step_key.clone())))
-            .map(|a| WorkflowProblem {
-                path: "approvers".into(),
-                code: "unknown_step".into(),
-                message: format!(
-                    "Approvers are assigned to step {} of transition {}, which this version does not have; they \
-                     still serve instances on older versions",
-                    a.step_key, a.transition_key
-                ),
-                severity: WorkflowProblemSeverity::Warning,
+            .map(|a| {
+                WorkflowProblem::new(
+                    "approvers",
+                    WorkflowProblemSeverity::Warning,
+                    "unknown_step",
+                    format!(
+                        "Approvers are assigned to step {} of transition {}, which this version does not have; they \
+                         still serve instances on older versions",
+                        a.step_key, a.transition_key
+                    ),
+                )
+                .with("step", a.step_key.as_str())
+                .with("transition", a.transition_key.as_str())
             })
             .collect()
     }
@@ -587,16 +616,20 @@ async fn problems(conn: &mut PgConnection, d: &WorkflowDefinition) -> Result<Vec
         if !steps.contains(&(a.transition_key.as_str(), a.step_key.as_str()))
             && seen.insert((a.transition_key.as_str(), a.step_key.as_str()))
         {
-            out.push(WorkflowProblem {
-                path: format!("approvers[{k}]"),
-                code: "unknown_step".into(),
-                message: format!(
-                    "Neither the current version nor the draft has step {} of transition {}: the assignment serves \
-                     only instances on older versions",
-                    a.step_key, a.transition_key
-                ),
-                severity: WorkflowProblemSeverity::Warning,
-            });
+            out.push(
+                WorkflowProblem::new(
+                    format!("approvers[{k}]"),
+                    WorkflowProblemSeverity::Warning,
+                    "unknown_step",
+                    format!(
+                        "Neither the current version nor the draft has step {} of transition {}: the assignment \
+                         serves only instances on older versions",
+                        a.step_key, a.transition_key
+                    ),
+                )
+                .with("step", a.step_key.as_str())
+                .with("transition", a.transition_key.as_str()),
+            );
         }
     }
     Ok(out)
@@ -914,6 +947,9 @@ fn latest_sql(filter: &str) -> sqlx::AssertSqlSafe<String> {
 
 /// Why a source is dropped, and the reason in words.
 type Dropped = Option<(WorkflowApprovalDropReason, String)>;
+
+/// The params of a problem message, by name.
+type Params = Vec<(&'static str, String)>;
 
 /// The audited change that set the current value of field `key` of CI `ci`:
 /// the latest create, update or restore row whose old and new values of the

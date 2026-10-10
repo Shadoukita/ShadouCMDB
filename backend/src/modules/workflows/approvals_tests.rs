@@ -290,6 +290,17 @@ async fn approval_policies_are_drafted_linted_staffed_and_published() {
         let e = (expected.0.to_owned(), expected.1.to_owned(), expected.2.to_owned());
         assert!(codes.contains(&e), "{expected:?} in {codes:?}");
     }
+    // The params carry what the messages name (SHAA-3003).
+    let problems = v["problems"].as_array().unwrap();
+    let ghost = problems.iter().find(|p| p["code"] == "unknown_transition").unwrap();
+    assert_eq!(
+        ghost["params"],
+        json!({ "step": gated_graph()["transitions"][0]["approval"]["steps"][1]["key"], "excluded": "ghost" }),
+        "{ghost}"
+    );
+    let unstaffed = problems.iter().find(|p| p["code"] == "no_approvers").unwrap();
+    assert_eq!(unstaffed["params"]["transition"], gated_graph()["transitions"][0]["key"], "{unstaffed}");
+    assert!(unstaffed["params"]["step"].is_string(), "{unstaffed}");
     let (status, d) = w.call("GET", &format!("{BASE}/{def}"), None).await;
     assert_eq!(status, 200);
     let (status, v) =
@@ -438,6 +449,12 @@ async fn approval_policies_are_drafted_linted_staffed_and_published() {
     w.ok("PUT", &draft, short, 200).await;
     let (_, v) = w.call("GET", &approvers, None).await;
     assert!(problem_codes(&v).iter().any(|c| c.0 == "transitions.approve.steps.cab" && c.1 == "understaffed"), "{v}");
+    let short = v["problems"].as_array().unwrap().iter().find(|p| p["code"] == "understaffed").unwrap();
+    assert_eq!(
+        short["params"],
+        json!({ "step": "cab", "transition": "approve", "class": "server", "required": 3, "available": 2 }),
+        "{short}"
+    );
     w.ok("PUT", &draft, gated_graph(), 200).await;
 
     // Publish: warnings do not refuse it; the version carries the policy, and its checksum covers it.

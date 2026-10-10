@@ -7,7 +7,7 @@
 //! is renamed later. Conditions are stored with field ids (see
 //! [`super::condition`]).
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value, json};
@@ -776,12 +776,7 @@ pub struct LintContext<'a> {
 }
 
 fn error(path: impl Into<String>, code: &str, message: impl Into<String>) -> WorkflowProblem {
-    WorkflowProblem {
-        path: path.into(),
-        code: code.into(),
-        message: message.into(),
-        severity: WorkflowProblemSeverity::Error,
-    }
+    WorkflowProblem::new(path, WorkflowProblemSeverity::Error, code, message)
 }
 
 /// The problems that refuse publishing (errors) or are worth knowing (warnings).
@@ -805,11 +800,14 @@ pub fn lint(g: &Stored, cx: &LintContext<'_>) -> Vec<WorkflowProblem> {
     let initial = g.version.initial_state_id.and_then(|id| index.get(&id).copied());
     match initial {
         None if n > 0 => out.push(error("initialState", "no_initial_state", "Choose the state an instance starts in")),
-        Some(i) if g.states[i].is_terminal => out.push(error(
-            "initialState",
-            "initial_state_terminal",
-            format!("The initial state {} is terminal: an instance would end as it starts", g.states[i].key),
-        )),
+        Some(i) if g.states[i].is_terminal => out.push(
+            error(
+                "initialState",
+                "initial_state_terminal",
+                format!("The initial state {} is terminal: an instance would end as it starts", g.states[i].key),
+            )
+            .with("state", g.states[i].key.as_str()),
+        ),
         _ => {}
     }
     let reach = |starts: Vec<usize>, edges: &Vec<Vec<usize>>| {
@@ -836,30 +834,30 @@ pub fn lint(g: &Stored, cx: &LintContext<'_>) -> Vec<WorkflowProblem> {
     for (i, s) in g.states.iter().enumerate() {
         let path = format!("states[{i}]");
         if reachable.as_ref().is_some_and(|r| !r[i]) {
-            out.push(error(
-                &path,
-                "unreachable_state",
-                format!("State {} cannot be reached from the initial state", s.key),
-            ));
+            out.push(
+                error(&path, "unreachable_state", format!("State {} cannot be reached from the initial state", s.key))
+                    .with("state", s.key.as_str()),
+            );
         }
         if s.is_terminal && !outgoing[i].is_empty() {
-            out.push(error(
-                &path,
-                "terminal_has_transitions",
-                format!("State {} is terminal but has outgoing transitions", s.key),
-            ));
+            out.push(
+                error(
+                    &path,
+                    "terminal_has_transitions",
+                    format!("State {} is terminal but has outgoing transitions", s.key),
+                )
+                .with("state", s.key.as_str()),
+            );
         } else if !s.is_terminal && outgoing[i].is_empty() {
-            out.push(error(
-                &path,
-                "dead_end",
-                format!("State {} is not terminal and has no outgoing transition", s.key),
-            ));
+            out.push(
+                error(&path, "dead_end", format!("State {} is not terminal and has no outgoing transition", s.key))
+                    .with("state", s.key.as_str()),
+            );
         } else if !s.is_terminal && !terminals.is_empty() && !finishes[i] {
-            out.push(error(
-                &path,
-                "no_terminal_reachable",
-                format!("No terminal state can be reached from state {}", s.key),
-            ));
+            out.push(
+                error(&path, "no_terminal_reachable", format!("No terminal state can be reached from state {}", s.key))
+                    .with("state", s.key.as_str()),
+            );
         }
     }
 
@@ -868,21 +866,28 @@ pub fn lint(g: &Stored, cx: &LintContext<'_>) -> Vec<WorkflowProblem> {
     let state_field = cx.state_attribute.and_then(|id| fields.model.field(id));
     if let Some(id) = cx.state_attribute {
         match state_field {
-            Some(f) if !fields.on_type(f) => out.push(error(
-                "stateAttributeId",
-                "unknown_attribute",
-                format!("The state field {} is not a field of type {}", f.key, fields.class_key),
-            )),
-            Some(f) if f.data_type != AttributeDataType::Lookup => out.push(error(
-                "stateAttributeId",
-                "attribute_type",
-                format!("The state field {} is a {} field, not a lookup field", f.key, f.data_type.as_str()),
-            )),
-            Some(f) if !f.is_active => out.push(error(
-                "stateAttributeId",
-                "inactive_attribute",
-                format!("The state field {} is archived", f.key),
-            )),
+            Some(f) if !fields.on_type(f) => out.push(
+                error(
+                    "stateAttributeId",
+                    "unknown_attribute",
+                    format!("The state field {} is not a field of type {}", f.key, fields.class_key),
+                )
+                .with("attribute", f.key.as_str())
+                .with("class", fields.class_key.as_str()),
+            ),
+            Some(f) if f.data_type != AttributeDataType::Lookup => out.push(
+                error(
+                    "stateAttributeId",
+                    "attribute_type",
+                    format!("The state field {} is a {} field, not a lookup field", f.key, f.data_type.as_str()),
+                )
+                .with("attribute", f.key.as_str())
+                .with("dataType", f.data_type.as_str()),
+            ),
+            Some(f) if !f.is_active => out.push(
+                error("stateAttributeId", "inactive_attribute", format!("The state field {} is archived", f.key))
+                    .with("attribute", f.key.as_str()),
+            ),
             Some(_) => {}
             None => out.push(error("stateAttributeId", "unknown_attribute", format!("Field {id} no longer exists"))),
         }
@@ -892,15 +897,24 @@ pub fn lint(g: &Stored, cx: &LintContext<'_>) -> Vec<WorkflowProblem> {
         let Some(key) = &s.value_key else { continue };
         let path = format!("states[{i}].stateValue");
         if cx.state_attribute.is_none() {
-            out.push(error(
-                path,
-                "no_state_attribute",
-                format!("State {} maps to value {key}, but the workflow has no state field", s.key),
-            ));
+            out.push(
+                error(
+                    path,
+                    "no_state_attribute",
+                    format!("State {} maps to value {key}, but the workflow has no state field", s.key),
+                )
+                .with("state", s.key.as_str())
+                .with("value", key.as_str()),
+            );
         } else if s.value_list_id != state_list {
-            out.push(error(path, "state_value_list", format!("{key} is not a value of the state field's list")));
+            out.push(
+                error(path, "state_value_list", format!("{key} is not a value of the state field's list"))
+                    .with("value", key.as_str()),
+            );
         } else if s.value_active == Some(false) {
-            out.push(error(path, "state_value_inactive", format!("The value {key} is retired")));
+            out.push(
+                error(path, "state_value_inactive", format!("The value {key} is retired")).with("value", key.as_str()),
+            );
         }
     }
 
@@ -909,28 +923,36 @@ pub fn lint(g: &Stored, cx: &LintContext<'_>) -> Vec<WorkflowProblem> {
         for (j, f) in g.fields.iter().filter(|f| f.transition_id == t.id).enumerate() {
             let path = format!("transitions[{i}].fields[{j}].attribute");
             match fields.model.field(f.attribute_id) {
-                Some(a) if !fields.on_type(a) => out.push(error(
-                    path,
-                    "unknown_attribute",
-                    format!("{} is not a field of type {}", a.key, fields.class_key),
-                )),
-                Some(a) if !a.is_active => {
-                    out.push(error(path, "inactive_attribute", format!("Field {} is archived", a.key)))
-                }
+                Some(a) if !fields.on_type(a) => out.push(
+                    error(path, "unknown_attribute", format!("{} is not a field of type {}", a.key, fields.class_key))
+                        .with("attribute", a.key.as_str())
+                        .with("class", fields.class_key.as_str()),
+                ),
+                Some(a) if !a.is_active => out.push(
+                    error(path, "inactive_attribute", format!("Field {} is archived", a.key))
+                        .with("attribute", a.key.as_str()),
+                ),
                 // A workflow's state field moves only with its states: taking it
                 // as a transition field would let the actor set any value (GH#668).
-                Some(a) if cx.state_attribute == Some(a.id) => out.push(error(
-                    path,
-                    "state_field",
-                    format!("{} is this workflow's state field: its states set it, not transition fields", a.key),
-                )),
+                Some(a) if cx.state_attribute == Some(a.id) => out.push(
+                    error(
+                        path,
+                        "state_field",
+                        format!("{} is this workflow's state field: its states set it, not transition fields", a.key),
+                    )
+                    .with("attribute", a.key.as_str()),
+                ),
                 Some(a) => {
                     if let Some(d) = cx.other_drivers.iter().find(|d| d.attribute_id == a.id) {
-                        out.push(error(
-                            path,
-                            "state_field",
-                            format!("{} is the state field of {}: a transition cannot set it", a.key, d.named()),
-                        ));
+                        out.push(
+                            error(
+                                path,
+                                "state_field",
+                                format!("{} is the state field of {}: a transition cannot set it", a.key, d.named()),
+                            )
+                            .with("attribute", a.key.as_str())
+                            .with(d.param().0, d.param().1),
+                        );
                     }
                 }
                 None => out.push(error(path, "unknown_attribute", "The field no longer exists")),
@@ -943,32 +965,45 @@ pub fn lint(g: &Stored, cx: &LintContext<'_>) -> Vec<WorkflowProblem> {
                     let mut used = Vec::new();
                     parsed.attributes(&mut used);
                     for a in used.iter().filter_map(|id| fields.model.field(*id)).filter(|a| !a.is_active) {
-                        out.push(error(&path, "inactive_attribute", format!("Field {} is archived", a.key)));
+                        out.push(
+                            error(&path, "inactive_attribute", format!("Field {} is archived", a.key))
+                                .with("attribute", a.key.as_str()),
+                        );
                     }
                 }
-                Err(problems) => out.extend(problems.into_iter().map(|p| error(p.field, &p.code, p.message))),
+                Err(problems) => out.extend(problems.into_iter().map(|p| {
+                    let params = condition_params(&c.0, &path, &p.field, fields);
+                    WorkflowProblem { params, ..error(p.field, &p.code, p.message) }
+                })),
             }
         }
         out.extend(lint_set_attributes(g, t, i, cx));
         if !cx.granted.contains(&t.key) {
-            out.push(WorkflowProblem {
-                path: format!("transitions[{i}]"),
-                code: "ungranted_transition".into(),
-                message: format!("No profile is granted transition {}: only administrators could run it", t.key),
-                severity: WorkflowProblemSeverity::Warning,
-            });
+            out.push(
+                WorkflowProblem::new(
+                    format!("transitions[{i}]"),
+                    WorkflowProblemSeverity::Warning,
+                    "ungranted_transition",
+                    format!("No profile is granted transition {}: only administrators could run it", t.key),
+                )
+                .with("transition", t.key.as_str()),
+            );
         }
         for (j, s) in g.steps_of(t.id).enumerate() {
             for (k, key) in s.exclude_actors_of.iter().enumerate() {
                 if !g.transitions.iter().any(|x| &x.key == key) {
-                    out.push(error(
-                        format!("transitions[{i}].approval.steps[{j}].excludeActorsOf[{k}]"),
-                        "unknown_transition",
-                        format!(
-                            "Step {} excludes the actors of transition {key}, which this version does not have",
-                            s.key
-                        ),
-                    ));
+                    out.push(
+                        error(
+                            format!("transitions[{i}].approval.steps[{j}].excludeActorsOf[{k}]"),
+                            "unknown_transition",
+                            format!(
+                                "Step {} excludes the actors of transition {key}, which this version does not have",
+                                s.key
+                            ),
+                        )
+                        .with("step", s.key.as_str())
+                        .with("excluded", key.as_str()),
+                    );
                 }
             }
         }
@@ -994,11 +1029,15 @@ fn lint_set_attributes(g: &Stored, t: &TransitionRow, i: usize, cx: &LintContext
         let (a, def) = match (fields.model.field(s.attribute_id), fields.def(s.attribute_id)) {
             (Some(a), Some(def)) if fields.on_type(a) => (a, def),
             (Some(a), _) => {
-                out.push(error(
-                    attribute,
-                    "unknown_attribute",
-                    format!("{} is not a field of type {}", a.key, fields.class_key),
-                ));
+                out.push(
+                    error(
+                        attribute,
+                        "unknown_attribute",
+                        format!("{} is not a field of type {}", a.key, fields.class_key),
+                    )
+                    .with("attribute", a.key.as_str())
+                    .with("class", fields.class_key.as_str()),
+                );
                 continue;
             }
             (None, _) => {
@@ -1007,21 +1046,24 @@ fn lint_set_attributes(g: &Stored, t: &TransitionRow, i: usize, cx: &LintContext
             }
         };
         let refused = if !a.is_active {
-            Some(("inactive_attribute", format!("Field {} is archived", a.key)))
+            Some(("inactive_attribute", format!("Field {} is archived", a.key), None))
         } else if cx.state_attribute == Some(a.id) {
             Some((
                 "workflow_managed_attribute",
                 format!("{} is this workflow's state field: its states set it, not attribute actions", a.key),
+                None,
             ))
         } else if let Some(d) = cx.other_drivers.iter().find(|d| d.attribute_id == a.id) {
             Some((
                 "workflow_managed_attribute",
                 format!("{} is the state field of {}: an attribute action cannot set it", a.key, d.named()),
+                Some(d.param()),
             ))
         } else if def.is_identifying {
             Some((
                 "identifying_attribute",
                 format!("{} is an identifying field: only a person may change what identifies a CI", a.key),
+                None,
             ))
         } else if g.fields.iter().any(|f| f.transition_id == t.id && f.attribute_id == a.id) {
             Some((
@@ -1030,47 +1072,64 @@ fn lint_set_attributes(g: &Stored, t: &TransitionRow, i: usize, cx: &LintContext
                     "{} is also a field of transition {}: either the user enters it or the action sets it",
                     a.key, t.key
                 ),
+                Some(("transition", t.key.clone())),
             ))
         } else if a.system_role.is_some() {
-            Some(("read_only_attribute", format!("{} is a key field of the Person type and cannot be set", a.key)))
+            Some((
+                "read_only_attribute",
+                format!("{} is a key field of the Person type and cannot be set", a.key),
+                None,
+            ))
         } else if a.data_type == AttributeDataType::Reference && def.reference_class_id != fields.person_class {
             Some((
                 "reference_not_person",
                 format!("{} references another type than Person: an attribute action can only name a Person", a.key),
+                None,
             ))
         } else {
             None
         };
-        if let Some((code, message)) = refused {
-            out.push(error(attribute, code, message));
+        if let Some((code, message, extra)) = refused {
+            let p = error(attribute, code, message).with("attribute", a.key.as_str());
+            out.push(match extra {
+                Some((name, value)) => p.with(name, value),
+                None => p,
+            });
             continue;
         }
         let from = WorkflowValueFrom::parse(&s.value_from);
         let type_name = a.data_type.as_str();
-        let wrong_type = |what: &str| {
+        let wrong_type = |what: &str, expected: &str| {
             error(
                 format!("{path}.valueFrom"),
                 "value_from_type",
                 format!("{} is a {type_name} field: valueFrom {} needs {what}", a.key, s.value_from),
             )
+            .with("attribute", a.key.as_str())
+            .with("dataType", type_name)
+            .with("valueFrom", s.value_from.as_str())
+            .with("expected", expected)
         };
         match (from, &s.value) {
             (Some(WorkflowValueFrom::Now), _)
                 if !matches!(a.data_type, AttributeDataType::Date | AttributeDataType::Datetime) =>
             {
-                out.push(wrong_type("a date or datetime field"))
+                out.push(wrong_type("a date or datetime field", "date_or_datetime"))
             }
             (Some(WorkflowValueFrom::Today), _) if a.data_type != AttributeDataType::Date => {
-                out.push(wrong_type("a date field"))
+                out.push(wrong_type("a date field", "date"))
             }
             (Some(WorkflowValueFrom::Actor), _) if a.data_type != AttributeDataType::Reference => {
-                out.push(wrong_type("a field that references Person"))
+                out.push(wrong_type("a field that references Person", "person_reference"))
             }
-            (Some(WorkflowValueFrom::Clear), _) if def.is_required => out.push(error(
-                format!("{path}.valueFrom"),
-                "required_attribute",
-                format!("{} is required and cannot be cleared", a.key),
-            )),
+            (Some(WorkflowValueFrom::Clear), _) if def.is_required => out.push(
+                error(
+                    format!("{path}.valueFrom"),
+                    "required_attribute",
+                    format!("{} is required and cannot be cleared", a.key),
+                )
+                .with("attribute", a.key.as_str()),
+            ),
             (Some(_), _) => {}
             (None, Some(value)) => out.extend(literal(&path, a, def, &value.0, fields)),
             (None, None) => out.push(error(path, "value_or_value_from", "The action has no value")),
@@ -1083,35 +1142,139 @@ fn lint_set_attributes(g: &Stored, t: &TransitionRow, i: usize, cx: &LintContext
 fn literal(path: &str, a: &Field, def: &EffectiveAttributeRow, value: &Value, fields: &Fields) -> Vec<WorkflowProblem> {
     let path = format!("{path}.value");
     match a.data_type {
-        AttributeDataType::Reference => vec![error(
-            path,
-            "reference_literal",
-            format!(
-                "{} is a reference: set it to the actor (valueFrom actor) or clear it; a CI id does not travel \
+        AttributeDataType::Reference => vec![
+            error(
+                path,
+                "reference_literal",
+                format!(
+                    "{} is a reference: set it to the actor (valueFrom actor) or clear it; a CI id does not travel \
                  between installs",
-                a.key
-            ),
-        )],
+                    a.key
+                ),
+            )
+            .with("attribute", a.key.as_str()),
+        ],
         AttributeDataType::Lookup => {
             let found = value.as_str().and_then(|key| fields.value(a.lookup_list_id.unwrap_or_default(), key));
             match found {
                 Some(v) if v.is_active => Vec::new(),
-                Some(v) => vec![error(path, "value_inactive", format!("The value {} is retired", v.key))],
-                None => {
-                    vec![error(path, "unknown_value", format!("{value} is not the key of a value of {}'s list", a.key))]
-                }
+                Some(v) => vec![
+                    error(path, "value_inactive", format!("The value {} is retired", v.key))
+                        .with("attribute", a.key.as_str())
+                        .with("value", v.key.as_str()),
+                ],
+                None => vec![
+                    error(path, "unknown_value", format!("{value} is not the key of a value of {}'s list", a.key))
+                        .with("attribute", a.key.as_str())
+                        .with("value", shown(value)),
+                ],
             }
         }
         _ => plan::literal_problems(def, value, &path)
             .into_iter()
-            .map(|p| error(p.field, &p.code, format!("{}: {}", a.key, p.message)))
+            .map(|p| literal_params(error(p.field, &p.code, format!("{}: {}", a.key, p.message)), a, def, value))
             .collect(),
     }
+}
+
+/// A value as a message shows it: a string as is, anything else as JSON.
+fn shown(value: &Value) -> String {
+    value.as_str().map_or_else(|| value.to_string(), str::to_owned)
+}
+
+/// The params of a problem of literal `value` for field `a`: the field, its
+/// type and the value, and the rule the value breaks where the field has one.
+fn literal_params(p: WorkflowProblem, a: &Field, def: &EffectiveAttributeRow, value: &Value) -> WorkflowProblem {
+    let rule = |name: &str| def.validation.as_ref().and_then(|v| v.0.get(name)).filter(|v| v.is_number()).cloned();
+    let limit = match (p.code.as_str(), value.is_string()) {
+        ("too_big", true) => rule("maxLength"),
+        ("too_big", false) => rule("maximum"),
+        ("too_small", true) => rule("minLength"),
+        ("too_small", false) => rule("minimum"),
+        _ => None,
+    };
+    let options = (p.code == "invalid_value").then(|| def.enum_values.as_ref().map(|v| v.0.join(", "))).flatten();
+    let pattern = (p.code == "invalid_format")
+        .then(|| def.validation.as_ref().and_then(|v| v.0.get("pattern")).and_then(Value::as_str))
+        .flatten();
+    let mut p = p.with("attribute", a.key.as_str()).with("dataType", a.data_type.as_str()).with("value", shown(value));
+    if let Some(limit) = limit {
+        p = p.with("limit", limit);
+    }
+    if let Some(options) = options {
+        p = p.with("options", options);
+    }
+    if let Some(pattern) = pattern {
+        p = p.with("pattern", pattern);
+    }
+    p
+}
+
+/// The leaf of stored condition `c` (at `base`) that a problem at `at` is
+/// about, and the value at `at` when it is (part of) the leaf's value.
+fn condition_leaf<'c>(c: &'c Value, base: &str, at: &str) -> Option<(&'c Value, Option<&'c Value>)> {
+    let mut node = c;
+    let mut leaf = c.get("field").is_some().then_some(c);
+    let rest = at.strip_prefix(base)?;
+    for part in rest.split(['.', '[']).filter(|s| !s.is_empty()) {
+        let next = match part.strip_suffix(']').and_then(|n| n.parse::<usize>().ok()) {
+            Some(n) => node.get(n),
+            None => node.get(part),
+        };
+        let Some(next) = next else { break };
+        node = next;
+        if node.get("field").is_some() {
+            leaf = Some(node);
+        }
+    }
+    let value = (rest.contains(".value") && !std::ptr::eq(node, leaf?)).then_some(node);
+    Some((leaf?, value))
+}
+
+/// The params of a problem at `at` inside the stored condition `c` (at
+/// `base`): the field of its leaf (by key, while it exists, with its type and
+/// the workflow type's key), the leaf's op, and the value at `at`.
+fn condition_params(c: &Value, base: &str, at: &str, fields: &Fields) -> BTreeMap<String, Value> {
+    let mut out = BTreeMap::new();
+    let Some((leaf, value)) = condition_leaf(c, base, at) else { return out };
+    let field = leaf.get("field").and_then(Value::as_str).and_then(|id| id.parse::<Uuid>().ok());
+    if let Some(f) = field.and_then(|id| fields.model.field(id)) {
+        out.insert("attribute".into(), f.key.as_str().into());
+        out.insert("dataType".into(), f.data_type.as_str().into());
+        out.insert("class".into(), fields.class_key.as_str().into());
+    }
+    if let Some(op) = leaf.get("op").and_then(Value::as_str) {
+        out.insert("op".into(), op.into());
+    }
+    if let Some(v) = value {
+        out.insert("value".into(), shown(v).into());
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_condition_problem_finds_its_leaf_and_value() {
+        let c = json!({ "all": [
+            { "field": "f1", "op": "eq", "value": "x" },
+            { "any": [ { "field": "f2", "op": "in", "value": ["a", 2] }, { "field": "f3", "op": "isSet" } ] }
+        ] });
+        let at = |path: &str| condition_leaf(&c, "t[0].conditions", &format!("t[0].conditions{path}"));
+        let (leaf, value) = at(".all[1].any[0].value[1]").unwrap();
+        assert_eq!((&leaf["field"], value), (&json!("f2"), Some(&json!(2))));
+        let (leaf, value) = at(".all[0].op").unwrap();
+        assert_eq!((&leaf["field"], value), (&json!("f1"), None));
+        let (leaf, value) = at(".all[1].any[1].field").unwrap();
+        assert_eq!((&leaf["field"], value), (&json!("f3"), None));
+        let (leaf, value) = at(".all[0].value").unwrap();
+        assert_eq!((&leaf["field"], value), (&json!("f1"), Some(&json!("x"))));
+        assert!(at(".all[1]").is_none(), "a group is no leaf");
+        assert!(condition_leaf(&c, "t[1].conditions", "t[0].conditions.all[0]").is_none());
+        assert_eq!(shown(&json!(["a", 2])), r#"["a",2]"#);
+    }
 
     /// A graph with states, fields and conditions but no approval policy.
     fn pre_approvals_graph() -> (Vec<WorkflowState>, Vec<WorkflowTransition>) {
