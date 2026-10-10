@@ -155,6 +155,47 @@ test("grants and notifications: the save bar and a toast", async ({ page }, test
   await checkA11y(page, testInfo, "admin-workflow-actions", { include: "main" });
 });
 
+test("notifications: a webhook picks an active endpoint; the key is typed when the list cannot load", async ({ page }, testInfo) => {
+  // CI runs with webhooks off, where no endpoint can be registered: serve the list a workflows.manage caller gets.
+  const limited = { suspendedReason: null, url: null, unencrypted: null, payloadVersion: null, timeoutMs: null };
+  const endpoints = [
+    { id: "00000000-0000-4000-8000-000000000001", key: "itsm", name: "ITSM", status: "active", ...limited },
+    { id: "00000000-0000-4000-8000-000000000002", key: "monitoring", name: "Monitoring", status: "paused", ...limited },
+    { id: "00000000-0000-4000-8000-000000000003", key: "siem", name: "SIEM", status: "suspended", ...limited },
+  ];
+  let fail = false;
+  await page.route("**/api/v1/admin/webhook-endpoints?*", (route) =>
+    fail
+      ? route.fulfill({ status: 500, json: { error: { code: "INTERNAL_ERROR", message: "Internal error", requestId: "e2e" } } })
+      : route.fulfill({ json: { data: endpoints, page: { limit: 200, offset: 0, total: 3 } } }),
+  );
+  await page.goto(`/admin/workflows/${wfId}?tab=actions`);
+  await page.getByRole("button", { name: "+ Notification" }).click();
+  const editor = page.getByTestId("wf-action-editor-0");
+  await editor.getByLabel("Kind").selectOption("webhook");
+  const picker = editor.getByLabel("Endpoint", { exact: true });
+  await expect(picker).toBeEnabled();
+  await expect(picker.locator("option")).toHaveText(["Choose…", "ITSM (itsm)", "Monitoring (monitoring) · paused", "SIEM (siem) · suspended"]);
+  await expect(picker.locator("option:disabled")).toHaveText(["Choose…", "Monitoring (monitoring) · paused", "SIEM (siem) · suspended"]);
+  await picker.selectOption("itsm");
+  await expect(page.getByTestId("wf-action-row-notify")).toContainText("ITSM (itsm)");
+  await expect(editor.getByTestId("wf-action-endpoint-hint")).toContainText("Only active endpoints can be chosen.");
+  await checkA11y(page, testInfo, "admin-workflow-action-endpoint", { include: "main" });
+
+  // The list failing does not block the form: the key is typed as before, with a retry.
+  fail = true;
+  await page.getByRole("region", { name: "Save" }).getByRole("button", { name: "Discard" }).click();
+  await page.reload();
+  await page.getByRole("button", { name: "+ Notification" }).click();
+  await page.getByTestId("wf-action-editor-0").getByLabel("Kind").selectOption("webhook");
+  const typed = page.getByTestId("wf-action-editor-0").getByRole("textbox", { name: "Endpoint", exact: true });
+  // The client retries a 5xx twice before giving up.
+  await expect(typed).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId("wf-action-editor-0").getByRole("alert")).toContainText("The webhook endpoints could not be loaded.");
+  await typed.fill("itsm");
+  await page.getByRole("region", { name: "Save" }).getByRole("button", { name: "Discard" }).click();
+});
+
 test("administration › workflows: the texts come from the German catalog", async ({ browser }) => {
   const page = await open(browser, { locale: "de" });
   await page.goto(`/admin/workflows?q=${encodeURIComponent(WF)}`);
