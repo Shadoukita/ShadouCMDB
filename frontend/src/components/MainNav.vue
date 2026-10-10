@@ -237,6 +237,16 @@ function active(item: NavLinkItem): (r: RouteLocationNormalizedLoaded) => boolea
           <span v-if="wf && !collapsed" class="nav-count" aria-hidden="true" :title="t('nav.workflowsActive', { n: wf.active })">{{
             formatNumber(wf.active)
           }}</span>
+        </NavLink>
+        <!-- The approvals inbox; its badge is the inbox's total, the requests the user may open and decide now. -->
+        <NavLink
+          v-if="item.page === 'inventory'"
+          to="/approvals"
+          :active="(r) => r.path === '/approvals'"
+          :title="collapsed ? t('approvals.title') : undefined"
+        >
+          <Icon name="inbox" :size="collapsed ? 20 : 16" />
+          <span class="nav-label">{{ t("approvals.title") }}</span>
           <span v-if="wf && wf.awaitingMyDecision > 0" class="nav-pending mono" :title="t('nav.workflowsMine', { n: wf.awaitingMyDecision })"
             ><span aria-hidden="true">{{ formatNumber(wf.awaitingMyDecision) }}</span
             ><span class="sr-only">{{ t("nav.workflowsMine", { n: wf.awaitingMyDecision }) }}</span></span
