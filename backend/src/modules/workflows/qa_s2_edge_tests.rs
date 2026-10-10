@@ -100,10 +100,8 @@ async fn action_rows(w: &World, ci: Uuid) -> Vec<(String, Option<String>, Option
 /// Replaces the grants of the world's workflow: every transition to `profiles`.
 async fn grant(w: &World, profiles: &[&str]) {
     let def = w.ok("GET", &format!("{DEFS}/{}", w.definition), json!(null)).await;
-    let grants: Vec<Value> = ["approve", "go_live", "_cancel"]
-        .iter()
-        .map(|t| json!({ "transitionKey": t, "profiles": profiles }))
-        .collect();
+    let grants: Vec<Value> =
+        ["approve", "go_live", "_cancel"].iter().map(|t| json!({ "transitionKey": t, "profiles": profiles })).collect();
     w.ok("PUT", &format!("{DEFS}/{}/grants", w.definition), json!({ "version": def["version"], "grants": grants }))
         .await;
 }
@@ -164,7 +162,12 @@ async fn qa_s2_literals_of_the_wrong_type_are_refused_at_publish() {
         .call(&w.admin, "POST", &format!("{draft}/publish"), Some(json!({ "expectedDraftChecksum": d["checksum"] })))
         .await;
     assert_eq!((status, code(&p)), (400, "VALIDATION_ERROR"), "{p}");
-    let versions = count(&w, "SELECT count(*) FROM workflow_versions WHERE definition_id = $1 AND status <> 'draft'", w.definition).await;
+    let versions = count(
+        &w,
+        "SELECT count(*) FROM workflow_versions WHERE definition_id = $1 AND status <> 'draft'",
+        w.definition,
+    )
+    .await;
     assert_eq!(versions, 1, "only version 1 is published");
 
     // The same values of the right type publish and are written as sent.
@@ -232,7 +235,12 @@ async fn qa_s2_required_targets_cannot_be_emptied() {
     assert_eq!(count(&w, "SELECT count(*) FROM audit_log WHERE entity_id = $1", ci).await, audit, "no audit row");
     // A PATCH clearing it is refused the same way.
     let (status, v) = w
-        .call(&w.admin, "PATCH", &format!("/api/v1/configuration-items/{ci}"), Some(json!({ "attributes": { "later": null } })))
+        .call(
+            &w.admin,
+            "PATCH",
+            &format!("/api/v1/configuration-items/{ci}"),
+            Some(json!({ "attributes": { "later": null } })),
+        )
         .await;
     assert_eq!((status, details(&v)), (400, pairs(&[("attributes.later", "required")])), "{v}");
     db.drop().await;
@@ -248,7 +256,8 @@ async fn qa_s2_rules_tightened_after_publish_fail_the_run_closed() {
     let count_id = field(&w, "count", "integer", json!({})).await;
     let note = field(&w, "note", "text", json!({})).await;
     let list = id(&w.ok("POST", "/api/v1/lookup-lists", json!({ "key": "ops", "name": "ops" })).await);
-    let retired = id(&w.ok("POST", "/api/v1/lookup-list-values", json!({ "listId": list, "key": "retired", "name": "r" })).await);
+    let retired =
+        id(&w.ok("POST", "/api/v1/lookup-list-values", json!({ "listId": list, "key": "retired", "name": "r" })).await);
     field(&w, "ops", "lookup", json!({ "lookupListId": list })).await;
     publish(
         &w,
@@ -294,10 +303,8 @@ async fn qa_s2_rules_tightened_after_publish_fail_the_run_closed() {
 async fn qa_s2_read_only_and_foreign_targets_are_refused() {
     let Some(db) = scratch::database("qa_s2_read_only").await else { return };
     let w = world(&db).await;
-    let person: Uuid = sqlx::query_scalar("SELECT id FROM ci_classes WHERE system_role = 'person'")
-        .fetch_one(&w.pool)
-        .await
-        .unwrap();
+    let person: Uuid =
+        sqlx::query_scalar("SELECT id FROM ci_classes WHERE system_role = 'person'").fetch_one(&w.pool).await.unwrap();
     let name: String = sqlx::query_scalar("SELECT key FROM ci_attribute_definitions WHERE system_role = 'person_name'")
         .fetch_one(&w.pool)
         .await
@@ -327,9 +334,18 @@ async fn qa_s2_read_only_and_foreign_targets_are_refused() {
     let body = json!({ "classId": w.network, "key": "vlan", "label": "vlan", "dataType": "text" });
     w.ok("POST", "/api/v1/attribute-definitions", body).await;
     let (status, v) = w
-        .call(&w.admin, "PUT", &format!("{DEFS}/{}/draft", w.definition), Some(graph(json!([{ "attribute": "vlan", "value": "1" }]))))
+        .call(
+            &w.admin,
+            "PUT",
+            &format!("{DEFS}/{}/draft", w.definition),
+            Some(graph(json!([{ "attribute": "vlan", "value": "1" }]))),
+        )
         .await;
-    assert_eq!((status, details(&v)), (400, pairs(&[("transitions[1].setAttributes[0].attribute", "unknown_attribute")])), "{v}");
+    assert_eq!(
+        (status, details(&v)),
+        (400, pairs(&[("transitions[1].setAttributes[0].attribute", "unknown_attribute")])),
+        "{v}"
+    );
     db.drop().await;
 }
 
@@ -390,13 +406,15 @@ async fn qa_s2_a_target_is_not_archived_while_a_version_that_runs_sets_it() {
 async fn qa_s2_actions_write_with_the_runner_rights_and_add_none() {
     let Some(db) = scratch::database("qa_s2_rights").await else { return };
     let w = world(&db).await;
-    let person: Uuid = sqlx::query_scalar("SELECT id FROM ci_classes WHERE system_role = 'person'")
-        .fetch_one(&w.pool)
-        .await
-        .unwrap();
+    let person: Uuid =
+        sqlx::query_scalar("SELECT id FROM ci_classes WHERE system_role = 'person'").fetch_one(&w.pool).await.unwrap();
     field(&w, "retired_by", "reference", json!({ "referenceClassId": person })).await;
     field(&w, "note", "text", json!({})).await;
-    publish(&w, graph(json!([{ "attribute": "retired_by", "valueFrom": "actor" }, { "attribute": "note", "value": "done" }]))).await;
+    publish(
+        &w,
+        graph(json!([{ "attribute": "retired_by", "valueFrom": "actor" }, { "attribute": "note", "value": "done" }])),
+    )
+    .await;
     let watchers = w.profile("Watchers", &[(w.server, false)]).await;
     grant(&w, &["Approvers", "Watchers"]).await;
     let (watcher, _) = w.user("watcher", &[watchers]).await;
@@ -424,7 +442,10 @@ async fn qa_s2_actions_write_with_the_runner_rights_and_add_none() {
     let rows = action_rows(&w, ci).await;
     assert_eq!(rows.len(), 1, "{rows:?}");
     let approver_str = approver_id.to_string();
-    assert_eq!((rows[0].0.as_str(), rows[0].1.as_deref(), rows[0].2.as_deref()), ("user", Some(approver_str.as_str()), Some("approver")));
+    assert_eq!(
+        (rows[0].0.as_str(), rows[0].1.as_deref(), rows[0].2.as_deref()),
+        ("user", Some(approver_str.as_str()), Some("approver"))
+    );
 
     // An API token of the approver: actor type api_client, the owner named.
     let token = w.token(approver_id, w.approvers).await;
@@ -448,7 +469,11 @@ async fn qa_s2_actions_write_with_the_runner_rights_and_add_none() {
         let (status, v) = run_as(&w, creds, i3, "go_live", json!({})).await;
         assert!(status == 401 || status == 422, "refused, never written: {status} {v}");
         if status == 422 {
-            assert_eq!(details(&v), pairs(&[("action", "set_attributes"), ("attributes.retired_by", "no_person")]), "{v}");
+            assert_eq!(
+                details(&v),
+                pairs(&[("action", "set_attributes"), ("attributes.retired_by", "no_person")]),
+                "{v}"
+            );
         }
     }
     assert_eq!(w.ci_values(ci3).await, before);
@@ -478,7 +503,12 @@ async fn qa_s2_a_view_only_decider_applies_the_actions_as_actor() {
     }
     // a2 cannot edit a server by PATCH...
     let (status, _) = w
-        .call(&p.a2.0, "PATCH", &format!("/api/v1/configuration-items/{ci}"), Some(json!({ "attributes": { "approved_note": "x" } })))
+        .call(
+            &p.a2.0,
+            "PATCH",
+            &format!("/api/v1/configuration-items/{ci}"),
+            Some(json!({ "attributes": { "approved_note": "x" } })),
+        )
         .await;
     assert_eq!(status, 403, "a2 may view servers only");
     // ...but the final approval wrote the action as a2.
@@ -486,7 +516,10 @@ async fn qa_s2_a_view_only_decider_applies_the_actions_as_actor() {
     let rows = action_rows(&w, ci).await;
     assert_eq!(rows.len(), 1, "{rows:?}");
     let a2 = p.a2.1.to_string();
-    assert_eq!((rows[0].0.as_str(), rows[0].1.as_deref(), rows[0].2.as_deref()), ("user", Some(a2.as_str()), Some("a2")));
+    assert_eq!(
+        (rows[0].0.as_str(), rows[0].1.as_deref(), rows[0].2.as_deref()),
+        ("user", Some(a2.as_str()), Some("a2"))
+    );
     audit_ok(&w).await;
     db.drop().await;
 }
@@ -524,17 +557,28 @@ async fn qa_s2_every_action_write_is_audited_in_the_ci_history() {
 
     // The CI's history shows it, with the actor.
     let (status, h) = w
-        .call(&w.admin, "GET", &format!("/api/v1/audit-log?entityType=configuration_items&entityId={ci}&action=update"), None)
+        .call(
+            &w.admin,
+            "GET",
+            &format!("/api/v1/audit-log?entityType=configuration_items&entityId={ci}&action=update"),
+            None,
+        )
         .await;
     assert_eq!(status, 200, "{h}");
-    let entry = h["data"].as_array().unwrap().iter().find(|e| e["newValue"]["source"]["kind"] == "workflow_action").cloned();
+    let entry =
+        h["data"].as_array().unwrap().iter().find(|e| e["newValue"]["source"]["kind"] == "workflow_action").cloned();
     let entry = entry.unwrap_or_else(|| panic!("no action entry in the history: {h}"));
     assert_eq!((entry["actorName"].as_str(), entry["actorType"].as_str()), (Some("approver"), Some("user")), "{entry}");
     assert_eq!(entry["newValue"]["source"]["transitionKey"], "go_live");
 
     // The actions change nothing: no row, no origin marker.
     let (ci2, i2) = approved(&w).await;
-    w.ok("PATCH", &format!("/api/v1/configuration-items/{ci2}"), json!({ "attributes": { "note": "live", "count": 3 } })).await;
+    w.ok(
+        "PATCH",
+        &format!("/api/v1/configuration-items/{ci2}"),
+        json!({ "attributes": { "note": "live", "count": 3 } }),
+    )
+    .await;
     let (status, v) = run_as(&w, &approver, i2, "go_live", json!({})).await;
     assert_eq!(status, 200, "{v}");
     assert!(action_rows(&w, ci2).await.is_empty(), "nothing changed, nothing audited");
@@ -551,7 +595,8 @@ async fn qa_s2_every_action_write_is_audited_in_the_ci_history() {
         items.push(json!({ "instanceId": i, "transitionKey": "go_live", "expectedVersion": version }));
         cis.push(c);
     }
-    let (status, v) = w.call(&approver, "POST", &format!("{RUN}/bulk-transitions"), Some(json!({ "items": items }))).await;
+    let (status, v) =
+        w.call(&approver, "POST", &format!("{RUN}/bulk-transitions"), Some(json!({ "items": items }))).await;
     assert_eq!((status, v["succeeded"].as_i64()), (200, Some(2)), "{v}");
     for c in cis {
         let rows = action_rows(&w, c).await;

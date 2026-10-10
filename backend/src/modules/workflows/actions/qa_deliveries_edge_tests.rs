@@ -167,9 +167,8 @@ async fn qa_deliveries_an_in_flight_delivery_is_left_to_its_lease() {
     let (ci, instance) = started(&w).await;
     let mail = run(&w, "mail", "email", instance, ci).await;
     let d = add(&w.pool, mail, "addr:a@corp.example", "pending", None).await;
-    let claimed = outbox::claim_deliveries(&w.pool, "w1", WorkflowActionKind::Email, Duration::from_secs(30), 10)
-        .await
-        .unwrap();
+    let claimed =
+        outbox::claim_deliveries(&w.pool, "w1", WorkflowActionKind::Email, Duration::from_secs(30), 10).await.unwrap();
     assert_eq!(claimed.iter().map(|c| c.id).collect::<Vec<_>>(), vec![d]);
     assert_eq!(status_of(&w.pool, d).await.0, "sending");
 
@@ -192,9 +191,8 @@ async fn qa_deliveries_an_in_flight_delivery_is_left_to_its_lease() {
 
     // A second one whose lease runs out: back to pending, discarded, the late report refused.
     let d2 = add(&w.pool, mail, "addr:b@corp.example", "pending", None).await;
-    let claimed = outbox::claim_deliveries(&w.pool, "w2", WorkflowActionKind::Email, Duration::from_secs(30), 10)
-        .await
-        .unwrap();
+    let claimed =
+        outbox::claim_deliveries(&w.pool, "w2", WorkflowActionKind::Email, Duration::from_secs(30), 10).await.unwrap();
     assert_eq!(claimed.len(), 1);
     sqlx::query("UPDATE workflow_action_deliveries SET lease_until = now() - interval '1 second' WHERE id = $1")
         .bind(d2)
@@ -247,15 +245,18 @@ async fn qa_deliveries_final_states_stay_final_and_changes_are_audited_once() {
             assert!(v["error"]["message"].as_str().unwrap().contains(status), "{v}");
         }
     }
-    let (_, v) = w
-        .call(&w.admin, "POST", &format!("{}/retry", base(&w)), Some(json!({ "ids": [discarded, delivered] })))
-        .await;
+    let (_, v) =
+        w.call(&w.admin, "POST", &format!("{}/retry", base(&w)), Some(json!({ "ids": [discarded, delivered] }))).await;
     let mut refused: Vec<(String, String, String)> = v["refused"]
         .as_array()
         .unwrap()
         .iter()
         .map(|r| {
-            (r["id"].as_str().unwrap().into(), r["reason"].as_str().unwrap().into(), r["status"].as_str().unwrap().into())
+            (
+                r["id"].as_str().unwrap().into(),
+                r["reason"].as_str().unwrap().into(),
+                r["status"].as_str().unwrap().into(),
+            )
         })
         .collect();
     refused.sort();
@@ -285,14 +286,26 @@ async fn qa_deliveries_final_states_stay_final_and_changes_are_audited_once() {
         rows.iter().zip([(held, "held", "pending"), (dead, "dead", "discarded")])
     {
         assert_eq!(*entity, d);
-        assert_eq!((actor_type.as_str(), actor_id.as_deref(), actor.as_deref()), ("user", Some(admin_id.as_str()), Some("admin")));
-        assert_eq!((new["before"]["status"].as_str(), new["after"]["status"].as_str()), (Some(before), Some(after)), "{new}");
+        assert_eq!(
+            (actor_type.as_str(), actor_id.as_deref(), actor.as_deref()),
+            ("user", Some(admin_id.as_str()), Some("admin"))
+        );
+        assert_eq!(
+            (new["before"]["status"].as_str(), new["after"]["status"].as_str()),
+            (Some(before), Some(after)),
+            "{new}"
+        );
         assert_eq!((new["ciId"].clone(), new["bulk"].as_bool()), (json!(ci), Some(false)), "{new}");
         assert!(!new.to_string().contains("@corp.example"), "no address audited: {new}");
     }
     // Listed in the audit log of the delivery.
     let (status, h) = w
-        .call(&w.admin, "GET", &format!("/api/v1/audit-log?entityType=workflow_action_deliveries&entityId={dead}"), None)
+        .call(
+            &w.admin,
+            "GET",
+            &format!("/api/v1/audit-log?entityType=workflow_action_deliveries&entityId={dead}"),
+            None,
+        )
         .await;
     assert_eq!(status, 200, "{h}");
     let actions: Vec<&str> = h["data"].as_array().unwrap().iter().map(|e| e["action"].as_str().unwrap()).collect();

@@ -55,12 +55,15 @@ impl Hit {
     }
 }
 
+/// A status and the headers to answer with.
+type Answer = (u16, Vec<(&'static str, String)>);
+
 /// A plain-http receiver: records every request, answers `status` with `headers`.
 #[derive(Clone)]
 struct Receiver {
     port: u16,
     hits: Arc<Mutex<Vec<Hit>>>,
-    answer: Arc<Mutex<(u16, Vec<(&'static str, String)>)>>,
+    answer: Arc<Mutex<Answer>>,
 }
 
 impl Receiver {
@@ -139,11 +142,7 @@ struct Flood {
 /// again (every `pause`, if given) until the client closes the connection.
 async fn flood(head: &'static [u8], piece: Vec<u8>, pause: Option<Duration>) -> Flood {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let f = Flood {
-        port: listener.local_addr().unwrap().port(),
-        written: Arc::default(),
-        closed: Arc::default(),
-    };
+    let f = Flood { port: listener.local_addr().unwrap().port(), written: Arc::default(), closed: Arc::default() };
     let (written, closed) = (f.written.clone(), f.closed.clone());
     tokio::spawn(async move {
         let Ok((mut tcp, _)) = listener.accept().await else { return };
@@ -485,8 +484,12 @@ async fn qa_an_endless_answer_is_cut_off() {
 #[tokio::test]
 async fn qa_a_dripping_answer_ends_at_the_timeout() {
     let (w, _) = hooks(&["127.0.0.0/8"]);
-    let f = flood(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n", b"1\r\nd\r\n".to_vec(), Some(Duration::from_millis(50)))
-        .await;
+    let f = flood(
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n",
+        b"1\r\nd\r\n".to_vec(),
+        Some(Duration::from_millis(50)),
+    )
+    .await;
     let started = Instant::now();
     let a = post(&w, &format!("http://hook.example.test:{}/", f.port), Duration::from_millis(1000)).await;
     let took = started.elapsed();
