@@ -358,7 +358,6 @@ async fn a_poison_run_does_not_hold_up_the_others() {
 /// audited, not retried every lease for ever while it counts towards the
 /// queue limit.
 #[tokio::test]
-#[ignore = "GH#846: a poison run is retried for ever; un-ignore with the fix"]
 async fn a_poison_run_gives_up_after_the_attempt_limit() {
     let Some(db) = scratch::database("actions_edge_poison_limit").await else { return };
     let pool = &db.pool;
