@@ -170,7 +170,7 @@ test("the approvers matrix: five sources and an escalation, with the lint per st
   await cab.getByLabel("Source", { exact: true }).selectOption("service_owner");
   await expect(cab.getByText("The step already has this approver.")).toBeVisible();
 
-  await expect(page.getByTestId("wf-approvers").locator(".panel-header .badge")).toHaveText("Unsaved changes");
+  await expect(page.getByRole("region", { name: "Save" })).toContainText("Unsaved changes");
   await page.getByTestId("wf-approvers-save").click();
   await expect(page.getByRole("status").filter({ hasText: /Approvers saved/ })).toBeVisible();
   await expect(tech.locator("tbody tr")).toHaveCount(2);

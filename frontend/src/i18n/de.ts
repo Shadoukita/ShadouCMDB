@@ -4265,5 +4265,7 @@ export const de: { [K in MessageKey]: string } = {
   "wfAdmin.grants.addColumn": "Spalte hinzufügen",
   "wfAdmin.grants.save": "Berechtigungen speichern",
   "wfAdmin.grants.saved": "Berechtigungen gespeichert.",
+  "wfAdmin.grants.startAgain": "Erneut starten, nachdem eine Instanz geendet hat",
+  "wfAdmin.grants.cancelInstance": "Eine Instanz abbrechen",
   "wfAdmin.grants.leave": "Ihre Änderungen an den Berechtigungen sind nicht gespeichert. Verlassen und verwerfen?",
 };

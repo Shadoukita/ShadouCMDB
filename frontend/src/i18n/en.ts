@@ -4251,6 +4251,8 @@ export const en = {
   "wfAdmin.grants.addColumn": "Add column",
   "wfAdmin.grants.save": "Save grants",
   "wfAdmin.grants.saved": "Grants saved.",
+  "wfAdmin.grants.startAgain": "Start again after an instance ended",
+  "wfAdmin.grants.cancelInstance": "Cancel an instance",
   "wfAdmin.grants.leave": "Your grant changes are not saved. Leave and lose them?",
 } satisfies Record<string, string>;
 

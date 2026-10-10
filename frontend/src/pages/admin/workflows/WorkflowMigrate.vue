@@ -132,7 +132,7 @@ const confirmParts = computed(() => tAround("wfAdmin.migrate.confirmBody", "name
             </select>
             <span v-if="versionError" id="wf-migrate-to-err" class="error">{{ versionError }}</span>
           </div>
-          <fieldset class="field">
+          <fieldset class="group">
             <legend>{{ t("wfAdmin.migrate.pending") }}</legend>
             <label class="checkbox-row">
               <input v-model="pendingApprovals" type="radio" name="wf-migrate-pending" value="skip" />
