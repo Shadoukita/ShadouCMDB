@@ -26555,7 +26555,8 @@
                 "workflow.action_retry",
                 "workflow.action_discard",
                 "workflow.action_suppressed",
-                "mail.test"
+                "mail.test",
+                "workflow.action_test"
               ]
             }
           },
@@ -35479,6 +35480,156 @@
         ]
       }
     },
+    "/api/v1/admin/workflow-definitions/{id}/actions/{key}/test": {
+      "post": {
+        "tags": [
+          "Workflow definitions"
+        ],
+        "summary": "Send a test of a saved action to yourself: one e-mail, one signed ping, or one inbox entry",
+        "description": "Requires `workflows.manage`. For the designer's Test send. Nothing goes to the action's recipients and nothing is queued: `email` sends the action's message in the caller's language, marked as a test, to the caller's own address; `webhook` sends one signed `ping` to the action's endpoint after the URL rules and address checks a delivery runs (as `POST /admin/webhook-endpoints/{id}/ping`; no `webhooks.manage` needed); `inbox` writes one notification to the caller. With `ciId` the message is about that CI. A refusal by the relay or the receiver is the result (`ok` false, `statusCode`, `reason`), not an error status. Audited as `workflow.action_test` on the workflow. 404 for an unknown action (also one not saved yet) and for a CI that does not exist or the caller may not view; 409 MAIL_NOT_CONFIGURED with `MAIL=off`, 409 WEBHOOKS_DISABLED while webhooks are off, 409 CONFLICT when the caller has no e-mail address or the endpoint is paused or suspended; 429 RATE_LIMITED beyond 10 tests a minute. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "testWorkflowAction",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "description": "Action key",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Stable machine key, lower_snake_case",
+              "pattern": "^[a-z][a-z0-9_]{0,62}$"
+            }
+          },
+          {
+            "name": "ciId",
+            "in": "query",
+            "description": "Judge the view right on this CI's type; without it, on the workflow's type",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowActionTestResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (not allowed in this state) or MAIL_NOT_CONFIGURED (outbound e-mail is off: MAIL=off). Nothing was sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests (code RATE_LIMITED): failed password attempts, or the limit named in details[0].code; see the Retry-After header",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
     "/api/v1/admin/workflow-definitions/{id}/actions/summary": {
       "get": {
         "tags": [
@@ -43039,7 +43190,8 @@
               "workflow.action_retry",
               "workflow.action_discard",
               "workflow.action_suppressed",
-              "mail.test"
+              "mail.test",
+              "workflow.action_test"
             ]
           },
           "entityType": {
@@ -50108,7 +50260,7 @@
           },
           "entityType": {
             "$ref": "#/components/schemas/NotificationEntityType",
-            "description": "The record to open: an approval request, a workflow instance, an import job or a webhook endpoint. It may be\ngone by now (an import record past its retention); the client then says so."
+            "description": "The record to open: an approval request, a workflow instance, an import job, a webhook endpoint or a workflow (a\ntest of one of its actions). It may be gone by now (an import record past its retention); the client then says\nso."
           },
           "entityId": {
             "type": "string",
@@ -50124,7 +50276,7 @@
           },
           "data": {
             "type": "object",
-            "description": "Display values as they were at the event, by kind. Approvals: `instanceId`, `ciId`, `ciLabel`, `ciIdent`,\n`definitionName`, `transitionKey`, `transitionName`, `requestNo`; `approval_requested` also `stepKey`,\n`stepName`, `dueAt`, `requestedByName`; `approval_closed` also `status`, `closeReason`, `closedByName`.\n`workflow_transition`: `instanceId`, `ciId`, `ciLabel`, `ciIdent`, `definitionName`, `event` (`transition`,\n`cancel`, `force`), `transitionKey`, `transitionName`, `fromStateKey`, `fromStateName`, `toStateKey`,\n`toStateName`, `actorName`. `import_finished`: `fileName`, `classKey`, `status`, `errorCode`. `workflow_action`: those of\n`workflow_transition` plus `actionKey`, `actionName`, `approvalRequestId` and `requestNo` (`event` is the\nworkflow event's kind: `transition`, `approval_request`, `approval_decision`, `approval_close`,\n`approval_overdue`, `cancel`, `force`, ...). `webhook_suspended`: `endpointKey`, `endpointName`, `reason`,\n`consecutiveFailures`. Any may be null."
+            "description": "Display values as they were at the event, by kind. Approvals: `instanceId`, `ciId`, `ciLabel`, `ciIdent`,\n`definitionName`, `transitionKey`, `transitionName`, `requestNo`; `approval_requested` also `stepKey`,\n`stepName`, `dueAt`, `requestedByName`; `approval_closed` also `status`, `closeReason`, `closedByName`.\n`workflow_transition`: `instanceId`, `ciId`, `ciLabel`, `ciIdent`, `definitionName`, `event` (`transition`,\n`cancel`, `force`), `transitionKey`, `transitionName`, `fromStateKey`, `fromStateName`, `toStateKey`,\n`toStateName`, `actorName`. `import_finished`: `fileName`, `classKey`, `status`, `errorCode`. `workflow_action`: those of\n`workflow_transition` plus `actionKey`, `actionName`, `approvalRequestId` and `requestNo` (`event` is the\nworkflow event's kind: `transition`, `approval_request`, `approval_decision`, `approval_close`,\n`approval_overdue`, `cancel`, `force`, ...). `webhook_suspended`: `endpointKey`, `endpointName`, `reason`,\n`consecutiveFailures`. A designer's test of a `workflow_action` has `test` true, `definitionId` and no instance.\nAny may be null."
           },
           "createdAt": {
             "type": "string",
@@ -50147,7 +50299,8 @@
           "workflow_approval_requests",
           "workflow_instances",
           "import_jobs",
-          "webhook_endpoints"
+          "webhook_endpoints",
+          "workflow_definitions"
         ]
       },
       "NotificationKind": {
@@ -55787,6 +55940,58 @@
             ],
             "format": "int64",
             "description": "Its age in seconds"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowActionTestResult": {
+        "type": "object",
+        "description": "What a test send came to",
+        "required": [
+          "key",
+          "kind",
+          "ok",
+          "to",
+          "message",
+          "durationMs"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/WorkflowActionKind"
+          },
+          "ok": {
+            "type": "boolean",
+            "description": "It arrived: the relay accepted the e-mail (it may still bounce later), the receiver answered 2xx, or the\ninbox entry was written"
+          },
+          "to": {
+            "type": "string",
+            "description": "Where it went: the caller's e-mail address, the endpoint's key, or `inbox`"
+          },
+          "statusCode": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The relay's SMTP reply code when it refused, or the receiver's HTTP status",
+            "minimum": 0
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it failed: `smtp_rejected` (5xx) or `smtp_deferred` (no connection, 4xx) for e-mail; for a webhook as\na delivery would record it (`host_not_allowed`, `address_blocked:<ip>`, `redirect_not_followed`,\n`http_status`, `unreachable`, ...)"
+          },
+          "message": {
+            "type": "string"
+          },
+          "durationMs": {
+            "type": "integer",
+            "format": "int64"
           }
         },
         "additionalProperties": false

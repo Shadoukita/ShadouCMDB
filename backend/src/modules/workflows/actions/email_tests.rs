@@ -830,3 +830,68 @@ async fn mail_off_skips_and_sends_nothing() {
     assert!(m.sink.received().is_empty());
     db.drop().await;
 }
+
+/// SHAA-3042: the designer's test send of an e-mail action goes to the caller
+/// only, in their language, marked as a test, about the CI given; nothing is
+/// queued and the audit entry names the user, not the address. The relay's
+/// 550 is the result, not an error status; `MAIL=off` is 409
+/// MAIL_NOT_CONFIGURED.
+#[tokio::test]
+async fn an_email_test_send_goes_to_the_caller_only() {
+    let Some(db) = scratch::database("workflow_email_test_send").await else { return };
+    let mut w = world(&db).await;
+    let m = mailer(&w.pool, mail_cfg("en")).await;
+    w.app = crate::modules::api_tokens::tests::app_with_mail(w.pool.clone(), m.mail.clone());
+    w.user("en_user", &[w.approvers]).await;
+    let admin = id(&w.pool, "SELECT id FROM users WHERE username = 'admin'").await;
+    ok(&w.pool, "UPDATE users SET email = 'admin@corp.example' WHERE username = 'admin'").await;
+    set_locale(&w.pool, admin, Some("de")).await;
+    put_actions(
+        &w,
+        json!([{ "key": "tell", "name": "Tell the team", "kind": "email", "trigger": "transition",
+            "transition": "approve",
+            "recipients": [{ "source": "user", "user": "en_user" }, { "source": "address", "address": "cab@corp.example" }],
+            "settings": { "subject": { "en": "Approved: {{ci.label}}", "de": "Genehmigt: {{ci.label}}" } } }]),
+    )
+    .await;
+    let ci = w.ci(w.server).await;
+    ok(&w.pool, &format!("UPDATE configuration_items SET label = 'db01' WHERE id = '{ci}'")).await;
+    let test = format!("{}/tell/test", actions(&w));
+
+    let v = w.ok("POST", &format!("{test}?ciId={ci}"), json!(null)).await;
+    assert_eq!(
+        (v["ok"].as_bool(), v["kind"].as_str(), v["to"].as_str(), v["reason"].as_str()),
+        (Some(true), Some("email"), Some("admin@corp.example"), None),
+        "{v}"
+    );
+    let received = m.sink.received();
+    assert_eq!(received.len(), 1, "one message");
+    assert_eq!(received[0].to, ["admin@corp.example"], "to the caller only");
+    let msg = &m.sink.to("admin@corp.example")[0];
+    assert!(msg.subject.starts_with("[TEST] ") && msg.subject.contains("Genehmigt: db01"), "{}", msg.subject);
+    assert!(msg.text.contains("Dies ist ein Test der Aktion Tell the team"), "{}", msg.text);
+    assert!(msg.text.contains("https://cmdb.corp.example/admin/workflows/"), "{}", msg.text);
+    assert_eq!(count(&w.pool, "SELECT count(*) FROM workflow_action_runs").await, 0, "nothing queued");
+    let audited: Value = sqlx::query_scalar("SELECT new_value FROM audit_log WHERE action = 'workflow.action_test'")
+        .fetch_one(&w.pool)
+        .await
+        .unwrap();
+    assert_eq!((audited["to"].as_str(), audited["kind"].as_str()), (Some("admin"), Some("email")), "{audited}");
+    assert!(!audited.to_string().contains("corp.example"), "no address in the audit log: {audited}");
+
+    // Without a CI: the subject has no reference, and the relay's refusal is the result.
+    m.sink.reply("admin@corp.example", &[550]);
+    let v = w.ok("POST", &test, json!(null)).await;
+    assert_eq!(
+        (v["ok"].as_bool(), v["statusCode"].as_u64(), v["reason"].as_str()),
+        (Some(false), Some(550), Some("smtp_rejected")),
+        "{v}"
+    );
+
+    // MAIL=off.
+    w.app = crate::modules::api_tokens::tests::app_with_mail(w.pool.clone(), Arc::new(Mail::default()));
+    let (status, v) = w.call(&w.admin, "POST", &test, None).await;
+    assert_eq!((status, crate::modules::api_tokens::tests::code(&v)), (409, "MAIL_NOT_CONFIGURED"), "{v}");
+    assert_eq!(m.sink.received().len(), 1);
+    db.drop().await;
+}

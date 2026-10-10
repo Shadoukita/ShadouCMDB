@@ -28,6 +28,7 @@ pub mod outbox;
 #[cfg(test)]
 mod qa_deliveries_edge_tests;
 pub mod recipients;
+pub mod test_send;
 #[cfg(test)]
 mod tests;
 
@@ -1572,6 +1573,20 @@ pub struct WorkflowActionPreview {
     pub subject: Option<String>,
 }
 
+/// CI `id` for a preview or a test send: 404 when it does not exist or the caller may not view its type.
+async fn sample_ci(conn: &mut PgConnection, ctx: &RequestContext, id: Uuid) -> Result<email::SampleCi, AppError> {
+    let row: Option<(Uuid, String, Option<String>, String)> = sqlx::query_as(
+        "SELECT ci.class_id, ci.label, ci.ident, c.name FROM cmdb.configuration_items ci
+         JOIN cmdb.ci_classes c ON c.id = ci.class_id WHERE ci.id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&mut *conn)
+    .await?;
+    let (class_id, label, ident, class) =
+        row.filter(|(c, ..)| ctx.may_view_all(&[*c])).ok_or_else(|| AppError::missing("Configuration item", id))?;
+    Ok(email::SampleCi { id, class_id, label, ident, class })
+}
+
 pub async fn preview(
     pool: &PgPool,
     ctx: &RequestContext,
@@ -1585,23 +1600,13 @@ pub async fn preview(
         load(&mut conn, d.id).await?.into_iter().find(|a| a.key == path.1).ok_or_else(|| {
             AppError::new(ErrorCode::NotFound, format!("Workflow {} has no action {}", d.key, path.1))
         })?;
-    let ci: Option<(Uuid, Uuid, String, Option<String>)> = match q.ci_id {
-        Some(ci) => {
-            let row: Option<(Uuid, String, Option<String>)> =
-                sqlx::query_as("SELECT class_id, label, ident FROM cmdb.configuration_items WHERE id = $1")
-                    .bind(ci)
-                    .fetch_optional(&mut *conn)
-                    .await?;
-            let (class, label, ident) = row
-                .filter(|(c, ..)| ctx.may_view_all(&[*c]))
-                .ok_or_else(|| AppError::missing("Configuration item", ci))?;
-            Some((ci, class, label, ident))
-        }
+    let ci = match q.ci_id {
+        Some(ci) => Some(sample_ci(&mut conn, ctx, ci).await?),
         None => None,
     };
-    let class_id = ci.as_ref().map_or(d.class_id, |c| c.1);
+    let class_id = ci.as_ref().map_or(d.class_id, |c| c.class_id);
     let model = crate::schema::model::Model::load(&mut conn).await?;
-    let subject = ci.as_ref().map(|(ci, class, ..)| recipients::Subject { ci_id: *ci, class_id: *class, run: None });
+    let subject = ci.as_ref().map(|c| recipients::Subject { ci_id: c.id, class_id: c.class_id, run: None });
     let resolved = recipients::resolve(&mut conn, &model, &action.recipients, subject.as_ref()).await?;
     let ids: Vec<Uuid> = resolved.users.keys().copied().collect();
     let permissions = auth_data::load_permissions_of(&mut conn, &ids).await?;
@@ -1661,22 +1666,7 @@ pub async fn preview(
             None => None,
         };
         let locale = crate::modules::mail::render::Locale::of(locale.as_deref(), limits.mail.default_locale);
-        let class_name = model.class(class_id).map(|c| c.key.clone()).unwrap_or_default();
-        let class_name: Option<String> = sqlx::query_scalar("SELECT name FROM cmdb.ci_classes WHERE id = $1")
-            .bind(class_id)
-            .fetch_optional(&mut *conn)
-            .await?
-            .or(Some(class_name));
-        Some(
-            email::preview_subject(
-                &mut conn,
-                &d,
-                &action,
-                ci.map(|(_, _, label, ident)| (label, ident, class_name.unwrap_or_default())),
-                locale,
-            )
-            .await?,
-        )
+        Some(email::preview_subject(&mut conn, &d, &action, ci.as_ref(), locale).await?)
     } else {
         None
     };

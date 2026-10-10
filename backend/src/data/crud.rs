@@ -441,6 +441,11 @@ pub enum AuditAction {
     #[serde(rename = "mail.test")]
     #[sqlx(rename = "mail.test")]
     MailTest,
+    /// An administrator sent a test of a workflow action to themselves (entity type `workflow_definitions`): the
+    /// action, its kind, where it went (a user name, never an address) and the outcome.
+    #[serde(rename = "workflow.action_test")]
+    #[sqlx(rename = "workflow.action_test")]
+    WorkflowActionTest,
 }
 
 impl AuditAction {
@@ -488,6 +493,7 @@ impl AuditAction {
             AuditAction::WorkflowActionDiscard => "workflow.action_discard",
             AuditAction::WorkflowActionSuppressed => "workflow.action_suppressed",
             AuditAction::MailTest => "mail.test",
+            AuditAction::WorkflowActionTest => "workflow.action_test",
         }
     }
 }

@@ -875,15 +875,25 @@ async fn summary_fields(
         .collect())
 }
 
-/// The subject an action's e-mail would have, for the preview: in `locale`,
-/// for the CI `ci` (label, ident, type) when given.
-pub(super) async fn preview_subject(
+/// A CI an action is previewed or tested on, which the caller may view.
+pub(super) struct SampleCi {
+    pub id: Uuid,
+    pub class_id: Uuid,
+    pub label: String,
+    pub ident: Option<String>,
+    /// The type's name.
+    pub class: String,
+}
+
+/// The event an action's e-mail would tell of, for the preview and the test send: its trigger on the workflow's
+/// current version, now, about `ci` when given (none in minimal content), with no instance behind it.
+async fn sample_event(
     conn: &mut PgConnection,
     d: &super::WorkflowDefinition,
     action: &WorkflowAction,
-    ci: Option<(String, Option<String>, String)>,
-    locale: Locale,
-) -> sqlx::Result<String> {
+    ci: Option<&SampleCi>,
+    url: String,
+) -> sqlx::Result<(Content, render::Event)> {
     let transition: Option<String> = match &action.transition {
         Some(key) => sqlx::query_scalar(
             "SELECT t.name FROM cmdb.workflow_transitions t JOIN cmdb.workflow_definitions d
@@ -918,11 +928,47 @@ pub(super) async fn preview_subject(
         to: None,
         actor: None,
         comment: None,
-        ci: ci.filter(|_| content != Content::Minimal).map(|(label, ident, class)| Ci { label, ident, class }),
+        ci: ci.filter(|_| content != Content::Minimal).map(|c| Ci {
+            label: c.label.clone(),
+            ident: c.ident.clone(),
+            class: c.class.clone(),
+        }),
         approval: None,
         fields: Vec::new(),
-        url: String::new(),
+        url,
     };
+    Ok((content, e))
+}
+
+/// The subject an action's e-mail would have, for the preview: in `locale`, for `ci` when given.
+pub(super) async fn preview_subject(
+    conn: &mut PgConnection,
+    d: &super::WorkflowDefinition,
+    action: &WorkflowAction,
+    ci: Option<&SampleCi>,
+    locale: Locale,
+) -> sqlx::Result<String> {
+    let (content, e) = sample_event(conn, d, action, ci, String::new()).await?;
     let custom = custom(&action.settings, locale);
     Ok(render::single(locale, content, &custom, &e, &[], &action.name).subject)
+}
+
+/// The designer's test message of an action to `user` (their name) in `locale`: about `ci` when given, with the
+/// summary fields of a `detailed` action as `permissions` may see them; the link opens the workflow's designer.
+pub(super) async fn test_message(
+    conn: &mut PgConnection,
+    mail: &Mail,
+    d: &super::WorkflowDefinition,
+    action: &WorkflowAction,
+    ci: Option<&SampleCi>,
+    (locale, user, permissions): (Locale, &str, &Permissions),
+) -> sqlx::Result<render::Rendered> {
+    let base = mail.cfg.public_url.clone().unwrap_or_default();
+    let (content, mut e) = sample_event(conn, d, action, ci, format!("{base}/admin/workflows/{}", d.id)).await?;
+    if let (Content::Detailed, Some(c)) = (content, ci) {
+        let model = Model::load(&mut *conn).await?;
+        e.fields = summary_fields(conn, &model, c.id, c.class_id, permissions, locale).await?;
+    }
+    let custom = custom(&action.settings, locale);
+    Ok(render::action_test(locale, content, &custom, &e, &action.name, user))
 }
