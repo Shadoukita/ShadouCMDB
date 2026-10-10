@@ -29,4 +29,5 @@ pub mod sso;
 pub mod templates;
 pub mod ui_settings;
 pub mod users;
+pub mod webhooks;
 pub mod workflows;

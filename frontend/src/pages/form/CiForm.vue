@@ -149,11 +149,11 @@ async function onSubmit() {
       const given = Object.fromEntries(Object.entries(coreToApi(draft.core)).filter(([k, v]) => v !== null && (k !== "ident" || draft.isAdmin)));
       const body = { classId: props.classId, ...given, ...(draft.criticalityId ? { criticalityValueId: draft.criticalityId } : {}), attributes } as CiCreateBody;
       const created = await create.mutateAsync(body);
-      flash.show(`Created ${created.label}.`);
+      flash.show(t("form.created", { name: created.label }));
       await router.push(fromServices.value ? { path: `/services/${created.id}`, query: { edit: "owners" } } : `/cis/${created.id}`);
     } else if (props.ci) {
       const saved = await draft.save();
-      if (saved) flash.show(`Saved ${saved.label}.`);
+      if (saved) flash.show(t("record.saved", { name: saved.label }));
       await router.push(`/cis/${props.ci.id}`);
     }
   } catch (err) {
@@ -170,34 +170,34 @@ async function onSubmit() {
   <LayoutEditView v-if="editor?.active && classKey" :editor="editor" :class-name="className" :attrs="activeAttrs" :attrs-error="attrs.error.value" form>
     <template #field="{ field }"><CiFieldInput :draft="draft" :f="field" /></template>
   </LayoutEditView>
-  <form v-else novalidate :aria-label="mode === 'create' ? `New ${className}` : `Edit ${ci?.label}`" @submit.prevent="onSubmit">
+  <form v-else novalidate :aria-label="mode === 'create' ? t('record.create.title', { class: className }) : t('record.edit.title', { name: ci?.label ?? '' })" @submit.prevent="onSubmit">
     <FormErrorBanner v-if="draft.error != null" :error="draft.error" :unplaced="draft.unplaced" :version-conflict-href="ci ? `/cis/${ci.id}` : undefined" />
     <div class="layout-container">
-      <div v-if="tabs.length > 1" class="tabs" role="tablist" aria-label="Form tabs">
+      <div v-if="tabs.length > 1" class="tabs" role="tablist" :aria-label="t('form.tabs')">
         <button
-          v-for="(t, i) in tabs"
-          :id="`form-tab-${t.key}`"
-          :key="t.key"
+          v-for="(tb, i) in tabs"
+          :id="`form-tab-${tb.key}`"
+          :key="tb.key"
           type="button"
           role="tab"
           :aria-selected="i === tabIndex"
-          :aria-controls="`form-tabpanel-${t.key}`"
+          :aria-controls="`form-tabpanel-${tb.key}`"
           :tabindex="i === tabIndex ? 0 : -1"
           @click="activeTab = i"
           @keydown="onTabKey"
         >
-          {{ t.label }}<span v-if="tabErrorCount(i) > 0" class="badge danger tab-errors">{{ tabErrorCount(i) }} error{{ tabErrorCount(i) === 1 ? "" : "s" }}</span>
+          {{ tb.label }}<span v-if="tabErrorCount(i) > 0" class="badge danger tab-errors">{{ t("record.tabErrors", { n: tabErrorCount(i) }) }}</span>
         </button>
       </div>
       <div
-        v-for="(t, i) in tabs"
+        v-for="(tb, i) in tabs"
         v-show="i === tabIndex"
-        :id="`form-tabpanel-${t.key}`"
-        :key="t.key"
+        :id="`form-tabpanel-${tb.key}`"
+        :key="tb.key"
         :role="tabs.length > 1 ? 'tabpanel' : undefined"
-        :aria-labelledby="tabs.length > 1 ? `form-tab-${t.key}` : undefined"
+        :aria-labelledby="tabs.length > 1 ? `form-tab-${tb.key}` : undefined"
       >
-        <div v-for="g in sectionGroups(t.sections)" :key="String(g.free)" :class="g.free ? 'lg-free' : 'layout-panels'" :style="g.free ? freeAreaStyle(g.items) : undefined">
+        <div v-for="g in sectionGroups(tb.sections)" :key="String(g.free)" :class="g.free ? 'lg-free' : 'layout-panels'" :style="g.free ? freeAreaStyle(g.items) : undefined">
           <RecordSection
             v-for="sec in g.items"
             :key="sec.key"
@@ -211,11 +211,11 @@ async function onSubmit() {
             <div v-if="sec.kind === 'note'" class="panel-body"><NoteText :text="sec.text ?? ''" /></div>
             <div v-else class="panel-body">
               <template v-if="i === 0 && sec.key === firstGrid">
-                <LoadingState v-if="attrs.isLoading.value" label="Loading attribute definitions…" />
+                <LoadingState v-if="attrs.isLoading.value" :label="t('record.loadingAttrs')" />
                 <ErrorAlert
                   v-if="attrs.isError.value"
                   :error="attrs.error.value"
-                  title="Could not load this class's attributes"
+                  :title="t('form.attrsFailed')"
                   :on-retry="() => attrs.refetch()"
                 />
               </template>
@@ -235,7 +235,7 @@ async function onSubmit() {
     <SaveBar :label="t('record.save.region')" :dirty="mode === 'edit' && draft.dirty" :changes="draft.changeCount">
       <RouterLink class="btn" :to="ci ? `/cis/${ci.id}` : clone ? `/cis/${clone.ci.id}` : fromServices ? '/services' : '/cis'">{{ t("common.cancel") }}</RouterLink>
       <button type="submit" class="btn btn-primary" :disabled="pending || attrs.isLoading.value || attrs.isError.value">
-        {{ pending ? t("common.saving") : mode === "create" ? `Create ${className}` : "Save changes" }}
+        {{ pending ? t("common.saving") : mode === "create" ? t("form.create", { class: className }) : t("common.saveChanges") }}
       </button>
     </SaveBar>
   </form>

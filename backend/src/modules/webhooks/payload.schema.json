@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://shadoucmdb.example/schemas/webhook-envelope-v1.json",
+  "title": "ShadouCMDB webhook envelope, version 1",
+  "description": "The JSON body of every webhook request ShadouCMDB sends. Fields are only ever added within a version; receivers must ignore fields they do not know. Verify X-ShadouCMDB-Signature before trusting the body, and deduplicate on `id` (X-ShadouCMDB-Delivery): delivery is at least once.",
+  "type": "object",
+  "required": ["specVersion", "id", "event", "occurredAt", "sequence", "instance", "definition", "transition", "state", "approval", "ci", "actor", "action"],
+  "properties": {
+    "specVersion": { "const": "1" },
+    "id": {
+      "description": "The delivery id; the same on every retry of this delivery (also sent as X-ShadouCMDB-Delivery and Idempotency-Key).",
+      "type": "string", "format": "uuid"
+    },
+    "event": {
+      "description": "What happened: `workflow.` and the action's trigger, or `ping` for an endpoint test.",
+      "type": "string",
+      "enum": ["workflow.transition", "workflow.approval_requested", "workflow.approval_step", "workflow.approval_closed", "workflow.approval_overdue", "workflow.instance_cancelled", "workflow.instance_forced", "ping"]
+    },
+    "occurredAt": { "description": "When the event happened (UTC).", "type": ["string", "null"], "format": "date-time" },
+    "sequence": {
+      "description": "The workflow event's id: increases with every event of the server, so a receiver can order events (deliveries may arrive out of order after retries). Null for a ping.",
+      "type": ["integer", "null"]
+    },
+    "instance": {
+      "type": ["object", "null"],
+      "required": ["id", "url"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "url": { "description": "Where the instance opens in the web UI (PUBLIC_URL); null when the server has no PUBLIC_URL.", "type": ["string", "null"], "format": "uri" }
+      }
+    },
+    "definition": {
+      "type": ["object", "null"],
+      "required": ["key", "name", "versionNo"],
+      "properties": {
+        "key": { "type": ["string", "null"] },
+        "name": { "type": ["string", "null"] },
+        "versionNo": { "description": "The workflow version the instance is on after the event.", "type": ["integer", "null"] }
+      }
+    },
+    "transition": {
+      "description": "The transition applied or requested; null for a cancel or force.",
+      "type": ["object", "null"],
+      "required": ["key", "name", "from", "to"],
+      "properties": {
+        "key": { "type": "string" },
+        "name": { "type": ["string", "null"] },
+        "from": { "type": ["string", "null"] },
+        "to": { "type": ["string", "null"] }
+      }
+    },
+    "state": {
+      "description": "The instance's state after the event.",
+      "type": ["object", "null"],
+      "required": ["key", "name"],
+      "properties": { "key": { "type": "string" }, "name": { "type": ["string", "null"] } }
+    },
+    "approval": {
+      "description": "For the approval triggers: the request.",
+      "type": ["object", "null"],
+      "required": ["id", "requestNo", "status", "step"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "requestNo": { "type": ["integer", "null"] },
+        "status": { "type": ["string", "null"] },
+        "step": { "type": ["integer", "null"] }
+      }
+    },
+    "ci": {
+      "description": "The CI, read when the request is sent. Null when the CI no longer exists.",
+      "type": ["object", "null"],
+      "required": ["id", "ident", "label", "class"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "ident": { "type": "string" },
+        "label": { "type": "string" },
+        "class": { "description": "The CI type's key.", "type": "string" },
+        "deleted": { "description": "Present and true when the CI was deleted since the event; it then has no attributes.", "const": true },
+        "attributes": {
+          "description": "Only the fields the action lists in includeAttributes (none by default), by key. A reference to another CI is an object {id, ident, label}.",
+          "type": "object",
+          "additionalProperties": {
+            "anyOf": [
+              { "type": ["string", "number", "boolean", "null", "array"] },
+              {
+                "type": "object",
+                "required": ["id", "ident", "label"],
+                "properties": { "id": { "type": "string" }, "ident": { "type": ["string", "null"] }, "label": { "type": ["string", "null"] } }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "actor": {
+      "description": "Who caused the event, by name only (no user id, no e-mail address).",
+      "type": ["object", "null"],
+      "required": ["type", "name"],
+      "properties": {
+        "type": { "enum": ["user", "api_client", "system", "import"] },
+        "name": { "type": ["string", "null"] }
+      }
+    },
+    "action": {
+      "type": ["object", "null"],
+      "required": ["key"],
+      "properties": { "key": { "type": "string" } }
+    },
+    "endpoint": {
+      "description": "Ping only: the endpoint tested.",
+      "type": "object",
+      "required": ["key"],
+      "properties": { "key": { "type": "string" } }
+    }
+  }
+}

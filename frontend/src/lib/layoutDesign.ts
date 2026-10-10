@@ -1,6 +1,7 @@
 import type { UiClassLayout } from "../api/uiSettings";
 import { makeFree } from "./freeLayout";
 import { suggestKey } from "./keys";
+import { t } from "../i18n";
 import { CORE_FIELDS, GRID_COLUMNS, LOCKED_FIELDS, MAX_COLUMNS, SECTION_GRID, panelLabel, placedPanels, resolveLayout, sectionKind, sectionWidth, type AttributeLike, type PanelKind } from "./uiSettings";
 
 /**
@@ -342,20 +343,22 @@ export const canRemoveSection = (l: UiClassLayout, section: LayoutSection) => !i
 export function removalSummary(l: UiClassLayout, target: { tab: LayoutTab } | { section: LayoutSection }): string {
   if ("section" in target && !isFieldSection(target.section)) {
     const kind = sectionKind(target.section);
-    if (kind === "note") return "The note and its text are removed.";
+    if (kind === "note") return t("layoutEditor.removal.note");
     // The history has a tab of its own when no section places it; the other panels are then not shown.
     return kind === "history"
-      ? "The History panel is no longer placed by this layout: the detail page shows the history in a tab of its own."
-      : `The ${panelLabel(kind as PanelKind)} panel is no longer shown on the detail page. + Panel adds it again.`;
+      ? t("layoutEditor.removal.history")
+      : t("layoutEditor.removal.panel", { panel: panelLabel(kind as PanelKind) });
   }
-  const noun = "tab" in target ? "tab" : "section";
   const fields = ("tab" in target ? sectionsOf(target.tab).flatMap((s) => fieldsOf(s)) : fieldsOf(target.section)).filter((f) => !f.separator);
   const into = "tab" in target ? tabFallback(l, target.tab) : sectionFallback(l, target.section);
   const n = fields.length;
-  const moved = n === 0 ? `The ${noun} has no fields.` : `Its ${n} field${n === 1 ? "" : "s"} move to the end of the section ${into?.label}.`;
+  const moved =
+    n === 0
+      ? t("tab" in target ? "layoutEditor.removal.tabEmpty" : "layoutEditor.removal.sectionEmpty")
+      : t("layoutEditor.removal.fields", { n, section: into?.label });
   const blocks = "tab" in target ? sectionsOf(target.tab).filter((s) => !isFieldSection(s)) : [];
   if (blocks.length === 0) return moved;
-  return `${moved} ${blocks.length === 1 ? "Its note or panel" : `Its ${blocks.length} notes and panels`} (${blocks.map((b) => b.label).join(", ")}) ${blocks.length === 1 ? "is" : "are"} removed with it.`;
+  return `${moved} ${t("layoutEditor.removal.blocks", { n: blocks.length, names: blocks.map((b) => b.label).join(", ") })}`;
 }
 
 export function moveTab(l: UiClassLayout, tab: LayoutTab, delta: -1 | 1): void {
@@ -402,7 +405,7 @@ export function materialize(classKey: string, attrs: readonly AttributeLike[]): 
  * at the end of the first tab) into a real section there, named `label`.
  */
 export function adoptFields(l: UiClassLayout, label: string, fields: readonly string[]): LayoutSection {
-  if (tabsOf(l).length === 0) tabsOf(l).push({ key: "general", label: "General", placement: "free", sections: [] });
+  if (tabsOf(l).length === 0) tabsOf(l).push({ key: "general", label: t("record.section.general"), placement: "free", sections: [] });
   const section = addSection(l, tabsOf(l)[0], label);
   for (const f of fields) placeField(l, f, section.key);
   return section;

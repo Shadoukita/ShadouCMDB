@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { WorkflowWarning } from "../../../api/workflows";
+import { t } from "../../../i18n";
 import { uninstancedText } from "./uninstanced";
 
 /**
@@ -17,10 +18,10 @@ function goToBootstrap() {
 
 <template>
   <div v-if="warning.code === 'UNINSTANCED_CIS'" :class="['alert', { 'alert-warn': warning.count !== 0 }]" role="status" data-testid="wf-uninstanced">
-    <strong>{{ warning.count === null ? "CIs without an instance" : `${warning.count.toLocaleString()} CIs without an instance` }}</strong>
+    <strong>{{ warning.count === null ? t("wfAdmin.uninstanced.titleUnknown") : t("wfAdmin.uninstanced.title", { n: warning.count }) }}</strong>
     <div>{{ uninstancedText(warning) }}</div>
     <div v-if="bootstrapTarget && warning.count !== 0">
-      <button type="button" class="btn btn-sm" data-testid="wf-uninstanced-bootstrap" @click="goToBootstrap">Adopt them with the bootstrap</button>
+      <button type="button" class="btn btn-sm" data-testid="wf-uninstanced-bootstrap" @click="goToBootstrap">{{ t("wfAdmin.uninstanced.adopt") }}</button>
     </div>
   </div>
   <div v-else class="alert alert-warn" role="status">{{ warning.message }}</div>

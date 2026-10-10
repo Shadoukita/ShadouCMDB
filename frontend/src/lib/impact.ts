@@ -4,6 +4,7 @@
 // built here from `items` plus the root, never from ids outside the response.
 import type { LocationQuery, LocationQueryRaw } from "vue-router";
 import type { Schemas } from "../api/client";
+import { t } from "../i18n";
 
 export type ImpactAnalysis = Schemas["ImpactAnalysis"];
 export type ImpactItem = Schemas["ImpactItem"];
@@ -14,17 +15,24 @@ export type ImpactView = "list" | "tree";
 export type ImpactGroup = "none" | "class" | "criticality" | "hops";
 export type ImpactSortField = "name" | "class" | "criticality" | "hops" | "direction" | "via" | "status" | "active";
 
-export const DIRECTIONS: { value: ImpactDirection; label: string; hint: string }[] = [
-  { value: "downstream", label: "Downstream", hint: "Affected by this CI" },
-  { value: "upstream", label: "Upstream", hint: "This CI depends on" },
-  { value: "both", label: "Both", hint: "Both directions" },
-];
-export const GROUPS: { value: ImpactGroup; label: string }[] = [
-  { value: "none", label: "None" },
-  { value: "class", label: "Class" },
-  { value: "criticality", label: "Criticality" },
-  { value: "hops", label: "Hop distance" },
-];
+// Labels are getters, so they follow the active locale.
+export const DIRECTIONS: { value: ImpactDirection; readonly label: string; readonly hint: string }[] = (
+  ["downstream", "upstream", "both"] as const
+).map((value) => ({
+  value,
+  get label() {
+    return t(`impact.dir.${value}`);
+  },
+  get hint() {
+    return t(`impact.dir.${value}.hint`);
+  },
+}));
+export const GROUPS: { value: ImpactGroup; readonly label: string }[] = (["none", "class", "criticality", "hops"] as const).map((value) => ({
+  value,
+  get label() {
+    return t(`impact.group.${value}`);
+  },
+}));
 export const DEFAULT_DEPTH = 3;
 const SORT_FIELDS: ImpactSortField[] = ["name", "class", "criticality", "hops", "direction", "via", "status", "active"];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -139,15 +147,12 @@ export const PARAM_KEYS: Record<string, keyof ImpactState> = {
   includeInactive: "includeInactive",
 };
 
-export const STATE_LABELS: Record<keyof ImpactState, string> = {
-  direction: "direction",
-  depth: "depth",
-  types: "relationship types",
-  includeInactive: "inactive CIs",
-  view: "view",
-  group: "grouping",
-  sort: "sort order",
-};
+const STATE_KEYS: (keyof ImpactState)[] = ["direction", "depth", "types", "includeInactive", "view", "group", "sort"];
+/** How the reset notice names a state key, in the active locale. */
+export const STATE_LABELS = Object.defineProperties(
+  {} as Record<keyof ImpactState, string>,
+  Object.fromEntries(STATE_KEYS.map((k) => [k, { enumerable: true, get: () => t(`impact.param.${k}`) }])),
+);
 
 /** The request parameters (GET …/impact and …/impact/export) for a state. */
 export function impactParams(s: ImpactState) {
@@ -167,7 +172,7 @@ export function criticalityTone(rank: number | null | undefined): "danger" | "wa
   return rank <= 1 ? "danger" : rank === 2 ? "warn" : rank === 3 ? "neutral" : "off";
 }
 
-export const NOT_SET = "Not set";
+const notSet = () => t("common.notSet");
 
 // ---------- Paths ----------
 
@@ -287,11 +292,11 @@ export function groupItems(items: readonly ImpactItem[], group: ImpactGroup, sor
       order = i.className.toLocaleLowerCase();
     } else if (group === "criticality") {
       key = `crit:${i.criticality?.key ?? ""}`;
-      label = i.criticality?.label ?? NOT_SET;
+      label = i.criticality?.label ?? notSet();
       order = i.criticality?.rank ?? Number.MAX_SAFE_INTEGER;
     } else {
       key = `hops:${i.hops}`;
-      label = i.hops === 1 ? "1 hop" : `${i.hops} hops`;
+      label = t("impact.depthOption", { n: i.hops });
       order = i.hops;
     }
     const g = groups.get(key) ?? { key, label, items: [], order };
@@ -350,7 +355,10 @@ export function impactTree(analysis: Pick<ImpactAnalysis, "root" | "items" | "pa
       }
     };
     walk(analysis.root.id, 1);
-    return { way, title: way === "downstream" ? "Affected by this CI" : "This CI depends on", rows };
+    return { way, get title() {
+        return t(`impact.dir.${way}.hint`);
+      },
+      rows };
   });
 }
 
@@ -360,26 +368,21 @@ export function impactTree(analysis: Pick<ImpactAnalysis, "root" | "items" | "pa
 export function truncationMessage(a: ImpactAnalysis, timeoutMs?: number): string {
   switch (a.truncatedReason) {
     case "max_nodes":
-      return `Showing the first ${a.parameters.maxNodes.toLocaleString()} affected CIs. Narrow the relationship types or reduce the depth to see a complete result.`;
+      return t("impact.truncated.maxNodes", { n: a.parameters.maxNodes });
     case "max_edges":
-      return "This CI has more relationships than one analysis can follow. The result is incomplete.";
-    case "timeout": {
-      const s = timeoutMs ? timeoutMs / 1000 : null;
-      return `The analysis stopped after ${s ? `${s.toLocaleString()} ${s === 1 ? "second" : "seconds"}` : "the server's time limit"}. The result is incomplete.`;
-    }
+      return t("impact.truncated.maxEdges");
+    case "timeout":
+      return timeoutMs ? t("impact.truncated.timeout", { n: timeoutMs / 1000 }) : t("impact.truncated.timeLimit");
     default:
-      return "The result is incomplete.";
+      return t("impact.truncated.other");
   }
 }
 
-export const VISIBILITY_NOTE = "Results include only CIs of classes you are allowed to view.";
+
 
 /** "42 CIs affected downstream", "7 CIs upstream", "12 CIs in both directions". */
 export function summaryPhrase(total: number, direction: ImpactDirection): string {
-  const cis = `${total.toLocaleString()} ${total === 1 ? "CI" : "CIs"}`;
-  if (direction === "downstream") return `${cis} affected downstream`;
-  if (direction === "upstream") return `${cis} upstream`;
-  return `${cis} in both directions`;
+  return t(`impact.summary.count.${direction}`, { n: total });
 }
 
 /** "3 critical · 11 high": the counts of the ranked criticality values, most critical first. */

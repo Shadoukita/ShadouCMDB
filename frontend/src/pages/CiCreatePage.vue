@@ -41,10 +41,10 @@ const crumbs = computed<Crumb[]>(() =>
   fromServices.value
     ? [{ label: t("services.title"), to: "/services" }, { label: t("services.new") }]
     : [
-        { label: "Inventory", to: "/cis" },
+        { label: t("inventory.crumb"), to: "/cis" },
         ...(area.value ? [{ label: area.value.name }] : []),
         ...(cls.value ? [{ label: cls.value.name, to: `/cis?classId=${cls.value.id}` }] : []),
-        { label: "New" },
+        { label: t("record.create.crumb") },
       ],
 );
 
@@ -53,7 +53,7 @@ const crumbs = computed<Crumb[]>(() =>
 const attrs = useClassAttributes(() => cls.value?.id);
 const editor = useLayoutEditor({ classKey: () => cls.value?.key, attrs: () => attrs.data.value?.filter((d) => d.isActive) });
 
-const unknownClass = computed(() => new Error(`Class ${classId.value} does not exist.`));
+const unknownClass = computed(() => new Error(t("record.create.unknownClass", { id: classId.value })));
 
 // Clone (?cloneFrom=<id>, gap G11): the form starts from that CI's values (lib/ciClone). The source is read through
 // the API like any CI the user may view; the new CI is created through the normal create path.
@@ -70,7 +70,7 @@ const clone = computed<(CloneSource & { ci: NonNullable<typeof source.data.value
   return { ci, attributes: ci.attributes, cleared: new Set(cleared.value), reset: new Set(sourceWorkflows.data.value?.controlledFields ?? []) };
 });
 const cloneLoading = computed(() => !!cloneFrom.value && !sourceOtherClass.value && !source.isError.value && !clone.value);
-useDocumentTitle(() => (clone.value ? t("clone.title", { name: clone.value.ci.label }) : cls.value ? `New ${cls.value.name}` : "New CI"));
+useDocumentTitle(() => (clone.value ? t("clone.title", { name: clone.value.ci.label }) : cls.value ? t("record.create.title", { class: cls.value.name }) : t("shell.newCi")));
 
 function pickClass(e: Event) {
   const value = (e.target as HTMLSelectElement).value;
@@ -84,7 +84,7 @@ function pickClass(e: Event) {
     <div class="record-heading">
       <div class="title">
         <ClassBadge v-if="cls" :icon="cls.icon" :color="cls.color" />
-        <h1 dir="auto">{{ cls && !closed && !denied ? `New ${cls.name}` : "New configuration item" }}</h1>
+        <h1 dir="auto">{{ cls && !closed && !denied ? t("record.create.title", { class: cls.name }) : t("record.create.heading") }}</h1>
       </div>
       <p v-if="area || cls" class="record-meta">
         <span v-if="area" dir="auto">{{ area.name }}</span>
@@ -103,27 +103,25 @@ function pickClass(e: Event) {
   <section v-else class="panel record-class-picker">
     <div class="panel-body">
       <div class="field">
-        <label for="ci-class">Class<span class="req" aria-hidden="true">*</span></label>
+        <label for="ci-class">{{ t("ciField.class") }}<span class="req" aria-hidden="true">*</span></label>
         <ErrorAlert v-if="classes.isError.value" :error="classes.error.value" :on-retry="() => classes.refetch()" />
         <select v-else id="ci-class" v-autofocus="!classId" :value="classId" required @change="pickClass">
-          <option value="">{{ classes.isLoading.value ? "Loading…" : "Choose a class…" }}</option>
-          <optgroup v-for="g in concreteGroups" :key="g.area?.id ?? '-'" :label="g.area?.name ?? 'Other'">
+          <option value="">{{ classes.isLoading.value ? t("common.loading") : t("record.create.chooseClass") }}</option>
+          <optgroup v-for="g in concreteGroups" :key="g.area?.id ?? '-'" :label="g.area?.name ?? t('record.create.otherArea')">
             <option v-for="c in g.items" :key="c.id" :value="c.id">{{ c.name }}</option>
           </optgroup>
-          <option v-if="cls && !concrete.includes(cls)" :value="cls.id" disabled>{{ cls.name }}{{ cls.isActive ? "" : " (archived)" }}</option>
+          <option v-if="cls && !concrete.includes(cls)" :value="cls.id" disabled>{{ cls.name }}{{ cls.isActive ? "" : ` ${t("record.archived.suffix")}` }}</option>
         </select>
-        <span class="hint">The class decides which attributes the CI carries.</span>
+        <span class="hint">{{ t("record.create.classHint") }}</span>
       </div>
       <div v-if="closed" class="alert alert-warn" role="alert">
-        {{ cls?.name }} is {{ cls?.isAbstract ? "an abstract class: it groups other classes and holds no CIs itself" : "archived: its CIs are kept, but no new ones can be created" }}.
-        Choose another class.
+        {{ t(cls?.isAbstract ? "record.create.abstract" : "record.create.archived", { class: cls?.name ?? "" }) }}
       </div>
       <div v-else-if="denied" class="alert alert-error" role="alert">
-        None of your permission profiles allows creating {{ cls?.name }} configuration items. Choose another class.
+        {{ t("record.create.deniedClass", { class: cls?.name ?? "" }) }}
       </div>
       <div v-else-if="classes.data.value?.length && concrete.length === 0" class="alert alert-warn" role="alert">
-        None of your permission profiles allows creating configuration items. Ask an administrator for a profile with the
-        create right.
+        {{ t("record.create.deniedAll") }}
       </div>
     </div>
   </section>
@@ -140,7 +138,7 @@ function pickClass(e: Event) {
       </p>
     </div>
   </template>
-  <LoadingState v-if="cloneLoading && !denied && !closed" label="Loading the CI to clone…" />
+  <LoadingState v-if="cloneLoading && !denied && !closed" :label="t('clone.loading')" />
   <CiForm
     v-else-if="classId && cls && ((!denied && !closed) || editor.active) && (!cloneFrom || !!clone || sourceOtherClass || source.isError.value || editor.active)"
     :key="`${classId}:${clone?.ci.id ?? ''}`"

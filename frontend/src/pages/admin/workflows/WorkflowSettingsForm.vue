@@ -14,6 +14,8 @@ import {
 } from "../../../api/workflows";
 import ConfirmDialog from "../../../components/ConfirmDialog.vue";
 import ErrorAlert from "../../../components/ErrorAlert.vue";
+import SaveBar from "../../../components/SaveBar.vue";
+import { t, tAround } from "../../../i18n";
 import { vAutofocus } from "../../../lib/directives";
 import { formatDateTime } from "../../../lib/format";
 import { keyError, suggestKey } from "../../../lib/keys";
@@ -28,7 +30,7 @@ import { uninstancedText } from "./uninstanced";
  * A workflow's identity and flags: on create the key and CI type too (both never change). Turning
  * on a workflow that drives a state field is confirmed first, because CIs without a running
  * instance cannot have that field edited until instances are started on them; the API's
- * `UNINSTANCED_CIS` warning then says how many.
+ * `UNINSTANCED_CIS` warning then says how many. Saving goes through the shared save bar, with a toast.
  */
 const props = defineProps<{ workflow?: WorkflowDefinitionDetail }>();
 const route = useRoute();
@@ -107,7 +109,6 @@ const className = computed(() => classes.data.value?.find((c) => c.id === form.v
 
 const error = ref<unknown>(null);
 const local = ref<Record<string, string>>({});
-const saved = ref<string | null>(null);
 /**
  * The `UNINSTANCED_CIS` banner: from the detail when the API sends it, else from the last save or bootstrap. A
  * bootstrap leaves the CIs it skipped without an instance, so its result replaces the count. Turning the workflow off
@@ -143,11 +144,11 @@ const confirmActivation = ref(false);
 function validate(): boolean {
   const f = form.value;
   const errs: Record<string, string> = {};
-  if (!f.name.trim()) errs.name = "Required";
+  if (!f.name.trim()) errs.name = t("common.required");
   if (isNew.value) {
     const k = keyError(f.key);
     if (k) errs.key = k;
-    if (!f.classId) errs.classId = "Required";
+    if (!f.classId) errs.classId = t("common.required");
   }
   local.value = errs;
   const first = FIELDS.find((k) => errs[k]);
@@ -157,7 +158,6 @@ function validate(): boolean {
 
 function submit() {
   error.value = null;
-  saved.value = null;
   if (!validate()) return;
   if (activating.value) {
     confirmActivation.value = true;
@@ -184,7 +184,7 @@ async function save() {
       });
       // The activation warning (a new active workflow with a state field) must not get lost with the navigation.
       const w = created.warnings.find((x) => x.code === "UNINSTANCED_CIS");
-      flash.show(`Workflow ${created.name} created. ${w ? uninstancedText(w) : "Design its states and transitions, then publish it."}`);
+      flash.show(t("wfAdmin.settings.created", { name: created.name, next: w ? uninstancedText(w) : t("wfAdmin.settings.createdNext") }));
       await router.push({ path: `/admin/workflows/${created.id}`, query: { tab: "designer" } });
       return;
     }
@@ -198,18 +198,25 @@ async function save() {
     if (f.autoStart !== b.autoStart) body.autoStart = f.autoStart;
     if (f.isActive !== b.isActive) body.isActive = f.isActive;
     if (Object.keys(body).length === 1) {
-      saved.value = "Nothing changed.";
+      flash.show(t("common.nothingChanged"));
       return;
     }
     const next = await update.mutateAsync({ id: w.id, body });
     base.value = fromWorkflow(next);
     form.value = fromWorkflow(next);
     // The banner follows the answer through the detail cache (see `warnings`).
-    saved.value = `Saved ${next.name}.`;
+    flash.show(t("record.saved", { name: next.name }));
   } catch (e) {
     error.value = e;
   }
 }
+
+function discard() {
+  error.value = null;
+  local.value = {};
+  if (base.value) form.value = { ...base.value };
+}
+const changes = computed(() => (base.value ? (Object.keys(form.value) as (keyof Form)[]).filter((k) => form.value[k] !== base.value![k]).length : 0));
 
 function reloadAfterConflict() {
   error.value = null;
@@ -228,38 +235,38 @@ function confirmDelete() {
   if (!w) return;
   del.mutate(w.id, {
     onSuccess: () => {
-      flash.show(`Workflow ${w.name} deleted.`);
+      flash.show(t("wfAdmin.settings.deleted", { name: w.name }));
       void router.replace("/admin/workflows");
     },
   });
 }
 const deleteInUse = computed(() => del.error.value instanceof ApiError && del.error.value.code === "IN_USE");
+const deleteParts = computed(() => tAround("wfAdmin.delete.body", "name"));
 </script>
 
 <template>
   <div class="grid-2">
-    <form class="panel" aria-labelledby="wf-form-title" novalidate @submit.prevent="submit">
-      <div class="panel-header"><h2 id="wf-form-title">Settings</h2></div>
+    <form id="wf-settings-form" class="panel" aria-labelledby="wf-form-title" novalidate @submit.prevent="submit">
+      <div class="panel-header"><h2 id="wf-form-title">{{ t("wfAdmin.tab.settings") }}</h2></div>
       <div class="panel-body stack">
         <div v-if="conflict" class="alert alert-warn" role="alert">
-          <div>Someone changed this workflow (its settings, grants or versions) since you opened it. Your changes were not saved.</div>
-          <div><button type="button" class="btn btn-sm" @click="reloadAfterConflict">Load the current settings</button></div>
+          <div>{{ t("wfAdmin.settings.conflict") }}</div>
+          <div><button type="button" class="btn btn-sm" @click="reloadAfterConflict">{{ t("wfAdmin.settings.reload") }}</button></div>
         </div>
         <FormErrorBanner v-else-if="error" :error="error" :unplaced="unplaced" />
-        <div v-if="saved" class="alert" role="status">{{ saved }}</div>
         <UninstancedWarning v-for="w in warnings" :key="w.code" :warning="w" :bootstrap-target="workflow?.stateAttributeId ? 'wf-bootstrap' : undefined" />
         <div class="form-grid">
-          <FormField id="wf-name" label="Name" required :error="fieldErrors.name" hint="Shown to operators when they run a transition.">
+          <FormField id="wf-name" :label="t('wfAdmin.field.name')" required :error="fieldErrors.name" :hint="t('wfAdmin.field.nameHint')">
             <template #default="{ id: fid, invalid, describedBy }">
               <input :id="fid" v-model="form.name" v-autofocus="isNew" type="text" maxlength="100" autocomplete="off" :aria-invalid="invalid" :aria-describedby="describedBy" />
             </template>
           </FormField>
           <FormField
             id="wf-key"
-            label="Key"
+            :label="t('wfAdmin.field.key')"
             :required="isNew"
             :error="fieldErrors.key"
-            :hint="isNew ? 'Stable identity for export and the API; it never changes.' : 'Never changes.'"
+            :hint="isNew ? t('wfAdmin.field.keyHint') : t('wfAdmin.field.fixed')"
           >
             <template #default="{ id: fid, invalid, describedBy }">
               <input
@@ -279,14 +286,14 @@ const deleteInUse = computed(() => del.error.value instanceof ApiError && del.er
           </FormField>
           <FormField
             id="wf-classId"
-            label="CI type"
+            :label="t('wfAdmin.col.class')"
             :required="isNew"
             :error="fieldErrors.classId"
-            :hint="isNew ? 'The type whose CIs run this workflow. It never changes.' : 'Never changes.'"
+            :hint="isNew ? t('wfAdmin.field.classHint') : t('wfAdmin.field.fixed')"
           >
             <template #default="{ id: fid, invalid, describedBy }">
               <select v-if="isNew" :id="fid" v-model="form.classId" :aria-invalid="invalid" :aria-describedby="describedBy">
-                <option value="" disabled>Choose a type…</option>
+                <option value="" disabled>{{ t("wfAdmin.field.classChoose") }}</option>
                 <option v-for="c in classes.data.value ?? []" :key="c.id" :value="c.id" :disabled="!c.isActive">{{ c.name }}</option>
               </select>
               <input v-else :id="fid" type="text" readonly :value="className ?? workflow?.classKey" :aria-describedby="describedBy" />
@@ -294,108 +301,94 @@ const deleteInUse = computed(() => del.error.value instanceof ApiError && del.er
           </FormField>
           <FormField
             id="wf-stateAttributeId"
-            label="State field"
+            :label="t('wfAdmin.col.stateField')"
             :error="fieldErrors.stateAttributeId"
-            :hint="
-              stateFieldLocked
-                ? 'Fixed once a version has been published.'
-                : 'Optional. A dropdown field of the type that the workflow keeps in step with its state; operators can no longer edit it directly while the workflow is active.'
-            "
+            :hint="stateFieldLocked ? t('wfAdmin.field.stateLocked') : t('wfAdmin.field.stateHint')"
           >
             <template #default="{ id: fid, invalid, describedBy }">
               <select :id="fid" v-model="form.stateAttributeId" :disabled="stateFieldLocked || !form.classId" :aria-invalid="invalid" :aria-describedby="describedBy">
-                <option value="">None</option>
+                <option value="">{{ t("wfAdmin.none") }}</option>
                 <option v-for="a in lookupFields" :key="a.id" :value="a.id">{{ a.label }} ({{ a.key }})</option>
               </select>
             </template>
           </FormField>
-          <FormField id="wf-description" label="Description" :error="fieldErrors.description" wide>
+          <FormField id="wf-description" :label="t('wfAdmin.field.description')" :error="fieldErrors.description" wide>
             <template #default="{ id: fid, invalid, describedBy }">
               <textarea :id="fid" v-model="form.description" rows="3" maxlength="4000" :aria-invalid="invalid" :aria-describedby="describedBy" />
             </template>
           </FormField>
         </div>
         <fieldset class="group">
-          <legend>Behaviour</legend>
-          <label class="checkbox-row"><input id="wf-includeSubclasses" v-model="form.includeSubclasses" type="checkbox" /> CIs of its subtypes run it too</label>
-          <label class="checkbox-row"><input id="wf-autoStart" v-model="form.autoStart" type="checkbox" /> Start an instance when a CI of the type is created</label>
-          <label class="checkbox-row"><input id="wf-isActive" v-model="form.isActive" type="checkbox" /> Active: new instances can start</label>
-          <p class="hint no-margin">An inactive workflow starts no new instances; running ones continue.</p>
+          <legend>{{ t("wfAdmin.field.behaviour") }}</legend>
+          <label class="checkbox-row"><input id="wf-includeSubclasses" v-model="form.includeSubclasses" type="checkbox" /> {{ t("wfAdmin.field.includeSubclasses") }}</label>
+          <label class="checkbox-row"><input id="wf-autoStart" v-model="form.autoStart" type="checkbox" /> {{ t("wfAdmin.field.autoStart") }}</label>
+          <label class="checkbox-row"><input id="wf-isActive" v-model="form.isActive" type="checkbox" /> {{ t("wfAdmin.field.isActive") }}</label>
+          <p class="hint no-margin">{{ t("wfAdmin.field.isActiveHint") }}</p>
         </fieldset>
-      </div>
-      <div class="form-footer">
-        <button type="submit" class="btn btn-primary" :disabled="pending">
-          {{ pending ? "Saving…" : isNew ? "Create workflow" : "Save changes" }}
-        </button>
-        <RouterLink class="btn" to="/admin/workflows">{{ isNew ? "Cancel" : "Back to workflows" }}</RouterLink>
       </div>
     </form>
 
     <div v-if="workflow" class="stack">
       <section class="panel" aria-labelledby="wf-facts-title">
-        <div class="panel-header"><h2 id="wf-facts-title">Facts</h2></div>
+        <div class="panel-header"><h2 id="wf-facts-title">{{ t("wfAdmin.facts.title") }}</h2></div>
         <div class="panel-body">
           <dl class="props">
-            <dt>Current version</dt>
-            <dd>{{ workflow.currentVersionNo ?? "None published" }}</dd>
-            <dt>Draft</dt>
-            <dd>{{ workflow.draftVersionNo !== null ? `Version ${workflow.draftVersionNo}` : "None" }}</dd>
-            <dt>Created</dt>
-            <dd>{{ formatDateTime(workflow.createdAt) }} by {{ workflow.createdByName }}</dd>
-            <dt>Updated</dt>
-            <dd>{{ formatDateTime(workflow.updatedAt) }} by {{ workflow.updatedByName }}</dd>
+            <dt>{{ t("wfAdmin.col.version") }}</dt>
+            <dd>{{ workflow.currentVersionNo ?? t("wfAdmin.facts.nonePublished") }}</dd>
+            <dt>{{ t("wfAdmin.col.draft") }}</dt>
+            <dd>{{ workflow.draftVersionNo !== null ? t("wfAdmin.versionN", { n: workflow.draftVersionNo }) : t("wfAdmin.none") }}</dd>
+            <dt>{{ t("common.created") }}</dt>
+            <dd>{{ t("wfAdmin.facts.by", { when: formatDateTime(workflow.createdAt), name: workflow.createdByName }) }}</dd>
+            <dt>{{ t("common.updated") }}</dt>
+            <dd>{{ t("wfAdmin.facts.by", { when: formatDateTime(workflow.updatedAt), name: workflow.updatedByName }) }}</dd>
           </dl>
         </div>
       </section>
       <WorkflowBootstrap v-if="workflow.stateAttributeId" :workflow="workflow" @done="onBootstrapped" />
       <section class="panel" aria-labelledby="wf-danger-title">
-        <div class="panel-header"><h2 id="wf-danger-title">Delete</h2></div>
+        <div class="panel-header"><h2 id="wf-danger-title">{{ t("common.delete") }}</h2></div>
         <div class="panel-body stack">
-          <p class="muted no-margin">
-            Only a workflow that never ran can be deleted, with its versions and grants. Once a CI has had an instance, its history
-            keeps the workflow: deactivate it instead.
-          </p>
-          <div><button type="button" class="btn btn-danger" @click="(del.reset(), (deleting = true))">Delete workflow</button></div>
+          <p class="muted no-margin">{{ t("wfAdmin.delete.intro") }}</p>
+          <div><button type="button" class="btn btn-danger" @click="(del.reset(), (deleting = true))">{{ t("wfAdmin.delete.open") }}</button></div>
         </div>
       </section>
     </div>
   </div>
 
+  <SaveBar :label="t('record.save.region')" :dirty="!isNew && dirty" :changes="isNew ? 0 : changes">
+    <RouterLink class="btn" to="/admin/workflows">{{ isNew ? t("common.cancel") : t("wfAdmin.back") }}</RouterLink>
+    <button v-if="!isNew && dirty" type="button" class="btn" :disabled="pending" @click="discard">{{ t("record.save.discard") }}</button>
+    <button type="submit" form="wf-settings-form" class="btn btn-primary" :disabled="pending">
+      {{ pending ? t("common.saving") : isNew ? t("wfAdmin.create") : t("common.saveChanges") }}
+    </button>
+  </SaveBar>
+
   <ConfirmDialog
     :open="confirmActivation"
-    title="Activate a workflow that drives a state field?"
-    confirm-label="Activate"
+    :title="t('wfAdmin.activate.title')"
+    :confirm-label="t('wfAdmin.activate.confirm')"
     tone="primary"
     :busy="pending"
     @cancel="confirmActivation = false"
     @confirm="save"
   >
-    <p>
-      While this workflow is active it owns the state field: operators can no longer edit that field directly on any CI it covers.
-    </p>
-    <p>
-      CIs that already exist have no running instance of it, so their state field stays locked until an instance is started on them.
-      Before activating, plan to adopt the existing CIs with the workflow's <strong>bootstrap</strong>, which starts an instance on each
-      CI in the state matching its current value. After saving, the number of affected CIs is shown here.
-    </p>
+    <p>{{ t("wfAdmin.activate.owns") }}</p>
+    <p>{{ t("wfAdmin.activate.existing") }}</p>
   </ConfirmDialog>
 
   <ConfirmDialog
     v-if="workflow"
     :open="deleting"
-    :title="`Delete workflow ${workflow.name}?`"
-    confirm-label="Delete workflow"
+    :title="t('wfAdmin.delete.title', { name: workflow.name })"
+    :confirm-label="t('wfAdmin.delete.open')"
     :busy="del.isPending.value"
     @cancel="deleting = false"
     @confirm="confirmDelete"
   >
-    <div v-if="deleteInUse" class="alert alert-warn" role="alert">
-      This workflow has run on at least one CI, so its history keeps it. Deactivate it in Settings instead.
-    </div>
-    <ErrorAlert v-else-if="del.isError.value" :error="del.error.value" title="The workflow was not deleted" />
+    <div v-if="deleteInUse" class="alert alert-warn" role="alert">{{ t("wfAdmin.delete.inUse") }}</div>
+    <ErrorAlert v-else-if="del.isError.value" :error="del.error.value" :title="t('wfAdmin.delete.failed')" />
     <p>
-      This deletes the workflow <strong>{{ workflow.name }}</strong> (<span class="mono">{{ workflow.key }}</span>) with every version,
-      its draft and its grants. It cannot be undone.
+      {{ deleteParts[0] }}<strong dir="auto">{{ workflow.name }}</strong> (<span class="mono">{{ workflow.key }}</span>){{ deleteParts[1] }}
     </p>
   </ConfirmDialog>
 </template>

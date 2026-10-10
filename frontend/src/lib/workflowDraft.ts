@@ -12,6 +12,7 @@ import type {
 } from "../api/workflows";
 import { checkSetAttributes, setAttributeFromApi, setAttributeToApi, type DraftSetAttribute } from "./workflowActions";
 import { checkSteps, stepFromApi, stepToApi, type DraftApprovalStep } from "./workflowApprovals";
+import { t, type MessageKey } from "../i18n/index";
 
 export type ConditionOp = "eq" | "ne" | "in" | "notIn" | "isSet" | "isNotSet" | "gt" | "gte" | "lt" | "lte" | "contains";
 export type FieldDataType = "text" | "number" | "integer" | "boolean" | "enum" | "date" | "datetime" | "ip" | "cidr" | "reference" | "lookup";
@@ -60,12 +61,18 @@ export interface Draft {
 export const MAX_CONDITION_DEPTH = 4;
 export const MAX_CONDITION_LEAVES = 32;
 
-export const CATEGORIES: { value: StateCategory; label: string }[] = [
-  { value: "open", label: "Open" },
-  { value: "active", label: "In progress" },
-  { value: "done", label: "Done" },
-  { value: "cancelled", label: "Cancelled" },
+export const CATEGORIES: { value: StateCategory; label: MessageKey }[] = [
+  { value: "open", label: "wfRun.category.open" },
+  { value: "active", label: "wfRun.category.active" },
+  { value: "done", label: "wfRun.category.done" },
+  { value: "cancelled", label: "wfRun.category.cancelled" },
 ];
+
+/** A state category in the active locale; an unknown one as its key. */
+export const categoryLabel = (c: string) => {
+  const k = CATEGORIES.find((x) => x.value === c)?.label;
+  return k ? t(k) : c;
+};
 
 export const OP_LABELS: Record<ConditionOp, string> = {
   eq: "is",
@@ -355,8 +362,8 @@ export function grantRows(
   for (const g of grants) {
     if (!PSEUDO_GRANTS.includes(g.transitionKey) && !out.has(g.transitionKey)) out.set(g.transitionKey, { key: g.transitionKey, name: g.transitionKey, orphan: true });
   }
-  out.set(START_GRANT, { key: START_GRANT, name: "Start again after an instance ended", orphan: false });
-  out.set(CANCEL_GRANT, { key: CANCEL_GRANT, name: "Cancel an instance", orphan: false });
+  out.set(START_GRANT, { key: START_GRANT, name: t("wfAdmin.grants.startAgain"), orphan: false });
+  out.set(CANCEL_GRANT, { key: CANCEL_GRANT, name: t("wfAdmin.grants.cancelInstance"), orphan: false });
   return [...out.values()];
 }
 

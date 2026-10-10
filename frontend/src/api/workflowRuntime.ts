@@ -6,6 +6,8 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import { toValue, type MaybeRefOrGetter } from "vue";
 import { api, unwrap, type JsonBody as Body, type ListQuery, type Schemas } from "./client";
 import { keys } from "./queries";
+import type { IconName } from "../icons/lucide";
+import type { MessageKey } from "../i18n";
 
 export type WorkflowInstance = Schemas["WorkflowInstance"];
 export type WorkflowInstanceView = Schemas["WorkflowInstanceView"];
@@ -16,6 +18,12 @@ export type WorkflowStateRef = Schemas["WorkflowStateRef"];
 export type WorkflowStartable = Schemas["WorkflowStartable"];
 export type WorkflowEvent = Schemas["WorkflowEvent"];
 export type WorkflowStateCount = Schemas["WorkflowStateCount"];
+export type WorkflowPendingApproval = Schemas["WorkflowPendingApproval"];
+export type WorkflowApprovalRequest = Schemas["WorkflowApprovalRequest"];
+export type WorkflowApprovalRequestItem = Schemas["WorkflowApprovalRequestItem"];
+export type WorkflowApprovalRequestStep = Schemas["WorkflowApprovalRequestStep"];
+export type WorkflowApprovalStatus = WorkflowApprovalRequest["status"];
+export type WorkflowApprovalCloseReason = NonNullable<WorkflowApprovalRequest["closeReason"]>;
 export type WorkflowInstanceStatus = WorkflowInstance["status"];
 
 export type WorkflowInstanceListQuery = ListQuery<"/api/v1/workflow-instances">;
@@ -29,6 +37,9 @@ export const runtimeKeys = {
   summary: (definitionKey?: string) => ["workflow-runtime", "summary", definitionKey ?? ""] as const,
   instance: (id: string) => ["workflow-runtime", "instance", id] as const,
   events: (id: string, limit: number, offset: number) => ["workflow-runtime", "events", id, limit, offset] as const,
+  // Under `all`, so a workflow step (which may open or close a request) refreshes them too.
+  approval: (id: string) => ["workflow-runtime", "approval", id] as const,
+  instanceApprovals: (id: string, limit: number, offset: number) => ["workflow-runtime", "instance-approvals", id, limit, offset] as const,
 };
 
 const path = (id: string) => ({ params: { path: { id } } });
@@ -165,19 +176,90 @@ export function useForceWorkflowState() {
   });
 }
 
-/** Labels and badge tones of the instance statuses and state categories. */
-export const STATUS_LABELS: Record<WorkflowInstanceStatus, string> = { active: "Running", completed: "Completed", cancelled: "Cancelled" };
+/**
+ * One approval request (GET /workflow-approval-requests/{id}): its steps and decisions, the live state of the
+ * requester's account, and whether the caller may decide the active step (`myEligibility`). 404 for a request on
+ * a CI of a type the caller may not view.
+ */
+export function useApprovalRequest(id: MaybeRefOrGetter<string | undefined>) {
+  return useQuery(() => {
+    const rid = toValue(id) ?? "";
+    return {
+      queryKey: runtimeKeys.approval(rid),
+      enabled: !!rid,
+      queryFn: ({ signal }: { signal: AbortSignal }) => unwrap(api.GET("/api/v1/workflow-approval-requests/{id}", { ...path(rid), signal })),
+    };
+  });
+}
+
+/** Every approval request an instance had, the pending one included (GET /workflow-instances/{id}/approval-requests). */
+export function useInstanceApprovalRequests(id: MaybeRefOrGetter<string | undefined>, limit: MaybeRefOrGetter<number>, offset: MaybeRefOrGetter<number>) {
+  return useQuery(() => {
+    const iid = toValue(id) ?? "";
+    const l = toValue(limit);
+    const o = toValue(offset);
+    return {
+      queryKey: runtimeKeys.instanceApprovals(iid, l, o),
+      enabled: !!iid,
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        unwrap(api.GET("/api/v1/workflow-instances/{id}/approval-requests", { params: { path: { id: iid }, query: { limit: l, offset: o } }, signal })),
+      placeholderData: keepPreviousData,
+    };
+  });
+}
+
+export type ApprovalDecisionBody = Body<"/api/v1/workflow-approval-requests/{id}/decisions", "post">;
+
+/** Approves or rejects the active step. The final approval runs the transition, so the CI is refreshed as after a step. */
+export function useDecideApproval() {
+  const done = useInvalidateStep();
+  return useMutation({
+    mutationFn: (v: { id: string; ciId: string; body: ApprovalDecisionBody }) =>
+      unwrap(api.POST("/api/v1/workflow-approval-requests/{id}/decisions", { ...path(v.id), body: v.body })),
+    onSuccess: (_d, v) => done(v.ciId),
+  });
+}
+
+/** The requester takes their pending request back; the instance stays in its state. */
+export function useWithdrawApproval() {
+  const done = useInvalidateStep();
+  return useMutation({
+    mutationFn: (v: { id: string; ciId: string; expectedVersion: number; comment?: string }) =>
+      unwrap(
+        api.POST("/api/v1/workflow-approval-requests/{id}/withdraw", {
+          ...path(v.id),
+          body: { expectedVersion: v.expectedVersion, comment: v.comment || undefined },
+        }),
+      ),
+    onSuccess: (_d, v) => done(v.ciId),
+  });
+}
+
+/** Labels (catalog keys), icons and badge tones of the instance statuses and state categories. */
+export const STATUS_LABELS: Record<WorkflowInstanceStatus, MessageKey> = {
+  active: "wfRun.status.active",
+  completed: "wfRun.status.completed",
+  cancelled: "wfRun.status.cancelled",
+};
+export const STATUS_ICONS: Record<WorkflowInstanceStatus, IconName> = { active: "circle", completed: "circle-check", cancelled: "circle-x" };
 export const STATUS_TONES: Record<WorkflowInstanceStatus, string> = { active: "info", completed: "ok", cancelled: "off" };
 export const CATEGORY_TONES: Record<WorkflowStateRef["category"], string> = { open: "", active: "info", done: "ok", cancelled: "off" };
-export const EVENT_LABELS: Record<WorkflowEvent["kind"], string> = {
-  start: "Started",
-  transition: "Transition",
-  cancel: "Cancelled",
-  migrate: "Moved to a new version",
-  force: "State forced",
-  approval_request: "Approval requested",
-  approval_decision: "Approval decision",
-  approval_withdraw: "Approval request withdrawn",
-  approval_close: "Approval request closed",
-  approval_overdue: "Approval overdue",
+export const EVENT_LABELS: Record<WorkflowEvent["kind"], MessageKey> = {
+  start: "wfRun.event.start",
+  transition: "wfRun.event.transition",
+  cancel: "wfRun.event.cancel",
+  migrate: "wfRun.event.migrate",
+  force: "wfRun.event.force",
+  approval_request: "wfRun.event.approval_request",
+  approval_decision: "wfRun.event.approval_decision",
+  approval_withdraw: "wfRun.event.approval_withdraw",
+  approval_close: "wfRun.event.approval_close",
+  approval_overdue: "wfRun.event.approval_overdue",
+};
+export const APPROVAL_STATUS_TONES: Record<WorkflowApprovalStatus, string> = {
+  pending: "info",
+  approved: "ok",
+  rejected: "danger",
+  withdrawn: "off",
+  cancelled: "off",
 };

@@ -614,6 +614,7 @@ pub(crate) mod tests {
             imports,
             Default::default(),
             None,
+            None,
         )
     }
 
@@ -630,6 +631,24 @@ pub(crate) mod tests {
             Default::default(),
             limits,
             None,
+            None,
+        )
+    }
+
+    /// The real router with these webhook settings (resolver, CA and switches of the test).
+    pub(crate) fn app_with_webhooks(
+        pool: sqlx::PgPool,
+        webhooks: std::sync::Arc<crate::modules::webhooks::Webhooks>,
+    ) -> Router {
+        build_app_full(
+            pool,
+            CookieSecure::Never,
+            crate::http::Capacity::new(512, StdDuration::from_secs(10)),
+            |_| {},
+            Default::default(),
+            Default::default(),
+            None,
+            Some(webhooks),
         )
     }
 
@@ -643,6 +662,7 @@ pub(crate) mod tests {
             Default::default(),
             Default::default(),
             Some(exports),
+            None,
         )
     }
 
@@ -652,9 +672,10 @@ pub(crate) mod tests {
         capacity: crate::http::Capacity,
         configure: impl FnOnce(&mut AuthConfig),
     ) -> Router {
-        build_app_full(pool, cookie_secure, capacity, configure, Default::default(), Default::default(), None)
+        build_app_full(pool, cookie_secure, capacity, configure, Default::default(), Default::default(), None, None)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_app_full(
         pool: sqlx::PgPool,
         cookie_secure: CookieSecure,
@@ -663,6 +684,7 @@ pub(crate) mod tests {
         imports: crate::config::ImportConfig,
         business_services: crate::config::BusinessServiceConfig,
         exports: Option<crate::config::ExportConfig>,
+        webhooks: Option<std::sync::Arc<crate::modules::webhooks::Webhooks>>,
     ) -> Router {
         let mut auth = AuthConfig {
             session_idle: StdDuration::from_secs(3600),
@@ -715,12 +737,16 @@ pub(crate) mod tests {
             notifications: Default::default(),
             approval_sweep: Default::default(),
             workflow_actions: Default::default(),
+            webhooks: Default::default(),
         };
         let mut state = AppState::new(pool, auth, crate::secrets::Keyring::for_tests())
             .importing(&imports)
             .with_business_services(business_services);
         if let Some(exports) = exports {
             state = state.with_exports(exports);
+        }
+        if let Some(webhooks) = webhooks {
+            state = state.with_webhooks(webhooks);
         }
         router(AppState { capacity, ..state }, &cfg)
     }

@@ -1026,7 +1026,15 @@ async fn shared_views_travel_with_the_configuration_file() {
         import_mappings: None,
         ..file.clone()
     };
-    let res = import(&dst.pool, &system, &only_views, ImportMode::Apply).await.unwrap();
+    let res = import(
+        &dst.pool,
+        &system,
+        &crate::modules::webhooks::Webhooks::off(crate::secrets::Keyring::for_tests()),
+        &only_views,
+        ImportMode::Apply,
+    )
+    .await
+    .unwrap();
     let section = res.summary.iter().find(|s| s.section == "savedViews").unwrap();
     assert_eq!((section.created, section.updated, section.not_in_file), (1, 1, 1), "{:?}", res.summary);
     let (_, list) = dst.call(&dst.admin, "GET", VIEWS, None).await;
@@ -1041,7 +1049,15 @@ async fn shared_views_travel_with_the_configuration_file() {
     .await
     .unwrap();
     assert_eq!(actors.len(), 2, "one import row per view written");
-    let again = import(&dst.pool, &system, &only_views, ImportMode::Apply).await.unwrap();
+    let again = import(
+        &dst.pool,
+        &system,
+        &crate::modules::webhooks::Webhooks::off(crate::secrets::Keyring::for_tests()),
+        &only_views,
+        ImportMode::Apply,
+    )
+    .await
+    .unwrap();
     let section = again.summary.iter().find(|s| s.section == "savedViews").unwrap();
     assert_eq!((section.created, section.updated, section.unchanged), (0, 0, 2));
 
@@ -1049,7 +1065,15 @@ async fn shared_views_travel_with_the_configuration_file() {
     let mut odd = only_views.clone();
     odd.saved_views.as_mut().unwrap()[0].definition =
         serde_json::from_value(json!({ "classKeys": ["warp_core"], "columns": ["attributes.flux"], "filters": { "lookups": { "galaxy": ["andromeda"] } } })).unwrap();
-    let res = import(&dst.pool, &system, &odd, ImportMode::DryRun).await.unwrap();
+    let res = import(
+        &dst.pool,
+        &system,
+        &crate::modules::webhooks::Webhooks::off(crate::secrets::Keyring::for_tests()),
+        &odd,
+        ImportMode::DryRun,
+    )
+    .await
+    .unwrap();
     let paths: Vec<&str> = res.warnings.iter().map(|w| w.path.as_str()).collect();
     assert!(paths.contains(&"savedViews.0.definition.classKeys.0"), "{paths:?}");
     assert!(paths.contains(&"savedViews.0.definition.filters.lookups.galaxy"), "{paths:?}");
@@ -1072,6 +1096,7 @@ async fn shared_views_travel_with_the_configuration_file() {
     let err = import(
         &dst.pool,
         &system,
+        &crate::modules::webhooks::Webhooks::off(crate::secrets::Keyring::for_tests()),
         &ConfigFile { format_version: FORMAT_VERSION + 1, ..only_views.clone() },
         ImportMode::DryRun,
     )
@@ -1080,7 +1105,15 @@ async fn shared_views_travel_with_the_configuration_file() {
     let wanted = format!("versions 1 to {FORMAT_VERSION}");
     assert!(err.message.contains(&wanted) || format!("{err:?}").contains(&wanted), "{err:?}");
     let v5 = ConfigFile { format_version: 5, saved_views: None, ..only_views };
-    import(&dst.pool, &system, &v5, ImportMode::DryRun).await.unwrap();
+    import(
+        &dst.pool,
+        &system,
+        &crate::modules::webhooks::Webhooks::off(crate::secrets::Keyring::for_tests()),
+        &v5,
+        ImportMode::DryRun,
+    )
+    .await
+    .unwrap();
 
     src_db.drop().await;
     dst_db.drop().await;

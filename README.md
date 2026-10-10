@@ -245,6 +245,49 @@ one on. The queue is bounded: past `WORKFLOW_ACTIONS_QUEUE_MAX` pending items, a
 `suppressed` and audited as `workflow.action_suppressed` rather than queued. The other limits and the
 retention periods are listed in `.env.example`.
 
+### Outbound webhooks
+
+Webhook actions post a signed JSON envelope to an endpoint registered under Administration › Webhooks
+(`/api/v1/admin/webhook-endpoints`, right `webhooks.manage`). They are off until the operator sets
+`WEBHOOKS_ALLOWED=true`; `WEBHOOK_ALLOWED_HOSTS`, `WEBHOOK_ALLOW_PRIVATE_CIDRS`, `WEBHOOK_ALLOW_HTTP`,
+the proxy and the corporate CA settings are described in `.env.example`. An endpoint's host must be on
+the administrator's allowlist (`/api/v1/admin/webhook-allowed-hosts`), which stays inside the operator's
+ceiling. Every address the host resolves to is checked again on each request and the connection is made
+to the checked address, so a name that later resolves to an internal address is refused. Redirects are
+not followed, and at most 64 KiB of an answer is read.
+
+After 20 failures in a row with no success for 15 minutes an endpoint is suspended: its deliveries are
+held, an audit entry is written, and the holders of `webhooks.manage` get an in-app notice. `resume`
+releases the held deliveries.
+
+**Verifying a delivery.** The signing secret (`whsec_…`) is shown once, when the endpoint is created or
+its secret is rotated. Each request carries `X-ShadouCMDB-Event`, `X-ShadouCMDB-Delivery` (stable across
+retries; use it to drop duplicates), `X-ShadouCMDB-Webhook-Id` and
+
+```text
+X-ShadouCMDB-Signature: t=1760000000,v1=<hex>[,v1=<hex>]
+```
+
+To verify: take `t` and every `v1` from the header; refuse the request if `t` is more than 300 seconds
+from your clock; compute the hex HMAC-SHA256, keyed with the whole `whsec_…` string, of `t`, a `.` and
+the raw request body exactly as received; accept if it equals any `v1` (compare in constant time).
+After `rotate-secret` the header carries a second `v1` made with the previous secret for the grace period
+(`graceHours`, default 24), so the receiver can switch secrets without losing deliveries. The envelope
+(`specVersion` `1`) is described by the JSON Schema in
+`backend/src/modules/webhooks/payload.schema.json`.
+
+**Echo loops.** If a receiver runs a workflow transition in response to a delivery, it should send the
+delivery id back as `X-ShadouCMDB-Cause: <X-ShadouCMDB-Delivery>` on the transition request. When ten
+transitions of one instance in a row are caused by deliveries, the actions of the tenth are suppressed
+(`echo_loop`). The header is honoured only on requests made with an API token, and only if it
+names a webhook delivery sent for the same instance within `WORKFLOW_ACTIONS_MAX_AGE_HOURS`. Any other
+value is ignored.
+
+The signing secret and the authentication header value are stored encrypted with the encryption key,
+are re-encrypted by a key rotation, and never appear in an API response after creation, in the audit
+trail, in a configuration export or in the log. A configuration import creates endpoints `suspended`
+(`secret_required`) until their secret is rotated on the target instance.
+
 ## Backup, restore and reset
 
 `shadoucmdb backup` writes a consistent, checksummed backup of every table without pg_dump.
