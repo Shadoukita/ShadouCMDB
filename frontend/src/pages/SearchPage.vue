@@ -159,7 +159,7 @@ const inventoryLink = computed(() => {
               </td>
               <td class="matches" :title="matches.map((m) => `${m.label}: ${m.value}`).join('\n')">
                 <span v-for="(m, i) in matches.slice(0, 2)" :key="i" class="match">
-                  <span class="match-key"><bdi>{{ m.label }}</bdi></span>
+                  <span class="match-key"><bdi>{{ m.label }}</bdi><span class="sr-only">: </span></span>
                   <span class="match-value mono" dir="auto"><template v-for="(part, j) in highlight(m.value, q)" :key="j"><mark v-if="part.match">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></span>
                 </span>
                 <span v-if="matches.length > 2" class="badge"><span aria-hidden="true">+{{ matches.length - 2 }}</span><span class="sr-only">{{ t("search.moreMatches", { n: matches.length - 2 }) }}</span></span>
