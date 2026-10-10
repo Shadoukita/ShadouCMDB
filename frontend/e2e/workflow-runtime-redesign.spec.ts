@@ -107,6 +107,7 @@ test("workflow instance: record head band with pills, the CI chip and Force stat
   const events = page.getByTestId("wf-events");
   await expect(events).toContainText("2 events, oldest first");
   await expect(events).toContainText("Ready for review");
+  await expect(events.locator(".pagination.numbered")).toBeVisible();
   expect(await page.locator("main [style]").count(), "no inline styles").toBe(0);
 
   // The force dialog: its texts, a missing reason next to the field.

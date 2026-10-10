@@ -211,11 +211,11 @@ async function reload() {
           </thead>
           <tbody>
             <tr v-for="s in d.graph.states" :key="s.key" :class="{ 'row-current': s.key === inst.state.key }" :aria-current="s.key === inst.state.key ? 'step' : undefined">
-              <td>
+              <td class="wf-state-cell">
                 <WorkflowStateBadge :state="s" />
-                <span v-if="s.key === d.graph.initialState" class="muted"> {{ t("wfRun.graph.initial") }}</span>
-                <span v-if="s.terminal" class="muted"> {{ t("wfRun.graph.final") }}</span>
-                <strong v-if="s.key === inst.state.key"> {{ t("wfRun.graph.current") }}</strong>
+                <span v-if="s.key === d.graph.initialState" class="muted">{{ t("wfRun.graph.initial") }}</span>
+                <span v-if="s.terminal" class="muted">{{ t("wfRun.graph.final") }}</span>
+                <strong v-if="s.key === inst.state.key">{{ t("wfRun.graph.current") }}</strong>
               </td>
               <td>{{ categoryLabel(s.category) }}</td>
               <td class="wf-wrap">
@@ -278,6 +278,7 @@ async function reload() {
         </div>
         <div class="table-footer">
           <PaginationBar
+            numbered
             :total="events.data.value?.page.total ?? 0"
             :limit="evLimit"
             :offset="evOffset"

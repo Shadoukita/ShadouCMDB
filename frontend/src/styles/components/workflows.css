@@ -48,6 +48,10 @@ table.data td.wf-summary-cell {
 table.data.wf-summary-table td.wf-summary-cell {
   width: 100%;
 }
+/* A state's badge and its flags (initial, current, final), spaced like words. */
+table.data td.wf-state-cell > * + * {
+  margin-left: var(--space-2);
+}
 table.data.wf-events td {
   vertical-align: top;
 }
