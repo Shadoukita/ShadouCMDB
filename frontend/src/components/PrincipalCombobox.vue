@@ -19,6 +19,8 @@ const props = defineProps<{
   hint?: string;
   /** Only users, or only groups; both when left out. */
   kind?: Principal["kind"];
+  /** The lookup; GET /principals when left out. */
+  search?: (q: string, signal: AbortSignal) => Promise<Principal[]>;
 }>();
 const emit = defineEmits<{ select: [principal: Principal]; forbidden: [] }>();
 defineExpose({ focus: () => input.value?.focus() });
@@ -70,7 +72,7 @@ async function lookup(q: string) {
   const c = new AbortController();
   controller = c;
   try {
-    const found = (await searchPrincipals(q, c.signal)).filter((p) => !props.kind || p.kind === props.kind);
+    const found = (await (props.search ?? searchPrincipals)(q, c.signal)).filter((p) => !props.kind || p.kind === props.kind);
     if (c.signal.aborted) return;
     results.value = found;
     open.value = true;

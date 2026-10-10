@@ -4,8 +4,8 @@ import { apiGet, apiSend, checkA11y, expect, openUserMenu, test } from "./suppor
 // The approvals inbox and delegations (SHAA-2916, design SHAA-1869 A6b). Two approvers share the first step: A,
 // who may view the CI type, and R, who may not. The navigation count and the inbox of each match what they can
 // open (A: one request, R: none). A decides from the inbox. The administrator delegates B's approvals on the
-// admin page; the delegate finds it under My delegations, cannot pick a delegate themselves without the user
-// lookup, and revokes it.
+// admin page; the delegate finds it under My delegations, delegates their own approvals by exact username (they
+// may not look up users), and revokes the delegation they received.
 test.describe.configure({ mode: "serial" });
 
 const stamp = Date.now().toString(36);
@@ -157,7 +157,7 @@ test("the administrator delegates B's approvals on the admin page", async ({ pag
   await expect(page.getByRole("table", { name: "Approval delegations" }).getByRole("row").filter({ hasText: DELEGATE })).toContainText("Active");
 });
 
-test("the delegate finds it under My delegations, may not pick a delegate themselves, and revokes it", async ({ browser }, testInfo) => {
+test("the delegate finds it under My delegations, delegates by exact username, and revokes it", async ({ browser }, testInfo) => {
   const page = await signInUi(browser, DELEGATE);
   await openUserMenu(page);
   await page.getByRole("link", { name: "My delegations" }).click();
@@ -168,12 +168,25 @@ test("the delegate finds it under My delegations, may not pick a delegate themse
   await expect(row).toContainText("e2e: annual leave");
   await checkA11y(page, testInfo, "my delegations", { include: "main" });
 
-  // Without business-service edit or users.manage, the user lookup answers 403: the dialog says whom to ask.
+  // Without business-service edit or users.manage, the first answer of the candidate lookup is `exactMatchOnly`:
+  // the picker becomes a username field, looked up on Enter or blur. A miss does not say why.
   await page.getByTestId("delegation-new").click();
   const dlg = page.getByRole("dialog", { name: "Delegate my approvals" });
   await dlg.getByRole("combobox", { name: "Delegate" }).fill(APPROVER_A.slice(0, 8));
-  await expect(dlg.getByTestId("delegation-lookup-forbidden")).toContainText("Ask an administrator");
-  await dlg.getByRole("button", { name: "Cancel" }).click();
+  const username = dlg.getByRole("textbox", { name: "Delegate's username" });
+  await expect(username).toHaveValue(APPROVER_A.slice(0, 8));
+  await expect(username).toBeFocused();
+  await expect(dlg.getByTestId("delegation-delegate")).toContainText("Enter the delegate's exact username.");
+  await username.fill(`nobody-${stamp}`);
+  await username.press("Enter");
+  await expect(dlg.getByTestId("delegation-delegate")).toContainText("No active user with this username to whom you can delegate.");
+  await username.fill(APPROVER_A.toUpperCase());
+  await username.press("Enter");
+  await expect(dlg.getByTestId("delegation-delegate")).toContainText(`Delegate: ${APPROVER_A} (${APPROVER_A})`);
+  await checkA11y(page, testInfo, "delegation dialog, exact username", { include: "dialog[open]" });
+  await dlg.getByRole("button", { name: "Delegate", exact: true }).click();
+  await expect(page.getByRole("status").filter({ hasText: `${APPROVER_A} may now decide approvals for ${DELEGATE}` })).toBeVisible();
+  await expect(page.getByRole("table", { name: "My delegations" }).getByRole("row").filter({ hasText: APPROVER_A })).toContainText("Active");
 
   await row.getByRole("button", { name: `Revoke the delegation of ${APPROVER_B} to ${DELEGATE}` }).click();
   await page.getByRole("dialog", { name: "Revoke this delegation?" }).getByRole("button", { name: "Revoke" }).click();

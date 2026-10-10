@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { useCreateDelegation } from "../../api/approvals";
+import { useCreateDelegation, type DelegateCandidate } from "../../api/approvals";
 import { ApiError } from "../../api/client";
 import type { Principal } from "../../api/services";
 import ErrorAlert from "../../components/ErrorAlert.vue";
@@ -11,13 +11,15 @@ import { delegationBody, delegationProblems, newDelegationDraft, MAX_DELEGATION_
 import { useFlashStore } from "../../stores/flash";
 import { useSessionStore } from "../../stores/session";
 import FormField from "../form/FormField.vue";
+import DelegateCandidatePicker from "./DelegateCandidatePicker.vue";
 
 /**
  * Delegates approvals for a time window: your own (`admin` false, POST /me/approval-delegations) or, with
  * users.manage, someone else's while they are away (POST /admin/approval-delegations). The delegate decides in
  * the principal's name and the decision records both. The checks the API makes (not yourself, an end after the
  * start and in the future, at most 90 days) run before sending; the API's own field errors go next to the same
- * inputs. The user lookup needs business-service edit or users.manage: without it, the dialog says whom to ask.
+ * inputs. Your own delegate comes from GET /me/approval-delegations/candidates, which needs no lookup right: without
+ * one you enter the delegate's exact username. Someone else's delegation (users.manage) uses the user lookup.
  */
 const props = defineProps<{ open: boolean; admin: boolean }>();
 const emit = defineEmits<{ close: [] }>();
@@ -29,7 +31,6 @@ const draft = ref<DelegationDraft>(newDelegationDraft());
 const principalName = ref("");
 const delegateName = ref("");
 const tried = ref(false);
-const lookupForbidden = ref(false);
 watch(
   () => props.open,
   (open) => {
@@ -51,6 +52,10 @@ function pickDelegate(p: Principal) {
   draft.value.delegateId = p.id;
   delegateName.value = label(p);
 }
+function pickCandidate(c: DelegateCandidate | null) {
+  draft.value.delegateId = c?.id ?? "";
+  delegateName.value = c ? `${c.displayName} (${c.username})` : "";
+}
 
 const apiErrors = computed(() => (create.error.value instanceof ApiError && create.error.value.code === "VALIDATION_ERROR" ? create.error.value.fieldErrors() : {}));
 const problems = computed(() => delegationProblems(draft.value, props.admin, session.user?.id));
@@ -60,7 +65,7 @@ const unplaced = computed(() => create.isError.value && !placed.some((f) => apiE
 
 async function submit() {
   tried.value = true;
-  if (Object.keys(problems.value).length > 0 || lookupForbidden.value) return;
+  if (Object.keys(problems.value).length > 0) return;
   try {
     const d = props.admin ? await create.mutateAsync(delegationBody(draft.value, true)) : await create.mutateAsync(delegationBody(draft.value, false));
     flash.show(t("delegations.created", { principal: d.principal.name, delegate: d.delegate.name }));
@@ -82,10 +87,6 @@ async function submit() {
     @cancel="emit('close')"
   >
     <p class="muted">{{ t("delegations.new.intro") }}</p>
-    <div v-if="lookupForbidden" class="alert alert-warn" role="alert" data-testid="delegation-lookup-forbidden">
-      <strong>{{ t("delegations.lookupForbidden.title") }}</strong>
-      <div>{{ t("delegations.lookupForbidden.body") }}</div>
-    </div>
     <ErrorAlert v-if="unplaced" :error="create.error.value" :title="t('delegations.new.failed')" />
     <div class="form-grid">
       <!-- The combobox is a field of its own (label, hint); a problem replaces its hint, which it is described by. -->
@@ -95,18 +96,17 @@ async function submit() {
           kind="user"
           :hint="errorFor('principalUserId') ?? (principalName ? t('delegations.picked', { name: principalName }) : t('delegations.principalHint'))"
           @select="pickPrincipal"
-          @forbidden="lookupForbidden = true"
         />
       </div>
       <div :class="['delegation-picker', { invalid: !!errorFor('delegateUserId') }]" data-testid="delegation-delegate">
         <PrincipalCombobox
+          v-if="admin"
           :label="t('delegations.delegate')"
           kind="user"
-          :disabled="lookupForbidden"
           :hint="errorFor('delegateUserId') ?? (delegateName ? t('delegations.picked', { name: delegateName }) : t('delegations.delegateHint'))"
           @select="pickDelegate"
-          @forbidden="lookupForbidden = true"
         />
+        <DelegateCandidatePicker v-else :label="t('delegations.delegate')" :error="errorFor('delegateUserId')" :picked="delegateName" @select="pickCandidate" />
       </div>
       <FormField id="delegation-start" v-slot="f" :label="t('delegations.startsAt')" required :error="errorFor('startsAt')" :hint="t('delegations.startsAtHint')">
         <input :id="f.id" v-model="draft.startsAt" type="datetime-local" :aria-invalid="f.invalid || undefined" :aria-describedby="f.describedBy" />
