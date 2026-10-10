@@ -278,8 +278,8 @@ table.data.wf-events td {
 .wf-edge:focus-visible .wf-edge-label {
   font-weight: var(--fw-semibold);
 }
-/* Names in the states and transitions tables wrap rather than run into the next column. */
-table.data td.wf-name-cell {
+/* Names in the states and transitions tables wrap rather than run into the next column (over `td.wrap`'s minimum). */
+table.data td.wrap.wf-name-cell {
   min-width: 16ch;
   max-width: 36ch;
   overflow-wrap: anywhere;

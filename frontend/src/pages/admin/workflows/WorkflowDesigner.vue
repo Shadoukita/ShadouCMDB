@@ -547,9 +547,9 @@ function confirmPublish() {
                 <td class="wrap">{{ stateName(tn.from) }} → {{ stateName(tn.to) }}</td>
                 <td :title="describeConditions(tn.conditions, labelOf)">
                   <span class="cell-clip">
-                    <span v-if="tn.requiresComment">{{ t("wfDesign.needs.comment") }} </span>
-                    <span v-if="tn.fields.length">{{ t("wfDesign.needs.fields", { n: tn.fields.length }) }} </span>
-                    <span v-if="tn.conditions.children.length">{{ t("wfDesign.needs.if", { conditions: describeConditions(tn.conditions, labelOf) }) }} </span>
+                    <span v-if="tn.requiresComment">{{ t("wfDesign.needs.comment") }}{{ " " }}</span>
+                    <span v-if="tn.fields.length">{{ t("wfDesign.needs.fields", { n: tn.fields.length }) }}{{ " " }}</span>
+                    <span v-if="tn.conditions.children.length">{{ t("wfDesign.needs.if", { conditions: describeConditions(tn.conditions, labelOf) }) }}{{ " " }}</span>
                     <span v-if="tn.approval.length" class="badge info" data-testid="wf-gated">{{ describePolicy(tn.approval) }}</span>
                     <span v-if="tn.setAttributes.length" :title="tn.setAttributes.map((s) => describeSetAttribute(s, labelOf)).join('; ')">
                       {{ t("wfActions.set.count", { n: tn.setAttributes.length }) }}
