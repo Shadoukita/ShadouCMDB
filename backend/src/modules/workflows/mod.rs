@@ -35,6 +35,10 @@ pub mod migration;
 mod notifications_tests;
 #[cfg(test)]
 mod perf;
+#[cfg(test)]
+mod qa_s2_edge_tests;
+#[cfg(test)]
+mod qa_s6_edge_tests;
 pub mod refs;
 pub mod runtime;
 pub mod runtime_schemas;

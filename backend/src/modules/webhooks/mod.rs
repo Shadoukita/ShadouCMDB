@@ -17,6 +17,8 @@ pub mod channel;
 pub mod client;
 pub mod envelope;
 pub mod hosts;
+#[cfg(test)]
+mod qa_edge_tests;
 pub mod service;
 pub mod signing;
 pub mod ssrf;
