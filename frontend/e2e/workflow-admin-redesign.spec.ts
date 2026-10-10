@@ -196,6 +196,56 @@ test("notifications: a webhook picks an active endpoint; the key is typed when t
   await page.getByRole("region", { name: "Save" }).getByRole("button", { name: "Discard" }).click();
 });
 
+test("notifications: a test send reaches the admin only; e-mail being off is explained in place", async ({ page, request }, testInfo) => {
+  const path = `/admin/workflow-definitions/${wfId}/actions`;
+  const base = { trigger: "transition", transition: "submit", recipients: [{ source: "profile", profile: PROFILE }] };
+  const stored = await apiGet<{ version: number }>(request, path);
+  await apiSend(request, "PUT", path, {
+    version: stored.version,
+    actions: [
+      { key: "tell_inbox", name: "Tell the board", kind: "inbox", ...base },
+      { key: "tell_mail", name: "Mail the board", kind: "email", ...base },
+    ],
+  });
+  await page.goto(`/admin/workflows/${wfId}?tab=actions`);
+  const panel = page.getByTestId("wf-action-test");
+  await expect(panel.getByRole("heading", { name: "Send a test" })).toBeVisible();
+  const action = panel.getByLabel("Notification");
+  await expect(action.locator("option")).toHaveText(["Tell the board (tell_inbox) · Inbox", "Mail the board (tell_mail) · E-mail"]);
+  await expect(panel.getByTestId("wf-action-test-where")).toContainText("your own notifications");
+  await expect(panel.getByLabel("CI")).toHaveCount(0);
+
+  // Inbox: one entry to the caller, sent for real.
+  await panel.getByRole("button", { name: "Send test" }).click();
+  const result = panel.getByTestId("wf-action-test-result");
+  await expect(result).toContainText("Test sent");
+  await expect(result).toContainText("To inbox");
+  await expect(panel.getByTestId("wf-action-test-status")).toHaveText("Test sent");
+
+  // E-mail with MAIL=off (as CI runs): nothing sent, and the operator's setting is named.
+  await action.selectOption("tell_mail");
+  await expect(result).toHaveCount(0);
+  await expect(panel.getByLabel("CI")).toBeVisible();
+  await panel.getByRole("button", { name: "Send test" }).click();
+  const off = panel.getByTestId("wf-action-test-off");
+  await expect(off).toContainText("Outbound e-mail is off on this server");
+  await expect(off).toContainText("MAIL=smtp");
+  await checkA11y(page, testInfo, "admin-workflow-action-test-off", { include: "main" });
+
+  // A receiver that refuses is a result with its reason, not a failed request.
+  await page.route(`**/api/v1${path}/tell_mail/test*`, (route) =>
+    route.fulfill({ json: { key: "tell_mail", kind: "email", ok: false, to: "admin@example.test", statusCode: 550, reason: "smtp_rejected", message: "Mailbox unavailable", durationMs: 12 } }),
+  );
+  await panel.getByRole("button", { name: "Send test" }).click();
+  await expect(result).toContainText("The test did not arrive");
+  await expect(result).toContainText("Mailbox unavailable");
+  await expect(result).toContainText("smtp_rejected · 550");
+  await checkA11y(page, testInfo, "admin-workflow-action-test-result", { include: "main" });
+
+  const now = await apiGet<{ version: number }>(request, path);
+  await apiSend(request, "PUT", path, { version: now.version, actions: [] });
+});
+
 test("administration › workflows: the texts come from the German catalog", async ({ browser }) => {
   const page = await open(browser, { locale: "de" });
   await page.goto(`/admin/workflows?q=${encodeURIComponent(WF)}`);

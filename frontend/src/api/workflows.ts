@@ -4,6 +4,7 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/vue-query";
 import { toValue, type MaybeRefOrGetter } from "vue";
 import { ApiError, api, unwrap, type JsonBody as Body, type ListQuery, type Schemas } from "./client";
+import { notificationKeys } from "./notifications";
 import { keys } from "./queries";
 import { runtimeKeys } from "./workflowRuntime";
 
@@ -27,6 +28,7 @@ export type WorkflowApprovers = Schemas["WorkflowApprovers"];
 export type WorkflowApproverPreview = Schemas["WorkflowApproverPreview"];
 export type WorkflowActions = Schemas["WorkflowActions"];
 export type WorkflowActionPreview = Schemas["WorkflowActionPreview"];
+export type WorkflowActionTestResult = Schemas["WorkflowActionTestResult"];
 export type WorkflowBootstrapResult = Schemas["WorkflowBootstrapResult"];
 export type WorkflowMigrationReport = Schemas["WorkflowInstanceMigrationReport"];
 export type StateCategory = WorkflowState["category"];
@@ -345,4 +347,22 @@ export function useSaveActions() {
  */
 export function previewAction(id: string, key: string, ciId: string | undefined, signal?: AbortSignal): Promise<WorkflowActionPreview> {
   return unwrap(api.GET("/api/v1/admin/workflow-definitions/{id}/actions/{key}/preview", { params: { path: { id, key }, query: ciId ? { ciId } : {} }, signal }));
+}
+
+/**
+ * Sends a stored action once, to the caller only (SHAA-2725 §11.1): an e-mail to the caller's address, a
+ * signed `ping` to the webhook endpoint, or an inbox entry. A refusal by the relay or the receiver is the
+ * result (`ok` false), not an error. Audited, so the audit log is stale afterwards; an inbox test adds to
+ * the caller's own notifications.
+ */
+export function useTestAction() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, key, ciId }: { id: string; key: string; ciId?: string }) =>
+      unwrap(api.POST("/api/v1/admin/workflow-definitions/{id}/actions/{key}/test", { params: { path: { id, key }, query: ciId ? { ciId } : {} } })),
+    onSettled: (res) => {
+      qc.invalidateQueries({ queryKey: ["audit"] });
+      if (res?.kind === "inbox") qc.invalidateQueries({ queryKey: notificationKeys.all });
+    },
+  });
 }

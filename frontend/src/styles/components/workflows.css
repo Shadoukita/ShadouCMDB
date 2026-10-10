@@ -438,6 +438,10 @@ table.data.wf-approver-table {
 .wf-preview-actions {
   flex: 1 0 100%;
 }
+/* The test send names the action and its kind, and says where the test goes: room for both. */
+.wf-preview-form > .field.wf-test-action {
+  flex: 0 1 28rem;
+}
 table.data.wf-approver-table th:first-child {
   width: 16rem;
 }
