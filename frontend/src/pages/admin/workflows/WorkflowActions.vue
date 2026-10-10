@@ -15,6 +15,8 @@ import {
 import EmptyState from "../../../components/EmptyState.vue";
 import ErrorAlert from "../../../components/ErrorAlert.vue";
 import LoadingState from "../../../components/LoadingState.vue";
+import SaveBar from "../../../components/SaveBar.vue";
+import { useFlashStore } from "../../../stores/flash";
 import { t } from "../../../i18n";
 import {
   actionFromApi,
@@ -113,14 +115,12 @@ async function add() {
   const a = newAction(list.value, filter.value || transitions.value.find((x) => !x.orphan)?.key || null);
   list.value.push(a);
   editing.value = a;
-  saved.value = null;
   await nextTick();
   document.getElementById(`wf-action-${list.value.length - 1}-name`)?.focus();
 }
 function remove(a: DraftAction) {
   list.value = list.value.filter((x) => x !== a);
   if (editing.value === a) editing.value = null;
-  saved.value = null;
 }
 async function edit(a: DraftAction, i: number) {
   editing.value = editing.value === a ? null : a;
@@ -163,20 +163,19 @@ const markerOf = (i: number) => {
 // ---------- Saving ----------
 
 const save = useSaveActions();
+const flash = useFlashStore();
 const error = ref<unknown>(null);
-const saved = ref<string | null>(null);
 const conflict = computed(() => error.value instanceof ApiError && error.value.code === "VERSION_CONFLICT");
 
 async function submit() {
   if (!actionsQ.data.value || localProblems.value.length) return;
   error.value = null;
-  saved.value = null;
   refused.value = null;
   const keys = list.value.map((a) => a.key);
   try {
     const next = await save.mutateAsync({ id: wid.value, body: { version: baseVersion.value, actions: actionsBody(list.value) } });
     seed(next);
-    saved.value = next.problems.length ? t("wfActions.savedWithWarnings", { n: next.problems.length }) : t("wfActions.saved");
+    flash.show(next.problems.length ? t("wfActions.savedWithWarnings", { n: next.problems.length }) : t("wfActions.saved"));
   } catch (e) {
     error.value = e;
     if (e instanceof ApiError && e.code === "VALIDATION_ERROR") {
@@ -199,9 +198,6 @@ function reset() {
   error.value = null;
   refused.value = null;
 }
-watch(dirty, (d) => {
-  if (d) saved.value = null;
-});
 
 const keepChanges = (to: { path: string }) => to.path === route.path || !dirty.value || window.confirm(t("wfActions.leave"));
 onBeforeRouteLeave(keepChanges);
@@ -229,7 +225,6 @@ const loading = computed(() => actionsQ.isLoading.value || draft.isLoading.value
   <section class="panel" aria-labelledby="wf-actions-title" data-testid="wf-actions">
     <div class="panel-header">
       <h2 id="wf-actions-title">{{ t("wfActions.title") }}</h2>
-      <span v-if="dirty" class="badge warn">{{ t("wfApprovers.unsaved") }}</span>
       <span v-if="!dirty && lint.length" class="badge warn">{{ t("wfApprovers.warnings", { n: lint.length }) }}</span>
     </div>
     <div class="panel-body stack">
@@ -242,7 +237,6 @@ const loading = computed(() => actionsQ.isLoading.value || draft.isLoading.value
         <strong>{{ t("wfActions.notSaved") }}</strong> {{ t("wfActions.refused") }}
       </div>
       <ErrorAlert v-else-if="error" :error="error" :title="t('wfActions.notSaved')" />
-      <div v-if="saved" class="alert" role="status">{{ saved }}</div>
       <div v-if="cannotListProfiles" class="alert" role="note">{{ t("wfApprovers.noProfileList") }}</div>
       <ul v-if="otherProblems.length" class="wf-problems" :aria-label="t('wfApprovers.lint')">
         <li v-for="(p, i) in otherProblems" :key="i" :class="p.severity">
@@ -321,20 +315,6 @@ const loading = computed(() => actionsQ.isLoading.value || draft.isLoading.value
           </tbody>
         </table>
       </div>
-      <div class="form-footer">
-        <button
-          type="button"
-          class="btn btn-primary"
-          :disabled="!dirty || save.isPending.value || localProblems.length > 0"
-          :title="localProblems.length ? t('wfActions.fixFirst') : undefined"
-          data-testid="wf-actions-save"
-          @click="submit"
-        >
-          {{ save.isPending.value ? t("wfApprovers.saving") : t("wfActions.save") }}
-        </button>
-        <button type="button" class="btn" :disabled="!dirty || save.isPending.value" @click="reset">{{ t("wfApprovers.undo") }}</button>
-        <span v-if="dirty && localProblems.length" class="hint" role="status">{{ t("wfActions.fixFirst") }}</span>
-      </div>
     </template>
   </section>
   <ActionPreview
@@ -345,4 +325,18 @@ const loading = computed(() => actionsQ.isLoading.value || draft.isLoading.value
     :dirty="dirty"
     :selected-key="editing?.key"
   />
+  <SaveBar v-if="!loading && !actionsQ.isError.value && actionsQ.data.value" :label="t('record.save.region')" :dirty="dirty">
+    <span v-if="dirty && localProblems.length" class="hint" role="status">{{ t("wfActions.fixFirst") }}</span>
+    <button v-if="dirty" type="button" class="btn" :disabled="save.isPending.value" @click="reset">{{ t("record.save.discard") }}</button>
+    <button
+      type="button"
+      class="btn btn-primary"
+      :disabled="!dirty || save.isPending.value || localProblems.length > 0"
+      :title="localProblems.length ? t('wfActions.fixFirst') : undefined"
+      data-testid="wf-actions-save"
+      @click="submit"
+    >
+      {{ save.isPending.value ? t("wfApprovers.saving") : t("wfActions.save") }}
+    </button>
+  </SaveBar>
 </template>

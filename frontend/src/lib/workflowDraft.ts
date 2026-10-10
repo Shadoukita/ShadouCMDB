@@ -362,8 +362,8 @@ export function grantRows(
   for (const g of grants) {
     if (!PSEUDO_GRANTS.includes(g.transitionKey) && !out.has(g.transitionKey)) out.set(g.transitionKey, { key: g.transitionKey, name: g.transitionKey, orphan: true });
   }
-  out.set(START_GRANT, { key: START_GRANT, name: "Start again after an instance ended", orphan: false });
-  out.set(CANCEL_GRANT, { key: CANCEL_GRANT, name: "Cancel an instance", orphan: false });
+  out.set(START_GRANT, { key: START_GRANT, name: t("wfAdmin.grants.startAgain"), orphan: false });
+  out.set(CANCEL_GRANT, { key: CANCEL_GRANT, name: t("wfAdmin.grants.cancelInstance"), orphan: false });
   return [...out.values()];
 }
 
