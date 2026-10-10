@@ -20,7 +20,7 @@ import RowMenu, { type RowMenuItem } from "../components/RowMenu.vue";
 import SaveBar from "../components/SaveBar.vue";
 import LayoutEditView from "../components/layoutEdit/LayoutEditView.vue";
 import EditLayoutButton from "../components/layoutEdit/EditLayoutButton.vue";
-import { t } from "../i18n";
+import { t, tAround } from "../i18n";
 import { useAppSettings } from "../lib/appSettings";
 import { useDocumentTitle } from "../lib/composables";
 import { useLayoutEditor } from "../lib/layoutEditor";
@@ -69,6 +69,8 @@ type Tab = string;
 const route = useRoute();
 const router = useRouter();
 const id = computed(() => String(route.params.id ?? ""));
+/** "No CI has the id <id>…": the text around the id, in the translator's word order. */
+const notFoundParts = tAround("record.notFound.body", "id");
 const onImpactRoute = computed(() => /\/impact\/?$/.test(route.path));
 const trail = useTrail();
 const ci = useCi(id);
@@ -251,7 +253,7 @@ async function onSave() {
     const saved = await draft.save();
     if (!saved) return;
     draft.reset(saved);
-    flash.show(`Saved ${saved.label}.`);
+    flash.show(t("record.saved", { name: saved.label }));
   } catch (err) {
     draft.error = err;
     // Show the first tab with a rejected field, so the message next to it is in view.
@@ -269,7 +271,7 @@ async function loadCurrent() {
 // Unsaved changes: confirm before leaving this CI in the app (its Impact tab is the same page), and let the
 // browser ask before a reload or closing the tab.
 const keepChanges = (to: RouteLocationNormalized) =>
-  !draft.dirty || String(to.params.id ?? "") === id.value || window.confirm(`Discard your unsaved changes to ${c.value?.label ?? "this configuration item"}?`);
+  !draft.dirty || String(to.params.id ?? "") === id.value || window.confirm(t("record.leave", { name: c.value?.label ?? t("record.leave.thisCi") }));
 onBeforeRouteLeave(keepChanges);
 onBeforeRouteUpdate(keepChanges);
 function onBeforeUnload(e: BeforeUnloadEvent) {
@@ -309,7 +311,7 @@ const crumbs = computed<Crumb[]>(() => {
 </script>
 
 <template>
-  <LoadingState v-if="ci.isLoading.value || serviceSettings.isLoading.value || redirecting" label="Loading configuration item…" />
+  <LoadingState v-if="ci.isLoading.value || serviceSettings.isLoading.value || redirecting" :label="t('record.loading')" />
   <template v-else-if="ci.isError.value">
     <PermissionDenied
       v-if="forbidden"
@@ -321,10 +323,10 @@ const crumbs = computed<Crumb[]>(() => {
       <template #actions><RouterLink class="btn btn-primary" to="/cis">{{ t("inventory.denied.back") }}</RouterLink></template>
     </PermissionDenied>
     <template v-else>
-      <Breadcrumbs :items="[{ label: t('inventory.crumb'), to: '/cis' }, { label: notFound ? 'Not found' : 'Error' }]" />
-      <EmptyState v-if="notFound" title="Configuration item not found">
-        No CI has the id <code>{{ id }}</code>. It may have been removed, or the link is wrong.
-        <template #actions><RouterLink class="btn" to="/cis">Back to inventory</RouterLink></template>
+      <Breadcrumbs :items="[{ label: t('inventory.crumb'), to: '/cis' }, { label: notFound ? t('record.crumb.notFound') : t('common.error') }]" />
+      <EmptyState v-if="notFound" :title="t('record.notFound.title')">
+        {{ notFoundParts[0] }}<code>{{ id }}</code>{{ notFoundParts[1] }}
+        <template #actions><RouterLink class="btn" to="/cis">{{ t("inventory.denied.back") }}</RouterLink></template>
       </EmptyState>
       <ErrorAlert v-else :error="ci.error.value" :on-retry="() => ci.refetch()" />
     </template>
@@ -345,7 +347,7 @@ const crumbs = computed<Crumb[]>(() => {
             </p>
             <p class="record-meta" data-testid="record-meta">
               <RouterLink class="badge record-class-chip" :to="`/cis?classId=${c.classId}`" dir="auto">{{ c.class.name }}</RouterLink>
-              <span v-if="c.deletedAt" class="badge danger">Deleted {{ formatDateTime(c.deletedAt) }}</span>
+              <span v-if="c.deletedAt" class="badge danger">{{ t("record.deletedBadge", { when: formatDateTime(c.deletedAt) }) }}</span>
               <template v-else>
                 <span v-if="c.active" class="badge ok"><span class="status-dot ok" aria-hidden="true" />{{ t("ciState.active") }}</span>
                 <CiStateBadge :ci="c" />
@@ -399,14 +401,13 @@ const crumbs = computed<Crumb[]>(() => {
           @keydown="onTabKey"
         >
           <!-- The count is generated content: part of the tab's accessible name, not of its text (the tab is named by its label). -->
-          {{ label }}<span v-if="n !== undefined" class="tab-count mono" :data-count="n.toLocaleString()" /><span v-if="tabErrorCount(key) > 0" class="badge danger tab-errors">{{ tabErrorCount(key) }} error{{ tabErrorCount(key) === 1 ? "" : "s" }}</span>
+          {{ label }}<span v-if="n !== undefined" class="tab-count mono" :data-count="n.toLocaleString()" /><span v-if="tabErrorCount(key) > 0" class="badge danger tab-errors">{{ t("record.tabErrors", { n: tabErrorCount(key) }) }}</span>
         </button>
       </div>
     </div>
     <FormErrorBanner v-if="draft.error != null && draft.dirty && !editor.active" :error="draft.error" :unplaced="draft.unplaced" :on-reload="loadCurrent" />
     <div v-if="c.deletedAt" class="alert alert-warn">
-      This CI was deleted on {{ formatDateTime(c.deletedAt) }}. It is kept read-only for history; its relationships were
-      removed with it.
+      {{ t("record.deletedNotice", { when: formatDateTime(c.deletedAt) }) }}
     </div>
 
     <LayoutEditView v-if="editor.active && classKey" :editor="editor" :class-name="c.class.name" :attrs="activeAttrs" :attrs-error="attrs.error.value">
@@ -428,17 +429,17 @@ const crumbs = computed<Crumb[]>(() => {
           </div>
         </div>
         <BlockContent v-else-if="kind === 'relations' || session.can('audit.view')" :kind="kind" :ci="c" :self="self" :trail="trail" />
-        <p v-else class="hint panel-body">Shown to users with the audit.view permission; you do not have it, so no preview.</p>
+        <p v-else class="hint panel-body">{{ t("record.auditPreviewHidden") }}</p>
       </template>
     </LayoutEditView>
 
     <div v-if="!editor.active" :id="`panel-${tabId(current)}`" role="tabpanel" :aria-labelledby="`tab-${tabId(current)}`">
       <template v-if="layoutIndex >= 0">
-        <LoadingState v-if="attrs.isLoading.value || layoutLoading" label="Loading attribute definitions…" />
+        <LoadingState v-if="attrs.isLoading.value || layoutLoading" :label="t('record.loadingAttrs')" />
         <ErrorAlert
           v-else-if="attrs.isError.value"
           :error="attrs.error.value"
-          title="Could not load this class's attribute definitions"
+          :title="t('record.attrsFailed')"
           :on-retry="() => attrs.refetch()"
         />
         <!-- The built-in arrangement, the default layout: the field sections in one card beside the relationships and the newest history. -->
