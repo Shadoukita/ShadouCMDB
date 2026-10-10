@@ -36,6 +36,9 @@ import GroupEditPage from "./pages/admin/GroupEditPage.vue";
 import GroupsPage from "./pages/admin/GroupsPage.vue";
 import WorkflowEditPage from "./pages/admin/workflows/WorkflowEditPage.vue";
 import WorkflowsPage from "./pages/admin/workflows/WorkflowsPage.vue";
+import WorkflowDeliveriesPage from "./pages/admin/deliveries/WorkflowDeliveriesPage.vue";
+import WebhooksPage from "./pages/admin/webhooks/WebhooksPage.vue";
+import MailSettingsPage from "./pages/admin/MailSettingsPage.vue";
 import { ADMIN_SECTIONS, visibleSections } from "./pages/admin/sections";
 import AccountPage from "./pages/account/AccountPage.vue";
 import EmailEntryPage from "./pages/account/EmailEntryPage.vue";
@@ -144,6 +147,9 @@ export const router = createRouter({
         { path: "workflows", component: WorkflowsPage, meta: { permissions: section("workflows") } },
         { path: "workflows/new", component: WorkflowEditPage, meta: { permissions: section("workflows") } },
         { path: "workflows/:id", component: WorkflowEditPage, meta: { permissions: section("workflows") } },
+        { path: "workflow-deliveries", component: WorkflowDeliveriesPage, meta: { permissions: section("workflow-deliveries") } },
+        { path: "webhooks", component: WebhooksPage, meta: { permissions: section("webhooks") } },
+        { path: "mail", component: MailSettingsPage, meta: { permissions: section("mail") } },
         { path: "customization", redirect: "/admin/customization/branding" },
         { path: "customization/:section", component: CustomizationPage, meta: { permissions: section("customization") } },
         { path: "import", component: ImportSettingsPage, meta: { administratorOnly: true } },
