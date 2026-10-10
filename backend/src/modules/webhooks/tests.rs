@@ -1392,3 +1392,87 @@ async fn a_webhook_action_test_pings_its_endpoint_for_a_designer() {
     assert_eq!((status, code(&v)), (409, "WEBHOOKS_DISABLED"), "{v}");
     e.db.drop().await;
 }
+
+/// A designer with `workflows.manage` only, and the URL of a `sync` action's
+/// endpoint `itsm` on a port nobody listens on, with a token in its path and query.
+async fn unreachable_for_a_designer(e: &Env) -> (Creds, String, Uuid) {
+    let w = &e.w;
+    let closed = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap().port()
+    };
+    e.allow("hook.example.test", Some(closed), false).await;
+    let url = format!("https://hook.example.test:{closed}/services/T0SECRET/B0SECRET?token=qs-secret-123");
+    let (id, _) = e.endpoint("itsm", &url, json!({})).await;
+    e.action("itsm", json!([])).await;
+    let designers = w.profile("Designers", &[(w.server, false)]).await;
+    sqlx::query(
+        "INSERT INTO permission_profile_global_permissions (profile_id, permission) VALUES ($1, 'workflows.manage')",
+    )
+    .bind(designers)
+    .execute(&w.pool)
+    .await
+    .unwrap();
+    let (designer, _) = w.user("designer", &[designers]).await;
+    (designer, format!("{DEFS}/{}/actions/sync/test", w.definition), id)
+}
+
+/// QA (SHAA-3062): an endpoint nobody answers on is the result of a test send
+/// (200, `ok` false, `unreachable`), audited; nothing is queued, and the
+/// endpoint's failure count is not touched. A suspended endpoint is 409
+/// CONFLICT like a paused one.
+#[tokio::test]
+async fn a_webhook_action_test_to_an_unreachable_or_suspended_endpoint() {
+    let Some(e) = env("webhooks_action_test_edges", on(&["127.0.0.0/8"]), None).await else { return };
+    let (designer, test, id) = unreachable_for_a_designer(&e).await;
+    let w = &e.w;
+
+    let (status, v) = w.call(&designer, "POST", &test, None).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(
+        (v["ok"].as_bool(), v["reason"].as_str(), v["statusCode"].as_u64(), v["to"].as_str()),
+        (Some(false), Some("unreachable"), None, Some("itsm")),
+        "{v}"
+    );
+    let audited: Value = sqlx::query_scalar("SELECT new_value FROM audit_log WHERE action = 'workflow.action_test'")
+        .fetch_one(&w.pool)
+        .await
+        .unwrap();
+    assert_eq!((audited["ok"].as_bool(), audited["reason"].as_str()), (Some(false), Some("unreachable")));
+    assert_eq!(count(&w.pool, "SELECT count(*) FROM workflow_action_runs").await, 0, "nothing queued");
+    let failures: i32 = sqlx::query_scalar("SELECT consecutive_failures FROM webhook_endpoints WHERE id = $1")
+        .bind(id)
+        .fetch_one(&w.pool)
+        .await
+        .unwrap();
+    assert_eq!(failures, 0, "a test does not count towards suspension");
+
+    sqlx::query("UPDATE webhook_endpoints SET status = 'suspended', suspended_reason = 'failures' WHERE id = $1")
+        .bind(id)
+        .execute(&w.pool)
+        .await
+        .unwrap();
+    let (status, v) = w.call(&designer, "POST", &test, None).await;
+    assert_eq!((status, code(&v)), (409, "CONFLICT"), "{v}");
+    assert!(v["error"]["message"].as_str().unwrap().contains("suspended"), "{v}");
+    e.db.drop().await;
+}
+
+/// GH#898: a designer without `webhooks.manage` never sees the endpoint's URL
+/// (the endpoint list shows it as null), so the test send's message must not
+/// show it either: its path and query often hold the receiver's credential.
+#[tokio::test]
+#[ignore = "GH#898: the test send returns the receiver error, URL included"]
+async fn a_webhook_action_test_does_not_show_the_url_to_a_designer() {
+    let Some(e) = env("webhooks_action_test_url", on(&["127.0.0.0/8"]), None).await else { return };
+    let (designer, test, _) = unreachable_for_a_designer(&e).await;
+    let (status, list) = e.w.call(&designer, "GET", &format!("{ENDPOINTS}?limit=5"), None).await;
+    assert_eq!((status, &list["data"][0]["url"]), (200, &Value::Null), "{list}");
+    let (status, v) = e.w.call(&designer, "POST", &test, None).await;
+    assert_eq!((status, v["reason"].as_str()), (200, Some("unreachable")), "{v}");
+    let text = v.to_string();
+    for secret in ["T0SECRET", "qs-secret-123", "hook.example.test"] {
+        assert!(!text.contains(secret), "{secret} leaks to a designer: {v}");
+    }
+    e.db.drop().await;
+}

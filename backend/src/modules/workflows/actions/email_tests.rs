@@ -895,3 +895,43 @@ async fn an_email_test_send_goes_to_the_caller_only() {
     assert_eq!(m.sink.received().len(), 1);
     db.drop().await;
 }
+
+/// QA (SHAA-3062): a relay that cannot be reached is the result of a test
+/// send (200, `ok` false, `smtp_deferred`), not an error status, and is
+/// audited as such; nothing is queued for a later attempt.
+#[tokio::test]
+async fn an_email_test_send_reports_an_unreachable_relay() {
+    let Some(db) = scratch::database("workflow_email_test_edges").await else { return };
+    let mut w = world(&db).await;
+    let m = mailer(&w.pool, mail_cfg("en")).await;
+    w.app = crate::modules::api_tokens::tests::app_with_mail(w.pool.clone(), m.mail.clone());
+    ok(&w.pool, "UPDATE users SET email = 'admin@corp.example' WHERE username = 'admin'").await;
+    put_actions(
+        &w,
+        json!([{ "key": "tell", "name": "Tell", "kind": "email", "trigger": "transition", "transition": "approve",
+            "recipients": [{ "source": "participant", "participant": "actor" }] }]),
+    )
+    .await;
+    let test = format!("{}/tell/test", actions(&w));
+    // A relay port nobody listens on.
+    let closed = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap().port()
+    };
+    let down = Arc::new(Mail::plain_for_tests(&mail_cfg("en"), "127.0.0.1", closed));
+    w.app = crate::modules::api_tokens::tests::app_with_mail(w.pool.clone(), down);
+    let v = w.ok("POST", &test, json!(null)).await;
+    assert_eq!(
+        (v["ok"].as_bool(), v["reason"].as_str(), v["statusCode"].as_u64(), v["to"].as_str()),
+        (Some(false), Some("smtp_deferred"), None, Some("admin@corp.example")),
+        "{v}"
+    );
+    assert!(!v["message"].as_str().unwrap_or_default().is_empty(), "{v}");
+    let row: Value = sqlx::query_scalar("SELECT new_value FROM audit_log WHERE action = 'workflow.action_test'")
+        .fetch_one(&w.pool)
+        .await
+        .unwrap();
+    assert_eq!((row["ok"].as_bool(), row["reason"].as_str()), (Some(false), Some("smtp_deferred")), "{row}");
+    assert_eq!(count(&w.pool, "SELECT count(*) FROM workflow_action_runs").await, 0, "nothing queued");
+    db.drop().await;
+}
