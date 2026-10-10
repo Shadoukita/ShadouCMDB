@@ -24,6 +24,8 @@ const L = {
     range: (n: number) => `Step ${n}: between 1 and 20 approvals.`,
     down: (n: number) => `Move step ${n} down`,
     remove: (n: number) => `Remove step ${n}`,
+    saved: "All changes saved",
+    fix: "Not saved: fix the marked problems",
   },
   de: {
     none: "Keine Genehmigung: Der Übergang wird sofort ausgeführt.",
@@ -39,6 +41,8 @@ const L = {
     range: (n: number) => `Stufe ${n}: zwischen 1 und 20 Genehmigungen.`,
     down: (n: number) => `Stufe ${n} nach unten`,
     remove: (n: number) => `Stufe ${n} entfernen`,
+    saved: "Alle Änderungen gespeichert",
+    fix: "Nicht gespeichert: Beheben Sie die markierten Probleme",
   },
 } as const;
 
@@ -87,7 +91,7 @@ for (const lang of ["en", "de"] as const) {
       await expect(step(page, 4).getByLabel(m.key)).toHaveValue("step_5");
       await expect(approval(page).getByTestId("wf-add-step")).toBeDisabled();
       await expect(approval(page)).toContainText(m.max);
-      await expect(saveState(page)).toHaveText("All changes saved");
+      await expect(saveState(page)).toHaveText(m.saved);
       expect(await stored()).toHaveLength(5);
 
       // Each local check is marked on its step, in the page's language, and holds back the save.
@@ -95,20 +99,20 @@ for (const lang of ["en", "de"] as const) {
       await step(page, 1).getByLabel(m.key).fill("step_1");
       await expect(step(page, 1).locator(".error")).toHaveText(m.duplicate("step_1"));
       await expect(step(page, 1).getByLabel(m.key)).toHaveAttribute("aria-invalid", "true");
-      await expect(saveState(page)).toHaveText("Not saved: fix the marked problems");
+      await expect(saveState(page)).toHaveText(m.fix);
       await step(page, 1).getByLabel(m.key).fill("cab");
       await step(page, 2).getByLabel(m.name).fill("   ");
       await expect(step(page, 2).locator(".error")).toHaveText(m.needsName(3));
-      await expect(saveState(page)).toHaveText("Not saved: fix the marked problems");
+      await expect(saveState(page)).toHaveText(m.fix);
       await step(page, 2).getByLabel(m.name).fill("Security");
       for (const n of ["21", "0"]) {
         await step(page, 3).getByLabel(m.required).fill(n);
         await expect(step(page, 3).locator(".error")).toHaveText(m.range(4));
-        await expect(saveState(page)).toHaveText("Not saved: fix the marked problems");
+        await expect(saveState(page)).toHaveText(m.fix);
       }
       expect(await stored(), "nothing invalid reaches the draft").toEqual(before);
       await step(page, 3).getByLabel(m.required).fill("20");
-      await expect(saveState(page)).toHaveText("All changes saved");
+      await expect(saveState(page)).toHaveText(m.saved);
       expect(await stored()).toEqual([`step_1:${m.defaultName(1)}:1`, `cab:${m.defaultName(2)}:1`, `step_3:Security:1`, `step_4:${m.defaultName(4)}:20`, `step_5:${m.defaultName(5)}:1`]);
 
       // Moving step 1 down and removing the last two: saved in the new order, and a step can be added again.
@@ -116,14 +120,14 @@ for (const lang of ["en", "de"] as const) {
       await step(page, 4).getByRole("button", { name: m.remove(5) }).click();
       await step(page, 3).getByRole("button", { name: m.remove(4) }).click();
       await expect(approval(page).getByTestId("wf-add-step")).toBeEnabled();
-      await expect(saveState(page)).toHaveText("All changes saved");
+      await expect(saveState(page)).toHaveText(m.saved);
       expect(await stored()).toEqual([`cab:${m.defaultName(2)}:1`, `step_1:${m.defaultName(1)}:1`, `step_3:Security:1`]);
 
       // Removing every step saves the transition without approval (an empty policy would be refused).
       for (let j = 2; j >= 0; j--) await step(page, j).getByRole("button", { name: m.remove(j + 1) }).click();
       await expect(approval(page)).toContainText(m.none);
       await expect(approval(page).getByRole("button", { name: m.require })).toBeVisible();
-      await expect(saveState(page)).toHaveText("All changes saved");
+      await expect(saveState(page)).toHaveText(m.saved);
       const d = await apiGet<Draft>(request, `/admin/workflow-definitions/${wfId}/draft`);
       expect(d.transitions.find((t) => t.key === "approve")?.approval ?? null).toBeNull();
     });
