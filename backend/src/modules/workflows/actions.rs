@@ -18,6 +18,8 @@
 //! refused with `kind_unavailable` / `source_unavailable` until their slice
 //! ships, so nothing is saved that would never be delivered.
 
+#[cfg(test)]
+mod edge_tests;
 pub mod outbox;
 #[cfg(test)]
 mod tests;

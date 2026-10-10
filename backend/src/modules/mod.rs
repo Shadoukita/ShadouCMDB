@@ -30,3 +30,6 @@ pub mod templates;
 pub mod ui_settings;
 pub mod users;
 pub mod workflows;
+
+#[cfg(test)]
+mod s1_edge_tests;

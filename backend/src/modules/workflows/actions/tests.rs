@@ -20,11 +20,11 @@ use crate::db::upgrade_0046::{Fixture, id, ok, workflow_fixture};
 use crate::modules::api_tokens::tests::{Creds, code};
 use crate::modules::workflows::runtime_tests::{DEFS, RUN, World, details, world};
 
-fn cfg() -> WorkflowActionsConfig {
+pub(super) fn cfg() -> WorkflowActionsConfig {
     WorkflowActionsConfig { poll: Duration::from_millis(100), ..WorkflowActionsConfig::default() }
 }
 
-async fn count(pool: &PgPool, sql: &str) -> i64 {
+pub(super) async fn count(pool: &PgPool, sql: &str) -> i64 {
     sqlx::query_scalar(sqlx::AssertSqlSafe(sql.to_owned()))
         .fetch_one(pool)
         .await
@@ -45,7 +45,7 @@ fn inbox(key: &str, trigger: &str, transition: Option<&str>, recipients: Value) 
 }
 
 /// Fans out every pending run in this task, as one worker would.
-async fn drain(pool: &PgPool, cfg: &WorkflowActionsConfig) -> usize {
+pub(super) async fn drain(pool: &PgPool, cfg: &WorkflowActionsConfig) -> usize {
     let mut n = 0;
     loop {
         let ids = outbox::claim_runs(pool, "test-worker", 100).await.unwrap();
@@ -299,7 +299,7 @@ async fn an_inbox_action_reaches_viewers_only_and_a_refused_transition_queues_no
 
 /// The SQL fixture of the upgrade tests with `n` transition events, each
 /// queueing one run of an inbox action for one user who may view the CI.
-async fn queued(pool: &PgPool, n: i64) -> (Fixture, Uuid) {
+pub(super) async fn queued(pool: &PgPool, n: i64) -> (Fixture, Uuid) {
     let class = id(pool, "SELECT id FROM ci_classes WHERE system_role = 'business_service'").await;
     let ci =
         id(pool, &format!("INSERT INTO configuration_items (class_id, label) VALUES ('{class}', 'one') RETURNING id"))
@@ -433,7 +433,7 @@ async fn a_worker_lost_mid_fan_out_leaves_no_duplicate() {
 }
 
 /// A delivery of a sending channel (a stand-in for e-mail): written pending, as S4's fan-out will.
-async fn delivery(pool: &PgPool) -> Uuid {
+pub(super) async fn delivery(pool: &PgPool) -> Uuid {
     let (f, _) = queued(pool, 0).await;
     let run: i64 = sqlx::query_scalar(
         "INSERT INTO workflow_action_runs (event_id, action_key, kind, definition_id, instance_id, ci_id, status)
@@ -461,7 +461,7 @@ async fn claim_one(pool: &PgPool) -> Claimed {
 }
 
 /// Seconds until the delivery's next attempt.
-async fn next_in(pool: &PgPool, d: Uuid) -> f64 {
+pub(super) async fn next_in(pool: &PgPool, d: Uuid) -> f64 {
     sqlx::query_scalar(
         "SELECT extract(epoch FROM next_attempt_at - now())::float8 FROM workflow_action_deliveries WHERE id = $1",
     )
@@ -572,7 +572,7 @@ async fn failures_back_off_die_and_are_audited() {
 }
 
 /// Another pending delivery on the first run.
-async fn delivery_again(pool: &PgPool) -> Uuid {
+pub(super) async fn delivery_again(pool: &PgPool) -> Uuid {
     sqlx::query_scalar(
         "INSERT INTO workflow_action_deliveries (run_id, recipient_key, status)
          SELECT min(id), 'addr:' || gen_random_uuid() || '@b.example', 'pending' FROM workflow_action_runs RETURNING id",

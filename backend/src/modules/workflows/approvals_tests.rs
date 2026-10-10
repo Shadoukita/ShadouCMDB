@@ -851,3 +851,149 @@ async fn approvals_round_trip_through_the_configuration_file() {
     src.drop().await;
     dst.drop().await;
 }
+
+/// QA edge cases of the approvals designer's API (SHAA-2849, #837): a policy
+/// without steps or with a zero quorum is refused; one person named through
+/// a user, a group and a profile counts once towards a quorum; approvers who
+/// may not view the type, disabled ones and deleted ones are warned about
+/// by the lint and explained by the preview; a deleted group or user takes
+/// its assignments with it and the step is reported unstaffed.
+#[tokio::test]
+async fn the_approver_lint_and_preview_at_their_edges() {
+    let Some(db) = scratch::database("approvals_designer_edges").await else { return };
+    let w = World::new(&db).await;
+    let def = w.workflow("change", gated_graph()).await;
+    let draft = format!("{BASE}/{def}/draft");
+    let approvers = format!("{BASE}/{def}/approvers");
+    let preview = format!("{approvers}/preview");
+
+    // Policies the designer must never save.
+    for (steps, field) in [
+        (json!([]), "transitions.0.approval.steps"),
+        (json!([{ "key": "tech", "name": "Tech", "requiredApprovals": 0 }]), "requiredApprovals"),
+        (json!([{ "key": "tech", "name": "Tech", "requiredApprovals": -1 }]), "requiredApprovals"),
+        (json!([{ "key": "tech", "name": "Tech", "requiredApprovals": "2" }]), ""),
+        (json!([{ "key": "", "name": "Tech" }]), "key"),
+        (json!([{ "key": "tech", "name": "" }]), "name"),
+    ] {
+        let mut bad = gated_graph();
+        bad["transitions"][0]["approval"]["steps"] = steps.clone();
+        let (status, v) = w.call("PUT", &draft, Some(bad)).await;
+        assert_eq!(status, 400, "{steps}: {v}");
+        assert!(details(&v).iter().any(|(f, _)| f.contains(field)), "{steps}: {field} in {v}");
+    }
+    let (_, v) = w.call("GET", &draft, None).await;
+    assert_eq!(v["transitions"][0]["approval"]["steps"].as_array().map(Vec::len), Some(2), "nothing stored: {v}");
+    w.publish(def).await;
+
+    let solo = w.profile("Solo", true).await;
+    let blind = w.profile("Blind", false).await;
+    let viewers = w.profile("Viewers", true).await;
+    let alice = w.user("alice", &[solo]).await;
+    let bob = w.user("bob", &[blind]).await;
+    let carol = w.user("carol", &[viewers]).await;
+    let dave = w.user("dave", &[viewers]).await;
+    w.group("CAB", &[alice]).await;
+    let ops = w.group("Ops", &[dave]).await;
+    sqlx::query("UPDATE users SET is_active = false WHERE id = $1").bind(carol).execute(&w.pool).await.unwrap();
+
+    // alice three times over: one approver for a quorum of 2. bob may not view servers; carol is disabled.
+    let (status, v) = w
+        .set_approvers(
+            def,
+            json!([
+                { "transitionKey": "approve", "stepKey": "cab", "source": "user", "user": "alice" },
+                { "transitionKey": "approve", "stepKey": "cab", "source": "group", "group": "CAB" },
+                { "transitionKey": "approve", "stepKey": "cab", "source": "profile", "profile": "Solo" },
+                { "transitionKey": "approve", "stepKey": "tech", "source": "user", "user": "bob" },
+                { "transitionKey": "approve", "stepKey": "tech", "source": "user", "user": "carol" },
+                { "transitionKey": "go_live", "stepKey": "tech", "source": "user", "user": "dave" }
+            ]),
+        )
+        .await;
+    assert_eq!(status, 400, "a step go_live does not have: {v}");
+    assert_eq!(details(&v), pairs(&[("approvers[5].stepKey", "unknown_step")]), "{v}");
+    let (status, v) = w
+        .set_approvers(
+            def,
+            json!([
+                { "transitionKey": "approve", "stepKey": "cab", "source": "user", "user": "alice" },
+                { "transitionKey": "approve", "stepKey": "cab", "source": "group", "group": "CAB" },
+                { "transitionKey": "approve", "stepKey": "cab", "source": "profile", "profile": "Solo" },
+                { "transitionKey": "approve", "stepKey": "tech", "source": "user", "user": "bob" },
+                { "transitionKey": "approve", "stepKey": "tech", "source": "user", "user": "carol" },
+                { "transitionKey": "approve", "stepKey": "tech", "role": "escalation", "source": "group", "group": "Ops" }
+            ]),
+        )
+        .await;
+    assert_eq!(status, 200, "warnings never refuse a save: {v}");
+    let codes = problem_codes(&v);
+    let has = |path: &str, code: &str| codes.iter().any(|c| c.0 == path && c.1 == code && c.2 == "warning");
+    assert!(has("transitions.approve.steps.cab", "understaffed"), "alice counts once: {codes:?}");
+    assert!(!has("transitions.approve.steps.cab", "approvers_cannot_view"), "{codes:?}");
+    assert!(has("transitions.approve.steps.tech", "approvers_cannot_view"), "bob and carol: {codes:?}");
+    assert!(has("transitions.approve.steps.tech", "understaffed"), "an escalation never staffs a step: {codes:?}");
+    let tech_warnings = codes.iter().filter(|c| c.0 == "transitions.approve.steps.tech").count();
+    assert_eq!(tech_warnings, 3, "one per blind source and one understaffed: {codes:?}");
+
+    let names = |v: &Value| -> Vec<(String, String)> {
+        v["users"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|u| (u["username"].as_str().unwrap().to_owned(), u["reason"].as_str().unwrap().to_owned()))
+            .collect()
+    };
+    let (status, v) = w.call("GET", &format!("{preview}?transition=approve&step=cab"), None).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(names(&v), pairs(&[("alice", "eligible")]), "listed once: {v}");
+    assert_eq!((v["eligibleCount"].as_i64(), v["requiredApprovals"].as_i64()), (Some(1), Some(2)));
+    let mut via: Vec<&str> = v["users"][0]["via"].as_array().unwrap().iter().map(|s| s.as_str().unwrap()).collect();
+    via.sort_unstable();
+    assert_eq!(via.len(), 3, "every source that names her: {via:?}");
+    let (status, v) = w.call("GET", &format!("{preview}?transition=approve&step=tech"), None).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(
+        names(&v),
+        pairs(&[("dave", "escalation_only"), ("bob", "no_view_right"), ("carol", "inactive")]),
+        "{v}"
+    );
+    assert_eq!(v["eligibleCount"].as_i64(), Some(0));
+
+    // Preview refusals: a requester who does not exist or is not an id, a missing step.
+    let (status, v) =
+        w.call("GET", &format!("{preview}?transition=approve&step=cab&requestedBy={}", Uuid::new_v4()), None).await;
+    assert!(status == 200 || status == 400 || status == 404, "{status} {v}");
+    assert_ne!(status, 500, "{v}");
+    let (status, v) = w.call("GET", &format!("{preview}?transition=approve&step=cab&requestedBy=alice"), None).await;
+    assert_eq!(status, 400, "{v}");
+    let (status, v) = w.call("GET", &format!("{preview}?transition=approve"), None).await;
+    assert_eq!(status, 400, "{v}");
+    let (status, v) = w.call("GET", &format!("{preview}?transition=nope&step=cab"), None).await;
+    assert_eq!((status, details(&v)), (400, pairs(&[("step", "unknown_step")])), "{v}");
+
+    // Deleting the escalation group and alice takes their assignments with them; the lint says what is left.
+    let (status, v) = w.call("DELETE", &format!("/api/v1/admin/groups/{ops}"), None).await;
+    assert!(status == 200 || status == 204, "{v}");
+    let (status, v) = w.call("DELETE", &format!("/api/v1/admin/users/{alice}"), None).await;
+    assert!(status == 200 || status == 204, "{v}");
+    let (status, v) = w.call("GET", &approvers, None).await;
+    assert_eq!(status, 200, "{v}");
+    let mut left: Vec<(&str, &str)> = v["approvers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| (a["stepKey"].as_str().unwrap(), a["source"].as_str().unwrap()))
+        .collect();
+    left.sort_unstable();
+    assert_eq!(left, [("cab", "group"), ("cab", "profile"), ("tech", "user"), ("tech", "user")], "{v}");
+    let codes = problem_codes(&v);
+    assert!(
+        codes.iter().any(|c| c.0 == "transitions.approve.steps.cab" && c.1 == "approvers_cannot_view"),
+        "CAB and Solo are empty now: {codes:?}"
+    );
+    let (status, v) = w.call("GET", &format!("{preview}?transition=approve&step=cab"), None).await;
+    assert_eq!((status, v["eligibleCount"].as_i64()), (200, Some(0)), "{v}");
+    let _ = (bob, dave);
+    db.drop().await;
+}
