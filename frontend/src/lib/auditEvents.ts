@@ -89,6 +89,7 @@ export const AUDIT_ACTIONS = [
   "workflow.action_suppressed",
   "mail.test",
   "workflow.action_test",
+  "workflow.action_delivery",
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 const ACTION_KEYS = new Set<string>(AUDIT_ACTIONS);

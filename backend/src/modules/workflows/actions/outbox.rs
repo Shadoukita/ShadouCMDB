@@ -72,8 +72,8 @@ const ACTOR: &str = "workflow actions";
 
 /// The definition, transition, from and to state names and the request number of an event.
 type EventNames = (Option<String>, Option<String>, Option<String>, Option<String>, Option<i32>);
-/// A dead delivery: id, run, action key, kind, CI, reason, attempts.
-type DeadRow = (Uuid, i64, String, String, Uuid, Option<String>, i16);
+/// An audited delivery: id, run, action key, kind, CI, status, reason, attempts, recipient key, user, endpoint.
+type DeliveryRow = (Uuid, i64, String, String, Uuid, String, Option<String>, i16, String, Option<Uuid>, Option<Uuid>);
 /// A run that gave up: id, workflow, action key, kind, CI, reason, attempts.
 type DeadRunRow = (i64, Uuid, String, String, Uuid, Option<String>, i16);
 
@@ -716,6 +716,7 @@ impl ClaimedRow {
 /// Returns false when it was not (another worker took the delivery over).
 pub async fn record(pool: &PgPool, cfg: &WorkflowActionsConfig, c: &Claimed, outcome: Outcome) -> sqlx::Result<bool> {
     let mut tx = pool.begin().await?;
+    let terminal = matches!(outcome, Outcome::Delivered { .. } | Outcome::Skipped { .. });
     let written = match outcome {
         Outcome::Delivered { status_code } => sqlx::query(
             "UPDATE cmdb.workflow_action_deliveries SET status = 'delivered', status_reason = NULL, completed_at = now(),
@@ -772,6 +773,9 @@ pub async fn record(pool: &PgPool, cfg: &WorkflowActionsConfig, c: &Claimed, out
         .await?
         .rows_affected(),
     };
+    if terminal && written == 1 && cfg.audit_deliveries {
+        audit_deliveries(&mut tx, &[c.id]).await?;
+    }
     tx.commit().await?;
     Ok(written == 1)
 }
@@ -802,14 +806,28 @@ async fn dead(
     Ok(n)
 }
 
-/// One `workflow.action_dead` row (actor system) per delivery that just died;
-/// no recipient address, no error text.
+/// One `workflow.action_dead` row (actor system) per delivery that just died,
+/// with its recipient; no address in full, no error text.
 pub(crate) async fn audit_dead(tx: &mut PgConnection, ids: &[Uuid]) -> sqlx::Result<()> {
+    audit(tx, AuditAction::WorkflowActionDead, ids).await
+}
+
+/// With `AUDIT_WORKFLOW_DELIVERIES=true`, one `workflow.action_delivery` row
+/// (actor system) per e-mail or webhook delivery that just ended `delivered`
+/// or `skipped`, in the transaction that ended it (design SHAA-2725 N-Q10):
+/// run, action, kind, CI, recipient, status and reason. Never the message,
+/// never an address in full.
+pub(crate) async fn audit_deliveries(tx: &mut PgConnection, ids: &[Uuid]) -> sqlx::Result<()> {
+    audit(tx, AuditAction::WorkflowActionDelivery, ids).await
+}
+
+async fn audit(tx: &mut PgConnection, action: AuditAction, ids: &[Uuid]) -> sqlx::Result<()> {
     if ids.is_empty() {
         return Ok(());
     }
-    let rows: Vec<DeadRow> = sqlx::query_as(
-        "SELECT d.id, r.id, r.action_key, r.kind, r.ci_id, d.status_reason, d.attempts
+    let rows: Vec<DeliveryRow> = sqlx::query_as(
+        "SELECT d.id, r.id, r.action_key, r.kind, r.ci_id, d.status, d.status_reason, d.attempts, d.recipient_key,
+                d.user_id, d.endpoint_id
          FROM cmdb.workflow_action_deliveries d JOIN cmdb.workflow_action_runs r ON r.id = d.run_id
          WHERE d.id = ANY($1) ORDER BY d.id",
     )
@@ -818,16 +836,39 @@ pub(crate) async fn audit_dead(tx: &mut PgConnection, ids: &[Uuid]) -> sqlx::Res
     .await?;
     let entries = rows
         .into_iter()
-        .map(|(id, run, action_key, kind, ci, reason, attempts)| AuditEntry {
-            action: AuditAction::WorkflowActionDead,
-            entity_type: "workflow_action_deliveries",
-            entity_id: id,
-            old_value: None,
-            new_value: Some(json!({ "runId": run, "actionKey": action_key, "kind": kind, "ciId": ci,
-                "reason": reason, "attempts": attempts })),
+        .map(|(id, run, action_key, kind, ci, status, reason, attempts, key, user, endpoint)| {
+            let mut value = json!({ "runId": run, "actionKey": action_key, "kind": kind, "ciId": ci,
+                "reason": reason, "attempts": attempts, "recipient": audited_recipient(&key, user, endpoint) });
+            if action == AuditAction::WorkflowActionDelivery {
+                value["status"] = json!(status);
+            }
+            AuditEntry {
+                action,
+                entity_type: "workflow_action_deliveries",
+                entity_id: id,
+                old_value: None,
+                new_value: Some(value),
+            }
         })
         .collect();
     crud::write_audit(tx, &system(), entries).await
+}
+
+/// A delivery's recipient as audited: the user's id, the endpoint's id, or a
+/// fixed address masked (N-Q3); `digest` for an hour's digest.
+pub(crate) fn audited_recipient(key: &str, user: Option<Uuid>, endpoint: Option<Uuid>) -> Value {
+    // `digest:<recipient key>:<hour>`
+    let digest = key.strip_prefix("digest:").and_then(|k| k.rsplit_once(':')).map(|(k, _)| k);
+    let mut out = match (endpoint, user, digest.unwrap_or(key).strip_prefix("addr:")) {
+        (Some(e), ..) => json!({ "endpointId": e }),
+        (_, Some(u), _) => json!({ "userId": u }),
+        (_, _, Some(a)) => json!({ "address": crate::modules::mail::mask(a) }),
+        _ => json!({}),
+    };
+    if digest.is_some() {
+        out["digest"] = json!(true);
+    }
+    out
 }
 
 fn system() -> RequestContext {
@@ -1286,5 +1327,29 @@ async fn housekeeping_loop(pool: PgPool, cfg: WorkflowActionsConfig, mut stop: w
         if idle(&mut stop, tick).await {
             return;
         }
+    }
+}
+
+#[cfg(test)]
+mod audit_tests {
+    use super::*;
+
+    /// The recipient an audit row names: an endpoint or user by id, a fixed
+    /// address masked, a digest marked as one; never an address in full.
+    #[test]
+    fn audited_recipient_names_ids_and_masks_addresses() {
+        let (u, e) = (Uuid::new_v4(), Uuid::new_v4());
+        assert_eq!(audited_recipient(&format!("user:{u}"), Some(u), None), json!({ "userId": u }));
+        assert_eq!(audited_recipient(&format!("endpoint:{e}"), None, Some(e)), json!({ "endpointId": e }));
+        assert_eq!(audited_recipient("addr:carol@corp.example", None, None), json!({ "address": "c***@corp.example" }));
+        assert_eq!(
+            audited_recipient(&format!("digest:user:{u}:494000"), Some(u), None),
+            json!({ "userId": u, "digest": true })
+        );
+        assert_eq!(
+            audited_recipient("digest:addr:cab@corp.example:494000", None, None),
+            json!({ "address": "c***@corp.example", "digest": true })
+        );
+        assert_eq!(audited_recipient("something:else", None, None), json!({}));
     }
 }

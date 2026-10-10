@@ -446,6 +446,12 @@ pub enum AuditAction {
     #[serde(rename = "workflow.action_test")]
     #[sqlx(rename = "workflow.action_test")]
     WorkflowActionTest,
+    /// A workflow action delivery by e-mail or webhook ended `delivered` or `skipped` (actor `system`; only with
+    /// `AUDIT_WORKFLOW_DELIVERIES=true`): run, action, kind, CI, recipient (user id, masked address or endpoint
+    /// id), status, reason; never the message.
+    #[serde(rename = "workflow.action_delivery")]
+    #[sqlx(rename = "workflow.action_delivery")]
+    WorkflowActionDelivery,
 }
 
 impl AuditAction {
@@ -494,6 +500,7 @@ impl AuditAction {
             AuditAction::WorkflowActionSuppressed => "workflow.action_suppressed",
             AuditAction::MailTest => "mail.test",
             AuditAction::WorkflowActionTest => "workflow.action_test",
+            AuditAction::WorkflowActionDelivery => "workflow.action_delivery",
         }
     }
 }

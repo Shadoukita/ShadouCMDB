@@ -375,6 +375,9 @@ pub struct WorkflowActionsConfig {
     pub retention_days: i32,
     /// `WORKFLOW_ACTIONS_DEAD_RETENTION_DAYS` (1 to 3650): dead deliveries.
     pub dead_retention_days: i32,
+    /// `AUDIT_WORKFLOW_DELIVERIES` (default false): audit every e-mail and webhook delivery that ends
+    /// `delivered` or `skipped` (`workflow.action_delivery`, design SHAA-2725 N-Q10). Dead ones always are.
+    pub audit_deliveries: bool,
 }
 
 impl Default for WorkflowActionsConfig {
@@ -390,6 +393,7 @@ impl Default for WorkflowActionsConfig {
             max_age_hours: 24,
             retention_days: 30,
             dead_retention_days: 90,
+            audit_deliveries: false,
         }
     }
 }
@@ -1251,6 +1255,7 @@ impl Config {
             dead_retention_days: r
                 .int::<i32>("WORKFLOW_ACTIONS_DEAD_RETENTION_DAYS", 1, 3650)
                 .unwrap_or(d.dead_retention_days),
+            audit_deliveries: r.bool("AUDIT_WORKFLOW_DELIVERIES", d.audit_deliveries),
         };
 
         let webhooks = webhooks_config(&mut r);
@@ -1526,6 +1531,7 @@ mod tests {
             ("WORKFLOW_ACTIONS_MAX_AGE_HOURS", "2"),
             ("WORKFLOW_ACTIONS_RETENTION_DAYS", "7"),
             ("WORKFLOW_ACTIONS_DEAD_RETENTION_DAYS", "14"),
+            ("AUDIT_WORKFLOW_DELIVERIES", "true"),
         ])
         .unwrap();
         assert_eq!(
@@ -1541,6 +1547,7 @@ mod tests {
                 max_age_hours: 2,
                 retention_days: 7,
                 dead_retention_days: 14,
+                audit_deliveries: true,
             }
         );
         for (key, bad) in [
@@ -1550,6 +1557,7 @@ mod tests {
             ("WORKFLOW_ACTIONS_MAX_ATTEMPTS", "21"),
             ("WORKFLOW_ACTIONS_QUEUE_MAX", "5"),
             ("WORKFLOW_ACTIONS_MAX_PER_INSTANCE_PER_HOUR", "0"),
+            ("AUDIT_WORKFLOW_DELIVERIES", "yes"),
         ] {
             let err = load_with(&[(key, bad)]).unwrap_err().to_string();
             assert!(err.contains(key), "{key}={bad}: {err}");
