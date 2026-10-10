@@ -15,7 +15,7 @@
 
 pub mod render;
 
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 
 use axum::http::Method;
@@ -26,6 +26,7 @@ use lettre::transport::smtp::client::{Certificate, CertificateStore, Tls, TlsPar
 use lettre::transport::smtp::extension::ClientId;
 use lettre::transport::smtp::{AsyncSmtpTransport, PoolConfig};
 use lettre::{AsyncTransport, Tokio1Executor};
+use regex::Regex;
 use serde::Serialize;
 use serde_json::json;
 use utoipa::ToSchema;
@@ -274,8 +275,29 @@ impl Mail {
     }
 }
 
+/// `c***@corp.example`: enough to tell lists apart, not to harvest them (N-Q3).
+pub fn mask(address: &str) -> String {
+    match address.split_once('@') {
+        Some((local, domain)) => format!("{}***@{domain}", local.chars().next().unwrap_or('*')),
+        None => "***".into(),
+    }
+}
+
+static ADDRESS_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*").expect("address regex")
+});
+
+/// `text` with every e-mail address in it masked: a relay's error names the
+/// recipient (`550 5.1.1 <carol@corp.example>`), so no error we keep (the
+/// delivery's `last_error`, the mail status) may show what the API masks
+/// everywhere else. Masking a masked address leaves it as it is.
+pub fn mask_addresses(text: &str) -> String {
+    ADDRESS_RE.replace_all(text, |c: &regex::Captures<'_>| mask(&c[0])).into_owned()
+}
+
+/// A relay error as kept: on one line, addresses masked (GH#881), cut short.
 fn capped(s: &str) -> String {
-    let one_line: String = s.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let one_line: String = mask_addresses(s).chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
     one_line.chars().take(MAX_STATUS_ERROR).collect()
 }
 
@@ -446,4 +468,29 @@ pub fn routes() -> Vec<Route> {
                 Ok(Json(test(&api).await?))
             }),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// GH#881: the status shows the relay's reply with the recipient masked.
+    #[test]
+    fn status_last_error_masks_addresses() {
+        let mail = Mail::default();
+        mail.note(&Err(SendError::Permanent {
+            code: Some(550),
+            message: "5.1.1 <carol@corp.example>: Recipient address rejected".into(),
+        }));
+        let error = mail.status().last_error.expect("last error");
+        assert!(!error.contains("carol@corp.example"), "lastError leaks the address: {error}");
+        assert_eq!(error, "550 5.1.1 <c***@corp.example>: Recipient address rejected");
+    }
+
+    #[test]
+    fn masking_is_idempotent() {
+        let once = mask_addresses("to carol@corp.example and bob.smith@mail.corp.example");
+        assert_eq!(once, "to c***@corp.example and b***@mail.corp.example");
+        assert_eq!(mask_addresses(&once), once);
+    }
 }

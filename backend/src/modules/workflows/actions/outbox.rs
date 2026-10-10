@@ -189,7 +189,7 @@ fn jitter() -> f64 {
 /// would otherwise show a fixed address the API masks everywhere else, N-Q3),
 /// then cut to `MAX_ERROR` bytes.
 fn capped(error: &str) -> String {
-    let masked = super::deliveries::mask_addresses(error);
+    let masked = crate::modules::mail::mask_addresses(error);
     let mut e: String = masked.chars().take(MAX_ERROR).collect();
     while e.len() > MAX_ERROR {
         e.pop();
