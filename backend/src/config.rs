@@ -359,7 +359,8 @@ pub struct WorkflowActionsConfig {
     pub concurrency: usize,
     /// `WORKFLOW_ACTIONS_POLL_MS` (100 to 60000): how often an idle worker looks for work.
     pub poll: Duration,
-    /// `WORKFLOW_ACTIONS_MAX_ATTEMPTS` (1 to 20): attempts before a delivery is dead.
+    /// `WORKFLOW_ACTIONS_MAX_ATTEMPTS` (1 to 20): attempts before a delivery is dead or a run
+    /// is cancelled (`fan_out_failed`).
     pub max_attempts: i16,
     /// `WORKFLOW_ACTIONS_MAX_RECIPIENTS` (1 to 5000): users one run notifies, after expansion.
     pub max_recipients: usize,
@@ -367,7 +368,8 @@ pub struct WorkflowActionsConfig {
     pub queue_max: i64,
     /// `WORKFLOW_ACTIONS_MAX_PER_INSTANCE_PER_HOUR` (1 to 10000): the loop breaker.
     pub max_per_instance_per_hour: i32,
-    /// `WORKFLOW_ACTIONS_MAX_AGE_HOURS` (1 to 168): a delivery older than this is dead, never sent late.
+    /// `WORKFLOW_ACTIONS_MAX_AGE_HOURS` (1 to 168): a run or delivery older than this gives up
+    /// (`expired`), never sent late.
     pub max_age_hours: i32,
     /// `WORKFLOW_ACTIONS_RETENTION_DAYS` (1 to 3650): runs and delivered or skipped deliveries.
     pub retention_days: i32,
