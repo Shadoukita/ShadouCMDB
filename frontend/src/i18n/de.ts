@@ -4064,6 +4064,7 @@ export const de: { [K in MessageKey]: string } = {
   "approvalRun.refusal.earlier_step": "Sie haben bereits einen früheren Schritt dieser Anforderung genehmigt. Dieser Schritt braucht eine andere genehmigende Person.",
   "approvalRun.refusal.actorOf": "Sie waren an „{transition}“ in diesem Workflow beteiligt. Dieser Schritt muss von jemandem entschieden werden, der nicht beteiligt war.",
   "approvalRun.refusal.not_eligible": "Sie gehören nicht zu den Genehmigenden des aktuellen Schritts oder haben ihn bereits entschieden.",
+  "approvalRun.refusal.already_decided": "Sie haben den aktuellen Schritt bereits entschieden, oder jemand hat für Sie entschieden. Jede Person hat pro Schritt eine Stimme.",
   "approvalRun.refusal.not_pending": "Diese Anforderung ist nicht mehr offen.",
   "approvalRun.refusal.session_required": "Dieser Schritt muss in einer angemeldeten Sitzung entschieden werden, nicht mit einem API-Token.",
   "approvalRun.refusal.token_not_self_minted": "Nur ein API-Token, das sein Inhaber für sich selbst erstellt hat, darf Genehmigungen entscheiden.",
