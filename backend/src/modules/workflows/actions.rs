@@ -21,6 +21,8 @@
 pub mod deliveries;
 #[cfg(test)]
 mod deliveries_tests;
+#[cfg(test)]
+mod edge_tests;
 pub mod outbox;
 #[cfg(test)]
 mod tests;
