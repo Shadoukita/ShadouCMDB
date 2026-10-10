@@ -12,6 +12,7 @@ import {
   type WorkflowActions,
   type WorkflowDefinitionDetail,
 } from "../../../api/workflows";
+import { useWebhookEndpoints } from "../../../api/webhooks";
 import EmptyState from "../../../components/EmptyState.vue";
 import ErrorAlert from "../../../components/ErrorAlert.vue";
 import LoadingState from "../../../components/LoadingState.vue";
@@ -73,6 +74,9 @@ const baseVersion = ref(0);
 const storedKeys = ref<string[]>([]);
 const dirty = computed(() => serialize(list.value) !== base.value);
 const editing = ref<DraftAction | null>(null);
+/** The endpoints a webhook action can pick: loaded once an action is a webhook. */
+const endpointsQ = useWebhookEndpoints(() => list.value.some((a) => a.kind === "webhook"));
+const endpoints = computed(() => endpointsQ.data.value?.data ?? null);
 
 function seed(a: WorkflowActions) {
   const keyBefore = editing.value?.key;
@@ -212,7 +216,10 @@ onBeforeUnmount(() => window.removeEventListener("beforeunload", onBeforeUnload)
 
 /** Who or where, in a few words, for the table. */
 function target(a: DraftAction): string {
-  if (!notifiesPeople(a.kind)) return a.endpoint ? t("wfActions.endpointLabel", { key: a.endpoint }) : "—";
+  if (!notifiesPeople(a.kind)) {
+    const name = endpoints.value?.find((e) => e.key === a.endpoint)?.name;
+    return a.endpoint ? (name ? `${name} (${a.endpoint})` : t("wfActions.endpointLabel", { key: a.endpoint })) : "—";
+  }
   if (a.recipients.length === 0) return "—";
   const first = recipientLabel(a.recipients[0]);
   return a.recipients.length === 1 ? first : t("wfActions.andMore", { first, n: a.recipients.length - 1 });
@@ -306,7 +313,10 @@ const loading = computed(() => actionsQ.isLoading.value || draft.isLoading.value
                       :fields="fields"
                       :profiles="profiles"
                       :person-fields="personFields"
+                      :endpoints="endpoints"
+                      :endpoints-error="endpointsQ.error.value"
                       :problems="problemsOf(i)"
+                      @retry-endpoints="endpointsQ.refetch()"
                     />
                   </section>
                 </td>

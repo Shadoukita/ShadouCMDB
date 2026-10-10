@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import type { AttributeDefinition } from "../../../api/datamodel";
+import type { WebhookEndpoint, WebhookEndpointStatus } from "../../../api/webhooks";
 import { t } from "../../../i18n";
 import { keyError } from "../../../lib/keys";
 import {
@@ -23,6 +24,7 @@ import {
   type DraftRecipient,
 } from "../../../lib/workflowActions";
 import type { AttributeChoice, Ref } from "../../../lib/workflowApprovals";
+import ErrorAlert from "../../../components/ErrorAlert.vue";
 import ActionRecipientAdd from "./ActionRecipientAdd.vue";
 
 /**
@@ -40,9 +42,14 @@ const props = defineProps<{
   fields: AttributeDefinition[];
   profiles: Ref[] | null;
   personFields: AttributeChoice[];
+  /** The registered webhook endpoints (key, name and status); null until loaded or when they cannot be. */
+  endpoints: WebhookEndpoint[] | null;
+  /** Why the endpoints could not be loaded: the key is then typed instead of picked. */
+  endpointsError: unknown;
   /** Problems found in this action (refusals and lint), paths `actions[index]…`. */
   problems: ActionProblem[];
 }>();
+const emit = defineEmits<{ retryEndpoints: [] }>();
 
 const a = computed(() => props.action);
 const fid = (f: string) => `wf-action-${props.index}-${f}`;
@@ -105,6 +112,25 @@ function addRecipient(r: DraftRecipient) {
   a.value.recipients.push(r);
 }
 const recipientErrors = (j: number) => props.problems.filter((p) => p.path === `actions[${props.index}].recipients[${j}]` || p.path.startsWith(`actions[${props.index}].recipients[${j}].`));
+
+/**
+ * The endpoint choices: active ones can be picked, paused and suspended ones show but are disabled. The
+ * action's own key stays listed even when it is not active or no longer registered, so the select shows it.
+ */
+type EndpointChoice = { key: string; name: string; status: WebhookEndpointStatus | "missing" };
+const endpointChoices = computed(() => {
+  const list: EndpointChoice[] = (props.endpoints ?? []).map((e) => ({ key: e.key, name: e.name, status: e.status }));
+  if (a.value.endpoint && !list.some((e) => e.key === a.value.endpoint)) list.push({ key: a.value.endpoint, name: a.value.endpoint, status: "missing" });
+  return list;
+});
+const chosenEndpoint = computed(() => endpointChoices.value.find((e) => e.key === a.value.endpoint));
+const endpointLabel = (e: EndpointChoice) =>
+  e.status === "missing" ? t("wfActions.endpoint.missing", { key: e.key }) : e.status === "active" ? `${e.name} (${e.key})` : `${e.name} (${e.key}) · ${t(`wfActions.endpoint.status.${e.status}`)}`;
+const endpointHint = computed(() => {
+  if (props.endpoints && props.endpoints.length === 0 && !a.value.endpoint) return t("wfActions.endpoint.none");
+  if (chosenEndpoint.value && chosenEndpoint.value.status !== "active") return t(`wfActions.endpoint.statusHint.${chosenEndpoint.value.status}`);
+  return t("wfActions.field.endpointPickHint");
+});
 
 /** Webhook payload fields: every active field of the type; the lint refuses keys that are not. */
 const payloadFields = computed(() => props.fields.filter((f) => f.isActive));
@@ -307,7 +333,9 @@ function toggleInclude(key: string, on: boolean) {
       <legend>{{ t("wfActions.field.webhook") }}</legend>
       <div class="field">
         <label :for="fid('endpoint')">{{ t("wfActions.field.endpoint") }}<span class="req" aria-hidden="true">*</span></label>
+        <!-- The list could not be loaded: type the key, as the API takes it. -->
         <input
+          v-if="endpointsError"
           :id="fid('endpoint')"
           v-model.trim="action.endpoint"
           class="mono"
@@ -319,8 +347,23 @@ function toggleInclude(key: string, on: boolean) {
           :aria-invalid="!!errorAt('endpoint')"
           :aria-describedby="errorAt('endpoint') ? `${fid('endpoint')}-err` : `${fid('endpoint')}-hint`"
         />
+        <select
+          v-else
+          :id="fid('endpoint')"
+          v-model="action.endpoint"
+          :disabled="!endpoints"
+          aria-required="true"
+          :aria-invalid="!!errorAt('endpoint')"
+          :aria-describedby="errorAt('endpoint') ? `${fid('endpoint')}-err` : `${fid('endpoint')}-hint`"
+          data-testid="wf-action-endpoint"
+        >
+          <option value="" disabled>{{ endpoints ? t("wfApprovers.choose") : t("wfActions.endpoint.loading") }}</option>
+          <option v-for="e in endpointChoices" :key="e.key" :value="e.key" :disabled="e.status !== 'active'">{{ endpointLabel(e) }}</option>
+        </select>
         <span v-if="errorAt('endpoint')" :id="`${fid('endpoint')}-err`" class="error">{{ errorAt("endpoint") }}</span>
-        <span v-else :id="`${fid('endpoint')}-hint`" class="hint">{{ t("wfActions.field.endpointHint") }}</span>
+        <span v-else-if="endpointsError" :id="`${fid('endpoint')}-hint`" class="hint">{{ t("wfActions.field.endpointHint") }}</span>
+        <span v-else :id="`${fid('endpoint')}-hint`" class="hint" data-testid="wf-action-endpoint-hint">{{ endpointHint }}</span>
+        <ErrorAlert v-if="endpointsError" :error="endpointsError" :title="t('wfActions.endpoint.loadFailed')" :on-retry="() => emit('retryEndpoints')" />
       </div>
       <fieldset class="wf-choices" :aria-describedby="`${fid('include')}-hint`">
         <legend class="label">{{ t("wfActions.field.includeAttributes") }}</legend>
