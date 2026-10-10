@@ -222,7 +222,7 @@ const state = computed<{ tone: string; key: MessageKey } | null>(() => {
         <p v-else-if="pending!.deleted">{{ t("configTransfer.dry.summaryRemove", { created: pending!.created, updated: pending!.updated, deleted: pending!.deleted }) }}</p>
         <p v-else>{{ t("configTransfer.dry.summary", { created: pending!.created, updated: pending!.updated }) }}</p>
       </div>
-      <div class="panel-body flush">
+      <div class="panel-body flush table-wrap">
         <table class="data" :aria-label="t('configTransfer.dry.tableLabel')">
           <thead>
             <tr>
@@ -270,21 +270,23 @@ const state = computed<{ tone: string; key: MessageKey } | null>(() => {
       <div class="panel-body">
         <details v-for="[sec, changes] in bySection(dryRun)" :key="sec" class="import-changes" open>
           <summary>{{ sectionName(sec) }} ({{ changes.length }})</summary>
-          <table class="data">
-            <tbody>
-              <tr v-for="(c, i) in changes" :key="i">
-                <td class="config-change-action">
-                  <span :class="['badge', actionTone(c.action)]">{{ actionLabel(c.action) }}</span>
-                </td>
-                <td class="mono config-change-key">{{ c.key }}</td>
-                <td>
-                  <div v-for="f in c.fields" :key="f.field">
-                    <code>{{ f.field }}</code>: <span class="diff-from">{{ show(f.from) }}</span> → <span class="diff-to">{{ show(f.to) }}</span>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+          <div class="table-wrap">
+            <table class="data">
+              <tbody>
+                <tr v-for="(c, i) in changes" :key="i">
+                  <td class="config-change-action">
+                    <span :class="['badge', actionTone(c.action)]">{{ actionLabel(c.action) }}</span>
+                  </td>
+                  <td class="mono config-change-key">{{ c.key }}</td>
+                  <td class="config-change-fields">
+                    <div v-for="f in c.fields" :key="f.field">
+                      <code>{{ f.field }}</code>: <span class="diff-from">{{ show(f.from) }}</span> → <span class="diff-to">{{ show(f.to) }}</span>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </details>
       </div>
     </section>
@@ -329,5 +331,9 @@ const state = computed<{ tone: string; key: MessageKey } | null>(() => {
 }
 .config-change-key {
   width: 30%;
+}
+.config-change-fields {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 </style>
