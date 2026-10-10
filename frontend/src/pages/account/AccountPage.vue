@@ -5,10 +5,11 @@ import Icon from "../../components/Icon.vue";
 import { t } from "../../i18n";
 import { useDocumentTitle } from "../../lib/composables";
 import { useSessionStore } from "../../stores/session";
+import MailLanguageSettings from "./MailLanguageSettings.vue";
 import PasswordSettings from "./PasswordSettings.vue";
 import TwoFactorSettings from "./TwoFactorSettings.vue";
 
-/** The signed-in user's own account: who they are, their password and their two-factor authentication. */
+/** The signed-in user's own account: who they are, their password, their two-factor authentication and the language of their e-mails. */
 useDocumentTitle(() => t("account.title"));
 const session = useSessionStore();
 const user = computed(() => session.user);
@@ -45,6 +46,7 @@ const user = computed(() => session.user);
   <div class="account">
     <PasswordSettings />
     <TwoFactorSettings />
+    <MailLanguageSettings />
   </div>
 </template>
 
