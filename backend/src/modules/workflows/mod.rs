@@ -39,7 +39,7 @@ pub mod refs;
 pub mod runtime;
 pub mod runtime_schemas;
 #[cfg(test)]
-mod runtime_tests;
+pub(crate) mod runtime_tests;
 #[cfg(test)]
 mod s6_tests;
 pub mod schemas;
@@ -484,19 +484,22 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("The workflow's notification actions: who is told what, when")
             .description(
-                "An action has a kind (`inbox`: an entry in each recipient's notifications; `email` and `webhook` \
-                 come in a later release), a trigger (`transition`, `approval_requested`, `approval_step`, \
+                "An action has a kind (`inbox`: an entry in each recipient's notifications; `webhook`: a signed \
+                 request to a registered endpoint, carrying the CI fields listed in `settings.includeAttributes`; \
+                 `email` comes in a later release), a trigger (`transition`, `approval_requested`, `approval_step`, \
                  `approval_closed`, `approval_overdue` on the transition `transition`, or `instance_cancelled`, \
                  `instance_forced`) and recipient sources, resolved when the action runs. Actions are on the \
                  definition: a change applies at once to every version, without publishing. Nothing is sent from \
                  the request that runs the transition; the event's transaction queues a run, and the action \
                  workers deliver it after commit to each recipient who may then view the CI's type. `problems` \
-                 holds the lint's warnings.",
+                 holds the lint's warnings (also `endpoint_not_active` for a webhook action whose endpoint is paused \
+                 or suspended, and `webhooks_disabled` while the operator has webhooks off).",
             )
             .requires(manage)
             .errors(&[ErrorCode::NotFound])
             .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
-                Ok(Json(actions::get(&api.pool, &api.ctx, id, api.workflow_actions.max_recipients).await?))
+                Ok(Json(actions::get(&api.pool, &api.ctx, id, api.workflow_actions.max_recipients, api.webhooks.cfg.allowed)
+                    .await?))
             }),
         route(Method::PUT, ACTIONS, "replaceWorkflowActions")
             .tag(TAG)
@@ -511,17 +514,28 @@ pub fn routes() -> Vec<Route> {
                  a group or user given by name by a caller who may not look up users and groups (the edit \
                  permission on business services or `users.manage`, as for `GET /principals`) unless the workflow \
                  already has it under that name, whether or not it exists; `duplicate`; `too_many_actions` \
-                 beyond 10 per trigger and transition; `unknown_placeholder` in an e-mail text; `kind_unavailable` \
-                 for `email` and `webhook`, and `source_unavailable` for sources other than `profile`, `group` and \
-                 `user`, until the release that delivers them. Runs already queued for a removed or disabled action \
-                 are cancelled.",
+                 beyond 10 per trigger and transition; `unknown_placeholder` in an e-mail text; for a webhook, \
+                 `not_found` for an unknown endpoint key, `endpoint_not_active` when a new or changed action names \
+                 a paused or suspended endpoint, and `unknown_attribute` for an `includeAttributes` key that is not \
+                 a field of the workflow's type (own or inherited); `kind_unavailable` for `email`, and \
+                 `source_unavailable` for sources other than `profile`, `group` and `user`, until the release that \
+                 delivers them. Choosing an endpoint needs no `webhooks.manage`. Runs already queued for a removed \
+                 or disabled action are cancelled.",
             )
             .requires(manage)
             .session_only()
             .errors(&[ErrorCode::NotFound, ErrorCode::VersionConflict])
             .handle(
                 |api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<actions::WorkflowActionsReplace>>| async move {
-                    Ok(Json(actions::replace(&api.pool, &api.ctx, id, &b, api.workflow_actions.max_recipients).await?))
+                    Ok(Json(actions::replace(
+                        &api.pool,
+                        &api.ctx,
+                        id,
+                        &b,
+                        api.workflow_actions.max_recipients,
+                        api.webhooks.cfg.allowed,
+                    )
+                    .await?))
                 },
             ),
         route(Method::GET, ACTION_PREVIEW, "previewWorkflowAction")

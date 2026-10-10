@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watchEffect } from "vue";
 import type { CiSummary } from "../api/queries";
-import { isMultiline, nowFormValue, NOW_HINT, type AttributeShape, type Validation } from "../lib/attributeValues";
+import { isMultiline, nowFormValue, nowHint, type AttributeShape, type Validation } from "../lib/attributeValues";
 import { t } from "../i18n";
 import CiPicker from "./CiPicker.vue";
 import LookupValueSelect, { type LookupParent } from "./LookupValueSelect.vue";
@@ -68,7 +68,7 @@ function onReference(ci: CiSummary | null) {
     v-model="model"
     v-bind="aria"
     :type="def.dataType === 'date' ? 'date' : 'datetime-local'"
-    :title="NOW_HINT"
+    :title="nowHint()"
     @dblclick="model = nowFormValue(def.dataType)"
   />
   <CiPicker

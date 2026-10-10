@@ -1,5 +1,6 @@
 //! The commands around the encryption key: `generate-encryption-key`,
-//! `mfa reset-undecryptable` and `identity-providers reset-undecryptable`
+//! `mfa reset-undecryptable`, `identity-providers reset-undecryptable` and
+//! `webhooks reset-undecryptable`
 //! (the audited ways out when a key is lost), and the key report `verify` and
 //! `migrate` print.
 
@@ -280,6 +281,98 @@ pub(crate) async fn reset_idps(
 
 fn providers_n(n: usize) -> String {
     format!("{n} identity {}", if n == 1 { "provider" } else { "providers" })
+}
+
+#[derive(Debug, Subcommand)]
+pub enum WebhooksCommand {
+    /// Suspend the webhook endpoints whose signing secret, previous secret or
+    /// auth header is encrypted with a key that is not configured (the key is
+    /// lost), so the server can start: each gets a new signing secret that is
+    /// never shown and loses a header it cannot decrypt. Their deliveries are
+    /// held until an administrator rotates the secret, shares it with the
+    /// receiver and resumes the endpoint. Audited; asks for confirmation.
+    /// Refuses to run without ENCRYPTION_KEY_FILE unless --no-key is given.
+    ResetUndecryptable(ResetUndecryptableArgs),
+}
+
+pub async fn webhooks(cfg: &Config, cmd: WebhooksCommand) -> anyhow::Result<()> {
+    match cmd {
+        WebhooksCommand::ResetUndecryptable(args) => {
+            // The secrets that do not decrypt are replaced, not read: a new one is sealed
+            // under the configured key, so the key itself is needed unless --no-key.
+            let configured = configured_key_ids(&cfg.encryption)?;
+            known_keys(configured, args.no_key, "webhook endpoint secret")?;
+            let keyring = match configured {
+                Some(_) => Some(crate::secrets::Keyring::load(&cfg.encryption)?),
+                None => None,
+            };
+            let pool = db::connect(&cfg.database).await?;
+            let result = reset_endpoints(&pool, keyring.as_ref(), configured, &args).await;
+            pool.close().await;
+            result
+        }
+    }
+}
+
+pub(crate) async fn reset_endpoints(
+    pool: &PgPool,
+    keyring: Option<&crate::secrets::Keyring>,
+    configured: Option<(KeyId, Option<KeyId>)>,
+    args: &ResetUndecryptableArgs,
+) -> anyhow::Result<()> {
+    let known = known_keys(configured, args.no_key, "webhook endpoint secret")?;
+    if db::applied_count(pool).await? != db::expected_count() {
+        bail!("the database is not fully migrated; run `shadoucmdb migrate` first");
+    }
+    let mut tx = pool.begin().await?;
+    let endpoints = sealed::undecryptable_endpoints(&mut tx, &known).await?;
+    if endpoints.is_empty() {
+        println!("No webhook endpoint secret is encrypted with another key; nothing to do.");
+        return Ok(());
+    }
+    println!("Webhook endpoints with a secret encrypted with a key that is not configured ({}):", endpoints.len());
+    for e in &endpoints {
+        let keys: Vec<String> = e.key_ids.iter().map(ToString::to_string).collect();
+        println!("  {:<32} {:<32} {:<10} key {}", e.key, e.name, e.status, keys.join(", "));
+    }
+    if args.dry_run {
+        println!("Dry run: nothing was changed.");
+        return Ok(());
+    }
+    let Some(keyring) = keyring else {
+        bail!(
+            "No key is configured (--no-key): the endpoints need a new signing secret sealed under a key. Configure \
+             ENCRYPTION_KEY_FILE (a new key: `shadoucmdb generate-encryption-key`) and run the command again. Nothing \
+             was changed."
+        );
+    };
+    println!(
+        "Each is suspended (secret_required) and gets a new signing secret that is not shown; a header that does not \
+         decrypt is removed. Its deliveries are held until an administrator rotates the secret under Administration > \
+         Webhooks, shares it with the receiver and resumes the endpoint."
+    );
+    let (database, place) = maintenance::describe(&mut tx).await?;
+    let action = format!("suspend {} and replace their secrets in", endpoints_n(endpoints.len()));
+    maintenance::confirm(&action, &database, &place, args.confirm.yes)?;
+    let actor = match crate::prune::operator() {
+        Some(op) => format!("cli: webhooks reset-undecryptable ({op})"),
+        None => "cli: webhooks reset-undecryptable".to_owned(),
+    };
+    let ctx = RequestContext::system(actor, "cli");
+    crate::modules::webhooks::service::reset_undecryptable(&mut tx, &ctx, keyring, &endpoints)
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e.message))?;
+    tx.commit().await?;
+    println!(
+        "Suspended {} and replaced their secrets. Rotate each secret, share it with the receiver and resume the \
+         endpoint under Administration > Webhooks.",
+        endpoints_n(endpoints.len())
+    );
+    Ok(())
+}
+
+fn endpoints_n(n: usize) -> String {
+    format!("{n} webhook {}", if n == 1 { "endpoint" } else { "endpoints" })
 }
 
 /// The encrypted secrets per table and key, against the configured key: for

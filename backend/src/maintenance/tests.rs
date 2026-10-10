@@ -872,7 +872,7 @@ async fn workflow_actions_survive_backup_and_restore_but_nothing_is_sent_again()
     let endpoint = id(
         pool,
         "INSERT INTO webhook_endpoints (key, name, url, secret_ciphertext, secret_key_id)
-         VALUES ('itsm-prod', 'ITSM', 'https://itsm.corp.example/hook', '\\x0102', '\\x03') RETURNING id",
+         VALUES ('itsm-prod', 'ITSM', 'https://itsm.corp.example/hook', decode(repeat('0102', 22), 'hex'), 3) RETURNING id",
     )
     .await;
     ok(
@@ -882,7 +882,7 @@ async fn workflow_actions_survive_backup_and_restore_but_nothing_is_sent_again()
                VALUES ('{transition}', 1, '{attribute}', 'literal', '\"retired\"');
              INSERT INTO webhook_allowed_hosts (host_pattern, created_by_name) VALUES ('itsm.corp.example', 'admin');
              INSERT INTO webhook_endpoints (key, name, url, secret_ciphertext, secret_key_id, status)
-               VALUES ('paused', 'Paused', 'https://itsm.corp.example/p', '\\x01', '\\x02', 'paused');
+               VALUES ('paused', 'Paused', 'https://itsm.corp.example/p', decode(repeat('01', 44), 'hex'), 2, 'paused');
              INSERT INTO workflow_actions (definition_id, key, name, kind, trigger, transition_key, endpoint_id)
                VALUES ('{def}', 'sync', 'Sync', 'webhook', 'transition', 'finish', '{endpoint}');
              INSERT INTO workflow_action_recipients (action_id, position, source, user_id)
@@ -972,8 +972,8 @@ async fn workflow_actions_survive_backup_and_restore_but_nothing_is_sent_again()
     assert_eq!(
         endpoints,
         [
-            ("itsm-prod".into(), "suspended".into(), Some("restored".into()), vec![1, 2]),
-            ("paused".into(), "suspended".into(), Some("restored".into()), vec![1]),
+            ("itsm-prod".into(), "suspended".into(), Some("restored".into()), [1, 2].repeat(22)),
+            ("paused".into(), "suspended".into(), Some("restored".into()), vec![1; 44]),
         ]
     );
     let locale: Option<String> =

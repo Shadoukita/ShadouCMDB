@@ -3436,12 +3436,12 @@ export interface paths {
         };
         /**
          * The workflow's notification actions: who is told what, when
-         * @description Requires `workflows.manage`. An action has a kind (`inbox`: an entry in each recipient's notifications; `email` and `webhook` come in a later release), a trigger (`transition`, `approval_requested`, `approval_step`, `approval_closed`, `approval_overdue` on the transition `transition`, or `instance_cancelled`, `instance_forced`) and recipient sources, resolved when the action runs. Actions are on the definition: a change applies at once to every version, without publishing. Nothing is sent from the request that runs the transition; the event's transaction queues a run, and the action workers deliver it after commit to each recipient who may then view the CI's type. `problems` holds the lint's warnings.
+         * @description Requires `workflows.manage`. An action has a kind (`inbox`: an entry in each recipient's notifications; `webhook`: a signed request to a registered endpoint, carrying the CI fields listed in `settings.includeAttributes`; `email` comes in a later release), a trigger (`transition`, `approval_requested`, `approval_step`, `approval_closed`, `approval_overdue` on the transition `transition`, or `instance_cancelled`, `instance_forced`) and recipient sources, resolved when the action runs. Actions are on the definition: a change applies at once to every version, without publishing. Nothing is sent from the request that runs the transition; the event's transaction queues a run, and the action workers deliver it after commit to each recipient who may then view the CI's type. `problems` holds the lint's warnings (also `endpoint_not_active` for a webhook action whose endpoint is paused or suspended, and `webhooks_disabled` while the operator has webhooks off).
          */
         get: operations["getWorkflowActions"];
         /**
          * Replace the workflow's notification actions
-         * @description Requires `workflows.manage`. `actions` is the complete new set, in order; an action keeps its id and its delivery history by `key`. Send the workflow's `version`: 409 VERSION_CONFLICT if it changed in between. A change bumps the workflow's version and is audited as an `update` with the actions before and after, recipients by name. 400 VALIDATION_ERROR: `required` / `not_applicable` / `source_mismatch` for fields the kind, trigger or source needs or does not take; `unknown_transition` for a transition no version and not the draft has; `not_found` for an unknown profile, group or user; `directory_lookup_forbidden` for a group or user given by name by a caller who may not look up users and groups (the edit permission on business services or `users.manage`, as for `GET /principals`) unless the workflow already has it under that name, whether or not it exists; `duplicate`; `too_many_actions` beyond 10 per trigger and transition; `unknown_placeholder` in an e-mail text; `kind_unavailable` for `email` and `webhook`, and `source_unavailable` for sources other than `profile`, `group` and `user`, until the release that delivers them. Runs already queued for a removed or disabled action are cancelled. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Requires `workflows.manage`. `actions` is the complete new set, in order; an action keeps its id and its delivery history by `key`. Send the workflow's `version`: 409 VERSION_CONFLICT if it changed in between. A change bumps the workflow's version and is audited as an `update` with the actions before and after, recipients by name. 400 VALIDATION_ERROR: `required` / `not_applicable` / `source_mismatch` for fields the kind, trigger or source needs or does not take; `unknown_transition` for a transition no version and not the draft has; `not_found` for an unknown profile, group or user; `directory_lookup_forbidden` for a group or user given by name by a caller who may not look up users and groups (the edit permission on business services or `users.manage`, as for `GET /principals`) unless the workflow already has it under that name, whether or not it exists; `duplicate`; `too_many_actions` beyond 10 per trigger and transition; `unknown_placeholder` in an e-mail text; for a webhook, `not_found` for an unknown endpoint key, `endpoint_not_active` when a new or changed action names a paused or suspended endpoint, and `unknown_attribute` for an `includeAttributes` key that is not a field of the workflow's type (own or inherited); `kind_unavailable` for `email`, and `source_unavailable` for sources other than `profile`, `group` and `user`, until the release that delivers them. Choosing an endpoint needs no `webhooks.manage`. Runs already queued for a removed or disabled action are cancelled. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         put: operations["replaceWorkflowActions"];
         post?: never;
@@ -4095,6 +4095,182 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/webhook-endpoints": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List webhook endpoints (never their secrets)
+         * @description For `webhooks.manage` holders. A caller with `workflows.manage` only (to pick an endpoint for a workflow action) gets the key, name and status of each, every other field null; anyone else 403.
+         */
+        get: operations["listWebhookEndpoints"];
+        put?: never;
+        /**
+         * Register a webhook endpoint; the response shows its signing secret once
+         * @description Requires `webhooks.manage`. The URL must be absolute https (http only when the operator set WEBHOOK_ALLOW_HTTP=true and the matching allowlist entry has `allowHttp`), without user name, password or fragment, and its host (and port) must be on the allowlist and inside the operator's WEBHOOK_ALLOWED_HOSTS: 400 VALIDATION_ERROR at `url` with `host_not_allowed`, `http_not_allowed`, `url_userinfo`, `url_fragment`, `invalid_url` or `too_long` otherwise. The server generates the signing secret (`whsec_...`) and returns it in this response only: copy it to the receiver now. `authHeader` is a static header sent with every request (e.g. `Authorization`); its value is write-only, and a name the server sets itself is refused (`reserved`). Where the request goes is judged again before every attempt, on the addresses the host resolves to then. 409 WEBHOOKS_DISABLED while the operator has not set WEBHOOKS_ALLOWED=true. Needs a signed-in session: API tokens get 403 FORBIDDEN. The session's owner must have signed in or confirmed their credentials (`reauthenticate`, POST /api/v1/auth/reauthenticate) in the last 10 minutes: 403 REAUTHENTICATION_REQUIRED otherwise, audited as `session.reauthentication_required`.
+         */
+        post: operations["createWebhookEndpoint"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/webhook-endpoints/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get one webhook endpoint (never its secret or header value)
+         * @description Requires `webhooks.manage`.
+         */
+        get: operations["getWebhookEndpoint"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a webhook endpoint that no workflow action uses
+         * @description Requires `webhooks.manage`. 409 IN_USE while a workflow action names it (the message lists them). Its deliveries still waiting die (`endpoint_deleted`), each audited as `workflow.action_dead`.
+         */
+        delete: operations["deleteWebhookEndpoint"];
+        options?: never;
+        head?: never;
+        /**
+         * Change a webhook endpoint (partial)
+         * @description Requires `webhooks.manage`. A new `url` meets the rules of createWebhookEndpoint. `authHeader`: an object replaces the header, null removes it, left out keeps it. The status changes only through pause and resume. 409 WEBHOOKS_DISABLED while the operator has not set WEBHOOKS_ALLOWED=true.
+         */
+        patch: operations["updateWebhookEndpoint"];
+        trace?: never;
+    };
+    "/api/v1/admin/webhook-endpoints/{id}/rotate-secret": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Replace the signing secret; the response shows the new one once
+         * @description Requires `webhooks.manage`. For `graceHours` (default 24, 0 to 168) every request carries a second `v1=` signature made with the previous secret, so the receiver can switch without missing a request. An endpoint suspended with `secret_required` becomes paused: share the new secret with the receiver, then resume it. 409 WEBHOOKS_DISABLED while the operator has not set WEBHOOKS_ALLOWED=true. Needs a signed-in session: API tokens get 403 FORBIDDEN. The session's owner must have signed in or confirmed their credentials (`reauthenticate`, POST /api/v1/auth/reauthenticate) in the last 10 minutes: 403 REAUTHENTICATION_REQUIRED otherwise, audited as `session.reauthentication_required`.
+         */
+        post: operations["rotateWebhookSecret"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/webhook-endpoints/{id}/ping": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send a signed test request (`ping`) and say what came of it
+         * @description Requires `webhooks.manage`. Runs the URL rules and the address checks a delivery runs, then sends one `ping` event (also to a paused or suspended endpoint). Answers 200 with `ok` and the reason a delivery would record (`host_not_allowed`, `address_blocked:<ip>`, `redirect_not_followed`, ...). Nothing is stored and the circuit breaker does not count it. 409 WEBHOOKS_DISABLED while the operator has not set WEBHOOKS_ALLOWED=true.
+         */
+        post: operations["pingWebhookEndpoint"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/webhook-endpoints/{id}/pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pause an endpoint: its deliveries are held until it is resumed
+         * @description Requires `webhooks.manage`. Held deliveries older than WORKFLOW_ACTIONS_MAX_AGE_HOURS die as `endpoint_suspended`. Audited as `webhook_endpoint.suspend` with reason `paused`. A paused or suspended endpoint is left as it is.
+         */
+        post: operations["pauseWebhookEndpoint"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/webhook-endpoints/{id}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resume a paused or suspended endpoint and send its held deliveries
+         * @description Requires `webhooks.manage`. Its URL must still be allowed (400 `host_not_allowed` otherwise) and its secrets must decrypt: an endpoint created by a configuration import, restored under another key or reset with `webhooks reset-undecryptable` needs a secret rotation first (422 SECRET_REQUIRED). The failure count starts again at 0. 409 WEBHOOKS_DISABLED while the operator has not set WEBHOOKS_ALLOWED=true.
+         */
+        post: operations["resumeWebhookEndpoint"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/webhook-allowed-hosts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The hosts webhooks may reach (an empty list allows none)
+         * @description Requires `webhooks.manage`. Answers `{ data }` with every entry; the list is short and not paginated.
+         */
+        get: operations["listWebhookAllowedHosts"];
+        put?: never;
+        /**
+         * Allow webhooks to a host
+         * @description Requires `webhooks.manage`. An exact host, `*.domain` (any name one label or more below it; never a bare `*`) or an IP address (matched only literally), with an optional port. When the operator set WEBHOOK_ALLOWED_HOSTS, the entry must lie inside it (400 `host_not_allowed`), and `allowHttp` needs WEBHOOK_ALLOW_HTTP=true (400 `http_not_allowed`). 409 CONFLICT for an entry that exists. 409 WEBHOOKS_DISABLED while the operator has not set WEBHOOKS_ALLOWED=true. Needs a signed-in session: API tokens get 403 FORBIDDEN. The session's owner must have signed in or confirmed their credentials (`reauthenticate`, POST /api/v1/auth/reauthenticate) in the last 10 minutes: 403 REAUTHENTICATION_REQUIRED otherwise, audited as `session.reauthentication_required`.
+         */
+        post: operations["createWebhookAllowedHost"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/webhook-allowed-hosts/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove an allowlist entry; endpoints it alone allowed are suspended
+         * @description Requires `webhooks.manage`. Every endpoint whose URL no remaining entry allows is suspended with reason `host_not_allowed` (audited) and listed in the response; its deliveries are held.
+         */
+        delete: operations["deleteWebhookAllowedHost"];
         options?: never;
         head?: never;
         patch?: never;
@@ -4809,7 +4985,7 @@ export interface components {
             isExpected: boolean;
             filled: boolean;
         };
-        /** @description A whole configuration: data model, lookups, permission profiles, UI settings, saved import mappings, shared saved views and workflows (no users, passwords, CIs, personal views or workflow instances) */
+        /** @description A whole configuration: data model, lookups, permission profiles, UI settings, saved import mappings, shared saved views, workflows and webhook endpoints (no users, passwords, secrets, CIs, personal views or workflow instances) */
         ConfigFile: {
             /**
              * @description Always "shadoucmdb.config"
@@ -4906,6 +5082,27 @@ export interface components {
                     attribute?: string;
                     serviceOwner?: ("technical" | "business") | null;
                 }[];
+            }[];
+            webhookEndpoints?: {
+                key: string;
+                name: string;
+                url: string;
+                /** Format: int32 */
+                timeoutMs?: number;
+                /** Format: int32 */
+                maxPerMinute?: number;
+                /** Format: int32 */
+                maxInFlight?: number;
+                /** @description The source's auth header name, if it had one; its value never travels, so it is not imported */
+                authHeaderName?: string | null;
+                authHeaderSet?: boolean;
+            }[];
+            webhookAllowedHosts?: {
+                hostPattern: string;
+                /** Format: int32 */
+                port?: number | null;
+                allowHttp?: boolean;
+                comment?: string | null;
             }[];
         };
         ConfigurationItem: {
@@ -6504,8 +6701,8 @@ export interface components {
             id: string;
             kind: components["schemas"]["NotificationKind"];
             /**
-             * @description The record to open: an approval request, a workflow instance or an import job. It may be gone by now (an
-             *     import record past its retention); the client then says so.
+             * @description The record to open: an approval request, a workflow instance, an import job or a webhook endpoint. It may be
+             *     gone by now (an import record past its retention); the client then says so.
              */
             entityType: components["schemas"]["NotificationEntityType"];
             /** Format: uuid */
@@ -6524,7 +6721,8 @@ export interface components {
              *     `toStateName`, `actorName`. `import_finished`: `fileName`, `classKey`, `status`, `errorCode`. `workflow_action`: those of
              *     `workflow_transition` plus `actionKey`, `actionName`, `approvalRequestId` and `requestNo` (`event` is the
              *     workflow event's kind: `transition`, `approval_request`, `approval_decision`, `approval_close`,
-             *     `approval_overdue`, `cancel`, `force`, ...). Any may be null.
+             *     `approval_overdue`, `cancel`, `force`, ...). `webhook_suspended`: `endpointKey`, `endpointName`, `reason`,
+             *     `consecutiveFailures`. Any may be null.
              */
             data: Record<string, never>;
             /** Format: date-time */
@@ -6539,9 +6737,9 @@ export interface components {
          * @description What a notification opens
          * @enum {string}
          */
-        NotificationEntityType: "workflow_approval_requests" | "workflow_instances" | "import_jobs";
+        NotificationEntityType: "workflow_approval_requests" | "workflow_instances" | "import_jobs" | "webhook_endpoints";
         /** @enum {string} */
-        NotificationKind: "approval_requested" | "approval_closed" | "workflow_transition" | "import_finished" | "workflow_action";
+        NotificationKind: "approval_requested" | "approval_closed" | "workflow_transition" | "import_finished" | "workflow_action" | "webhook_suspended";
         NotificationList: {
             data: components["schemas"]["Notification"][];
             page: components["schemas"]["PageMeta"];
@@ -8011,6 +8209,125 @@ export interface components {
             /** @description Database migrations shipped with this build */
             migrations: number;
         };
+        /** @description An allowlist entry: a host webhooks may reach */
+        WebhookAllowedHost: {
+            /** Format: uuid */
+            id: string;
+            /** @description An exact host (IDNA form), `*.domain` (any name below it), or an IP address */
+            hostPattern: string;
+            /**
+             * Format: int32
+             * @description The only port allowed; null allows any
+             */
+            port?: number | null;
+            /** @description Plain http to this host, if the operator also allows it (WEBHOOK_ALLOW_HTTP) */
+            allowHttp: boolean;
+            comment?: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            createdByName: string;
+        };
+        /** @description The allowlist entry was removed */
+        WebhookAllowedHostDeleted: {
+            /** @description Keys of the endpoints suspended (`host_not_allowed`) because no entry allows their URL any more */
+            suspendedEndpoints: string[];
+        };
+        /** @description The allowlist, every entry (it is short) */
+        WebhookAllowedHostList: {
+            data: components["schemas"]["WebhookAllowedHost"][];
+        };
+        /** @description A static header sent with every request (e.g. `Authorization: Bearer ...`); its value is write-only */
+        WebhookAuthHeaderInput: {
+            name: string;
+            value: string;
+        };
+        /** @description A registered webhook receiver. Never carries its signing secret or header value. */
+        WebhookEndpoint: {
+            /** Format: uuid */
+            id: string;
+            key: string;
+            name: string;
+            status: components["schemas"]["WebhookEndpointStatus"];
+            /**
+             * @description Why the server suspended it: `breaker` (too many failures in a row), `host_not_allowed` (its host left the
+             *     allowlist), `restored` (restored from a backup), `secret_required` (created by a configuration import, or its
+             *     secret could not be decrypted)
+             */
+            suspendedReason?: string | null;
+            /** @description The fields below are null to a caller without `webhooks.manage` */
+            url?: string | null;
+            /** @description The URL is plain http (allowed by the operator and the allowlist entry): requests are not encrypted */
+            unencrypted?: boolean | null;
+            /** Format: int32 */
+            payloadVersion?: number | null;
+            /** Format: int32 */
+            timeoutMs?: number | null;
+            /** Format: int32 */
+            maxPerMinute?: number | null;
+            /** Format: int32 */
+            maxInFlight?: number | null;
+            /** @description The auth header's name; its value is never returned */
+            authHeaderName?: string | null;
+            authHeaderSet?: boolean | null;
+            /**
+             * Format: date-time
+             * @description Until when the signing secret before the last rotation is still sent (a second `v1=` in the signature)
+             */
+            previousSecretUntil?: string | null;
+            /** Format: int32 */
+            consecutiveFailures?: number | null;
+            /** Format: date-time */
+            lastSuccessAt?: string | null;
+            /** Format: date-time */
+            lastFailureAt?: string | null;
+            /** Format: date-time */
+            createdAt?: string | null;
+            /** Format: date-time */
+            updatedAt?: string | null;
+            /**
+             * Format: int32
+             * @description Send it back with a change; a stale one fails with 409 VERSION_CONFLICT
+             */
+            version: number;
+        };
+        /** @description An endpoint just created, with its signing secret: shown this once, never again */
+        WebhookEndpointCreated: {
+            endpoint: components["schemas"]["WebhookEndpoint"];
+            /** @description `whsec_...`: the receiver keys HMAC-SHA256 with this whole string to check `X-ShadouCMDB-Signature` */
+            secret: string;
+        };
+        WebhookEndpointList: {
+            data: components["schemas"]["WebhookEndpoint"][];
+            page: components["schemas"]["PageMeta"];
+        };
+        /**
+         * @description Whether an endpoint is called
+         * @enum {string}
+         */
+        WebhookEndpointStatus: "active" | "paused" | "suspended";
+        /** @description What the test request came to */
+        WebhookPingResult: {
+            /** @description The receiver answered 2xx */
+            ok: boolean;
+            /**
+             * Format: int32
+             * @description The receiver's HTTP status, if it answered
+             */
+            statusCode?: number | null;
+            /**
+             * @description Why it failed, as a delivery would record it: `host_not_allowed`, `http_not_allowed`,
+             *     `address_blocked:<ip>`, `redirect_not_followed`, `http_status`, `unreachable`, `secret_unreadable`
+             */
+            reason?: string | null;
+            message: string;
+            /** Format: int64 */
+            durationMs: number;
+        };
+        /** @description A new signing secret, shown this once */
+        WebhookSecretRotated: {
+            endpoint: components["schemas"]["WebhookEndpoint"];
+            secret: string;
+        };
         /** @description One notification action of a workflow */
         WorkflowAction: {
             /** Format: uuid */
@@ -8415,7 +8732,7 @@ export interface components {
              * @description Warnings: `unknown_transition` (the current version lacks it; kept for instances on older versions),
              *     `recipients_cannot_view` (no active user of a source may view the workflow's type), `too_many_recipients`
              *     (more than `WORKFLOW_ACTIONS_MAX_RECIPIENTS` users; the rest are left out), `missing_locale` and
-             *     `minimal_placeholder` (e-mail)
+             *     `minimal_placeholder` (e-mail), `endpoint_not_active` and `webhooks_disabled` (webhook)
              */
             problems: components["schemas"]["WorkflowProblem"][];
         };
@@ -26831,7 +27148,7 @@ export interface operations {
                 offset?: number;
                 unread?: "true" | "false";
                 /** @description Only this kind */
-                kind?: "approval_requested" | "approval_closed" | "workflow_transition" | "import_finished" | "workflow_action";
+                kind?: "approval_requested" | "approval_closed" | "workflow_transition" | "import_finished" | "workflow_action" | "webhook_suspended";
             };
             header?: never;
             path?: never;
@@ -30646,6 +30963,27 @@ export interface operations {
                             attribute?: string;
                             serviceOwner?: ("technical" | "business") | null;
                         }[];
+                    }[];
+                    webhookEndpoints?: {
+                        key: string;
+                        name: string;
+                        url: string;
+                        /** Format: int32 */
+                        timeoutMs?: number;
+                        /** Format: int32 */
+                        maxPerMinute?: number;
+                        /** Format: int32 */
+                        maxInFlight?: number;
+                        /** @description The source's auth header name, if it had one; its value never travels, so it is not imported */
+                        authHeaderName?: string | null;
+                        authHeaderSet?: boolean;
+                    }[];
+                    webhookAllowedHosts?: {
+                        hostPattern: string;
+                        /** Format: int32 */
+                        port?: number | null;
+                        allowHttp?: boolean;
+                        comment?: string | null;
                     }[];
                 };
             };
@@ -36421,6 +36759,1187 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CiWorkflows"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listWebhookEndpoints: {
+        parameters: {
+            query?: {
+                /** @description Page size (1-200) */
+                limit?: number;
+                /** @description Rows to skip */
+                offset?: number;
+                /** @description Only endpoints in this status */
+                status?: "active" | "paused" | "suspended";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookEndpointList"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    createWebhookEndpoint: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Stable key: lower case, digits, _ and -; actions and configuration files name it */
+                    key: string;
+                    name: string;
+                    /** @description Absolute https URL (http only with WEBHOOK_ALLOW_HTTP=true and an allowlist entry that allows it), no user name or password, no fragment; its host and port must be on the allowlist */
+                    url: string;
+                    /**
+                     * Format: int32
+                     * @description Time allowed per attempt (1,000-30,000 ms, default 10,000)
+                     */
+                    timeoutMs?: number | null;
+                    /**
+                     * Format: int32
+                     * @description Requests per minute at most (1-6,000, default 120)
+                     */
+                    maxPerMinute?: number | null;
+                    /**
+                     * Format: int32
+                     * @description Requests in flight at most (1-16, default 2)
+                     */
+                    maxInFlight?: number | null;
+                    authHeader?: components["schemas"]["WebhookAuthHeaderInput"] | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookEndpointCreated"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the session's owner has not confirmed their credentials in the last 10 minutes (code REAUTHENTICATION_REQUIRED; POST /api/v1/auth/reauthenticate, then send the request again) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getWebhookEndpoint: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookEndpoint"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    deleteWebhookEndpoint: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success, no content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    updateWebhookEndpoint: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: int32 */
+                    version: number;
+                    name?: string;
+                    /** @description Absolute https URL (http only with WEBHOOK_ALLOW_HTTP=true and an allowlist entry that allows it), no user name or password, no fragment; its host and port must be on the allowlist */
+                    url?: string;
+                    /** Format: int32 */
+                    timeoutMs?: number | null;
+                    /** Format: int32 */
+                    maxPerMinute?: number | null;
+                    /** Format: int32 */
+                    maxInFlight?: number | null;
+                    /** @description An object replaces the header, null removes it, left out keeps it */
+                    authHeader?: components["schemas"]["WebhookAuthHeaderInput"] | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookEndpoint"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    rotateWebhookSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * Format: int32
+                     * @description Hours the current secret is still sent next to the new one (0-168, default 24); 0 drops it at once
+                     */
+                    graceHours?: number | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookSecretRotated"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the session's owner has not confirmed their credentials in the last 10 minutes (code REAUTHENTICATION_REQUIRED; POST /api/v1/auth/reauthenticate, then send the request again) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (not allowed in this state), VERSION_CONFLICT, or WEBHOOKS_DISABLED (the operator has not enabled webhooks: WEBHOOKS_ALLOWED=false). Nothing was changed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    pingWebhookEndpoint: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookPingResult"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (not allowed in this state), VERSION_CONFLICT, or WEBHOOKS_DISABLED (the operator has not enabled webhooks: WEBHOOKS_ALLOWED=false). Nothing was changed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    pauseWebhookEndpoint: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookEndpoint"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    resumeWebhookEndpoint: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookEndpoint"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (not allowed in this state), VERSION_CONFLICT, or WEBHOOKS_DISABLED (the operator has not enabled webhooks: WEBHOOKS_ALLOWED=false). Nothing was changed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The stored secret must be entered again (code SECRET_REQUIRED): the patch changes the server address or bind DN it would be sent to; details name the secret's field (code secret_required). Nothing was changed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listWebhookAllowedHosts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookAllowedHostList"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    createWebhookAllowedHost: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description `itsm.corp.example`, `*.corp.example` (one label or more below it, never a bare `*`), or an IP address */
+                    hostPattern: string;
+                    /** Format: int32 */
+                    port?: number | null;
+                    allowHttp?: boolean;
+                    comment?: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookAllowedHost"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the session's owner has not confirmed their credentials in the last 10 minutes (code REAUTHENTICATION_REQUIRED; POST /api/v1/auth/reauthenticate, then send the request again) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body too large (code PAYLOAD_TOO_LARGE) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    deleteWebhookAllowedHost: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookAllowedHostDeleted"];
                 };
             };
             /** @description Invalid input (code VALIDATION_ERROR) with per-field details */

@@ -258,7 +258,7 @@ const kindLabel = (m: ServiceMember) => (m.isService ? t("services.badge") : t("
       <div class="alert alert-warn" role="alert">
         <div>{{ t("common.busy") }}</div>
         <div class="meta">
-          <template v-if="apiError?.requestId">Request id <code>{{ apiError.requestId }}</code>&#32;</template>
+          <template v-if="apiError?.requestId">{{ t("error.requestId") }} <code>{{ apiError.requestId }}</code>&#32;</template>
           <button type="button" class="btn btn-sm" @click="members.refetch()">{{ t("common.retry") }}</button>
         </div>
       </div>

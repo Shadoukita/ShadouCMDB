@@ -8,6 +8,8 @@ import NotFoundPage from "./pages/NotFoundPage.vue";
 import SearchPage from "./pages/SearchPage.vue";
 import WorkflowInstancePage from "./pages/workflows/WorkflowInstancePage.vue";
 import WorkflowInstancesPage from "./pages/workflows/WorkflowInstancesPage.vue";
+import ApprovalsInboxPage from "./pages/approvals/ApprovalsInboxPage.vue";
+import DelegationsPage from "./pages/approvals/DelegationsPage.vue";
 import ServiceDetailPage from "./pages/services/ServiceDetailPage.vue";
 import ServiceListPage from "./pages/services/ServiceListPage.vue";
 import AdminLayout from "./pages/admin/AdminLayout.vue";
@@ -95,10 +97,13 @@ export const router = createRouter({
     // Workflow instances on the CIs the user may view, and one instance with its history.
     { path: "/workflows", component: WorkflowInstancesPage },
     { path: "/workflows/:id", component: WorkflowInstancePage },
+    // Approval requests waiting for the user's decision, the ones they made and the ones they decided.
+    { path: "/approvals", component: ApprovalsInboxPage },
     { path: "/imports", component: ImportsPage },
     { path: "/imports/new", component: ImportWizardPage },
     { path: "/imports/:id", component: ImportWizardPage },
     { path: "/account", component: AccountPage },
+    { path: "/account/delegations", component: DelegationsPage, props: { admin: false } },
     { path: TWO_FACTOR_SETUP, component: TwoFactorSetupPage, meta: { bare: true } },
     { path: EMAIL_ENTRY, component: EmailEntryPage, meta: { bare: true } },
     {
@@ -121,6 +126,7 @@ export const router = createRouter({
         { path: "profiles/new", component: ProfileEditPage, meta: { permissions: ["profiles.manage"] } },
         { path: "profiles/:id", component: ProfileEditPage, meta: { permissions: section("profiles") } },
         { path: "api-tokens", component: ApiTokensPage, meta: { permissions: section("api-tokens") } },
+        { path: "approval-delegations", component: DelegationsPage, props: { admin: true }, meta: { permissions: section("approval-delegations") } },
         { path: "identity-providers", component: IdentityProvidersPage, meta: { administratorOnly: true } },
         { path: "identity-providers/new", component: IdentityProviderEditPage, meta: { administratorOnly: true } },
         { path: "identity-providers/:id", component: IdentityProviderEditPage, meta: { administratorOnly: true } },

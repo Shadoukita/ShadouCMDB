@@ -7,29 +7,32 @@ import { useWorkflowList, type WorkflowListQuery } from "../../../api/workflows"
 import Breadcrumbs from "../../../components/Breadcrumbs.vue";
 import EmptyState from "../../../components/EmptyState.vue";
 import ErrorAlert from "../../../components/ErrorAlert.vue";
-import LoadingState from "../../../components/LoadingState.vue";
+import Icon from "../../../components/Icon.vue";
 import PaginationBar from "../../../components/PaginationBar.vue";
+import SkeletonRows from "../../../components/SkeletonRows.vue";
 import SortIcon from "../../../components/SortIcon.vue";
+import { t, type MessageKey } from "../../../i18n";
 import { useDebounced, useDocumentTitle } from "../../../lib/composables";
-import { formatRelative } from "../../../lib/format";
+import { formatDateTime, formatRelative } from "../../../lib/format";
 import { useListQuery } from "../../../lib/listQuery";
 
 /**
  * Administration › Workflows: every workflow definition, filtered by the CI type it runs on.
- * Search, type, active flag, sort and page live in the URL; the API filters and pages.
+ * Search, type, active flag, sort and page live in the URL; the API filters and pages. The page uses the
+ * inventory's head band (breadcrumb, title with the count, intro, filters) above the table card.
  */
-useDocumentTitle("Workflows");
+useDocumentTitle(() => t("admin.section.workflows"));
 type SortField = NonNullable<WorkflowListQuery["sort"]>;
 
-const COLUMNS: { key: string; label: string; sort?: string; num?: boolean }[] = [
-  { key: "name", label: "Name", sort: "name" },
-  { key: "key", label: "Key", sort: "key" },
-  { key: "class", label: "CI type" },
-  { key: "stateField", label: "State field" },
-  { key: "status", label: "Status" },
-  { key: "version", label: "Current version", num: true },
-  { key: "draft", label: "Draft" },
-  { key: "updated", label: "Updated", sort: "updatedAt" },
+const COLUMNS: { key: string; label: MessageKey; sort?: string; num?: boolean }[] = [
+  { key: "name", label: "wfAdmin.col.name", sort: "name" },
+  { key: "key", label: "wfAdmin.col.key", sort: "key" },
+  { key: "class", label: "wfAdmin.col.class" },
+  { key: "stateField", label: "wfAdmin.col.stateField" },
+  { key: "status", label: "wfAdmin.col.status" },
+  { key: "version", label: "wfAdmin.col.version", num: true },
+  { key: "draft", label: "wfAdmin.col.draft" },
+  { key: "updated", label: "wfAdmin.col.updated", sort: "updatedAt" },
 ];
 
 const lq = useListQuery({ sort: "name" });
@@ -69,96 +72,106 @@ function clearFilters() {
 </script>
 
 <template>
-  <Breadcrumbs :items="adminCrumbs('workflows')" />
-  <div class="page-header">
-    <div class="title">
-      <h1>Workflows</h1>
-      <span v-if="list.data.value" class="muted">{{ total.toLocaleString() }} total</span>
-      <span v-if="list.isFetching.value && !list.isLoading.value" class="spinner" aria-label="Refreshing" />
+  <div class="list-head">
+    <Breadcrumbs :items="adminCrumbs('workflows')" />
+    <div class="page-header">
+      <div class="title">
+        <h1>{{ t("admin.section.workflows") }}</h1>
+        <span v-if="list.data.value" class="count mono">{{ t("wfAdmin.list.count", { n: total }) }}</span>
+        <span v-if="list.isFetching.value && !list.isLoading.value" class="spinner" :aria-label="t('common.refreshing')" />
+      </div>
+      <div class="actions">
+        <RouterLink class="btn btn-primary" :to="newHref"><Icon name="plus" />{{ t("wfAdmin.new") }}</RouterLink>
+      </div>
     </div>
-    <div class="actions">
-      <RouterLink class="btn btn-primary" :to="newHref">+ New workflow</RouterLink>
-    </div>
-  </div>
-  <p class="page-intro muted">
-    A workflow moves the CIs of one type through states by named transitions. Edit a draft, check it, publish it as a version,
-    then decide which permission profiles may run each transition.
-  </p>
-
-  <section class="panel" aria-label="Workflows">
-    <form class="toolbar" role="search" @submit.prevent>
+    <p class="page-intro">{{ t("wfAdmin.list.intro") }}</p>
+    <form class="toolbar" role="search" :aria-label="t('wfAdmin.list.filters')" @submit.prevent>
       <div class="field search">
-        <label for="wf-q">Search</label>
-        <input id="wf-q" v-model="qText" type="search" placeholder="Name, key or description" />
+        <label for="wf-q">{{ t("admin.search") }}</label>
+        <div class="input-icon">
+          <Icon name="search" />
+          <input id="wf-q" v-model="qText" type="search" :placeholder="t('wfAdmin.list.searchPlaceholder')" />
+        </div>
       </div>
       <div class="field">
-        <label for="wf-class">CI type</label>
+        <label for="wf-class">{{ t("wfAdmin.col.class") }}</label>
         <select id="wf-class" :value="get('class')" @change="update({ class: ($event.target as HTMLSelectElement).value || undefined })">
-          <option value="">All types</option>
-          <option v-for="c in classes.data.value ?? []" :key="c.id" :value="c.key">{{ c.name }}</option>
+          <option value="">{{ t("wfAdmin.filter.allTypes") }}</option>
+          <option v-for="c in classes.data.value ?? []" :key="c.id" :value="c.key" dir="auto">{{ c.name }}</option>
         </select>
       </div>
       <div class="field">
-        <label for="wf-active">Status</label>
+        <label for="wf-active">{{ t("wfAdmin.col.status") }}</label>
         <select id="wf-active" :value="get('active')" @change="update({ active: ($event.target as HTMLSelectElement).value || undefined })">
-          <option value="">Active and inactive</option>
-          <option value="true">Active</option>
-          <option value="false">Inactive</option>
+          <option value="">{{ t("wfAdmin.filter.anyStatus") }}</option>
+          <option value="true">{{ t("common.active") }}</option>
+          <option value="false">{{ t("wfAdmin.inactive") }}</option>
         </select>
       </div>
-      <button v-if="filtered" type="button" class="btn" @click="clearFilters">Clear filters</button>
+      <button v-if="filtered" type="button" class="btn" @click="clearFilters">{{ t("inventory.clearFilters") }}</button>
     </form>
+  </div>
 
+  <section class="panel explorer" :aria-label="t('admin.section.workflows')">
     <div v-if="list.isError.value" class="panel-body">
       <ErrorAlert :error="list.error.value" :on-retry="() => list.refetch()" />
     </div>
-    <LoadingState v-if="list.isLoading.value" label="Loading workflows…" />
-    <EmptyState v-if="list.data.value && total === 0 && filtered" title="No workflow matches these filters">
-      <template #actions><button type="button" class="btn" @click="clearFilters">Clear filters</button></template>
+    <SkeletonRows v-else-if="list.isLoading.value" :label="t('wfAdmin.list.loading')" />
+    <EmptyState v-else-if="list.data.value && total === 0 && filtered" icon="search" :title="t('wfAdmin.list.noMatch')">
+      <template #actions><button type="button" class="btn" @click="clearFilters">{{ t("inventory.clearFilters") }}</button></template>
     </EmptyState>
-    <EmptyState v-else-if="list.data.value && total === 0" title="No workflows yet" data-testid="workflows-empty">
-      Create a workflow for a CI type, for example a change or decommissioning process, and design its states and transitions.
-      <template #actions><RouterLink class="btn btn-primary" :to="newHref">New workflow</RouterLink></template>
+    <EmptyState v-else-if="list.data.value && total === 0" icon="network" :title="t('wfAdmin.list.empty.title')" data-testid="workflows-empty">
+      {{ t("wfAdmin.list.empty.body") }}
+      <template #actions><RouterLink class="btn btn-primary" :to="newHref">{{ t("wfAdmin.new") }}</RouterLink></template>
     </EmptyState>
-    <EmptyState v-if="list.data.value && total > 0 && rows.length === 0" title="This page is past the end of the list">
-      <template #actions><button type="button" class="btn" @click="update({})">First page</button></template>
+    <EmptyState v-else-if="list.data.value && rows.length === 0" :title="t('common.pastEnd')">
+      <template #actions><button type="button" class="btn" @click="update({})">{{ t("common.firstPage") }}</button></template>
     </EmptyState>
 
-    <template v-if="rows.length > 0">
-      <div class="table-wrap">
-        <table :class="['data', { loading: list.isPlaceholderData.value }]">
+    <template v-if="rows.length > 0 && !list.isError.value">
+      <div class="table-wrap table-scroll">
+        <table :class="['data', 'list-table', { loading: list.isPlaceholderData.value }]">
+          <caption class="sr-only">{{ t("wfAdmin.list.caption") }}</caption>
           <thead>
             <tr>
               <th v-for="c in COLUMNS" :key="c.key" scope="col" :class="{ num: c.num }" :aria-sort="c.sort ? lq.ariaSort(c.sort) : undefined">
-                <button v-if="c.sort" type="button" class="sort" @click="lq.toggleSort(c.sort)">{{ c.label }} <SortIcon :dir="lq.ariaSort(c.sort)" /></button>
-                <template v-else>{{ c.label }}</template>
+                <button v-if="c.sort" type="button" class="sort" @click="lq.toggleSort(c.sort)">{{ t(c.label) }} <SortIcon :dir="lq.ariaSort(c.sort)" /></button>
+                <template v-else>{{ t(c.label) }}</template>
               </th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="w in rows" :key="w.id" :class="{ disabled: !w.isActive }">
-              <td><RouterLink :to="`/admin/workflows/${w.id}`">{{ w.name }}</RouterLink></td>
-              <td class="mono">{{ w.key }}</td>
               <td>
+                <span class="cell-clip"><RouterLink class="list-name" :to="`/admin/workflows/${w.id}`" dir="auto">{{ w.name }}</RouterLink></span>
+              </td>
+              <td class="mono muted">{{ w.key }}</td>
+              <td dir="auto">
                 {{ classByKey.get(w.classKey)?.name ?? w.classKey }}
-                <span v-if="w.includeSubclasses" class="muted"> and subtypes</span>
+                <span v-if="w.includeSubclasses" class="muted">{{ t("wfAdmin.andSubtypes") }}</span>
               </td>
-              <td :class="{ muted: !w.stateAttributeKey }">{{ w.stateAttributeKey ?? "None" }}</td>
+              <td :class="w.stateAttributeKey ? 'mono' : 'muted'">{{ w.stateAttributeKey ?? t("wfAdmin.none") }}</td>
               <td>
-                <span v-if="w.isActive" class="badge ok">Active</span>
-                <span v-else class="badge off">Inactive</span>
+                <span v-if="w.isActive" class="badge ok"><span class="status-dot" aria-hidden="true" />{{ t("common.active") }}</span>
+                <span v-else class="badge off"><span class="status-dot" aria-hidden="true" />{{ t("wfAdmin.inactive") }}</span>
               </td>
-              <td class="num">{{ w.currentVersionNo ?? "–" }}</td>
+              <td class="num mono">{{ w.currentVersionNo ?? "–" }}</td>
               <td>
-                <span v-if="w.draftVersionNo !== null" class="badge info">v{{ w.draftVersionNo }} draft</span>
-                <span v-else class="muted">None</span>
+                <span v-if="w.draftVersionNo !== null" class="badge info">{{ t("wfAdmin.draftChip", { n: w.draftVersionNo }) }}</span>
+                <span v-else class="muted">{{ t("wfAdmin.none") }}</span>
               </td>
-              <td :title="`${w.updatedAt} by ${w.updatedByName}`">{{ formatRelative(w.updatedAt) }}</td>
+              <td>
+                <time :datetime="w.updatedAt" :title="t('wfAdmin.updatedTitle', { when: formatDateTime(w.updatedAt), name: w.updatedByName })">{{
+                  formatRelative(w.updatedAt)
+                }}</time>
+              </td>
             </tr>
           </tbody>
         </table>
       </div>
-      <PaginationBar :total="total" :limit="limit" :offset="offset" @change="lq.onPage" />
+      <div class="table-footer">
+        <PaginationBar numbered :total="total" :limit="limit" :offset="offset" @change="lq.onPage" />
+      </div>
     </template>
   </section>
 </template>

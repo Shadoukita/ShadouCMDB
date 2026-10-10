@@ -22,18 +22,18 @@ const entries = computed(() => log.data.value?.data ?? []);
 </script>
 
 <template>
-  <LoadingState v-if="log.isLoading.value" label="Loading the audit trail…" />
+  <LoadingState v-if="log.isLoading.value" :label="t('record.audit.loading')" />
   <ErrorAlert v-else-if="log.isError.value" :error="log.error.value" :on-retry="() => log.refetch()" />
-  <EmptyState v-else-if="entries.length === 0" title="No audit entries">Nothing has been recorded for this CI yet.</EmptyState>
+  <EmptyState v-else-if="entries.length === 0" :title="t('record.audit.empty')">{{ t("record.audit.emptyBody") }}</EmptyState>
   <template v-else>
     <div class="table-wrap">
       <table class="data">
         <thead>
           <tr>
             <th scope="col">{{ t("history.col.time") }}</th>
-            <th scope="col">Action</th>
-            <th scope="col">By</th>
-            <th scope="col">Request id</th>
+            <th scope="col">{{ t("audit.col.action") }}</th>
+            <th scope="col">{{ t("record.audit.col.by") }}</th>
+            <th scope="col">{{ t("error.requestId") }}</th>
           </tr>
         </thead>
         <tbody>
@@ -47,7 +47,7 @@ const entries = computed(() => log.data.value?.data ?? []);
       </table>
     </div>
     <div v-if="log.data.value && log.data.value.page.total > entries.length" class="pagination">
-      Showing the latest {{ entries.length }} of {{ log.data.value.page.total }} entries.
+      {{ t("record.audit.showing", { n: entries.length, total: log.data.value.page.total }) }}
     </div>
   </template>
 </template>
