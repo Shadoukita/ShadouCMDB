@@ -1378,6 +1378,9 @@ pub struct WorkflowApproverPreview {
     pub users: Vec<WorkflowApproverPreviewUser>,
     /// More users were resolved than are listed
     pub truncated: bool,
+    /// `users` is left empty because the caller may not look up users (the edit permission on business services
+    /// or `users.manage`, as for `GET /principals`); the counts are still given
+    pub users_hidden: bool,
     pub sources: Vec<WorkflowApproverPreviewSource>,
 }
 
