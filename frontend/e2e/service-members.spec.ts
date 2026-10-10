@@ -46,7 +46,7 @@ const memberNames = (page: Page) => page.locator(".service-members tbody tr td:n
 
 test("Members tab: empty, then two members added through the picker", async ({ page }, testInfo) => {
   await page.goto(`/cis/${ids.inner}?tab=members`);
-  await expect(page.getByRole("tab", { name: "Members (0)" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: /^Members/ }).filter({ has: page.locator(`[data-count="0"]`) })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("heading", { name: "This service has no members yet." })).toBeVisible();
 
   const add = page.locator(".service-members-actions").getByRole("button", { name: "Add members" });
@@ -80,7 +80,7 @@ test("Members tab: empty, then two members added through the picker", async ({ p
   await expect(dialog).toBeHidden();
   await expect(page.locator(".service-members-live")).toHaveText("2 members added.");
   await expect(add).toBeFocused();
-  await expect(page.getByRole("tab", { name: "Members (2)" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: /^Members/ }).filter({ has: page.locator(`[data-count="2"]`) })).toBeVisible();
   await expect.poll(async () => (await memberNames(page)).sort()).toEqual([N("srv-1"), N("srv-2")]);
   await checkA11y(page, testInfo, "members-tab", { include: ".service-members" });
   await snap(page, "members-tab");
@@ -113,7 +113,7 @@ test("picker: already a member, and refused CIs stay in the open dialog with the
   await dialog.getByRole("button", { name: "Add 1 member" }).click();
   await expect(dialog).toBeHidden();
   await expect(page.locator(".service-members-live")).toHaveText("1 member added.");
-  await expect(page.getByRole("tab", { name: "Members (3)" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: /^Members/ }).filter({ has: page.locator(`[data-count="3"]`) })).toBeVisible();
 });
 
 test("filters live in the URL and survive a reload", async ({ page }) => {
@@ -125,7 +125,7 @@ test("filters live in the URL and survive a reload", async ({ page }) => {
   await page.getByRole("button", { name: /^Added/ }).click();
   await expect(page).toHaveURL(/[?&]msort=addedAt/);
   await page.reload();
-  await expect(page.getByRole("tab", { name: "Members (3)" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: /^Members/ }).filter({ has: page.locator(`[data-count="3"]`) })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByLabel("Search members")).toHaveValue(`srv-3-${stamp}`);
   await expect(page.getByLabel("Kind")).toHaveValue("ci");
   await expect.poll(() => memberNames(page)).toEqual([N("srv-3")]);
@@ -146,7 +146,7 @@ test("remove selected and the row menu confirm with the number", async ({ page }
   await expect(confirm).toContainText(`Remove 1 member from ${N("inner")}? The CIs themselves are not deleted.`);
   await confirm.getByRole("button", { name: "Remove", exact: true }).click();
   await expect(page.locator(".service-members-live")).toHaveText("1 member removed.");
-  await expect(page.getByRole("tab", { name: "Members (2)" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: /^Members/ }).filter({ has: page.locator(`[data-count="2"]`) })).toBeVisible();
 
   // The row menu: Open, Impact analysis, Remove from service; Esc returns to its button.
   const menuButton = page.getByRole("button", { name: `Actions for ${N("srv-2")}` });
@@ -216,7 +216,7 @@ test("a restricted viewer sees only the members they may view, the static note, 
   try {
     await page.goto(`/cis/${ids.inner}?tab=members`);
     // The servers are hidden: the count is the visible one, never "N of M".
-    await expect(page.getByRole("tab", { name: "Members (0)" })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("tab", { name: /^Members/ }).filter({ has: page.locator(`[data-count="0"]`) })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByRole("heading", { name: "This service has no members yet." })).toBeVisible();
     await expect(page.getByRole("note")).toHaveText("Members of classes you are not allowed to view are not listed.");
     await expect(page.getByRole("button", { name: "Add members" })).toHaveCount(0);
