@@ -1,6 +1,7 @@
 // Unit tests for the impact analysis tab's URL state, paths, groups and tree (SHAA-886). Run: npm run test:unit -w frontend
 import assert from "node:assert/strict";
-import { describe, test } from "node:test";
+import { afterEach, describe, test } from "node:test";
+import { setLocaleForTests } from "../src/i18n/index";
 import { visibleRows } from "../src/lib/graphTree";
 import {
   DEFAULT_STATE,
@@ -148,6 +149,17 @@ describe("list groups", () => {
   test("sorting by criticality keeps unset values last in both directions", () => {
     assert.deepEqual(groupItems(items, "none", "criticality", viaName)[0].items.map((i) => i.id), ["a", "b", "c"]);
     assert.deepEqual(groupItems(items, "none", "-criticality", viaName)[0].items.map((i) => i.id), ["c", "b", "a"]);
+  });
+
+  describe("in German (SHAA-3035)", () => {
+    afterEach(() => setLocaleForTests(null));
+    test("every group heading the list builds comes from the catalog", () => {
+      setLocaleForTests("de");
+      const labels = (group: "none" | "criticality" | "hops") => groupItems(items, group, "name", viaName).map((g) => g.label);
+      assert.deepEqual(labels("none"), ["Alle betroffenen CIs"]);
+      assert.deepEqual(labels("criticality"), ["Critical", "High", "Nicht gesetzt"]);
+      assert.deepEqual(labels("hops"), ["1 Schritt", "2 Schritte"]);
+    });
   });
 });
 
