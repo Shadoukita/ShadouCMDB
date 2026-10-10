@@ -364,7 +364,7 @@ async fn qa_a_timed_out_delivery_is_recorded_as_a_retryable_failure() {
     assert_eq!(status, 200, "{v}");
     let actions_cfg = WorkflowActionsConfig::default();
     for id in outbox::claim_runs(pool, "qa", 100).await.unwrap() {
-        outbox::fan_out(pool, &actions_cfg, id, "qa").await.unwrap();
+        outbox::fan_out(pool, &actions_cfg, &outbox::Channels::default(), id, "qa").await.unwrap();
     }
 
     let channel = channel::channel(pool.clone(), w.clone());

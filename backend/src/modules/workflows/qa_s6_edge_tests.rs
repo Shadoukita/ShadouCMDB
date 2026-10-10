@@ -165,7 +165,7 @@ async fn qa_s6_unknown_and_unreachable_recipients() {
 /// Texts: a blank name is required; an empty text is refused by the schema;
 /// e-mail texts on an inbox or webhook
 /// action are refused as not applicable, as are webhook
-/// fields on an inbox action; e-mail itself is not yet available.
+/// fields on an inbox action.
 #[tokio::test]
 async fn qa_s6_empty_and_misplaced_texts() {
     let Some(db) = scratch::database("qa_s6_texts").await else { return };
@@ -197,14 +197,6 @@ async fn qa_s6_empty_and_misplaced_texts() {
         ),
         "{v}"
     );
-
-    // An e-mail action: e-mail is the unavailable part, not a 500.
-    let mail = json!({ "key": "m", "name": "Mail", "kind": "email", "trigger": "transition", "transition": "approve",
-        "recipients": o1, "settings": { "subject": { "en": "{{ci.label}}" } } });
-    let (status, v) = w.call(&w.admin, "PUT", &actions(&w), Some(json!({ "version": v0, "actions": [mail] }))).await;
-    assert_eq!(status, 400, "{v}");
-    assert!(sorted(&v).contains(&("actions[0].kind".into(), "kind_unavailable".into())), "{v}");
-    assert_eq!(version(&w).await, v0, "nothing saved");
 
     // An empty text is no text: refused by the schema before any rule runs.
     let mut empty = inbox("e", o1.clone());
