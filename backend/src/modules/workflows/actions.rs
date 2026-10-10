@@ -27,6 +27,8 @@ mod email_tests;
 pub mod outbox;
 pub mod recipients;
 #[cfg(test)]
+mod qa_deliveries_edge_tests;
+#[cfg(test)]
 mod tests;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
