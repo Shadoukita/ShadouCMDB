@@ -4,7 +4,6 @@ import { RouterLink } from "vue-router";
 import { useCiClasses } from "../../api/queries";
 import {
   STATUS_LABELS,
-  STATUS_TONES,
   useWorkflowInstances,
   useWorkflowSummary,
   type WorkflowInstanceListQuery,
@@ -17,20 +16,24 @@ import EmptyState from "../../components/EmptyState.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
 import LoadingState from "../../components/LoadingState.vue";
 import PaginationBar from "../../components/PaginationBar.vue";
+import SkeletonRows from "../../components/SkeletonRows.vue";
 import SortIcon from "../../components/SortIcon.vue";
+import { formatNumber, t, type MessageKey } from "../../i18n";
 import { useDocumentTitle } from "../../lib/composables";
 import { formatDateTime, formatRelative } from "../../lib/format";
 import { useListQuery } from "../../lib/listQuery";
 import { viewableClasses } from "../../lib/permissions";
 import { useSessionStore } from "../../stores/session";
 import WorkflowStateBadge from "./WorkflowStateBadge.vue";
+import WorkflowStatusBadge from "./WorkflowStatusBadge.vue";
 
 /**
  * Workflows: every workflow instance on the CIs the caller may view (GET /workflow-instances), with the running
  * instances counted per workflow and state above (GET /workflow-instances/summary; a count filters the list).
- * Workflow, state, status, CI type, sort and page live in the URL; the API filters and pages.
+ * Workflow, state, status, CI type, sort and page live in the URL; the API filters and pages. The page uses the
+ * inventory's head band (breadcrumb, title with the count, intro, filters) above the summary and the table card.
  */
-useDocumentTitle("Workflows");
+useDocumentTitle(() => t("wfRun.list.title"));
 const session = useSessionStore();
 const lq = useListQuery({ sort: "-lastTransitionAt" });
 const { get, limit, offset, update } = lq;
@@ -87,48 +90,82 @@ function showState(key: string, state: string) {
 function clearFilters() {
   update({ workflow: undefined, state: undefined, status: undefined, class: undefined });
 }
-const COLUMNS: { key: string; label: string; sort?: string }[] = [
-  { key: "ci", label: "Configuration item" },
-  { key: "ident", label: "Ident" },
-  { key: "class", label: "CI type" },
-  { key: "workflow", label: "Workflow" },
-  { key: "state", label: "State" },
-  { key: "status", label: "Status" },
-  { key: "started", label: "Started", sort: "startedAt" },
-  { key: "last", label: "Last step", sort: "lastTransitionAt" },
+const COLUMNS: { key: string; label: MessageKey; sort?: string; cls?: string }[] = [
+  { key: "ci", label: "wfRun.col.ci" },
+  { key: "ident", label: "wfRun.col.ident" },
+  { key: "class", label: "wfRun.col.class" },
+  { key: "workflow", label: "wfRun.col.workflow" },
+  { key: "state", label: "wfRun.col.state" },
+  { key: "status", label: "wfRun.col.status" },
+  { key: "started", label: "wfRun.col.started", sort: "startedAt" },
+  { key: "last", label: "wfRun.col.lastStep", sort: "lastTransitionAt" },
 ];
+const crumbs = computed(() => [{ label: t("inventory.crumb"), to: "/cis" }, { label: t("wfRun.list.title") }]);
 </script>
 
 <template>
-  <Breadcrumbs :items="[{ label: 'Inventory', to: '/cis' }, { label: 'Workflows' }]" />
-  <div class="page-header">
-    <div class="title">
-      <h1>Workflows</h1>
-      <span v-if="list.data.value" class="muted">{{ total.toLocaleString() }} instances</span>
-      <span v-if="list.isFetching.value && !list.isLoading.value" class="spinner" aria-label="Refreshing" />
+  <div class="list-head">
+    <Breadcrumbs :items="crumbs" />
+    <div class="page-header">
+      <div class="title">
+        <h1>{{ t("wfRun.list.title") }}</h1>
+        <span v-if="list.data.value" class="count mono">{{ t("wfRun.list.count", { n: total }) }}</span>
+        <span v-if="list.isFetching.value && !list.isLoading.value" class="spinner" :aria-label="t('common.refreshing')" />
+      </div>
     </div>
+    <p class="page-intro">{{ t("wfRun.list.intro") }}</p>
+    <form class="toolbar" role="search" :aria-label="t('wfRun.list.filters')" @submit.prevent>
+      <div class="field">
+        <label for="wfi-workflow">{{ t("wfRun.col.workflow") }}</label>
+        <select id="wfi-workflow" :value="get('workflow')" @change="update({ workflow: ($event.target as HTMLSelectElement).value || undefined, state: undefined })">
+          <option value="">{{ t("wfRun.filter.allWorkflows") }}</option>
+          <option v-for="k in workflowKeys" :key="k" :value="k" dir="auto">{{ workflowName(k) }}</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="wfi-state">{{ t("wfRun.col.state") }}</label>
+        <select id="wfi-state" :value="get('state')" @change="update({ state: ($event.target as HTMLSelectElement).value || undefined })">
+          <option value="">{{ t("wfRun.filter.allStates") }}</option>
+          <option v-for="[k, name] in stateOptions" :key="k" :value="k" dir="auto">{{ name }}</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="wfi-status">{{ t("wfRun.col.status") }}</label>
+        <select id="wfi-status" :value="get('status')" @change="update({ status: ($event.target as HTMLSelectElement).value || undefined })">
+          <option value="">{{ t("wfRun.filter.anyStatus") }}</option>
+          <option v-for="s in STATUSES" :key="s" :value="s">{{ t(STATUS_LABELS[s]) }}</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="wfi-class">{{ t("wfRun.col.class") }}</label>
+        <select id="wfi-class" :value="get('class')" @change="update({ class: ($event.target as HTMLSelectElement).value || undefined })">
+          <option value="">{{ t("wfRun.filter.allTypes") }}</option>
+          <option v-for="c in classOptions" :key="c.id" :value="c.key" dir="auto">{{ c.name }}</option>
+        </select>
+      </div>
+      <button v-if="filtered" type="button" class="btn" @click="clearFilters">{{ t("inventory.clearFilters") }}</button>
+    </form>
   </div>
-  <p class="page-intro muted">Workflows running on your configuration items, and the ones that ended. Open a CI to run its next step.</p>
 
   <section class="panel" aria-labelledby="wf-summary-title" data-testid="wf-summary">
     <div class="panel-header">
-      <h2 id="wf-summary-title">Running now</h2>
-      <span class="meta">Per workflow and state; select a count to list those instances.</span>
+      <h2 id="wf-summary-title">{{ t("wfRun.summary.title") }}</h2>
+      <span class="meta">{{ t("wfRun.summary.meta") }}</span>
     </div>
-    <LoadingState v-if="summary.isLoading.value" label="Counting running workflows…" />
+    <LoadingState v-if="summary.isLoading.value" :label="t('wfRun.summary.loading')" />
     <div v-else-if="summary.isError.value" class="panel-body">
-      <ErrorAlert :error="summary.error.value" title="Could not count the running workflows" :on-retry="() => summary.refetch()" />
+      <ErrorAlert :error="summary.error.value" :title="t('wfRun.summary.failed')" :on-retry="() => summary.refetch()" />
     </div>
-    <p v-else-if="groups.length === 0" class="panel-body muted">No workflow is running on a CI you may view.</p>
+    <EmptyState v-else-if="groups.length === 0" icon="circle-check" :title="t('wfRun.summary.none')" />
     <div v-else class="table-wrap">
-      <table class="data">
+      <table class="data wf-summary-table">
         <tbody>
           <tr v-for="g in groups" :key="g.key">
             <th scope="row" dir="auto">
               {{ workflowName(g.key) }} <span v-if="workflowName(g.key) !== g.key" class="muted mono">{{ g.key }}</span>
             </th>
-            <td class="num">{{ g.total.toLocaleString() }}</td>
-            <td style="width: 100%; white-space: normal">
+            <td class="num mono">{{ formatNumber(g.total) }}</td>
+            <td class="wf-summary-cell">
               <span class="wf-summary-states">
                 <button
                   v-for="s in g.states"
@@ -136,11 +173,11 @@ const COLUMNS: { key: string; label: string; sort?: string }[] = [
                   type="button"
                   :class="['btn', 'btn-sm', { 'btn-primary': isCurrent(g.key, s.stateKey) }]"
                   :aria-pressed="isCurrent(g.key, s.stateKey)"
-                  :title="`List the running instances of ${workflowName(g.key)} in ${s.stateName}`"
+                  :title="t('wfRun.summary.countTitle', { workflow: workflowName(g.key), state: s.stateName })"
                   @click="showState(g.key, s.stateKey)"
                 >
                   <WorkflowStateBadge :state="{ name: s.stateName, category: s.category }" />
-                  {{ s.count.toLocaleString() }}
+                  <span class="mono">{{ formatNumber(s.count) }}</span>
                 </button>
               </span>
             </td>
@@ -150,83 +187,64 @@ const COLUMNS: { key: string; label: string; sort?: string }[] = [
     </div>
   </section>
 
-  <section class="panel" aria-label="Workflow instances">
-    <form class="toolbar" role="search" @submit.prevent>
-      <div class="field">
-        <label for="wfi-workflow">Workflow</label>
-        <select id="wfi-workflow" :value="get('workflow')" @change="update({ workflow: ($event.target as HTMLSelectElement).value || undefined, state: undefined })">
-          <option value="">All workflows</option>
-          <option v-for="k in workflowKeys" :key="k" :value="k">{{ workflowName(k) }}</option>
-        </select>
-      </div>
-      <div class="field">
-        <label for="wfi-state">State</label>
-        <select id="wfi-state" :value="get('state')" @change="update({ state: ($event.target as HTMLSelectElement).value || undefined })">
-          <option value="">All states</option>
-          <option v-for="[k, name] in stateOptions" :key="k" :value="k">{{ name }}</option>
-        </select>
-      </div>
-      <div class="field">
-        <label for="wfi-status">Status</label>
-        <select id="wfi-status" :value="get('status')" @change="update({ status: ($event.target as HTMLSelectElement).value || undefined })">
-          <option value="">Any status</option>
-          <option v-for="s in STATUSES" :key="s" :value="s">{{ STATUS_LABELS[s] }}</option>
-        </select>
-      </div>
-      <div class="field">
-        <label for="wfi-class">CI type</label>
-        <select id="wfi-class" :value="get('class')" @change="update({ class: ($event.target as HTMLSelectElement).value || undefined })">
-          <option value="">All types</option>
-          <option v-for="c in classOptions" :key="c.id" :value="c.key">{{ c.name }}</option>
-        </select>
-      </div>
-      <button v-if="filtered" type="button" class="btn" @click="clearFilters">Clear filters</button>
-    </form>
-
+  <section class="panel explorer" :aria-label="t('wfRun.list.region')">
     <div v-if="list.isError.value" class="panel-body">
       <ErrorAlert :error="list.error.value" :on-retry="() => list.refetch()" />
     </div>
-    <LoadingState v-if="list.isLoading.value" label="Loading workflow instances…" />
-    <EmptyState v-if="list.data.value && total === 0 && filtered" title="No workflow instance matches these filters">
-      <template #actions><button type="button" class="btn" @click="clearFilters">Clear filters</button></template>
+    <SkeletonRows v-else-if="list.isLoading.value" :label="t('wfRun.list.loading')" />
+    <EmptyState v-else-if="list.data.value && total === 0 && filtered" icon="search" :title="t('wfRun.list.noMatch')">
+      <template #actions><button type="button" class="btn" @click="clearFilters">{{ t("inventory.clearFilters") }}</button></template>
     </EmptyState>
-    <EmptyState v-else-if="list.data.value && total === 0" title="No workflows have run yet" data-testid="wf-instances-empty">
-      A workflow is started from a CI's Workflows tab, once an administrator has published one for its type.
-      <template v-if="session.can('workflows.manage')" #actions><RouterLink class="btn" to="/admin/workflows">Manage workflows</RouterLink></template>
+    <EmptyState v-else-if="list.data.value && total === 0" icon="circle-check" :title="t('wfRun.list.empty.title')" data-testid="wf-instances-empty">
+      {{ t("wfRun.list.empty.body") }}
+      <template v-if="session.can('workflows.manage')" #actions>
+        <RouterLink class="btn btn-primary" to="/admin/workflows">{{ t("wfRun.list.empty.manage") }}</RouterLink>
+      </template>
     </EmptyState>
-    <EmptyState v-if="list.data.value && total > 0 && rows.length === 0" title="This page is past the end of the list">
-      <template #actions><button type="button" class="btn" @click="update({})">First page</button></template>
+    <EmptyState v-else-if="list.data.value && rows.length === 0" :title="t('common.pastEnd')">
+      <template #actions><button type="button" class="btn" @click="update({})">{{ t("common.firstPage") }}</button></template>
     </EmptyState>
 
-    <template v-if="rows.length > 0">
-      <div class="table-wrap">
-        <table :class="['data', { loading: list.isPlaceholderData.value }]">
+    <template v-if="rows.length > 0 && !list.isError.value">
+      <div class="table-wrap table-scroll">
+        <table :class="['data', 'list-table', { loading: list.isPlaceholderData.value }]">
+          <caption class="sr-only">{{ t("wfRun.list.caption") }}</caption>
           <thead>
             <tr>
               <th v-for="c in COLUMNS" :key="c.key" scope="col" :aria-sort="c.sort ? lq.ariaSort(c.sort) : undefined">
-                <button v-if="c.sort" type="button" class="sort" @click="lq.toggleSort(c.sort)">{{ c.label }} <SortIcon :dir="lq.ariaSort(c.sort)" /></button>
-                <template v-else>{{ c.label }}</template>
+                <button v-if="c.sort" type="button" class="sort" @click="lq.toggleSort(c.sort)">{{ t(c.label) }} <SortIcon :dir="lq.ariaSort(c.sort)" /></button>
+                <template v-else>{{ t(c.label) }}</template>
               </th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="i in rows" :key="i.id">
-              <td><CiLink :id="i.ciId">{{ i.ciLabel }}</CiLink></td>
+              <td>
+                <span class="cell-clip"><CiLink :id="i.ciId" class="list-name">{{ i.ciLabel }}</CiLink></span>
+              </td>
               <td class="mono muted">{{ i.ciIdent }}</td>
-              <td>{{ className(i.classKey) }}</td>
+              <td dir="auto">{{ className(i.classKey) }}</td>
               <td>
                 <RouterLink :to="`/workflows/${i.id}`" dir="auto">{{ i.definitionName }}</RouterLink>
-                <span class="muted"> v{{ i.versionNo }}</span>
+                <span class="muted mono"> v{{ i.versionNo }}</span>
               </td>
               <td><WorkflowStateBadge :state="i.state" /></td>
-              <td><span :class="['badge', STATUS_TONES[i.status]]">{{ STATUS_LABELS[i.status] }}</span></td>
-              <td :title="`${formatDateTime(i.startedAt)} by ${i.startedByName}`">{{ formatRelative(i.startedAt) }}</td>
-              <td :title="formatDateTime(i.lastTransitionAt)">{{ formatRelative(i.lastTransitionAt) }}</td>
+              <td><WorkflowStatusBadge :status="i.status" /></td>
+              <td>
+                <time :datetime="i.startedAt" :title="t('wfRun.startedTitle', { when: formatDateTime(i.startedAt), name: i.startedByName })">{{
+                  formatRelative(i.startedAt)
+                }}</time>
+              </td>
+              <td>
+                <time :datetime="i.lastTransitionAt" :title="formatDateTime(i.lastTransitionAt)">{{ formatRelative(i.lastTransitionAt) }}</time>
+              </td>
             </tr>
           </tbody>
         </table>
       </div>
-      <PaginationBar :total="total" :limit="limit" :offset="offset" @change="lq.onPage" />
+      <div class="table-footer">
+        <PaginationBar numbered :total="total" :limit="limit" :offset="offset" @change="lq.onPage" />
+      </div>
     </template>
   </section>
 </template>

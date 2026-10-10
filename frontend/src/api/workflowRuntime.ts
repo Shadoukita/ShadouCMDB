@@ -6,6 +6,8 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import { toValue, type MaybeRefOrGetter } from "vue";
 import { api, unwrap, type JsonBody as Body, type ListQuery, type Schemas } from "./client";
 import { keys } from "./queries";
+import type { IconName } from "../icons/lucide";
+import type { MessageKey } from "../i18n";
 
 export type WorkflowInstance = Schemas["WorkflowInstance"];
 export type WorkflowInstanceView = Schemas["WorkflowInstanceView"];
@@ -233,21 +235,26 @@ export function useWithdrawApproval() {
   });
 }
 
-/** Labels and badge tones of the instance statuses and state categories. */
-export const STATUS_LABELS: Record<WorkflowInstanceStatus, string> = { active: "Running", completed: "Completed", cancelled: "Cancelled" };
+/** Labels (catalog keys), icons and badge tones of the instance statuses and state categories. */
+export const STATUS_LABELS: Record<WorkflowInstanceStatus, MessageKey> = {
+  active: "wfRun.status.active",
+  completed: "wfRun.status.completed",
+  cancelled: "wfRun.status.cancelled",
+};
+export const STATUS_ICONS: Record<WorkflowInstanceStatus, IconName> = { active: "circle", completed: "circle-check", cancelled: "circle-x" };
 export const STATUS_TONES: Record<WorkflowInstanceStatus, string> = { active: "info", completed: "ok", cancelled: "off" };
 export const CATEGORY_TONES: Record<WorkflowStateRef["category"], string> = { open: "", active: "info", done: "ok", cancelled: "off" };
-export const EVENT_LABELS: Record<WorkflowEvent["kind"], string> = {
-  start: "Started",
-  transition: "Transition",
-  cancel: "Cancelled",
-  migrate: "Moved to a new version",
-  force: "State forced",
-  approval_request: "Approval requested",
-  approval_decision: "Approval decision",
-  approval_withdraw: "Approval request withdrawn",
-  approval_close: "Approval request closed",
-  approval_overdue: "Approval overdue",
+export const EVENT_LABELS: Record<WorkflowEvent["kind"], MessageKey> = {
+  start: "wfRun.event.start",
+  transition: "wfRun.event.transition",
+  cancel: "wfRun.event.cancel",
+  migrate: "wfRun.event.migrate",
+  force: "wfRun.event.force",
+  approval_request: "wfRun.event.approval_request",
+  approval_decision: "wfRun.event.approval_decision",
+  approval_withdraw: "wfRun.event.approval_withdraw",
+  approval_close: "wfRun.event.approval_close",
+  approval_overdue: "wfRun.event.approval_overdue",
 };
 export const APPROVAL_STATUS_TONES: Record<WorkflowApprovalStatus, string> = {
   pending: "info",
