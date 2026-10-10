@@ -10,7 +10,7 @@ import PermissionDenied from "../components/PermissionDenied.vue";
 import ErrorAlert from "../components/ErrorAlert.vue";
 import LoadingState from "../components/LoadingState.vue";
 import EditLayoutButton from "../components/layoutEdit/EditLayoutButton.vue";
-import { t } from "../i18n";
+import { t, tAround } from "../i18n";
 import { useDocumentTitle } from "../lib/composables";
 import { formatDateTime, formatRelative, isHostLike } from "../lib/format";
 import { useLayoutEditor } from "../lib/layoutEditor";
@@ -19,7 +19,9 @@ import CiForm from "./form/CiForm.vue";
 
 const route = useRoute();
 const ci = useCi(() => String(route.params.id));
-useDocumentTitle(() => (ci.data.value ? `Edit ${ci.data.value.label}` : "Edit CI"));
+useDocumentTitle(() => (ci.data.value ? t("record.edit.title", { name: ci.data.value.label }) : t("record.edit.titleCi")));
+/** "Edit <label>": the text around the CI's label, in the translator's word order. */
+const headingParts = computed(() => tAround("record.edit.title", "name"));
 const c = computed(() => ci.data.value);
 const session = useSessionStore();
 // Edit layout (the layout-editor route, in its own window): the form's layout edited, with this CI's values.
@@ -46,9 +48,9 @@ const forbidden = computed(() => ci.error.value instanceof ApiError && ci.error.
     <template #actions><RouterLink class="btn btn-primary" to="/cis">{{ t("inventory.denied.back") }}</RouterLink></template>
   </PermissionDenied>
   <ErrorAlert v-else-if="ci.isError.value" :error="ci.error.value" :on-retry="() => ci.refetch()" />
-  <EmptyState v-else-if="c && c.deletedAt" title="This configuration item is deleted">
-    Deleted CIs cannot be edited.
-    <template #actions><RouterLink :to="`/cis/${c.id}`">Back to the record</RouterLink></template>
+  <EmptyState v-else-if="c && c.deletedAt" :title="t('record.edit.deleted.title')">
+    {{ t("record.edit.deleted.body") }}
+    <template #actions><RouterLink :to="`/cis/${c.id}`">{{ t("denied.ci.backToRecord") }}</RouterLink></template>
   </EmptyState>
   <PermissionDenied
     v-else-if="c && !session.canOnClass(c.classId, 'edit')"
@@ -67,17 +69,17 @@ const forbidden = computed(() => ci.error.value instanceof ApiError && ci.error.
   <template v-else-if="c">
     <Breadcrumbs
       :items="[
-        { label: 'Inventory', to: '/cis' },
+        { label: t('inventory.crumb'), to: '/cis' },
         { label: c.class.name, to: `/cis?classId=${c.classId}` },
         { label: c.label, to: `/cis/${c.id}` },
-        { label: 'Edit' },
+        { label: t('common.edit') },
       ]"
     />
     <div class="page-header record-header">
       <div class="record-heading">
         <div class="title">
           <ClassBadge :icon="cls?.icon" :color="cls?.color" />
-          <h1 dir="auto">Edit <span :class="{ mono: isHostLike(c.label) }">{{ c.label }}</span></h1>
+          <h1 dir="auto">{{ headingParts[0] }}<span :class="{ mono: isHostLike(c.label) }">{{ c.label }}</span>{{ headingParts[1] }}</h1>
         </div>
         <p class="record-meta" data-testid="record-meta">
           <RouterLink :to="`/cis?classId=${c.classId}`" dir="auto">{{ c.class.name }}</RouterLink>

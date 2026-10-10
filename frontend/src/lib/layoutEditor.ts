@@ -17,7 +17,7 @@ import {
 } from "../api/uiSettings";
 import { t } from "../i18n";
 import { useSessionStore } from "../stores/session";
-import { layerOf, LAYER_MOVES, moveLayer, settleFrames, type LayerMove } from "./freeLayout";
+import { layerOf, moveLayer, settleFrames, type LayerMove } from "./freeLayout";
 import { findSection, materialize, type LayoutTab } from "./layoutDesign";
 import { addTemplate, asClassLayout, classTemplateKey, compactLayouts, layoutContent, sectionErrors, setClassTemplate, type SentLayout } from "./layoutTemplates";
 
@@ -58,13 +58,12 @@ import { normalizeDocument, normalizeLayout, type AttributeLike } from "./uiSett
 export const EDITOR_SUFFIX = "/layout-editor";
 /** Query parameter of the editor's route: the template to edit, whatever the CI shows. */
 export const TEMPLATE_QUERY = "template";
-export const LEAVE_QUESTION = "Discard your unsaved layout changes?";
+const leaveQuestion = () => t("layoutEditor.leave");
 /**
  * Layouts shape the web UI only: the API returns hidden fields and accepts writes to read-only ones
  * (GH#192). Shown wherever a layout hides a field or makes it read-only, so nobody mistakes it for access control.
  */
-export const PRESENTATION_ONLY =
-  "Hidden and read-only fields change what the web UI shows, not who can read or change the data: the API still returns and accepts them. To restrict access, use permission profiles.";
+export const presentationOnly = () => t("layoutEditor.presentationOnly");
 
 const CHANNEL = "layout-updated";
 
@@ -351,19 +350,19 @@ export function useLayoutEditor(opts: {
 
   /** Moves the selected window (or `key`) up or down its tab's stack. */
   function layer(move: LayerMove, key = selected.value) {
-    const t = tab.value;
-    if (!t || !key) return;
+    const current = tab.value;
+    if (!current || !key) return;
     let moved = false;
     apply((l) => {
-      const own = l.tabs?.find((x) => x.key === t.key);
+      const own = l.tabs?.find((x) => x.key === current.key);
       const s = findSection(l, key)?.section;
       if (own && s) moved = moveLayer(own, s, move);
     });
     const now = tab.value && layout.value && findSection(layout.value, key);
     if (!now) return;
     const at = layerOf(now.tab, now.section);
-    const name = LAYER_MOVES.find((m) => m.move === move)!.label;
-    say(moved ? `${name}: ${now.section.label} is layer ${at.index} of ${at.count}.` : `${now.section.label} is already layer ${at.index} of ${at.count}.`);
+    const params = { section: now.section.label, index: at.index, count: at.count };
+    say(moved ? t("layoutEditor.say.layerMoved", { move: t(`layoutEditor.layer.${move}`), ...params }) : t("layoutEditor.say.layerUnchanged", params));
   }
 
   function announceSave() {
@@ -511,7 +510,7 @@ export function useLayoutEditor(opts: {
   let leaving = false;
   /** Leaves the editor, asking first when there are unsaved changes: closes its window, or back to the page. */
   const exit = async () => {
-    if (dirty.value && !window.confirm(LEAVE_QUESTION)) return;
+    if (dirty.value && !window.confirm(leaveQuestion())) return;
     leaving = true;
     if (popup) {
       window.close();
@@ -527,7 +526,7 @@ export function useLayoutEditor(opts: {
   // Unsaved changes: ask before leaving the editor, and let the browser ask before a reload or closing the window.
   const removeGuard = router.beforeEach((to, from) => {
     if (leaving || !active.value || !dirty.value || to.path === from.path) return true;
-    return window.confirm(LEAVE_QUESTION);
+    return window.confirm(leaveQuestion());
   });
   function onBeforeUnload(e: BeforeUnloadEvent) {
     if (leaving || !active.value || !dirty.value) return;

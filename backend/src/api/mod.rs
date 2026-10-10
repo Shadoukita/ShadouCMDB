@@ -53,6 +53,7 @@ pub fn routes() -> Vec<Route> {
         modules::config_transfer::routes(),
         modules::workflows::routes(),
         modules::workflows::runtime_routes(),
+        modules::webhooks::routes(),
     ]
     .into_iter()
     .flatten()

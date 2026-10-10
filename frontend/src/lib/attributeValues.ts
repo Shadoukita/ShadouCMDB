@@ -1,4 +1,5 @@
 import type { EffectiveAttribute } from "../api/queries";
+import { t } from "../i18n";
 
 /**
  * Form values are kept as strings while editing and converted to API JSON with
@@ -47,7 +48,7 @@ export function nowFormValue(dataType: "date" | "datetime"): FormValue {
 }
 
 /** Tooltip of date and datetime inputs. */
-export const NOW_HINT = "Double-click to set the current date and time";
+export const nowHint = () => t("form.nowHint");
 
 function isoToLocalInput(iso: string): string {
   const d = new Date(iso);
@@ -73,11 +74,11 @@ export function hintFor(def: EffectiveAttribute): string | undefined {
   const parts: string[] = [];
   // helpText is written for the operator filling in the form; description is the fallback.
   if (def.helpText || def.description) parts.push((def.helpText || def.description)!);
-  if (def.dataType === "ip") parts.push("IPv4 or IPv6 address");
-  if (def.dataType === "cidr") parts.push("Network in CIDR notation, e.g. 10.0.0.0/24");
+  if (def.dataType === "ip") parts.push(t("form.hint.ip"));
+  if (def.dataType === "cidr") parts.push(t("form.hint.cidr"));
   if (v.min !== undefined && v.max !== undefined) parts.push(`${v.min} – ${v.max}`);
-  else if (v.min !== undefined) parts.push(`Min ${v.min}`);
-  else if (v.max !== undefined) parts.push(`Max ${v.max}`);
-  if (v.maxLength) parts.push(`Max ${v.maxLength} characters`);
+  else if (v.min !== undefined) parts.push(t("form.hint.min", { n: v.min }));
+  else if (v.max !== undefined) parts.push(t("form.hint.max", { n: v.max }));
+  if (v.maxLength) parts.push(t("form.hint.maxLength", { n: v.maxLength }));
   return parts.join(" · ") || undefined;
 }

@@ -11,30 +11,30 @@ use uuid::Uuid;
 use crate::db::scratch;
 use crate::modules::api_tokens::tests::{Creds, app, call, code, session_of};
 
-pub(super) const DEFS: &str = "/api/v1/admin/workflow-definitions";
-pub(super) const RUN: &str = "/api/v1/workflow-instances";
+pub(crate) const DEFS: &str = "/api/v1/admin/workflow-definitions";
+pub(crate) const RUN: &str = "/api/v1/workflow-instances";
 
-pub(super) struct World {
-    pub(super) app: Router,
-    pub(super) pool: PgPool,
-    pub(super) admin: Creds,
-    pub(super) password: String,
-    pub(super) server: Uuid,
-    pub(super) network: Uuid,
+pub(crate) struct World {
+    pub(crate) app: Router,
+    pub(crate) pool: PgPool,
+    pub(crate) admin: Creds,
+    pub(crate) password: String,
+    pub(crate) server: Uuid,
+    pub(crate) network: Uuid,
     /// Value ids of list `server_state` by key.
-    pub(super) values: Vec<(String, Uuid)>,
-    pub(super) definition: Uuid,
+    pub(crate) values: Vec<(String, Uuid)>,
+    pub(crate) definition: Uuid,
     /// Profile granted approve, go_live and _cancel, with view and edit on servers.
-    pub(super) approvers: Uuid,
+    pub(crate) approvers: Uuid,
     /// View and edit on servers, no grant.
-    pub(super) editors: Uuid,
+    pub(crate) editors: Uuid,
 }
 
-pub(super) fn id(v: &Value) -> Uuid {
+pub(crate) fn id(v: &Value) -> Uuid {
     v["id"].as_str().unwrap_or_else(|| panic!("no id in {v}")).parse().unwrap()
 }
 
-pub(super) fn details(v: &Value) -> Vec<(String, String)> {
+pub(crate) fn details(v: &Value) -> Vec<(String, String)> {
     let mut d: Vec<(String, String)> = v["error"]["details"]
         .as_array()
         .map(|d| {
@@ -47,27 +47,27 @@ pub(super) fn details(v: &Value) -> Vec<(String, String)> {
     d
 }
 
-pub(super) fn pairs(p: &[(&str, &str)]) -> Vec<(String, String)> {
+pub(crate) fn pairs(p: &[(&str, &str)]) -> Vec<(String, String)> {
     p.iter().map(|(a, b)| ((*a).to_owned(), (*b).to_owned())).collect()
 }
 
 impl World {
-    pub(super) async fn call(&self, creds: &Creds, method: &str, path: &str, body: Option<Value>) -> (u16, Value) {
+    pub(crate) async fn call(&self, creds: &Creds, method: &str, path: &str, body: Option<Value>) -> (u16, Value) {
         let (status, v, _) = call(&self.app, method, path, creds, body).await;
         (status, v)
     }
 
-    pub(super) async fn ok(&self, method: &str, path: &str, body: Value) -> Value {
+    pub(crate) async fn ok(&self, method: &str, path: &str, body: Value) -> Value {
         let (status, v) = self.call(&self.admin, method, path, Some(body)).await;
         assert!(status == 200 || status == 201, "{method} {path}: {status} {v}");
         v
     }
 
-    pub(super) fn value(&self, key: &str) -> Uuid {
+    pub(crate) fn value(&self, key: &str) -> Uuid {
         self.values.iter().find(|(k, _)| k == key).unwrap().1
     }
 
-    pub(super) async fn profile(&self, name: &str, classes: &[(Uuid, bool)]) -> Uuid {
+    pub(crate) async fn profile(&self, name: &str, classes: &[(Uuid, bool)]) -> Uuid {
         let profile: Uuid = sqlx::query_scalar("INSERT INTO permission_profiles (name) VALUES ($1) RETURNING id")
             .bind(name)
             .fetch_one(&self.pool)
@@ -90,7 +90,7 @@ impl World {
     }
 
     /// A signed-in user holding these profiles; returns the session and the user's id.
-    pub(super) async fn user(&self, name: &str, profiles: &[Uuid]) -> (Creds, Uuid) {
+    pub(crate) async fn user(&self, name: &str, profiles: &[Uuid]) -> (Creds, Uuid) {
         let body = json!({ "username": name, "email": format!("{name}@example.test"), "displayName": name,
             "password": self.password, "profileIds": profiles });
         let v = self.ok("POST", "/api/v1/admin/users", body).await;
@@ -102,7 +102,7 @@ impl World {
     }
 
     /// An API token of `owner` narrowed to `profile`, minted by the administrator.
-    async fn token(&self, owner: Uuid, profile: Uuid) -> Creds {
+    pub(crate) async fn token(&self, owner: Uuid, profile: Uuid) -> Creds {
         let expires = (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339();
         let body = json!({ "name": format!("t-{}", Uuid::new_v4().simple()), "userId": owner, "profileId": profile,
             "expiresAt": expires });
@@ -110,26 +110,26 @@ impl World {
         Creds { bearer: Some(v["secret"].as_str().unwrap().to_owned()), ..Default::default() }
     }
 
-    pub(super) async fn ci(&self, class: Uuid) -> Uuid {
+    pub(crate) async fn ci(&self, class: Uuid) -> Uuid {
         let attributes = if class == self.server { json!({ "environment": "test" }) } else { json!({}) };
         id(&self.ok("POST", "/api/v1/configuration-items", json!({ "classId": class, "attributes": attributes })).await)
     }
 
-    pub(super) async fn ci_values(&self, ci: Uuid) -> Value {
+    pub(crate) async fn ci_values(&self, ci: Uuid) -> Value {
         let (status, v) = self.call(&self.admin, "GET", &format!("/api/v1/configuration-items/{ci}"), None).await;
         assert_eq!(status, 200, "{v}");
         v
     }
 
-    pub(super) async fn start(&self, creds: &Creds, ci: Uuid) -> (u16, Value) {
+    pub(crate) async fn start(&self, creds: &Creds, ci: Uuid) -> (u16, Value) {
         self.call(creds, "POST", RUN, Some(json!({ "definitionKey": "server_lifecycle", "ciId": ci }))).await
     }
 
-    pub(super) async fn transition(&self, creds: &Creds, instance: Uuid, body: Value) -> (u16, Value) {
+    pub(crate) async fn transition(&self, creds: &Creds, instance: Uuid, body: Value) -> (u16, Value) {
         self.call(creds, "POST", &format!("{RUN}/{instance}/transitions"), Some(body)).await
     }
 
-    pub(super) async fn audit_rows(&self, ci: Uuid) -> Vec<(String, Option<String>)> {
+    pub(crate) async fn audit_rows(&self, ci: Uuid) -> Vec<(String, Option<String>)> {
         sqlx::query_as(
             "SELECT action, request_id FROM audit_log WHERE entity_type = 'configuration_items' AND entity_id = $1
              ORDER BY id",
@@ -141,8 +141,12 @@ impl World {
     }
 }
 
-pub(super) async fn world(db: &scratch::Scratch) -> World {
-    let app = app(db.pool.clone());
+pub(crate) async fn world(db: &scratch::Scratch) -> World {
+    world_with_app(db, app(db.pool.clone())).await
+}
+
+/// [`world`] on a router built by the test (other settings).
+pub(crate) async fn world_with_app(db: &scratch::Scratch, app: Router) -> World {
     // Random per test run, so no hard-coded credential reaches the hasher or verifier.
     let password = format!("test passphrase {}", Uuid::new_v4());
     let setup = json!({ "username": "admin", "email": "admin@example.test", "displayName": "Admin",

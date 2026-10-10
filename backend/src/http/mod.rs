@@ -67,6 +67,8 @@ pub struct AppState {
     pub business_services: crate::config::BusinessServiceConfig,
     /// Workflow action limits (`WORKFLOW_ACTIONS_*`).
     pub workflow_actions: crate::config::WorkflowActionsConfig,
+    /// Webhook settings and sending (`WEBHOOK*`).
+    pub webhooks: Arc<crate::modules::webhooks::Webhooks>,
     /// Saved-view count requests running at once (GH#780).
     pub view_counts: Arc<tokio::sync::Semaphore>,
     /// Inventory exports in progress (`EXPORT_MAX_CONCURRENT`, GH#801).
@@ -88,6 +90,7 @@ pub struct SealedState {
 impl AppState {
     pub fn new(pool: PgPool, auth: AuthConfig, keyring: Arc<crate::secrets::Keyring>) -> Self {
         AppState {
+            webhooks: Arc::new(crate::modules::webhooks::Webhooks::off(keyring.clone())),
             auth: Arc::new(AuthState::new(auth, keyring)),
             capture: ClientCapture { ip: true, user_agent: true },
             schema: Arc::default(),
@@ -142,6 +145,11 @@ impl AppState {
 
     pub fn with_workflow_actions(mut self, limits: crate::config::WorkflowActionsConfig) -> Self {
         self.workflow_actions = limits;
+        self
+    }
+
+    pub fn with_webhooks(mut self, webhooks: Arc<crate::modules::webhooks::Webhooks>) -> Self {
+        self.webhooks = webhooks;
         self
     }
 
@@ -820,6 +828,11 @@ pub fn router(state: AppState, cfg: &Config) -> Router {
 pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'static) -> anyhow::Result<()> {
     // No key, no server: checked before anything else, with no database needed.
     let keyring = Arc::new(crate::secrets::Keyring::load(&cfg.encryption)?);
+    let webhooks = Arc::new(crate::modules::webhooks::Webhooks::load(
+        &cfg.webhooks,
+        keyring.clone(),
+        cfg.auth.public_url.clone(),
+    )?);
     let pool = db::lazy_pool(&cfg.database)?;
     if cfg.auth.trusted_proxies.is_empty() {
         tracing::warn!(
@@ -833,6 +846,7 @@ pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'sta
         .with_impact(cfg.impact)
         .with_business_services(cfg.business_services)
         .with_workflow_actions(cfg.workflow_actions)
+        .with_webhooks(webhooks.clone())
         .with_exports(cfg.exports)
         .importing(&cfg.imports);
     // Before listening: rows under a key that is not configured stop the server
@@ -860,7 +874,10 @@ pub async fn serve(cfg: Config, shutdown: impl Future<Output = ()> + Send + 'sta
     let action_outbox = crate::modules::workflows::actions::outbox::Outbox::spawn(
         pool.clone(),
         cfg.workflow_actions,
-        crate::modules::workflows::actions::outbox::Channels::default(),
+        crate::modules::workflows::actions::outbox::Channels::default().with(
+            crate::modules::workflows::actions::WorkflowActionKind::Webhook,
+            crate::modules::webhooks::channel::channel(pool.clone(), webhooks),
+        ),
     );
 
     let listener = TcpListener::bind((cfg.api_host.as_str(), cfg.api_port))
@@ -1595,6 +1612,7 @@ mod tests {
             notifications: Default::default(),
             approval_sweep: Default::default(),
             workflow_actions: Default::default(),
+            webhooks: Default::default(),
         };
         configure(&mut cfg);
         router(AppState::new(pool, auth, crate::secrets::Keyring::for_tests()), &cfg)
