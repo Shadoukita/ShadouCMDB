@@ -58,6 +58,8 @@ pub struct Api {
     pub business_services: crate::config::BusinessServiceConfig,
     /// Workflow action limits (`WORKFLOW_ACTIONS_*`).
     pub workflow_actions: crate::config::WorkflowActionsConfig,
+    /// Webhook settings and sending (`WEBHOOK*`).
+    pub webhooks: Arc<crate::modules::webhooks::Webhooks>,
     /// Saved-view count requests running at once.
     pub view_counts: Arc<tokio::sync::Semaphore>,
     /// Inventory exports in progress.
@@ -916,10 +918,7 @@ impl RouteBuilder {
                         peer_ip,
                         user_agent: auth::session::user_agent(&headers).filter(|_| capture.user_agent),
                         net: auth::throttle::Net::of(trusted_ip),
-                        cause: headers
-                            .get("x-shadoucmdb-cause")
-                            .and_then(|v| v.to_str().ok())
-                            .and_then(|v| Uuid::parse_str(v.trim()).ok()),
+                        cause: None,
                     };
                     let net = client.net;
                     let used = auth::token::Use { method: &method, path: uri.path(), operation_id: &operation_id };
@@ -927,7 +926,20 @@ impl RouteBuilder {
                         Rule { access, session_only, before_mfa_enrolment, before_email_entry, reauthentication, csrf };
                     // Authorise before reading the body: an anonymous caller must not make
                     // the server buffer up to body_limit bytes only to be answered 401.
-                    let ctx = authorise(&state, &headers, rule, client, used).await?;
+                    let mut ctx = authorise(&state, &headers, rule, client, used).await?;
+                    // A webhook receiver echoes the delivery that caused its call. Only an
+                    // API token may claim one: a person in the browser never runs a webhook
+                    // loop, and a forged cause would feed the echo-loop breaker (GH#845).
+                    let token = ctx.principal().is_some_and(|p| matches!(p.credential, auth::Credential::Token { .. }));
+                    ctx.client.cause = headers
+                        .get("x-shadoucmdb-cause")
+                        .filter(|_| token)
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|v| Uuid::parse_str(v.trim()).ok())
+                        .map(|delivery| crate::api::context::Cause {
+                            delivery,
+                            max_age_hours: state.workflow_actions.max_age_hours,
+                        });
                     // On every line of the request from here, so a refusal for the
                     // user's share or a body timeout names the account (GH#571).
                     if let Some(p) = ctx.principal() {
@@ -992,6 +1004,7 @@ impl RouteBuilder {
                         imports: state.imports,
                         business_services: state.business_services,
                         workflow_actions: state.workflow_actions,
+                        webhooks: state.webhooks,
                         view_counts: state.view_counts,
                         exports: state.exports,
                     };

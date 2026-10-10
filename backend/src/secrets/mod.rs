@@ -1,5 +1,6 @@
 //! Secrets the server must be able to read back (TOTP seeds, the OIDC client
-//! secrets and LDAP bind passwords of identity providers), encrypted at rest
+//! secrets and LDAP bind passwords of identity providers, the signing secrets
+//! and auth headers of webhook endpoints), encrypted at rest
 //! under a key kept outside the database (GH#189, design SHAA-484; GH#199,
 //! design SHAA-490).
 //!
@@ -60,15 +61,22 @@ pub enum Purpose {
     TotpSecret,
     /// `identity_providers.client_secret_enc` and `.bind_password_enc`
     IdentityProviderSecret,
+    /// `webhook_endpoints.secret_ciphertext` and `.previous_secret_ciphertext`
+    WebhookSecret,
+    /// `webhook_endpoints.auth_header_ciphertext`
+    WebhookHeader,
 }
 
 impl Purpose {
-    const ALL: [Purpose; 2] = [Purpose::TotpSecret, Purpose::IdentityProviderSecret];
+    const ALL: [Purpose; 4] =
+        [Purpose::TotpSecret, Purpose::IdentityProviderSecret, Purpose::WebhookSecret, Purpose::WebhookHeader];
 
     fn info(self) -> &'static [u8] {
         match self {
             Purpose::TotpSecret => b"shadoucmdb/totp-secret/v1",
             Purpose::IdentityProviderSecret => b"shadoucmdb/identity-provider-secret/v1",
+            Purpose::WebhookSecret => b"shadoucmdb/webhook-secret/v1",
+            Purpose::WebhookHeader => b"shadoucmdb/webhook-header/v1",
         }
     }
 }

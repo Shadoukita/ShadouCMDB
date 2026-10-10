@@ -94,6 +94,9 @@ enum Command {
     /// Identity provider (OIDC, LDAP) maintenance.
     #[command(subcommand)]
     IdentityProviders(secrets::cli::IdentityProvidersCommand),
+    /// Webhook endpoint maintenance.
+    #[command(subcommand)]
+    Webhooks(secrets::cli::WebhooksCommand),
     /// Print the OpenAPI document generated from the code, or compare it with a file.
     Openapi {
         /// Write the document to this file instead of stdout.
@@ -125,6 +128,7 @@ impl Command {
             Command::GenerateEncryptionKey(_) => "generate-encryption-key",
             Command::Mfa(_) => "mfa",
             Command::IdentityProviders(_) => "identity-providers",
+            Command::Webhooks(_) => "webhooks",
             Command::Openapi { .. } => "openapi",
             Command::Service(_) => "service",
         }
@@ -252,6 +256,10 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         Command::IdentityProviders(cmd) => {
             let cfg = Config::from_env()?;
             runtime()?.block_on(secrets::cli::identity_providers(&cfg, cmd))
+        }
+        Command::Webhooks(cmd) => {
+            let cfg = Config::from_env()?;
+            runtime()?.block_on(secrets::cli::webhooks(&cfg, cmd))
         }
         Command::Service(cmd) => service::run(cmd, launch),
         Command::Openapi { .. } | Command::GenerateEncryptionKey(_) => unreachable!("handled above"),

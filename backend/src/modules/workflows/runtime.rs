@@ -731,6 +731,26 @@ pub(super) async fn insert_event(
     e: NewEvent<'_>,
 ) -> Result<(), AppError> {
     let actor = actor_of(ctx);
+    // The echo-loop breaker reads it on transitions only (SHAA-2725 §7.4). A claimed
+    // cause counts only when it names a webhook delivery of this instance that was
+    // sent within the delivery age limit; anything else is stored as no cause, so a
+    // made-up id cannot silence the instance's actions (GH#845).
+    let cause = match ctx.client.cause.filter(|_| e.kind == "transition") {
+        Some(c) => {
+            sqlx::query_scalar::<_, Uuid>(
+                "SELECT d.id FROM cmdb.workflow_action_deliveries d
+                   JOIN cmdb.workflow_action_runs r ON r.id = d.run_id
+                  WHERE d.id = $1 AND r.kind = 'webhook' AND r.instance_id = $2 AND d.attempts > 0
+                    AND d.created_at > now() - make_interval(hours => $3)",
+            )
+            .bind(c.delivery)
+            .bind(e.instance)
+            .bind(c.max_age_hours)
+            .fetch_optional(&mut *conn)
+            .await?
+        }
+        None => None,
+    };
     sqlx::query(
         "INSERT INTO cmdb.workflow_instance_events
            (instance_id, kind, transition_key, from_state_key, to_state_key, to_version_no,
@@ -753,8 +773,7 @@ pub(super) async fn insert_event(
     .bind(e.approval.map(|a| a.0))
     .bind(e.approval.and_then(|a| a.1))
     .bind(e.on_behalf_of)
-    // The echo-loop breaker reads it on transitions only (SHAA-2725 §7.4).
-    .bind(ctx.client.cause.filter(|_| e.kind == "transition"))
+    .bind(cause)
     .execute(conn)
     .await?;
     Ok(())
