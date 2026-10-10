@@ -20,6 +20,12 @@ static NATIVE_ROOTS: LazyLock<Vec<CertificateDer<'static>>> = LazyLock::new(|| {
     found.certs
 });
 
+/// The operating system's trust store (read once per process), for clients
+/// that build their own root store (workflow e-mail).
+pub fn native_roots() -> &'static [CertificateDer<'static>] {
+    &NATIVE_ROOTS
+}
+
 /// Parses a PEM bundle; fails when it holds no certificate or a broken one.
 pub fn parse_ca_pem(pem: &str) -> Result<Vec<CertificateDer<'static>>, String> {
     let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(pem.as_bytes())

@@ -1096,12 +1096,18 @@ async function workflows(x: Json) {
   const withAction = (await put(actions, { version: noActions.version, actions: [inbox] })).json;
   check(withAction.actions[0]?.recipients[0]?.profile?.id === builtin.id, 'an inbox action is saved with its recipients resolved');
   await put(actions, { version: noActions.version, actions: [] }, 409);
-  const email = await put(actions, { version: withAction.version, actions: [{ ...inbox, kind: 'email' }] }, 400);
-  check(fields(email).includes('actions[0].kind'), 'a kind that is not available yet is refused per field');
+  // Actions S4 (SHAA-2734): the action becomes an e-mail; with MAIL=off it is saved with a warning.
+  const mail = (await get('/api/v1/admin/mail/status')).json;
+  check(typeof mail.enabled === 'boolean' && /^(en|de)$/.test(mail.defaultLocale), 'the mail status reports the settings');
+  const mailTest = await post('/api/v1/admin/mail/test', undefined, mail.enabled ? 200 : 409);
+  check(mail.enabled ? typeof mailTest.json.sent === 'boolean' : mailTest.json.error?.code === 'MAIL_NOT_CONFIGURED', 'a test message is sent, or refused with MAIL=off');
+  const email = (await put(actions, { version: withAction.version, actions: [{ ...inbox, kind: 'email' }] })).json;
+  check(email.actions[0]?.kind === 'email', 'an e-mail action is saved');
+  check(mail.enabled || email.problems.some((p: Json) => p.code === 'mail_off'), 'with MAIL=off an e-mail action is saved with a warning');
   const reach = (await get(`${actions}/notify_board/preview`)).json;
   check(reach.key === 'notify_board' && Array.isArray(reach.users), 'the recipients of an action are previewed');
   await get(`${actions}/nope/preview`, 404);
-  check((await put(actions, { version: withAction.version, actions: [] })).json.actions.length === 0, 'the action is removed');
+  check((await put(actions, { version: email.version, actions: [] })).json.actions.length === 0, 'the action is removed');
 
   // Actions S3b (SHAA-2831): the deliveries list, the summary, retry and discard.
   const deliveries = `${base}/${def.id}/action-deliveries`;

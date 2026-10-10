@@ -3745,6 +3745,7 @@ export const de: { [K in MessageKey]: string } = {
   "wfActions.preview.reason.no_view": "Kann das CI nicht sehen",
   "wfActions.preview.reason.inactive": "Konto deaktiviert",
   "wfActions.preview.reason.truncated": "Über der Empfängergrenze",
+  "wfActions.preview.reason.no_email": "Keine E-Mail-Adresse",
   "wfActions.inspector.tabs": "Bereiche des Übergangs",
   "wfActions.inspector.tab.rules": "Regeln",
   "wfActions.inspector.tab.actions": "Aktionen",

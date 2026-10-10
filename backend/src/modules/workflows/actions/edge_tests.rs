@@ -11,7 +11,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::WorkflowActionKind;
-use super::outbox::{self, Claimed, FanOut, Outcome};
+use super::outbox::{self, Channels, Claimed, FanOut, Outcome};
 use super::tests::{cfg, count, delivery, delivery_again, drain, next_in, queued};
 use crate::config::WorkflowActionsConfig;
 use crate::db::scratch;
@@ -325,7 +325,7 @@ async fn a_poison_run_does_not_hold_up_the_others() {
     assert_eq!(ids.len(), 3);
     let mut done = 0;
     for id in ids {
-        match outbox::fan_out(pool, &cfg, id, "w").await {
+        match outbox::fan_out(pool, &cfg, &Channels::default(), id, "w").await {
             Err(e) => {
                 assert_eq!(id, first);
                 assert!(e.to_string().contains("poison run"), "{e}");
@@ -368,7 +368,7 @@ async fn a_poison_run_gives_up_after_the_attempt_limit() {
 
     for _ in 0..10 {
         for id in outbox::claim_runs(pool, "w", 10).await.unwrap() {
-            assert!(outbox::fan_out(pool, &cfg, id, "w").await.is_err());
+            assert!(outbox::fan_out(pool, &cfg, &Channels::default(), id, "w").await.is_err());
         }
         ok(
             pool,

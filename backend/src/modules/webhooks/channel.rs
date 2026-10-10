@@ -298,7 +298,7 @@ pub async fn ping(pool: &PgPool, w: &Webhooks, id: Uuid) -> Result<WebhookPingRe
             message: error,
             duration_ms,
         },
-        Outcome::Held { reason } => WebhookPingResult {
+        Outcome::Held { reason } | Outcome::Skipped { reason } => WebhookPingResult {
             ok: false,
             status_code: None,
             reason: Some(reason.clone()),

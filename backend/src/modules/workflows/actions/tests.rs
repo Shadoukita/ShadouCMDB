@@ -53,7 +53,10 @@ pub(super) async fn drain(pool: &PgPool, cfg: &WorkflowActionsConfig) -> usize {
             return n;
         }
         for id in ids {
-            assert_ne!(outbox::fan_out(pool, cfg, id, "test-worker").await.unwrap(), FanOut::Lost);
+            assert_ne!(
+                outbox::fan_out(pool, cfg, &Channels::default(), id, "test-worker").await.unwrap(),
+                FanOut::Lost
+            );
             n += 1;
         }
     }
@@ -78,13 +81,23 @@ async fn actions_are_validated_saved_audited_and_previewed() {
     let put = |actions: Value| json!({ "version": version, "actions": actions });
     let refused = [
         (
-            json!([{ "key": "mail", "name": "Mail", "kind": "email", "trigger": "transition", "transition": "approve",
-                     "recipients": [{ "source": "profile", "profile": "Ops" }] }]),
-            vec![("actions[0].kind", "kind_unavailable")],
+            json!([{ "key": "hook", "name": "Hook", "kind": "webhook", "trigger": "transition", "transition": "approve",
+                     "endpoint": "itsm" }]),
+            vec![("actions[0].endpoint", "not_found")],
         ),
         (
-            json!([inbox("a", "transition", Some("approve"), json!([{ "source": "ci_owner" }]))]),
-            vec![("actions[0].recipients[0].source", "source_unavailable")],
+            json!([{ "key": "mail", "name": "Mail", "kind": "email", "trigger": "transition", "transition": "approve",
+                     "recipients": [{ "source": "address", "address": "cab@corp.example" }] }]),
+            vec![("actions[0].recipients[0].address", "address_not_allowed")],
+        ),
+        (
+            json!([inbox(
+                "a",
+                "transition",
+                Some("approve"),
+                json!([{ "source": "ci_attribute", "attribute": "risk" }])
+            )]),
+            vec![("actions[0].recipients[0].attribute", "attribute_type")],
         ),
         (
             json!([inbox("a", "transition", Some("nope"), json!([{ "source": "user", "user": "o1" }]))]),
@@ -533,7 +546,11 @@ async fn a_worker_lost_mid_fan_out_leaves_no_duplicate() {
     ok(pool, "UPDATE workflow_action_runs SET lease_until = now() - interval '1 second'").await;
     assert_eq!(outbox::housekeeping(pool, &cfg).await.unwrap().runs_released, 1);
     assert_eq!(drain(pool, &cfg).await, 1);
-    assert_eq!(outbox::fan_out(pool, &cfg, run, "dead-worker").await.unwrap(), FanOut::Lost, "late: writes nothing");
+    assert_eq!(
+        outbox::fan_out(pool, &cfg, &Channels::default(), run, "dead-worker").await.unwrap(),
+        FanOut::Lost,
+        "late: writes nothing"
+    );
     assert_eq!(count(pool, "SELECT count(*) FROM workflow_action_deliveries").await, 1);
     assert_eq!(count(pool, "SELECT count(*) FROM notifications").await, 1);
     db.drop().await;
@@ -565,7 +582,10 @@ async fn a_poison_run_gives_up_after_the_attempt_limit() {
 
     for cycle in 1..=10 {
         for id in outbox::claim_runs(pool, "test-worker", 10).await.unwrap() {
-            assert!(outbox::fan_out(pool, &cfg, id, "test-worker").await.is_err(), "the fan-out fails");
+            assert!(
+                outbox::fan_out(pool, &cfg, &Channels::default(), id, "test-worker").await.is_err(),
+                "the fan-out fails"
+            );
         }
         if cycle == 1 {
             let h = outbox::housekeeping(pool, &cfg).await.unwrap();

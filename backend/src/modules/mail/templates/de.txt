@@ -1,0 +1,94 @@
+# Workflow-E-Mail, Deutsch. Gleiche Schlüssel und Platzhalter wie en.txt
+# (ein Unit-Test prüft das). Begriffe wie in frontend/src/i18n/de.ts:
+# Configuration Item / CI, Workflow, Übergang, Status, Genehmigung,
+# Business-Service, Berechtigungsprofil. Formelles „Sie“. Konventionen: README.md.
+
+# Betreffzeilen.
+subject.transition = [{ref}] {workflow}: {ci} ist jetzt {to}
+subject.approval_requested = [{ref}] Genehmigung angefordert: {transition} für {ci}
+subject.approval_step = [{ref}] Genehmigungsschritt {step}: {transition} für {ci}
+subject.approval_closed.approved = [{ref}] Genehmigt: {transition} für {ci}
+subject.approval_closed.rejected = [{ref}] Abgelehnt: {transition} für {ci}
+subject.approval_closed.withdrawn = [{ref}] Zurückgezogen: Genehmigung von {transition} für {ci}
+subject.approval_closed.cancelled = [{ref}] Abgebrochen: Genehmigung von {transition} für {ci}
+subject.approval_overdue = [{ref}] Genehmigung überfällig: {transition} für {ci}
+subject.cancelled = [{ref}] {workflow} für {ci} wurde abgebrochen
+subject.forced = [{ref}] {workflow}: {ci} wurde von einem Administrator auf {to} gesetzt
+subject.minimal = {workflow}: Ein Workflow-Ereignis erfordert Ihre Aufmerksamkeit
+subject.bulk = {workflow}: {transition} wurde auf {count} Configuration Items angewendet
+subject.digest = ShadouCMDB: {count} Workflow-Benachrichtigungen der letzten Stunde
+subject.test = ShadouCMDB: Testnachricht
+
+# Der erste Satz: was geschehen ist und was, falls überhaupt, zu tun ist.
+lead.transition = {actor} hat den Übergang {transition} des Workflows {workflow} auf {ci} angewendet; der Status ist jetzt {to}. Diese Nachricht dient Ihrer Information; Sie müssen nichts tun.
+lead.approval_requested = {actor} hat die Genehmigung angefordert, {transition} des Workflows {workflow} auf {ci} anzuwenden. Wenn Sie genehmigen dürfen, prüfen Sie bitte die Anfrage und entscheiden Sie.
+lead.approval_step = Die Genehmigung von {transition} des Workflows {workflow} für {ci} hat Schritt {step} erreicht. Wenn Sie in diesem Schritt genehmigen dürfen, prüfen Sie bitte die Anfrage und entscheiden Sie.
+lead.approval_closed.approved = Die Anfrage, {transition} des Workflows {workflow} auf {ci} anzuwenden, wurde genehmigt. Sie müssen nichts tun.
+lead.approval_closed.rejected = Die Anfrage, {transition} des Workflows {workflow} auf {ci} anzuwenden, wurde abgelehnt. Sie müssen nichts tun.
+lead.approval_closed.withdrawn = Die Anfrage, {transition} des Workflows {workflow} auf {ci} anzuwenden, wurde zurückgezogen. Sie müssen nichts tun.
+lead.approval_closed.cancelled = Die Anfrage, {transition} des Workflows {workflow} auf {ci} anzuwenden, wurde abgebrochen. Sie müssen nichts tun.
+lead.approval_overdue = Die Genehmigung von {transition} des Workflows {workflow} für {ci} ist überfällig. Wenn Sie genehmigen dürfen, entscheiden Sie bitte so bald wie möglich.
+lead.cancelled = {actor} hat den Workflow {workflow} für {ci} abgebrochen. Sie müssen nichts tun.
+lead.forced = {actor} hat den Workflow {workflow} für {ci} ohne Übergang auf den Status {to} gesetzt. Sie müssen nichts tun.
+lead.minimal = Ein Workflow-Ereignis in ShadouCMDB erfordert Ihre Aufmerksamkeit: Workflow {workflow}, {transition}. Melden Sie sich an, um die Einzelheiten zu sehen.
+lead.bulk = {actor} hat den Übergang {transition} des Workflows {workflow} auf {count} Configuration Items angewendet. Diese Nachricht dient Ihrer Information; Sie müssen nichts tun.
+lead.digest = Sie haben innerhalb einer Stunde mehr als {max} Workflow-Nachrichten erhalten; die übrigen Nachrichten dieser Stunde sind hier zusammengefasst. Zu tun ist nur, was die einzelnen Einträge verlangen.
+lead.test = Dies ist eine Testnachricht von ShadouCMDB, angefordert von {user}. Sie bestätigt, dass der E-Mail-Versand funktioniert. Sie müssen nichts tun.
+
+# Detailzeilen.
+label.ci = Configuration Item
+label.type = Klasse
+label.workflow = Workflow
+label.transition = Übergang
+label.state = Status
+label.by = Von
+label.comment = Kommentar
+label.request = Genehmigungsanfrage
+label.step = Schritt
+label.due = Fällig
+label.requested_by = Angefordert von
+label.event = Ereignis
+
+# Einträge der Sammelnachricht.
+event.transition = {transition} angewendet: jetzt {to}
+event.approval_requested = Genehmigung von {transition} angefordert
+event.approval_step = Genehmigung von {transition} in Schritt {step}
+event.approval_closed.approved = {transition} genehmigt
+event.approval_closed.rejected = {transition} abgelehnt
+event.approval_closed.withdrawn = Genehmigung von {transition} zurückgezogen
+event.approval_closed.cancelled = Genehmigung von {transition} abgebrochen
+event.approval_overdue = Genehmigung von {transition} überfällig
+event.cancelled = Workflow abgebrochen
+event.forced = ohne Übergang auf {to} gesetzt
+event.minimal = ein Workflow-Ereignis erfordert Ihre Aufmerksamkeit
+
+# Wörter und Wendungen.
+more = und {count} weitere
+hidden_ref = ein CI, das Sie nicht sehen dürfen
+yes = ja
+no = nein
+someone = Jemand
+none = keiner
+open = In ShadouCMDB öffnen
+open_list = Die Workflow-Liste in ShadouCMDB öffnen
+digest.entry = {time} – {workflow}: {ci}, {event}
+
+# Warum die Nachricht an Sie geht.
+why.intro = Sie erhalten diese Nachricht, weil {reasons}.
+why.profile = Sie das Berechtigungsprofil {name} haben
+why.group = Sie Mitglied der Gruppe {name} sind
+why.user = die Aktion Sie namentlich nennt
+why.ci_owner = Sie der Verantwortliche des Configuration Items sind
+why.ci_attribute = Sie im Feld {name} des Configuration Items eingetragen sind
+why.service_owner.technical = Sie technischer Verantwortlicher eines Business-Service sind, zu dem das Configuration Item gehört
+why.service_owner.business = Sie fachlicher Verantwortlicher eines Business-Service sind, zu dem das Configuration Item gehört
+why.actor = Sie das Ereignis ausgelöst haben
+why.starter = Sie den Workflow gestartet haben
+why.requester = Sie die Genehmigung angefordert haben
+why.approver = Sie im aktuellen Schritt genehmigen dürfen
+why.delegate = Sie Genehmigungen in Vertretung von {name} entscheiden
+why.address = diese Adresse für Hinweise des Workflows {workflow} eingetragen ist
+why.workflows = Workflows in ShadouCMDB Sie benachrichtigen
+why.test = Sie eine Testnachricht angefordert haben
+footer.action = Gesendet von der Aktion {action} des Workflows {workflow}.
+footer.contact = Bei Fragen wenden Sie sich bitte an Ihre ShadouCMDB-Administratoren. Diese Nachricht wurde automatisch erstellt; Antworten werden nicht gelesen.

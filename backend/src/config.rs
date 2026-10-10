@@ -440,6 +440,107 @@ pub struct WebhooksConfig {
     pub tls_ca_file: Option<PathBuf>,
 }
 
+/// How the SMTP connection is secured (`SMTP_SECURITY`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmtpSecurity {
+    /// Plain connection upgraded with STARTTLS, which the relay must offer (port 587).
+    StartTls,
+    /// TLS from the first byte (port 465).
+    Tls,
+    /// No encryption; only with `SMTP_ALLOW_PLAINTEXT=true`.
+    None,
+}
+
+impl SmtpSecurity {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SmtpSecurity::StartTls => "starttls",
+            SmtpSecurity::Tls => "tls",
+            SmtpSecurity::None => "none",
+        }
+    }
+}
+
+/// Outbound e-mail (`MAIL`, `SMTP_*`, `MAIL_*`; design SHAA-2725 §6.1). Set by
+/// the operator, like every other outbound connection; the API never echoes
+/// the user name, and the password is read from `SMTP_PASSWORD_FILE` when the
+/// transport is built, never held here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MailConfig {
+    /// `MAIL=smtp`. Off, e-mail actions can be configured but their deliveries are skipped (`mail_off`).
+    pub enabled: bool,
+    pub host: Option<String>,
+    pub port: u16,
+    pub security: SmtpSecurity,
+    /// `SMTP_TLS_CA_FILE`: a corporate CA trusted in addition to the public and OS roots.
+    pub tls_ca_file: Option<PathBuf>,
+    pub username: Option<String>,
+    pub password_file: Option<PathBuf>,
+    /// `MAIL_FROM` as given (validated as a mailbox).
+    pub from: Option<String>,
+    pub reply_to: Option<String>,
+    /// `MAIL_DEFAULT_LOCALE`: `en` or `de`, for users without a language and for fixed addresses.
+    pub default_locale: &'static str,
+    /// `MAIL_ALLOW_EXTERNAL_ADDRESSES`: whether an action may name a fixed address at all.
+    pub allow_external_addresses: bool,
+    /// `MAIL_ALLOWED_DOMAINS`, lower-cased: the domains a fixed address may be in.
+    pub allowed_domains: Vec<String>,
+    /// `MAIL_MAX_PER_RECIPIENT_PER_HOUR`: more fold into one digest at the end of the hour.
+    pub max_per_recipient_per_hour: i32,
+    /// `SMTP_TIMEOUT_SECS`: per connection and per command.
+    pub timeout: Duration,
+    /// `PUBLIC_URL`: every link in a message is built from it.
+    pub public_url: Option<String>,
+}
+
+impl Default for MailConfig {
+    fn default() -> Self {
+        MailConfig {
+            enabled: false,
+            host: None,
+            port: 587,
+            security: SmtpSecurity::StartTls,
+            tls_ca_file: None,
+            username: None,
+            password_file: None,
+            from: None,
+            reply_to: None,
+            default_locale: "en",
+            allow_external_addresses: false,
+            allowed_domains: Vec::new(),
+            max_per_recipient_per_hour: 30,
+            timeout: Duration::from_secs(15),
+            public_url: None,
+        }
+    }
+}
+
+impl MailConfig {
+    /// Whether an action may send to fixed address `address` on this server.
+    pub fn address_allowed(&self, address: &str) -> bool {
+        let domain = address.rsplit_once('@').map(|(_, d)| d.to_lowercase());
+        self.allow_external_addresses && domain.is_some_and(|d| self.allowed_domains.contains(&d))
+    }
+}
+
+/// A domain of `MAIL_ALLOWED_DOMAINS`: lower-case labels, at least two of them.
+fn parse_mail_domain(raw: &str) -> Result<String, String> {
+    let d = raw.trim().to_lowercase();
+    let label_ok = |l: &str| {
+        !l.is_empty()
+            && l.len() <= 63
+            && !l.starts_with('-')
+            && !l.ends_with('-')
+            && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    };
+    if d.len() > 253 || d.split('.').count() < 2 || !d.split('.').all(label_ok) {
+        return Err(format!(
+            "\"{raw}\" is not a domain name; list domains such as corp.example (IDNs in punycode, no wildcards)"
+        ));
+    }
+    Ok(d)
+}
+
 /// Hard ceilings of the `BUSINESS_SERVICE_*` settings (the nesting ceiling is
 /// also the database trigger's, migration 0033).
 pub const BUSINESS_SERVICE_MAX_MEMBERS_CEILING: i64 = 50_000;
@@ -486,6 +587,7 @@ pub struct Config {
     pub approval_sweep: ApprovalSweepConfig,
     pub workflow_actions: WorkflowActionsConfig,
     pub webhooks: WebhooksConfig,
+    pub mail: MailConfig,
 }
 
 /// The env file the variables were read from (`--env-file`, or `./.env`), as an absolute path.
@@ -558,6 +660,7 @@ impl std::fmt::Debug for Config {
             approval_sweep,
             workflow_actions,
             webhooks,
+            mail,
         } = self;
         f.debug_struct("Config")
             .field("api_host", api_host)
@@ -580,6 +683,7 @@ impl std::fmt::Debug for Config {
             .field("approval_sweep", approval_sweep)
             .field("workflow_actions", workflow_actions)
             .field("webhooks", webhooks)
+            .field("mail", mail)
             .finish()
     }
 }
@@ -772,6 +876,118 @@ fn parse_audit_sink(raw: &str) -> Result<AuditSink, String> {
             Ok(AuditSink::Tls(addr.to_owned()))
         }
         _ => Err(format!("scheme \"{scheme}://\" is not supported; {EXPECTED}")),
+    }
+}
+
+/// Reads the outbound e-mail settings. With `MAIL=smtp` the relay, the sender
+/// and `PUBLIC_URL` are required: every message links to the web UI, and the
+/// link is never built from a request's Host header.
+fn read_mail(r: &mut Reader<'_>, public_url: Option<String>) -> MailConfig {
+    let d = MailConfig::default();
+    let enabled = r.one_of("MAIL", &["off", "smtp"], "off") == "smtp";
+    let host = r.raw("SMTP_HOST").map(|h| h.trim().to_owned());
+    if let Some(h) = &host
+        && (h.contains(['/', ':', ' ', '@']) && h.parse::<std::net::Ipv6Addr>().is_err())
+    {
+        r.errors.push(format!("SMTP_HOST: \"{h}\" is not a host name or IP address; set the port in SMTP_PORT"));
+    }
+    let port = r.int::<u16>("SMTP_PORT", 1, 65535);
+    let security = match r.one_of("SMTP_SECURITY", &["starttls", "tls", "none"], "starttls").as_str() {
+        "tls" => SmtpSecurity::Tls,
+        "none" => SmtpSecurity::None,
+        _ => SmtpSecurity::StartTls,
+    };
+    let allow_plaintext = r.bool("SMTP_ALLOW_PLAINTEXT", false);
+    if security == SmtpSecurity::None && !allow_plaintext {
+        r.errors.push(
+            "SMTP_SECURITY: none sends mail and any AUTH unencrypted; use starttls or tls, or set \
+             SMTP_ALLOW_PLAINTEXT=true for a relay on a trusted network"
+                .to_owned(),
+        );
+    }
+    let tls_ca_file = r.raw("SMTP_TLS_CA_FILE").map(PathBuf::from);
+    if tls_ca_file.is_some() && security == SmtpSecurity::None {
+        r.errors.push("SMTP_TLS_CA_FILE: only used with SMTP_SECURITY=starttls or tls".to_owned());
+    }
+    let username = r.raw("SMTP_USERNAME");
+    let password_file = r.raw("SMTP_PASSWORD_FILE").map(PathBuf::from);
+    if username.is_some() != password_file.is_some() {
+        r.errors.push(
+            "SMTP_USERNAME: SMTP authentication needs both SMTP_USERNAME and SMTP_PASSWORD_FILE (the password is \
+             read from the file, never from a variable)"
+                .to_owned(),
+        );
+    }
+    if username.is_some() && security == SmtpSecurity::None {
+        r.errors.push(
+            "SMTP_USERNAME: SMTP authentication is only sent over TLS; use SMTP_SECURITY=starttls or tls".to_owned(),
+        );
+    }
+    let mailbox = |r: &mut Reader<'_>, key: &str| -> Option<String> {
+        let raw = r.raw(key)?;
+        match raw.trim().parse::<lettre::message::Mailbox>() {
+            Ok(_) => Some(raw.trim().to_owned()),
+            Err(e) => {
+                r.errors.push(format!(
+                    "{key}: \"{raw}\" is not an e-mail address ({e}); e.g. \"ShadouCMDB\" <cmdb-noreply@corp.example>"
+                ));
+                None
+            }
+        }
+    };
+    let from = mailbox(r, "MAIL_FROM");
+    let reply_to = mailbox(r, "MAIL_REPLY_TO");
+    let default_locale = if r.one_of("MAIL_DEFAULT_LOCALE", &["en", "de"], "en") == "de" { "de" } else { "en" };
+    let allow_external_addresses = r.bool("MAIL_ALLOW_EXTERNAL_ADDRESSES", false);
+    let mut allowed_domains = Vec::new();
+    for raw in r.raw("MAIL_ALLOWED_DOMAINS").unwrap_or_default().split(',').filter(|s| !s.trim().is_empty()) {
+        match parse_mail_domain(raw) {
+            Ok(domain) => allowed_domains.push(domain),
+            Err(e) => r.errors.push(format!("MAIL_ALLOWED_DOMAINS: {e}")),
+        }
+    }
+    if allow_external_addresses && allowed_domains.is_empty() {
+        r.errors.push(
+            "MAIL_ALLOWED_DOMAINS: MAIL_ALLOW_EXTERNAL_ADDRESSES=true needs the domains fixed addresses may be in, \
+             e.g. MAIL_ALLOWED_DOMAINS=corp.example"
+                .to_owned(),
+        );
+    }
+    let max_per_recipient_per_hour =
+        r.int::<i32>("MAIL_MAX_PER_RECIPIENT_PER_HOUR", 1, 10_000).unwrap_or(d.max_per_recipient_per_hour);
+    let timeout = r.int::<u64>("SMTP_TIMEOUT_SECS", 1, 300).map_or(d.timeout, Duration::from_secs);
+    if enabled {
+        for (key, missing) in
+            [("SMTP_HOST", host.is_none()), ("MAIL_FROM", from.is_none() && r.raw("MAIL_FROM").is_none())]
+        {
+            if missing {
+                r.errors.push(format!("{key}: required with MAIL=smtp"));
+            }
+        }
+        if public_url.is_none() && r.raw("PUBLIC_URL").is_none() {
+            r.errors.push(
+                "MAIL: MAIL=smtp needs PUBLIC_URL, the address users open the web UI at: every message links to it, \
+                 and the link is never built from a request"
+                    .to_owned(),
+            );
+        }
+    }
+    MailConfig {
+        enabled,
+        host,
+        port: port.unwrap_or(if security == SmtpSecurity::Tls { 465 } else { d.port }),
+        security,
+        tls_ca_file,
+        username,
+        password_file,
+        from,
+        reply_to,
+        default_locale,
+        allow_external_addresses,
+        allowed_domains,
+        max_per_recipient_per_hour,
+        timeout,
+        public_url,
     }
 }
 
@@ -1038,6 +1254,7 @@ impl Config {
         };
 
         let webhooks = webhooks_config(&mut r);
+        let mail = read_mail(&mut r, public_url.clone());
 
         let encryption = EncryptionConfig {
             key_file: r.raw("ENCRYPTION_KEY_FILE").map(PathBuf::from),
@@ -1116,6 +1333,7 @@ impl Config {
             approval_sweep,
             workflow_actions,
             webhooks,
+            mail,
         })
     }
 }
@@ -1336,6 +1554,77 @@ mod tests {
             let err = load_with(&[(key, bad)]).unwrap_err().to_string();
             assert!(err.contains(key), "{key}={bad}: {err}");
         }
+    }
+
+    /// Outbound e-mail: off by default; with MAIL=smtp the relay, the sender
+    /// and PUBLIC_URL are required, and the unsafe combinations refuse to start.
+    #[test]
+    fn mail_settings() {
+        assert_eq!(load_with(&[]).unwrap().mail, MailConfig::default());
+        let smtp = [
+            ("MAIL", "smtp"),
+            ("SMTP_HOST", "relay.corp.example"),
+            ("MAIL_FROM", "\"ShadouCMDB\" <cmdb@corp.example>"),
+            ("PUBLIC_URL", "https://cmdb.corp.example/"),
+        ];
+        let cfg = load_with(&smtp).unwrap().mail;
+        assert!(cfg.enabled);
+        assert_eq!((cfg.port, cfg.security, cfg.default_locale), (587, SmtpSecurity::StartTls, "en"));
+        assert_eq!(cfg.public_url.as_deref(), Some("https://cmdb.corp.example"));
+        let cfg = load_with(&[
+            ("SMTP_SECURITY", "tls"),
+            ("MAIL_DEFAULT_LOCALE", "de"),
+            ("MAIL_ALLOW_EXTERNAL_ADDRESSES", "true"),
+            ("MAIL_ALLOWED_DOMAINS", "Corp.Example, lists.corp.example"),
+            ("MAIL_MAX_PER_RECIPIENT_PER_HOUR", "5"),
+            ("SMTP_TIMEOUT_SECS", "30"),
+            ("SMTP_USERNAME", "cmdb"),
+            ("SMTP_PASSWORD_FILE", "/run/secrets/smtp"),
+        ])
+        .unwrap()
+        .mail;
+        assert_eq!((cfg.port, cfg.default_locale, cfg.max_per_recipient_per_hour), (465, "de", 5));
+        assert_eq!(cfg.allowed_domains, ["corp.example", "lists.corp.example"]);
+        assert_eq!(cfg.timeout, Duration::from_secs(30));
+        assert!(cfg.address_allowed("CAB@Corp.Example"));
+        assert!(!cfg.address_allowed("cab@evil.example"));
+        assert!(!MailConfig { allow_external_addresses: false, ..cfg }.address_allowed("cab@corp.example"));
+
+        // PUBLIC_URL unset with MAIL=smtp refuses to start.
+        let err = load_with(&smtp[..3]).unwrap_err().to_string();
+        assert!(err.contains("MAIL: MAIL=smtp needs PUBLIC_URL"), "{err}");
+        for (extra, key) in [
+            (vec![("SMTP_HOST", "")], "SMTP_HOST: required"),
+            (vec![("MAIL_FROM", "")], "MAIL_FROM: required"),
+            (vec![("MAIL_FROM", "not an address")], "MAIL_FROM: \"not an address\""),
+            (vec![("SMTP_HOST", "relay:25")], "SMTP_HOST"),
+            (vec![("SMTP_SECURITY", "none")], "SMTP_SECURITY: none"),
+            (vec![("SMTP_SECURITY", "ssl")], "SMTP_SECURITY"),
+            (vec![("SMTP_USERNAME", "cmdb")], "SMTP_USERNAME: SMTP authentication needs both"),
+            (
+                vec![
+                    ("SMTP_SECURITY", "none"),
+                    ("SMTP_ALLOW_PLAINTEXT", "true"),
+                    ("SMTP_USERNAME", "u"),
+                    ("SMTP_PASSWORD_FILE", "/p"),
+                ],
+                "SMTP_USERNAME: SMTP authentication is only sent over TLS",
+            ),
+            (vec![("MAIL_ALLOW_EXTERNAL_ADDRESSES", "true")], "MAIL_ALLOWED_DOMAINS: MAIL_ALLOW_EXTERNAL"),
+            (vec![("MAIL_ALLOWED_DOMAINS", "*.corp.example")], "MAIL_ALLOWED_DOMAINS: \"*.corp.example\""),
+            (vec![("MAIL_DEFAULT_LOCALE", "fr")], "MAIL_DEFAULT_LOCALE"),
+            (vec![("MAIL_MAX_PER_RECIPIENT_PER_HOUR", "0")], "MAIL_MAX_PER_RECIPIENT_PER_HOUR"),
+        ] {
+            let mut env: Vec<(&str, &str)> = smtp.to_vec();
+            env.retain(|(k, _)| !extra.iter().any(|(e, _)| e == k));
+            env.extend(extra.iter().copied());
+            let err = load_with(&env).unwrap_err().to_string();
+            assert!(err.contains(key), "{extra:?}: {err}");
+        }
+        // A plaintext relay is the operator's explicit choice.
+        let mut env = smtp.to_vec();
+        env.extend([("SMTP_SECURITY", "none"), ("SMTP_ALLOW_PLAINTEXT", "true")]);
+        assert_eq!(load_with(&env).unwrap().mail.security, SmtpSecurity::None);
     }
 
     #[test]

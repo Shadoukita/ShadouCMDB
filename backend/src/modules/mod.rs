@@ -17,6 +17,7 @@ pub mod impact;
 pub mod imports;
 pub mod items;
 pub mod lookups;
+pub mod mail;
 pub mod mfa;
 pub mod notifications;
 pub mod people;

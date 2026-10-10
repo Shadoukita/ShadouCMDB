@@ -36,6 +36,7 @@ use crate::auth::permissions::GlobalPermission;
 use crate::config::WorkflowActionsConfig;
 use crate::data::crud::{self, AuditAction, AuditEntry, Where};
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
+use crate::modules::mail;
 use crate::modules::workflows::service;
 use crate::paged;
 
@@ -525,14 +526,6 @@ struct Row {
     retried_at: Option<DateTime<Utc>>,
 }
 
-/// `c***@corp.example`: enough to tell lists apart, not to harvest them (N-Q3).
-fn mask(address: &str) -> String {
-    match address.split_once('@') {
-        Some((local, domain)) => format!("{}***@{domain}", local.chars().next().unwrap_or('*')),
-        None => "***".into(),
-    }
-}
-
 fn recipient(r: &Row) -> WorkflowActionDeliveryRecipient {
     use WorkflowActionRecipientKind as K;
     let (kind, rest) = r.recipient_key.split_once(':').unwrap_or(("", ""));
@@ -542,7 +535,7 @@ fn recipient(r: &Row) -> WorkflowActionDeliveryRecipient {
             id: None,
             name: None,
             username: None,
-            address: Some(mask(rest)),
+            address: Some(mail::mask(rest)),
         },
         "endpoint" => WorkflowActionDeliveryRecipient {
             kind: K::Endpoint,
@@ -677,6 +670,8 @@ pub async fn get(
     .fetch_optional(&mut *conn)
     .await?;
     let (last_error, run_status, run_status_reason) = more;
+    // Masked on write as well; this covers rows written before that.
+    let last_error = last_error.as_deref().map(mail::mask_addresses);
     Ok(WorkflowActionDeliveryDetail { delivery: delivery(ctx, row), last_error, run_status, run_status_reason, event })
 }
 

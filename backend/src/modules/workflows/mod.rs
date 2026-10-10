@@ -484,9 +484,9 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("The workflow's notification actions: who is told what, when")
             .description(
-                "An action has a kind (`inbox`: an entry in each recipient's notifications; `webhook`: a signed \
-                 request to a registered endpoint, carrying the CI fields listed in `settings.includeAttributes`; \
-                 `email` comes in a later release), a trigger (`transition`, `approval_requested`, `approval_step`, \
+                "An action has a kind (`inbox`: an entry in each recipient's notifications; `email`: a message to \
+                 each recipient, sent only with `MAIL=smtp`; `webhook`: a signed request to a registered endpoint, \
+                 carrying the CI fields listed in `settings.includeAttributes`), a trigger (`transition`, `approval_requested`, `approval_step`, \
                  `approval_closed`, `approval_overdue` on the transition `transition`, or `instance_cancelled`, \
                  `instance_forced`) and recipient sources, resolved when the action runs. Actions are on the \
                  definition: a change applies at once to every version, without publishing. Nothing is sent from \
@@ -498,8 +498,12 @@ pub fn routes() -> Vec<Route> {
             .requires(manage)
             .errors(&[ErrorCode::NotFound])
             .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
-                Ok(Json(actions::get(&api.pool, &api.ctx, id, api.workflow_actions.max_recipients, api.webhooks.cfg.allowed)
-                    .await?))
+                let limits = actions::Limits {
+                    max_recipients: api.workflow_actions.max_recipients,
+                    mail: &api.mail.cfg,
+                    webhooks_on: api.webhooks.cfg.allowed,
+                };
+                Ok(Json(actions::get(&api.pool, &api.ctx, id, &limits).await?))
             }),
         route(Method::PUT, ACTIONS, "replaceWorkflowActions")
             .tag(TAG)
@@ -513,29 +517,28 @@ pub fn routes() -> Vec<Route> {
                  the draft has; `not_found` for an unknown profile, group or user; `directory_lookup_forbidden` for \
                  a group or user given by name by a caller who may not look up users and groups (the edit \
                  permission on business services or `users.manage`, as for `GET /principals`) unless the workflow \
-                 already has it under that name, whether or not it exists; `duplicate`; `too_many_actions` \
-                 beyond 10 per trigger and transition; `unknown_placeholder` in an e-mail text; for a webhook, \
-                 `not_found` for an unknown endpoint key, `endpoint_not_active` when a new or changed action names \
-                 a paused or suspended endpoint, and `unknown_attribute` for an `includeAttributes` key that is not \
-                 a field of the workflow's type (own or inherited); `kind_unavailable` for `email`, and \
-                 `source_unavailable` for sources other than `profile`, `group` and `user`, until the release that \
-                 delivers them. Choosing an endpoint needs no `webhooks.manage`. Runs already queued for a removed \
-                 or disabled action are cancelled.",
+                 already has it under that name, whether or not it exists; `unknown_attribute` / `attribute_type` \
+                 for a `ci_attribute` that is not a reference field of the type (own or inherited) to the Person \
+                 type; `address_not_allowed` for a fixed address the operator does not allow \
+                 (`MAIL_ALLOW_EXTERNAL_ADDRESSES`, `MAIL_ALLOWED_DOMAINS`); `duplicate`; `too_many_actions` beyond 10 \
+                 per trigger and transition; `unknown_placeholder` in an e-mail text; for a webhook, `not_found` for \
+                 an unknown endpoint key, `endpoint_not_active` when a new or changed action names a paused or \
+                 suspended endpoint, and `unknown_attribute` for an `includeAttributes` key that is not a field of \
+                 the workflow's type (own or inherited). Choosing an endpoint needs no `webhooks.manage`. Runs \
+                 already queued for a removed or disabled action are cancelled.",
             )
             .requires(manage)
             .session_only()
             .errors(&[ErrorCode::NotFound, ErrorCode::VersionConflict])
             .handle(
                 |api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<actions::WorkflowActionsReplace>>| async move {
-                    Ok(Json(actions::replace(
-                        &api.pool,
-                        &api.ctx,
-                        id,
-                        &b,
-                        api.workflow_actions.max_recipients,
-                        api.webhooks.cfg.allowed,
-                    )
-                    .await?))
+                    let limits =
+                        actions::Limits {
+                    max_recipients: api.workflow_actions.max_recipients,
+                    mail: &api.mail.cfg,
+                    webhooks_on: api.webhooks.cfg.allowed,
+                };
+                    Ok(Json(actions::replace(&api.pool, &api.ctx, id, &b, &limits).await?))
                 },
             ),
         route(Method::GET, ACTION_PREVIEW, "previewWorkflowAction")
@@ -544,10 +547,15 @@ pub fn routes() -> Vec<Route> {
             .description(
                 "Resolves the action's recipient sources to users as a run would now: `included`, or out with a \
                  reason (`inactive`, `no_view`: may not view the type of the CI `ciId`, or of the workflow without \
-                 it, `truncated`: beyond `WORKFLOW_ACTIONS_MAX_RECIPIENTS`). Whoever runs the event is left out too \
-                 unless the action sets `excludeActor: false`. Nothing is sent. A caller who may not look up users \
-                 (as for `GET /principals`) gets `included` with `users` empty and `usersHidden: true`. 404 for an \
-                 unknown action, and for a CI that does not exist or that the caller may not view.",
+                 it, `no_email`: an e-mail action and no address, `truncated`: beyond \
+                 `WORKFLOW_ACTIONS_MAX_RECIPIENTS`). The CI-dependent sources (`ci_owner`, `ci_attribute`, \
+                 `service_owner`) are resolved only with `ciId`, the participants only when the action runs: those \
+                 are listed in `unresolved`. Fixed addresses are listed with `minimal_only` (they get no CI data) or \
+                 `address_not_allowed`. For an e-mail action, `subject` is the subject in the caller's language. \
+                 Whoever runs the event is left out too unless the action sets `excludeActor: false`. Nothing is \
+                 sent. A caller who may not look up users (as for `GET /principals`) gets `included` with `users` \
+                 empty and `usersHidden: true`. 404 for an unknown action, and for a CI that does not exist or that \
+                 the caller may not view.",
             )
             .requires(manage)
             .class_checked()
@@ -555,7 +563,13 @@ pub fn routes() -> Vec<Route> {
             .handle(
                 |api,
                  In(path, Query(q), NoBody): In<actions::ActionKeyPath, Query<actions::WorkflowActionPreviewQuery>, NoBody>| async move {
-                    Ok(Json(actions::preview(&api.pool, &api.ctx, &path, &q, api.workflow_actions.max_recipients).await?))
+                    let limits =
+                        actions::Limits {
+                    max_recipients: api.workflow_actions.max_recipients,
+                    mail: &api.mail.cfg,
+                    webhooks_on: api.webhooks.cfg.allowed,
+                };
+                    Ok(Json(actions::preview(&api.pool, &api.ctx, &path, &q, &limits).await?))
                 },
             ),
         route(Method::GET, ACTION_SUMMARY, "getWorkflowActionsSummary")

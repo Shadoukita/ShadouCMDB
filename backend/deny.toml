@@ -38,6 +38,9 @@ allow = [
   "Unicode-3.0",
   "Unlicense",
   "CC0-1.0",
+  # quoted_printable (through lettre, workflow e-mail): zero-clause BSD, public-domain equivalent,
+  # no attribution required (SHAA-2734).
+  "0BSD",
   # webpki-roots: the Mozilla CA bundle as data.
   "CDLA-Permissive-2.0",
   # IBM Plex Sans and IBM Plex Mono fonts (frontend): fonts only. cargo-deny does not scan the

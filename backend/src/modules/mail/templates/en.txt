@@ -1,0 +1,94 @@
+# Workflow e-mail, English. One `key = text` per line; `{name}` is filled in
+# by the server (values are escaped for HTML and stripped of line breaks in
+# subjects). de.txt must have exactly these keys and placeholders (a unit test
+# checks it). Conventions: README.md next to this file.
+
+# Subjects. They start with the CI's ident in brackets; minimal content names no CI.
+subject.transition = [{ref}] {workflow}: {ci} is now {to}
+subject.approval_requested = [{ref}] Approval requested: {transition} for {ci}
+subject.approval_step = [{ref}] Approval step {step}: {transition} for {ci}
+subject.approval_closed.approved = [{ref}] Approved: {transition} for {ci}
+subject.approval_closed.rejected = [{ref}] Rejected: {transition} for {ci}
+subject.approval_closed.withdrawn = [{ref}] Withdrawn: approval of {transition} for {ci}
+subject.approval_closed.cancelled = [{ref}] Cancelled: approval of {transition} for {ci}
+subject.approval_overdue = [{ref}] Approval overdue: {transition} for {ci}
+subject.cancelled = [{ref}] {workflow} was cancelled for {ci}
+subject.forced = [{ref}] {workflow}: {ci} was set to {to} by an administrator
+subject.minimal = {workflow}: a workflow event needs your attention
+subject.bulk = {workflow}: {transition} was applied to {count} configuration items
+subject.digest = ShadouCMDB: {count} workflow notifications from the last hour
+subject.test = ShadouCMDB: test message
+
+# The first sentence: what happened, and what, if anything, the reader must do.
+lead.transition = {actor} applied the transition {transition} of workflow {workflow} to {ci}, which is now in state {to}. This message is for your information; no action is needed.
+lead.approval_requested = {actor} requested approval to apply {transition} of workflow {workflow} to {ci}. If you are an approver, please review the request and decide.
+lead.approval_step = The approval of {transition} of workflow {workflow} for {ci} has reached step {step}. If you are an approver of this step, please review the request and decide.
+lead.approval_closed.approved = The request to apply {transition} of workflow {workflow} to {ci} was approved. No action is needed.
+lead.approval_closed.rejected = The request to apply {transition} of workflow {workflow} to {ci} was rejected. No action is needed.
+lead.approval_closed.withdrawn = The request to apply {transition} of workflow {workflow} to {ci} was withdrawn. No action is needed.
+lead.approval_closed.cancelled = The request to apply {transition} of workflow {workflow} to {ci} was cancelled. No action is needed.
+lead.approval_overdue = The approval of {transition} of workflow {workflow} for {ci} is overdue. If you are an approver, please decide as soon as possible.
+lead.cancelled = {actor} cancelled workflow {workflow} for {ci}. No action is needed.
+lead.forced = {actor} set workflow {workflow} for {ci} to state {to} without a transition. No action is needed.
+lead.minimal = A workflow event needs your attention in ShadouCMDB: workflow {workflow}, {transition}. Sign in to see the details.
+lead.bulk = {actor} applied the transition {transition} of workflow {workflow} to {count} configuration items. This message is for your information; no action is needed.
+lead.digest = You received more than {max} workflow messages within an hour, so the rest of that hour's messages are collected here. No action is needed beyond what each entry asks for.
+lead.test = This is a test message from ShadouCMDB, sent at the request of {user}. It confirms that outbound e-mail works. No action is needed.
+
+# Detail rows.
+label.ci = Configuration item
+label.type = Type
+label.workflow = Workflow
+label.transition = Transition
+label.state = State
+label.by = By
+label.comment = Comment
+label.request = Approval request
+label.step = Step
+label.due = Due
+label.requested_by = Requested by
+label.event = Event
+
+# Digest entries.
+event.transition = {transition} applied: now {to}
+event.approval_requested = approval of {transition} requested
+event.approval_step = approval of {transition} at step {step}
+event.approval_closed.approved = {transition} approved
+event.approval_closed.rejected = {transition} rejected
+event.approval_closed.withdrawn = approval of {transition} withdrawn
+event.approval_closed.cancelled = approval of {transition} cancelled
+event.approval_overdue = approval of {transition} overdue
+event.cancelled = workflow cancelled
+event.forced = set to {to} without a transition
+event.minimal = a workflow event needs your attention
+
+# Words and phrases.
+more = and {count} more
+hidden_ref = a CI you cannot view
+yes = yes
+no = no
+someone = Someone
+none = none
+open = Open in ShadouCMDB
+open_list = Open the workflow list in ShadouCMDB
+digest.entry = {time} – {workflow}: {ci}, {event}
+
+# Why the reader got the message.
+why.intro = You receive this message because {reasons}.
+why.profile = you hold the permission profile {name}
+why.group = you are a member of the group {name}
+why.user = the action names you
+why.ci_owner = you are the owner of the configuration item
+why.ci_attribute = you are named in the field {name} of the configuration item
+why.service_owner.technical = you are a technical owner of a business service the configuration item belongs to
+why.service_owner.business = you are a business owner of a business service the configuration item belongs to
+why.actor = you ran the event
+why.starter = you started the workflow
+why.requester = you requested the approval
+why.approver = you are an approver of the current step
+why.delegate = you decide approvals on behalf of {name}
+why.address = this address is configured to receive notices from workflow {workflow}
+why.workflows = workflows in ShadouCMDB notify you
+why.test = you asked for a test message
+footer.action = It was sent by the action {action} of workflow {workflow}.
+footer.contact = If you have questions, please contact your ShadouCMDB administrators. This message was generated automatically; replies are not read.

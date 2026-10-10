@@ -27,7 +27,7 @@ use crate::config::{WebhookProxy, WebhooksConfig, WorkflowActionsConfig};
 use crate::db::scratch;
 use crate::modules::api_tokens::tests::{Creds, app_with_webhooks, call, code};
 use crate::modules::workflows::actions::WorkflowActionKind;
-use crate::modules::workflows::actions::outbox::{self, Claimed};
+use crate::modules::workflows::actions::outbox::{self, Channels, Claimed};
 use crate::modules::workflows::runtime_tests::{DEFS, World, world_with_app};
 use crate::secrets::Keyring;
 
@@ -287,7 +287,7 @@ impl Env {
         assert_eq!(status, 200, "{v}");
         let cfg = WorkflowActionsConfig::default();
         for id in outbox::claim_runs(&self.w.pool, "test", 100).await.unwrap() {
-            outbox::fan_out(&self.w.pool, &cfg, id, "test").await.unwrap();
+            outbox::fan_out(&self.w.pool, &cfg, &Channels::default(), id, "test").await.unwrap();
         }
         sqlx::query_scalar(
             "SELECT d.id FROM workflow_action_deliveries d JOIN workflow_action_runs r ON r.id = d.run_id
@@ -934,6 +934,18 @@ async fn twenty_failures_suspend_the_endpoint_with_an_audit_row_and_an_inbox_not
     assert_eq!(delivery(&e.w.pool, second).await.0, "held", "its waiting delivery is held");
     // A held delivery is not claimed; a further failure audits nothing more.
     assert_eq!(send_all(&e.w.pool, &hooks).await, 0);
+    // Retried while the endpoint is still suspended: checked again when sent, held again, nothing sent.
+    let retry = format!("{DEFS}/{}/action-deliveries/{second}/retry", e.w.definition);
+    let (status, v) = e.call("POST", &retry, None).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(delivery(&e.w.pool, second).await.0, "pending");
+    sqlx::query("UPDATE workflow_action_deliveries SET next_attempt_at = now() WHERE id = $1")
+        .bind(second)
+        .execute(&e.w.pool)
+        .await
+        .unwrap();
+    send_all(&e.w.pool, &hooks).await;
+    assert_eq!(delivery(&e.w.pool, second).await.0, "held", "a retried delivery of a suspended endpoint is held again");
 
     // Resume: active, the count starts again, held deliveries go out.
     let api_hooks = e.hooks.clone();

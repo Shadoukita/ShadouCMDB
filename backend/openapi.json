@@ -35073,7 +35073,7 @@
           "Workflow definitions"
         ],
         "summary": "The workflow's notification actions: who is told what, when",
-        "description": "Requires `workflows.manage`. An action has a kind (`inbox`: an entry in each recipient's notifications; `webhook`: a signed request to a registered endpoint, carrying the CI fields listed in `settings.includeAttributes`; `email` comes in a later release), a trigger (`transition`, `approval_requested`, `approval_step`, `approval_closed`, `approval_overdue` on the transition `transition`, or `instance_cancelled`, `instance_forced`) and recipient sources, resolved when the action runs. Actions are on the definition: a change applies at once to every version, without publishing. Nothing is sent from the request that runs the transition; the event's transaction queues a run, and the action workers deliver it after commit to each recipient who may then view the CI's type. `problems` holds the lint's warnings (also `endpoint_not_active` for a webhook action whose endpoint is paused or suspended, and `webhooks_disabled` while the operator has webhooks off).",
+        "description": "Requires `workflows.manage`. An action has a kind (`inbox`: an entry in each recipient's notifications; `email`: a message to each recipient, sent only with `MAIL=smtp`; `webhook`: a signed request to a registered endpoint, carrying the CI fields listed in `settings.includeAttributes`), a trigger (`transition`, `approval_requested`, `approval_step`, `approval_closed`, `approval_overdue` on the transition `transition`, or `instance_cancelled`, `instance_forced`) and recipient sources, resolved when the action runs. Actions are on the definition: a change applies at once to every version, without publishing. Nothing is sent from the request that runs the transition; the event's transaction queues a run, and the action workers deliver it after commit to each recipient who may then view the CI's type. `problems` holds the lint's warnings (also `endpoint_not_active` for a webhook action whose endpoint is paused or suspended, and `webhooks_disabled` while the operator has webhooks off).",
         "operationId": "getWorkflowActions",
         "parameters": [
           {
@@ -35182,7 +35182,7 @@
           "Workflow definitions"
         ],
         "summary": "Replace the workflow's notification actions",
-        "description": "Requires `workflows.manage`. `actions` is the complete new set, in order; an action keeps its id and its delivery history by `key`. Send the workflow's `version`: 409 VERSION_CONFLICT if it changed in between. A change bumps the workflow's version and is audited as an `update` with the actions before and after, recipients by name. 400 VALIDATION_ERROR: `required` / `not_applicable` / `source_mismatch` for fields the kind, trigger or source needs or does not take; `unknown_transition` for a transition no version and not the draft has; `not_found` for an unknown profile, group or user; `directory_lookup_forbidden` for a group or user given by name by a caller who may not look up users and groups (the edit permission on business services or `users.manage`, as for `GET /principals`) unless the workflow already has it under that name, whether or not it exists; `duplicate`; `too_many_actions` beyond 10 per trigger and transition; `unknown_placeholder` in an e-mail text; for a webhook, `not_found` for an unknown endpoint key, `endpoint_not_active` when a new or changed action names a paused or suspended endpoint, and `unknown_attribute` for an `includeAttributes` key that is not a field of the workflow's type (own or inherited); `kind_unavailable` for `email`, and `source_unavailable` for sources other than `profile`, `group` and `user`, until the release that delivers them. Choosing an endpoint needs no `webhooks.manage`. Runs already queued for a removed or disabled action are cancelled. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "description": "Requires `workflows.manage`. `actions` is the complete new set, in order; an action keeps its id and its delivery history by `key`. Send the workflow's `version`: 409 VERSION_CONFLICT if it changed in between. A change bumps the workflow's version and is audited as an `update` with the actions before and after, recipients by name. 400 VALIDATION_ERROR: `required` / `not_applicable` / `source_mismatch` for fields the kind, trigger or source needs or does not take; `unknown_transition` for a transition no version and not the draft has; `not_found` for an unknown profile, group or user; `directory_lookup_forbidden` for a group or user given by name by a caller who may not look up users and groups (the edit permission on business services or `users.manage`, as for `GET /principals`) unless the workflow already has it under that name, whether or not it exists; `unknown_attribute` / `attribute_type` for a `ci_attribute` that is not a reference field of the type (own or inherited) to the Person type; `address_not_allowed` for a fixed address the operator does not allow (`MAIL_ALLOW_EXTERNAL_ADDRESSES`, `MAIL_ALLOWED_DOMAINS`); `duplicate`; `too_many_actions` beyond 10 per trigger and transition; `unknown_placeholder` in an e-mail text; for a webhook, `not_found` for an unknown endpoint key, `endpoint_not_active` when a new or changed action names a paused or suspended endpoint, and `unknown_attribute` for an `includeAttributes` key that is not a field of the workflow's type (own or inherited). Choosing an endpoint needs no `webhooks.manage`. Runs already queued for a removed or disabled action are cancelled. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
         "operationId": "replaceWorkflowActions",
         "parameters": [
           {
@@ -35353,7 +35353,7 @@
           "Workflow definitions"
         ],
         "summary": "Who an action would notify now, and why each user is in or out",
-        "description": "Requires `workflows.manage`. Resolves the action's recipient sources to users as a run would now: `included`, or out with a reason (`inactive`, `no_view`: may not view the type of the CI `ciId`, or of the workflow without it, `truncated`: beyond `WORKFLOW_ACTIONS_MAX_RECIPIENTS`). Whoever runs the event is left out too unless the action sets `excludeActor: false`. Nothing is sent. A caller who may not look up users (as for `GET /principals`) gets `included` with `users` empty and `usersHidden: true`. 404 for an unknown action, and for a CI that does not exist or that the caller may not view.",
+        "description": "Requires `workflows.manage`. Resolves the action's recipient sources to users as a run would now: `included`, or out with a reason (`inactive`, `no_view`: may not view the type of the CI `ciId`, or of the workflow without it, `no_email`: an e-mail action and no address, `truncated`: beyond `WORKFLOW_ACTIONS_MAX_RECIPIENTS`). The CI-dependent sources (`ci_owner`, `ci_attribute`, `service_owner`) are resolved only with `ciId`, the participants only when the action runs: those are listed in `unresolved`. Fixed addresses are listed with `minimal_only` (they get no CI data) or `address_not_allowed`. For an e-mail action, `subject` is the subject in the caller's language. Whoever runs the event is left out too unless the action sets `excludeActor: false`. Nothing is sent. A caller who may not look up users (as for `GET /principals`) gets `included` with `users` empty and `usersHidden: true`. 404 for an unknown action, and for a CI that does not exist or that the caller may not view.",
         "operationId": "previewWorkflowAction",
         "parameters": [
           {
@@ -36879,6 +36879,176 @@
           },
           {
             "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/mail/status": {
+      "get": {
+        "tags": [
+          "Mail"
+        ],
+        "summary": "Outbound e-mail: the settings and the last outcomes",
+        "description": "Needs `workflows.manage` or `webhooks.manage`. The operator sets outbound e-mail in the environment (`MAIL`, `SMTP_*`, `MAIL_*`); this shows the relay, the security and the sender, never the user name or password. `lastSuccessAt` and `lastError` are those of the server process that answered, since it started.",
+        "operationId": "getMailStatus",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/mail/test": {
+      "post": {
+        "tags": [
+          "Mail"
+        ],
+        "summary": "Send a test message to your own address",
+        "description": "Needs `workflows.manage` or `webhooks.manage`, and a session. Sends at once, not through the workflow outbox, to the caller's own e-mail address only, in the caller's language. Audited as `mail.test` on the caller. A refusal by the relay is reported in the result (`sent` false, `smtpCode`, `error`), not as an error status. 409 MAIL_NOT_CONFIGURED with `MAIL=off`; 409 CONFLICT when the caller has no address. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "sendMailTest",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailTestResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (not allowed in this state) or MAIL_NOT_CONFIGURED (outbound e-mail is off: MAIL=off). Nothing was sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
           }
         ]
       }
@@ -49729,6 +49899,122 @@
         },
         "additionalProperties": false
       },
+      "MailStatus": {
+        "type": "object",
+        "description": "The outbound e-mail settings of the server process that answered, and how its last attempts went",
+        "required": [
+          "enabled",
+          "defaultLocale",
+          "externalAddresses",
+          "maxPerRecipientPerHour"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "`MAIL=smtp`; when false, e-mail actions can be configured but nothing is sent (`mail_off`)"
+          },
+          "host": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The SMTP relay (`SMTP_HOST`)"
+          },
+          "port": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "security": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`starttls`, `tls` or `none`"
+          },
+          "from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The sender (`MAIL_FROM`)"
+          },
+          "defaultLocale": {
+            "type": "string",
+            "description": "`en` or `de`: the language of users without one and of fixed addresses (`MAIL_DEFAULT_LOCALE`)"
+          },
+          "externalAddresses": {
+            "type": "boolean",
+            "description": "Whether actions may send to fixed addresses (`MAIL_ALLOW_EXTERNAL_ADDRESSES`)"
+          },
+          "maxPerRecipientPerHour": {
+            "type": "integer",
+            "format": "int32",
+            "description": "More e-mails to one recipient within an hour fold into one digest (`MAIL_MAX_PER_RECIPIENT_PER_HOUR`)"
+          },
+          "lastSuccessAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "The last message this process handed to the relay, since it started"
+          },
+          "lastErrorAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "lastError": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The last failure of this process: the relay's reply code and text, or the connection error"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MailTestResult": {
+        "type": "object",
+        "description": "The outcome of a test message",
+        "required": [
+          "to",
+          "sent"
+        ],
+        "properties": {
+          "to": {
+            "type": "string",
+            "description": "The caller's own address, the only one a test goes to"
+          },
+          "sent": {
+            "type": "boolean",
+            "description": "Whether the relay accepted the message (it may still bounce later)"
+          },
+          "smtpCode": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The relay's reply code when it refused",
+            "minimum": 0
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The relay's reply or the connection error when it was not sent"
+          }
+        },
+        "additionalProperties": false
+      },
       "MarkedRead": {
         "type": "object",
         "required": [
@@ -55005,7 +55291,9 @@
           "users",
           "truncated",
           "usersHidden",
-          "excludesActor"
+          "excludesActor",
+          "addresses",
+          "unresolved"
         ],
         "properties": {
           "key": {
@@ -55045,9 +55333,55 @@
           "excludesActor": {
             "type": "boolean",
             "description": "Whoever runs the event is left out as well (`excludeActor`, the default)"
+          },
+          "addresses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowActionPreviewAddress"
+            },
+            "description": "E-mail: the fixed addresses"
+          },
+          "unresolved": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Sources resolved only when the action runs: the CI-dependent ones without `ciId`, the participants always"
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "E-mail: the subject as the caller would get it, in the caller's language (with `ciId`, for that CI;\notherwise without a CI)"
           }
         },
         "additionalProperties": false
+      },
+      "WorkflowActionPreviewAddress": {
+        "type": "object",
+        "description": "One fixed address of an e-mail action",
+        "required": [
+          "address",
+          "reason"
+        ],
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/WorkflowActionPreviewAddressReason"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowActionPreviewAddressReason": {
+        "type": "string",
+        "description": "Whether a fixed address would be sent to",
+        "enum": [
+          "minimal_only",
+          "address_not_allowed"
+        ]
       },
       "WorkflowActionPreviewReason": {
         "type": "string",
@@ -55056,6 +55390,7 @@
           "included",
           "no_view",
           "inactive",
+          "no_email",
           "truncated"
         ]
       },
@@ -55088,7 +55423,7 @@
             "items": {
               "type": "string"
             },
-            "description": "The sources that name them, as `group CAB`"
+            "description": "The sources that name them, as `group CAB` or `participant starter`"
           }
         },
         "additionalProperties": false
@@ -55495,7 +55830,7 @@
             "items": {
               "$ref": "#/components/schemas/WorkflowProblem"
             },
-            "description": "Warnings: `unknown_transition` (the current version lacks it; kept for instances on older versions),\n`recipients_cannot_view` (no active user of a source may view the workflow's type), `too_many_recipients`\n(more than `WORKFLOW_ACTIONS_MAX_RECIPIENTS` users; the rest are left out), `missing_locale` and\n`minimal_placeholder` (e-mail), `endpoint_not_active` and `webhooks_disabled` (webhook)"
+            "description": "Warnings: `unknown_transition` (the current version lacks it; kept for instances on older versions),\n`recipients_cannot_view` (no active user of a source may view the workflow's type), `too_many_recipients`\n(more than `WORKFLOW_ACTIONS_MAX_RECIPIENTS` users; the rest are left out), `owner_not_person` (the type's\nowner field names no account, so `ci_owner` reaches nobody), for e-mail `missing_locale`,\n`minimal_placeholder`, `mail_off` (`MAIL=off`: nothing is sent) and `address_not_allowed` (the operator no\nlonger allows a fixed address), and for webhooks `endpoint_not_active` and `webhooks_disabled`"
           }
         },
         "additionalProperties": false
@@ -59181,6 +59516,9 @@
     },
     {
       "name": "Workflow definitions"
+    },
+    {
+      "name": "Mail"
     },
     {
       "name": "Workflow instances"
