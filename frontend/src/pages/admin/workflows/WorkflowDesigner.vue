@@ -22,7 +22,7 @@ import EmptyState from "../../../components/EmptyState.vue";
 import ErrorAlert from "../../../components/ErrorAlert.vue";
 import LoadingState from "../../../components/LoadingState.vue";
 import {
-  CATEGORIES,
+  categoryLabel,
   COLUMN_STEP,
   autoLayout,
   checkDraft,
@@ -332,7 +332,6 @@ function selectProblem(p: PlacedProblem) {
 /** A state value by its lookup value's name, as the inspector shows it; the key when the value is gone from the list. */
 const stateValueName = (key: string) => stateValues.value?.find((v) => v.key === key)?.name ?? key;
 const stateName = (key: string) => draft.value?.states.find((s) => s.key === key)?.name ?? key;
-const categoryLabel = (c: string) => CATEGORIES.find((x) => x.value === c)?.label ?? c;
 const marker = (kind: "state" | "transition", key: string) => {
   const mine = problemsFor(problems.value, kind, key);
   return mine[0]?.severity;

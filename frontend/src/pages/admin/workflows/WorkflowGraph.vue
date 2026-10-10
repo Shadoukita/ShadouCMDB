@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { CATEGORIES, NODE_H, NODE_W, type Draft, type PlacedProblem, type Position } from "../../../lib/workflowDraft";
+import { categoryLabel, NODE_H, NODE_W, type Draft, type PlacedProblem, type Position } from "../../../lib/workflowDraft";
 import { EDGE_LABEL_MAX, edgeGeometry, shorten } from "../../../lib/workflowGraph";
 
 /**
@@ -45,7 +45,6 @@ function severity(kind: "state" | "transition", key: string): "error" | "warning
   return mine.length ? "warning" : undefined;
 }
 
-const categoryLabel = (c: string) => CATEGORIES.find((x) => x.value === c)?.label ?? c;
 const valueName = (key: string) => props.stateValues?.find((v) => v.key === key)?.name ?? key;
 const nameOf = (key: string) => props.draft.states.find((s) => s.key === key)?.name ?? key;
 
