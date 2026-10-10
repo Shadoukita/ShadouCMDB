@@ -15,7 +15,9 @@ import {
 import EmptyState from "../../../components/EmptyState.vue";
 import ErrorAlert from "../../../components/ErrorAlert.vue";
 import LoadingState from "../../../components/LoadingState.vue";
+import SaveBar from "../../../components/SaveBar.vue";
 import { t } from "../../../i18n";
+import { useFlashStore } from "../../../stores/flash";
 import {
   approverFromApi,
   approverIdentity,
@@ -82,11 +84,9 @@ const taken = (a: DraftApprover) => list.value.some((x) => approverIdentity(x) =
 
 function add(a: DraftApprover) {
   list.value = [...list.value, a];
-  saved.value = null;
 }
 function remove(a: DraftApprover) {
   list.value = list.value.filter((x) => x !== a);
-  saved.value = null;
 }
 
 const problems = computed(() => approvers.data.value?.problems ?? []);
@@ -95,19 +95,18 @@ const generalProblems = computed(() => otherProblems(problems.value, rows.value)
 // ---------- Saving ----------
 
 const save = useSaveApprovers();
+const flash = useFlashStore();
 const error = ref<unknown>(null);
-const saved = ref<string | null>(null);
 const conflict = computed(() => error.value instanceof ApiError && error.value.code === "VERSION_CONFLICT");
 
 async function submit() {
   const a = approvers.data.value;
   if (!a) return;
   error.value = null;
-  saved.value = null;
   try {
     const next = await save.mutateAsync({ id: wid.value, body: { version: a.version, approvers: approversBody(list.value) } });
     seed(next);
-    saved.value = next.problems.length ? t("wfApprovers.savedWithWarnings", { n: next.problems.length }) : t("wfApprovers.saved");
+    flash.show(next.problems.length ? t("wfApprovers.savedWithWarnings", { n: next.problems.length }) : t("wfApprovers.saved"));
   } catch (e) {
     error.value = e;
   }
@@ -147,7 +146,6 @@ onBeforeUnmount(() => window.removeEventListener("beforeunload", onBeforeUnload)
   <section class="panel" aria-labelledby="wf-approvers-title" data-testid="wf-approvers">
     <div class="panel-header">
       <h2 id="wf-approvers-title">{{ t("wfApprovers.title") }}</h2>
-      <span v-if="dirty" class="badge warn">{{ t("wfApprovers.unsaved") }}</span>
       <span v-if="!dirty && problems.length" class="badge warn">{{ t("wfApprovers.warnings", { n: problems.length }) }}</span>
     </div>
     <div class="panel-body stack">
@@ -157,7 +155,6 @@ onBeforeUnmount(() => window.removeEventListener("beforeunload", onBeforeUnload)
         <div><button type="button" class="btn btn-sm" @click="reload">{{ t("wfApprovers.reload") }}</button></div>
       </div>
       <ErrorAlert v-else-if="error" :error="error" :title="t('wfApprovers.notSaved')" />
-      <div v-if="saved" class="alert" role="status">{{ saved }}</div>
       <div v-if="cannotListProfiles" class="alert" role="note">{{ t("wfApprovers.noProfileList") }}</div>
       <ul v-if="generalProblems.length && !dirty" class="wf-problems" :aria-label="t('wfApprovers.lint')">
         <li v-for="(p, i) in generalProblems" :key="i" :class="p.severity">
@@ -214,13 +211,13 @@ onBeforeUnmount(() => window.removeEventListener("beforeunload", onBeforeUnload)
           <ApproverAddForm :transition-key="r.transitionKey" :step-key="r.stepKey" :profiles="profiles" :attributes="personFields" :taken="taken" @add="add" />
         </section>
       </div>
-      <div class="form-footer">
-        <button type="button" class="btn btn-primary" :disabled="!dirty || save.isPending.value" data-testid="wf-approvers-save" @click="submit">
-          {{ save.isPending.value ? t("wfApprovers.saving") : t("wfApprovers.save") }}
-        </button>
-        <button type="button" class="btn" :disabled="!dirty || save.isPending.value" @click="reset">{{ t("wfApprovers.undo") }}</button>
-      </div>
     </template>
   </section>
   <ApproverPreview v-if="!loading && approvers.data.value && rows.some((r) => !r.orphan)" :workflow-id="wid" :class-id="workflow.classId" :rows="rows.filter((r) => !r.orphan)" :dirty="dirty" />
+  <SaveBar v-if="!loading && approvers.data.value && rows.length" :label="t('record.save.region')" :dirty="dirty">
+    <button v-if="dirty" type="button" class="btn" :disabled="save.isPending.value" @click="reset">{{ t("record.save.discard") }}</button>
+    <button type="button" class="btn btn-primary" :disabled="!dirty || save.isPending.value" data-testid="wf-approvers-save" @click="submit">
+      {{ save.isPending.value ? t("wfApprovers.saving") : t("wfApprovers.save") }}
+    </button>
+  </SaveBar>
 </template>

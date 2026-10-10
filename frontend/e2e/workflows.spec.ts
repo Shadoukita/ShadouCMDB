@@ -50,7 +50,7 @@ test("Workflows sits under Processes; an empty list says what a workflow is", as
 
 test("create a workflow for Server with Status as its state field", async ({ page, request }) => {
   await page.goto("/admin/workflows");
-  await page.getByRole("link", { name: "+ New workflow" }).click();
+  await page.getByRole("link", { name: "New workflow" }).click();
   await expect(page).toHaveURL(/\/admin\/workflows\/new$/);
   // Required fields are flagged before anything is sent.
   await page.getByRole("button", { name: "Create workflow" }).click();
@@ -196,7 +196,7 @@ test("publish version 1 with a change note", async ({ page, request }) => {
 
   // The read-only view of the version.
   await row.getByRole("button", { name: "View" }).click();
-  await expect(page.getByRole("heading", { name: "Version 1 (read-only)" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Version 1", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: /^Transition Put in service/ })).toBeVisible();
 
   // With everything published, the designer offers a new draft from the current version.
