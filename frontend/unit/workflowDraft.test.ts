@@ -94,7 +94,7 @@ describe("conditions", () => {
     assert.equal(text, "ENVIRONMENT ist prod und (RISK ist höchstens 3 oder NOTES ist gesetzt)");
     const d = draft();
     d.states[0].name = " ";
-    assert.ok(checkDraft(d).some((p) => p.message === "Der Status braucht einen Namen."));
+    assert.ok(checkDraft(d).some((p) => p.message === "Der Zustand braucht einen Namen."));
   });
 });
 

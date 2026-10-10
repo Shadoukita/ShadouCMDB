@@ -76,7 +76,7 @@ test("designer and version view: the texts and the condition wording come from t
   const page = await open(browser, { locale: "de" });
   await page.goto(`/admin/workflows/${wfId}?tab=designer`);
   await expect(page.getByTestId("wf-save-state")).toHaveText("Alle Änderungen gespeichert");
-  await expect(page.getByRole("button", { name: "+ Status" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "+ Zustand" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Version 2 veröffentlichen…" })).toBeVisible();
   await expect(page.getByTestId("wf-lint").getByRole("heading", { name: "Prüfung" })).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "Erfordert" })).toBeVisible();
@@ -88,8 +88,8 @@ test("designer and version view: the texts and the condition wording come from t
   await expect(page.getByRole("button", { name: "+ Bedingung" })).toBeVisible();
   await expect(page.getByLabel("Bedingung 2: Vergleich").locator("option:checked")).toHaveText("ist gesetzt");
 
-  await page.getByRole("button", { name: "Status Draft, Offen, Anfangsstatus" }).click();
-  await expect(page.getByRole("heading", { name: "Status: Draft" })).toBeVisible();
+  await page.getByRole("button", { name: "Zustand Draft, Offen, Anfangszustand" }).click();
+  await expect(page.getByRole("heading", { name: "Zustand: Draft" })).toBeVisible();
   await expect(page.getByText("0 eingehende, 1 ausgehender Übergang.")).toBeVisible();
 
   await page.getByRole("tab", { name: "Versionen" }).click();
