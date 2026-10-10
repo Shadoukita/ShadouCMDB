@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, ref } from "vue";
 import { dragBox, describeBox, fromBox, LAYER_MOVES, minHeightOf, MOVE, toBox, type Box, type Edges, type Frame, type LayerMove, type SnapLine } from "../../lib/freeLayout";
 import type { LayoutSection } from "../../lib/layoutDesign";
+import { type MessageKey, t } from "../../i18n";
 import Icon from "../Icon.vue";
 
 /**
@@ -47,7 +48,7 @@ const box = computed(() => toBox(props.frame, props.areaWidth));
 /** The box while a drag or resize is under way: the live readout. */
 const live = ref<Box | null>(null);
 const label = computed(() => props.section.label);
-const gripLabel = computed(() => `Window ${label.value}: ${describeBox(box.value)}, layer ${props.layer.index} of ${props.layer.count}`);
+const gripLabel = computed(() => t("layoutEditor.window.grip", { window: label.value, box: describeBox(box.value), index: props.layer.index, count: props.layer.count }));
 
 // ---------- Pointer: move by the title bar, resize by the edges ----------
 
@@ -93,7 +94,7 @@ function begin(e: PointerEvent, edges: Edges, threshold: number) {
     if (!started) return;
     swallowClick = true;
     setTimeout(() => (swallowClick = false), 0);
-    const text = live.value ? `Window ${label.value}: ${describeBox(live.value)}.` : null;
+    const text = live.value ? t("layoutEditor.window.readout", { window: label.value, box: describeBox(live.value) }) : null;
     live.value = null;
     emit("guides", []);
     emit("gestureEnd", text);
@@ -132,15 +133,15 @@ function onClickCapture(e: MouseEvent) {
   swallowClick = false;
 }
 
-const HANDLES: { key: string; edges: Edges; title: string }[] = [
-  { key: "n", edges: { n: true }, title: "Drag to change the height (top edge)" },
-  { key: "s", edges: { s: true }, title: "Drag to change the height" },
-  { key: "w", edges: { w: true }, title: "Drag to change the width (left edge)" },
-  { key: "e", edges: { e: true }, title: "Drag to change the width" },
-  { key: "nw", edges: { n: true, w: true }, title: "Drag to resize" },
-  { key: "ne", edges: { n: true, e: true }, title: "Drag to resize" },
-  { key: "sw", edges: { s: true, w: true }, title: "Drag to resize" },
-  { key: "se", edges: { s: true, e: true }, title: "Drag to resize" },
+const HANDLES: { key: string; edges: Edges; title: MessageKey }[] = [
+  { key: "n", edges: { n: true }, title: "layoutEditor.window.resizeTop" },
+  { key: "s", edges: { s: true }, title: "layoutEditor.window.resizeBottom" },
+  { key: "w", edges: { w: true }, title: "layoutEditor.window.resizeLeft" },
+  { key: "e", edges: { e: true }, title: "layoutEditor.window.resizeRight" },
+  { key: "nw", edges: { n: true, w: true }, title: "layoutEditor.window.resizeCorner" },
+  { key: "ne", edges: { n: true, e: true }, title: "layoutEditor.window.resizeCorner" },
+  { key: "sw", edges: { s: true, w: true }, title: "layoutEditor.window.resizeCorner" },
+  { key: "se", edges: { s: true, e: true }, title: "layoutEditor.window.resizeCorner" },
 ];
 
 // ---------- Keyboard ----------
@@ -249,16 +250,16 @@ const canLower = computed(() => props.layer.index > 1);
       :aria-label="gripLabel"
       :aria-describedby="keysId"
       aria-haspopup="menu"
-      :title="stacked ? 'Windows stack on narrow screens: widen the preview to move them' : 'Drag to move the window; right-click for the layers'"
+      :title="stacked ? t('layoutEditor.window.stackedTitle') : t('layoutEditor.window.gripTitle')"
       @keydown="onKey"
     >
       <Icon name="grip-horizontal" :size="14" />
     </span>
     <template v-if="!stacked">
-      <span v-for="h in HANDLES" :key="h.key" :class="['win-edge', h.key]" aria-hidden="true" :title="h.title" :data-testid="`window-edge-${h.key}`" @pointerdown="onEdgeDown($event, h.edges)" />
+      <span v-for="h in HANDLES" :key="h.key" :class="['win-edge', h.key]" aria-hidden="true" :title="t(h.title)" :data-testid="`window-edge-${h.key}`" @pointerdown="onEdgeDown($event, h.edges)" />
     </template>
     <span v-if="live" class="win-readout" role="status" data-testid="window-readout">{{ describeBox(live) }}</span>
-    <div v-if="menu" class="win-menu" role="menu" :aria-label="`Layers of ${label}`" :style="{ left: `${menu.x}px`, top: `${menu.y}px` }" data-no-drag @keydown="onMenuKey">
+    <div v-if="menu" class="win-menu" role="menu" :aria-label="t('layoutEditor.window.layersOf', { window: label })" :style="{ left: `${menu.x}px`, top: `${menu.y}px` }" data-no-drag @keydown="onMenuKey">
       <button
         v-for="m in LAYER_MOVES"
         :key="m.move"
@@ -267,7 +268,7 @@ const canLower = computed(() => props.layer.index > 1);
         :disabled="m.move === 'front' || m.move === 'forward' ? !canRaise : !canLower"
         @click="pick(m.move)"
       >
-        {{ m.label }}<kbd>{{ m.keys }}</kbd>
+        {{ t(`layoutEditor.layer.${m.move}`) }}<kbd>{{ m.keys }}</kbd>
       </button>
     </div>
   </div>

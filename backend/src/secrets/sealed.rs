@@ -22,9 +22,14 @@ pub enum SealedTable {
     /// OIDC client secrets and LDAP bind passwords (`client_secret_enc`,
     /// `bind_password_enc`, `secrets_key_id`).
     IdentityProviders,
+    /// Webhook signing secrets, the one before the last rotation and the auth
+    /// header value, each with its own key id (`secret_ciphertext` /
+    /// `secret_key_id`, `previous_secret_*`, `auth_header_*`).
+    WebhookEndpoints,
 }
 
-pub const SEALED_TABLES: &[SealedTable] = &[SealedTable::UserTotp, SealedTable::IdentityProviders];
+pub const SEALED_TABLES: &[SealedTable] =
+    &[SealedTable::UserTotp, SealedTable::IdentityProviders, SealedTable::WebhookEndpoints];
 
 impl SealedTable {
     /// Table name in the `cmdb` schema, as in the backup header.
@@ -32,6 +37,7 @@ impl SealedTable {
         match self {
             SealedTable::UserTotp => "user_totp",
             SealedTable::IdentityProviders => "identity_providers",
+            SealedTable::WebhookEndpoints => "webhook_endpoints",
         }
     }
 
@@ -39,10 +45,12 @@ impl SealedTable {
         SEALED_TABLES.iter().copied().find(|t| t.name() == name)
     }
 
-    fn key_column(self) -> &'static str {
+    /// The key-id columns: one per row, or one per sealed column.
+    fn key_columns(self) -> &'static [&'static str] {
         match self {
-            SealedTable::UserTotp => "key_id",
-            SealedTable::IdentityProviders => "secrets_key_id",
+            SealedTable::UserTotp => &["key_id"],
+            SealedTable::IdentityProviders => &["secrets_key_id"],
+            SealedTable::WebhookEndpoints => &["secret_key_id", "previous_secret_key_id", "auth_header_key_id"],
         }
     }
 
@@ -56,6 +64,8 @@ impl SealedTable {
                 "secrets_key_id IS NULL AND (client_secret IS NOT NULL OR bind_password IS NOT NULL)"
             }
             (SealedTable::IdentityProviders, false) => "client_secret IS NOT NULL OR bind_password IS NOT NULL",
+            // Sealed from the first write: never stored in clear.
+            (SealedTable::WebhookEndpoints, _) => "false",
         }
     }
 
@@ -64,6 +74,7 @@ impl SealedTable {
         let (one, many) = match self {
             SealedTable::UserTotp => ("authenticator secret", "authenticator secrets"),
             SealedTable::IdentityProviders => ("identity provider secret", "identity provider secrets"),
+            SealedTable::WebhookEndpoints => ("webhook endpoint secret", "webhook endpoint secrets"),
         };
         format!("{n} {}", if n == 1 { one } else { many })
     }
@@ -78,6 +89,11 @@ impl SealedTable {
             SealedTable::IdentityProviders => (
                 "shadoucmdb identity-providers reset-undecryptable",
                 "disables those providers and clears their secrets until an administrator enters them again",
+            ),
+            SealedTable::WebhookEndpoints => (
+                "shadoucmdb webhooks reset-undecryptable",
+                "suspends those endpoints and replaces their secrets until an administrator rotates the signing \
+                 secret, sets the header again and resumes them",
             ),
         }
     }
@@ -181,6 +197,67 @@ impl SealedTable {
                     .execute(&mut *conn)
                     .await?;
                     if row.secrets_key_id.is_none() { done.unencrypted += 1 } else { done.from_previous += 1 }
+                }
+            }
+            SealedTable::WebhookEndpoints => {
+                let rows: Vec<EndpointSecretsRow> = sqlx::query_as(
+                    "SELECT id, secret_ciphertext, secret_key_id, previous_secret_ciphertext, previous_secret_key_id,
+                            auth_header_ciphertext, auth_header_key_id
+                     FROM webhook_endpoints
+                     WHERE secret_key_id <> $1 OR previous_secret_key_id <> $1 OR auth_header_key_id <> $1
+                     FOR UPDATE",
+                )
+                .bind(keyring.active_id().0)
+                .fetch_all(&mut *conn)
+                .await?;
+                'endpoints: for row in rows {
+                    let mut resealed: [Option<Sealed>; 3] = [None, None, None];
+                    for (slot, column) in resealed.iter_mut().zip(EndpointSecret::ALL) {
+                        let Some((bytes, key_id)) = row.stored(column) else { continue };
+                        let plain = match keyring.open(column.purpose(), KeyId(key_id), &endpoint_ad(row.id), bytes) {
+                            Ok(plain) => plain,
+                            Err(OpenError::UnknownKey(k)) => {
+                                return Err(PrepareError::Refused(format!(
+                                    "webhook_endpoints row {} is encrypted with key {k}, which is not configured",
+                                    row.id
+                                )));
+                            }
+                            Err(OpenError::Invalid) => {
+                                // Left as it is: its deliveries fail closed until an
+                                // administrator rotates the secret or sets the header again.
+                                tracing::error!(
+                                    endpoint_id = %row.id,
+                                    key = ?KeyId(key_id),
+                                    "the {} of this webhook endpoint does not decrypt (altered or copied from another \
+                                     row); it cannot be re-encrypted. Rotate the signing secret or set the header \
+                                     again under Administration > Webhooks",
+                                    column.label()
+                                );
+                                done.failed += 1;
+                                continue 'endpoints;
+                            }
+                        };
+                        *slot = Some(keyring.seal(column.purpose(), &endpoint_ad(row.id), &plain));
+                    }
+                    let [secret, previous, header] = resealed;
+                    // Not an audited change: the configuration stays the same (as for TOTP).
+                    sqlx::query(
+                        "UPDATE webhook_endpoints SET
+                           secret_ciphertext = coalesce($2, secret_ciphertext), secret_key_id = $1,
+                           previous_secret_ciphertext = $3,
+                           previous_secret_key_id = CASE WHEN $3::bytea IS NULL THEN NULL ELSE $1 END,
+                           auth_header_ciphertext = $4,
+                           auth_header_key_id = CASE WHEN $4::bytea IS NULL THEN NULL ELSE $1 END
+                         WHERE id = $5",
+                    )
+                    .bind(keyring.active_id().0)
+                    .bind(secret.as_ref().map(|s| &s.bytes))
+                    .bind(previous.as_ref().map(|s| &s.bytes))
+                    .bind(header.as_ref().map(|s| &s.bytes))
+                    .bind(row.id)
+                    .execute(&mut *conn)
+                    .await?;
+                    done.from_previous += 1;
                 }
             }
         }
@@ -381,6 +458,90 @@ impl ProviderSecretsRow {
 }
 
 // ---------------------------------------------------------------------------
+// Webhook endpoint secrets
+// ---------------------------------------------------------------------------
+
+/// A sealed column of `webhook_endpoints`, with its key-id column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EndpointSecret {
+    /// The signing secret (`secret_ciphertext`)
+    Secret,
+    /// The signing secret before the last rotation (`previous_secret_ciphertext`)
+    PreviousSecret,
+    /// The auth header's value (`auth_header_ciphertext`)
+    AuthHeader,
+}
+
+impl EndpointSecret {
+    pub const ALL: [EndpointSecret; 3] =
+        [EndpointSecret::Secret, EndpointSecret::PreviousSecret, EndpointSecret::AuthHeader];
+
+    /// The two signing secrets share a purpose (a rotation moves the current
+    /// one to `previous_secret_*` as it is); the header has its own.
+    pub fn purpose(self) -> Purpose {
+        match self {
+            EndpointSecret::Secret | EndpointSecret::PreviousSecret => Purpose::WebhookSecret,
+            EndpointSecret::AuthHeader => Purpose::WebhookHeader,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            EndpointSecret::Secret => "signing secret",
+            EndpointSecret::PreviousSecret => "previous signing secret",
+            EndpointSecret::AuthHeader => "auth header value",
+        }
+    }
+}
+
+/// Binds a sealed value to its endpoint: copied onto another endpoint's row,
+/// it does not open. The purpose keeps a header value from opening as a
+/// signing secret and back.
+pub fn endpoint_ad(endpoint_id: Uuid) -> Vec<u8> {
+    let mut ad = b"shadoucmdb:webhook_endpoints:v1:".to_vec();
+    ad.extend_from_slice(endpoint_id.as_bytes());
+    ad
+}
+
+pub fn seal_endpoint_secret(keyring: &Keyring, endpoint_id: Uuid, column: EndpointSecret, value: &[u8]) -> Sealed {
+    keyring.seal(column.purpose(), &endpoint_ad(endpoint_id), value)
+}
+
+pub fn open_endpoint_secret(
+    keyring: &Keyring,
+    endpoint_id: Uuid,
+    column: EndpointSecret,
+    key_id: i32,
+    stored: &[u8],
+) -> Result<Secret, OpenError> {
+    keyring.open(column.purpose(), KeyId(key_id), &endpoint_ad(endpoint_id), stored)
+}
+
+/// The sealed columns of one endpoint, as the start-up step reads them.
+#[derive(sqlx::FromRow)]
+struct EndpointSecretsRow {
+    id: Uuid,
+    secret_ciphertext: Vec<u8>,
+    secret_key_id: i32,
+    previous_secret_ciphertext: Option<Vec<u8>>,
+    previous_secret_key_id: Option<i32>,
+    auth_header_ciphertext: Option<Vec<u8>>,
+    auth_header_key_id: Option<i32>,
+}
+
+impl EndpointSecretsRow {
+    fn stored(&self, column: EndpointSecret) -> Option<(&[u8], i32)> {
+        match column {
+            EndpointSecret::Secret => Some((&self.secret_ciphertext, self.secret_key_id)),
+            EndpointSecret::PreviousSecret => {
+                self.previous_secret_ciphertext.as_deref().zip(self.previous_secret_key_id)
+            }
+            EndpointSecret::AuthHeader => self.auth_header_ciphertext.as_deref().zip(self.auth_header_key_id),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Counts, refusal and warnings
 // ---------------------------------------------------------------------------
 
@@ -392,30 +553,37 @@ pub struct KeyCount {
     pub rows: i64,
 }
 
-/// Whether the table has its key column: not before its migration, e.g. when
-/// `backup` or `verify` run against a database at an older level.
+/// Whether the table has its key column, as an integer: not before its
+/// migration (0025, 0026, 0077), e.g. when `backup` or `verify` run against a
+/// database at an older level.
 async fn has_key_column(conn: &mut PgConnection, table: SealedTable) -> sqlx::Result<bool> {
     sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM pg_attribute
-                        WHERE attrelid = to_regclass('cmdb.' || $1) AND attname = $2 AND NOT attisdropped)",
+                        WHERE attrelid = to_regclass('cmdb.' || $1) AND attname = $2 AND NOT attisdropped
+                          AND atttypid = 'integer'::regtype)",
     )
     .bind(table.name())
-    .bind(table.key_column())
+    .bind(table.key_columns()[0])
     .fetch_one(conn)
     .await
 }
 
-/// Encrypted rows per table and key id.
+/// Encrypted values per table and key id (rows, or sealed columns where a row
+/// has a key id per column).
 pub async fn key_counts(conn: &mut PgConnection) -> sqlx::Result<Vec<KeyCount>> {
     let mut out = Vec::new();
     for &table in SEALED_TABLES {
         if !has_key_column(conn, table).await? {
             continue;
         }
-        let col = table.key_column();
+        let keys: Vec<String> = table
+            .key_columns()
+            .iter()
+            .map(|col| format!("SELECT {col} AS k FROM cmdb.{} WHERE {col} IS NOT NULL", table.name()))
+            .collect();
         let rows: Vec<(i32, i64)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "SELECT {col}, count(*) FROM cmdb.{} WHERE {col} IS NOT NULL GROUP BY 1 ORDER BY 1",
-            table.name()
+            "SELECT k, count(*) FROM ({}) keys GROUP BY 1 ORDER BY 1",
+            keys.join(" UNION ALL ")
         )))
         .fetch_all(&mut *conn)
         .await?;
@@ -675,6 +843,48 @@ pub async fn undecryptable_providers(
     Ok(rows
         .into_iter()
         .map(|(id, name, kind, is_enabled, k)| UndecryptableProvider { id, name, kind, is_enabled, key_id: KeyId(k) })
+        .collect())
+}
+
+/// An endpoint with a value sealed under a key that is not configured.
+#[derive(Debug)]
+pub struct UndecryptableEndpoint {
+    pub id: Uuid,
+    pub key: String,
+    pub name: String,
+    pub status: String,
+    /// The keys, one per sealed column under an unknown key.
+    pub key_ids: Vec<KeyId>,
+}
+
+/// The `webhook_endpoints` rows with a value under a key other than `known`, locked.
+pub async fn undecryptable_endpoints(
+    conn: &mut PgConnection,
+    known: &[KeyId],
+) -> sqlx::Result<Vec<UndecryptableEndpoint>> {
+    let known: Vec<i32> = known.iter().map(|k| k.0).collect();
+    let rows: Vec<(Uuid, String, String, String, Vec<i32>)> = sqlx::query_as(
+        "SELECT id, key, name, status,
+                array_remove(ARRAY[CASE WHEN secret_key_id <> ALL ($1) THEN secret_key_id END,
+                                   CASE WHEN previous_secret_key_id <> ALL ($1) THEN previous_secret_key_id END,
+                                   CASE WHEN auth_header_key_id <> ALL ($1) THEN auth_header_key_id END], NULL)
+         FROM webhook_endpoints
+         WHERE secret_key_id <> ALL ($1) OR previous_secret_key_id <> ALL ($1) OR auth_header_key_id <> ALL ($1)
+         ORDER BY key
+         FOR UPDATE",
+    )
+    .bind(&known)
+    .fetch_all(conn)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, key, name, status, keys)| UndecryptableEndpoint {
+            id,
+            key,
+            name,
+            status,
+            key_ids: keys.into_iter().map(KeyId).collect(),
+        })
         .collect())
 }
 

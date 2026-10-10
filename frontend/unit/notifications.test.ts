@@ -5,7 +5,14 @@ import type { Notification } from "../src/api/notifications";
 import { en } from "../src/i18n/en";
 import { badgeText, describeNotification, notificationTarget } from "../src/lib/notifications";
 
-const KINDS = ["approval_requested", "approval_closed", "workflow_transition", "import_finished", "workflow_action"] as const;
+const KINDS = [
+  "approval_requested",
+  "approval_closed",
+  "workflow_transition",
+  "import_finished",
+  "workflow_action",
+  "webhook_suspended",
+] as const;
 const ID = "0b9c5e8e-7a51-4c3e-9d6c-3f2a1b0c9d8e";
 const INSTANCE = "5f1c2d3e-4b5a-4687-9a0b-1c2d3e4f5a6b";
 const note = (kind: Notification["kind"], entityType: Notification["entityType"], data: Record<string, unknown>) =>
@@ -66,6 +73,16 @@ describe("notification labels", () => {
     const d = describeNotification(note("workflow_transition", "workflow_instances", { ciLabel: null, event: "transition" }));
     assert.equal(d.title, "a CI moved from unknown state to unknown state");
     assert.equal(describeNotification(note("import_finished", "import_jobs", {})).title, "Import of a file finished");
+  });
+});
+
+describe("webhook notices", () => {
+  test("a suspended endpoint is named with its failure count and opens nothing yet", () => {
+    const n = note("webhook_suspended", "webhook_endpoints", { endpointKey: "itsm", endpointName: "ITSM", consecutiveFailures: 20 });
+    const d = describeNotification(n);
+    assert.equal(d.title, "Webhook endpoint ITSM was suspended after repeated failures");
+    assert.equal(d.detail, "itsm · 20 failures in a row");
+    assert.equal(notificationTarget(n), null);
   });
 });
 

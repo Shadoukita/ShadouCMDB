@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from "../../i18n";
 import type { LayoutEditor } from "../../lib/layoutEditor";
 
 /**
@@ -11,9 +12,9 @@ const reload = () => window.location.reload();
 </script>
 
 <template>
-  <button type="button" class="btn" title="Opens the layout editor in a new window" @click="editor.enter()">Edit layout</button>
+  <button type="button" class="btn" :title="t('layoutEditor.openTitle')" @click="editor.enter()">{{ t("layoutEditor.open") }}</button>
   <span v-if="editor.reloadHint" class="muted" role="status">
-    Reload this page after saving the layout to see it.
-    <button type="button" class="btn btn-sm" @click="reload">Reload</button>
+    {{ t("layoutEditor.reloadHint") }}
+    <button type="button" class="btn btn-sm" @click="reload">{{ t("layoutEditor.reload") }}</button>
   </span>
 </template>

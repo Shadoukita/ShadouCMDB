@@ -50,6 +50,8 @@ pub enum Kind {
     ImportFinished,
     /// A workflow's notification action names the recipient (configured per workflow)
     WorkflowAction,
+    /// A webhook endpoint was suspended after failing too often (to `webhooks.manage` holders)
+    WebhookSuspended,
 }
 
 impl Kind {
@@ -60,6 +62,7 @@ impl Kind {
             Kind::WorkflowTransition => "workflow_transition",
             Kind::ImportFinished => "import_finished",
             Kind::WorkflowAction => "workflow_action",
+            Kind::WebhookSuspended => "webhook_suspended",
         }
     }
 }
@@ -73,6 +76,7 @@ pub enum EntityType {
     WorkflowApprovalRequests,
     WorkflowInstances,
     ImportJobs,
+    WebhookEndpoints,
 }
 
 /// One notification of the caller
@@ -81,8 +85,8 @@ pub enum EntityType {
 pub struct Notification {
     pub id: Uuid,
     pub kind: Kind,
-    /// The record to open: an approval request, a workflow instance or an import job. It may be gone by now (an
-    /// import record past its retention); the client then says so.
+    /// The record to open: an approval request, a workflow instance, an import job or a webhook endpoint. It may be
+    /// gone by now (an import record past its retention); the client then says so.
     pub entity_type: EntityType,
     pub entity_id: Uuid,
     /// The CI it is about; null when it is about no CI (imports)
@@ -95,7 +99,8 @@ pub struct Notification {
     /// `toStateName`, `actorName`. `import_finished`: `fileName`, `classKey`, `status`, `errorCode`. `workflow_action`: those of
     /// `workflow_transition` plus `actionKey`, `actionName`, `approvalRequestId` and `requestNo` (`event` is the
     /// workflow event's kind: `transition`, `approval_request`, `approval_decision`, `approval_close`,
-    /// `approval_overdue`, `cancel`, `force`, ...). Any may be null.
+    /// `approval_overdue`, `cancel`, `force`, ...). `webhook_suspended`: `endpointKey`, `endpointName`, `reason`,
+    /// `consecutiveFailures`. Any may be null.
     #[schema(value_type = Object)]
     pub data: Value,
     pub created_at: DateTime<Utc>,

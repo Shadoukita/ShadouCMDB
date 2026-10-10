@@ -198,18 +198,18 @@ export function useCiDraft(opts: CiDraftOptions) {
     const hint =
       f === "ident"
         ? create && isAdmin.value
-          ? "Generated when left empty"
+          ? t("form.hint.identGeneratedEmpty")
           : create
-            ? "Generated"
+            ? t("form.identGenerated")
             : ""
         : f === "criticality"
-          ? "How critical this CI is to the business; impact analysis groups by it"
+          ? t("form.hint.criticality")
           : f === "validFrom"
-            ? "Local time"
+            ? t("form.hint.localTime")
             : f === "validUntil"
-              ? "Local time; empty: open-ended"
+              ? t("form.hint.localTimeOpen")
               : "";
-    return [hint, EDITABLE_CORE.has(f) && !locked.value && !editable(f) ? "read-only" : ""].filter(Boolean).join(" · ") || undefined;
+    return [hint, EDITABLE_CORE.has(f) && !locked.value && !editable(f) ? t("form.hint.readOnly") : ""].filter(Boolean).join(" · ") || undefined;
   }
   /** What a field shown read-only says about it: who manages it. */
   const readOnlyHint = (f: string) =>
@@ -223,8 +223,8 @@ export function useCiDraft(opts: CiDraftOptions) {
     const managed = readOnlyHint(f);
     if (managed) return managed;
     const parent = lookupParent(d);
-    const ro = !locked.value && readOnly.value.has(f) ? "read-only" : "";
-    return [hintFor(d), parent ? `depends on ${parent.label}` : "", d.inherited ? `from ${d.definedOn.name}` : "", d.isActive ? "" : "retired attribute", ro].filter(Boolean).join(" · ") || undefined;
+    const ro = !locked.value && readOnly.value.has(f) ? t("form.hint.readOnly") : "";
+    return [hintFor(d), parent ? t("form.hint.dependsOn", { parent: parent.label }) : "", d.inherited ? t("form.hint.inheritedFrom", { class: d.definedOn.name }) : "", d.isActive ? "" : t("form.hint.retired"), ro].filter(Boolean).join(" · ") || undefined;
   }
 
   const fieldErrors = computed<Record<string, string>>(() => ({
@@ -241,10 +241,10 @@ export function useCiDraft(opts: CiDraftOptions) {
   /** Marks the empty required fields among `shown` (empty required fields are caught before the round trip); returns them. */
   function checkRequired(shown: ReadonlySet<string>): string[] {
     const req: Record<string, string> = {};
-    if (!core.value.validFrom && shown.has("validFrom")) req.validFrom = "Required";
+    if (!core.value.validFrom && shown.has("validFrom")) req.validFrom = t("common.required");
     for (const d of defs.value) {
       const f = `${ATTRIBUTE_PREFIX}${d.key}`;
-      if (d.isRequired && d.isActive && shown.has(f) && editable(f) && (values.value[d.key] ?? "") === "") req[f] = "Required";
+      if (d.isRequired && d.isActive && shown.has(f) && editable(f) && (values.value[d.key] ?? "") === "") req[f] = t("common.required");
     }
     missing.value = req;
     return Object.keys(req);

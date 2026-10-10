@@ -52,10 +52,12 @@ export const CREATED = ["admin/profiles", "admin/groups", "admin/users", "admin/
  * Resources that may have no row yet; any well-formed value still reaches the handler (404). The
  * scan's administrator does every action itself and is not notified of its own actions, so its
  * notification inbox is usually empty. The legacy lookup tables are read-only since migration 0016
- * (create answers 410) and empty on a fresh install, so they cannot be given a row.
+ * (create answers 410) and empty on a fresh install, so they cannot be given a row. Webhooks are off
+ * unless the operator sets WEBHOOKS_ALLOWED, so the scan cannot create an endpoint; an allowlist entry
+ * would be its only webhook object, and deleting it is all its `/{id}` route does.
  */
 export const LEGACY = ["statuses", "environments", "locations", "owners"];
-export const OPTIONAL = ["schema-changes", "notifications", ...LEGACY, "ui-settings/versions", "admin/templates", "ui-settings/class-layouts", "admin/workflow-definitions/versions", "admin/workflow-definitions/actions", "admin/workflow-definitions/action-deliveries"];
+export const OPTIONAL = ["schema-changes", "notifications", ...LEGACY, "ui-settings/versions", "admin/templates", "ui-settings/class-layouts", "admin/workflow-definitions/versions", "admin/workflow-definitions/actions", "admin/workflow-definitions/action-deliveries", "admin/webhook-endpoints", "admin/webhook-allowed-hosts"];
 
 /** Paths whose parameter names an object of another resource. */
 export const ALIASES = {
@@ -146,7 +148,7 @@ async function collect(request) {
     const id = (await request("GET", `${resource}?limit=1`)).data[0]?.id;
     if (id) examples[resource] = id;
   }
-  for (const resource of ["schema-changes", "notifications", ...LEGACY]) {
+  for (const resource of ["schema-changes", "notifications", ...LEGACY, "admin/webhook-endpoints", "admin/webhook-allowed-hosts"]) {
     examples[resource] = (await request("GET", `${resource}?limit=1`)).data[0]?.id ?? randomUUID();
   }
   const version = (await request("GET", "ui-settings/versions?limit=1")).data[0]?.version;

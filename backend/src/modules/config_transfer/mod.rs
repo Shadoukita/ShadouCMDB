@@ -16,6 +16,7 @@
 pub mod format;
 mod legacy;
 mod system_roles;
+mod webhooks;
 mod workflows;
 
 use std::collections::{HashMap, HashSet};
@@ -504,6 +505,7 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
         })
         .collect();
 
+    let (webhook_endpoints, webhook_allowed_hosts) = webhooks::snapshot(conn).await?;
     let file = ConfigFile {
         format: FORMAT.into(),
         format_version: FORMAT_VERSION,
@@ -522,6 +524,8 @@ async fn snapshot(conn: &mut PgConnection) -> Result<Snapshot, AppError> {
         import_mappings: Some(mapping_specs),
         saved_views: Some(view_specs),
         workflows: Some(workflows::snapshot(conn).await?),
+        webhook_endpoints: Some(webhook_endpoints),
+        webhook_allowed_hosts: Some(webhook_allowed_hosts),
     };
     let views_catalogue = saved_views::resolve::Catalogue::load(conn).await?;
     Ok(Snapshot { file, ids, builtin_profile, views_catalogue })
@@ -572,6 +576,11 @@ pub async fn export(pool: &PgPool, ctx: &RequestContext) -> Result<ConfigFile, A
     } else if let Some(list) = file.workflows.as_mut() {
         list.retain(|w| workflows::exportable(ctx, &model, &ids, w));
     }
+    // Destinations outside the CMDB: only for whoever may manage them. Never a secret.
+    if ctx.require(GlobalPermission::WebhooksManage).is_err() {
+        file.webhook_endpoints = None;
+        file.webhook_allowed_hosts = None;
+    }
 
     // GH#407: one `export` row per download, in its own transaction (the
     // snapshot is read-only). Which sections left and how many mappings,
@@ -584,6 +593,8 @@ pub async fn export(pool: &PgPool, ctx: &RequestContext) -> Result<ConfigFile, A
         ("importMappings", file.import_mappings.is_some()),
         ("savedViews", file.saved_views.is_some()),
         ("workflows", file.workflows.is_some()),
+        ("webhookEndpoints", file.webhook_endpoints.is_some()),
+        ("webhookAllowedHosts", file.webhook_allowed_hosts.is_some()),
     ]
     .into_iter()
     .filter_map(|(name, present)| present.then_some(name))
@@ -602,6 +613,7 @@ pub async fn export(pool: &PgPool, ctx: &RequestContext) -> Result<ConfigFile, A
             "mappingCount": file.import_mappings.as_ref().map_or(0, Vec::len),
             "viewCount": file.saved_views.as_ref().map_or(0, Vec::len),
             "workflowCount": file.workflows.as_ref().map_or(0, Vec::len),
+            "webhookEndpointCount": file.webhook_endpoints.as_ref().map_or(0, Vec::len),
         })),
     };
     let mut tx = pool.begin().await?;
@@ -1390,6 +1402,7 @@ fn not_in_file<'a>(here: impl Iterator<Item = &'a String>, file: &HashSet<String
 async fn run(
     conn: &mut PgConnection,
     ctx: &RequestContext,
+    w: &crate::modules::webhooks::Webhooks,
     file: &ConfigFile,
     mode: ImportMode,
 ) -> Result<ImportResult, AppError> {
@@ -1822,6 +1835,16 @@ async fn run(
         }
     }
 
+    // ---- webhook allowlist and endpoints (never a secret; new endpoints wait for one) ----
+    im.webhooks(
+        w,
+        file,
+        current.webhook_endpoints.as_deref().unwrap_or_default(),
+        current.webhook_allowed_hosts.as_deref().unwrap_or_default(),
+        &mut warnings,
+    )
+    .await?;
+
     // ---- workflows (after the data model, lookups and profiles they refer to) ----
     if let Some(list) = &file.workflows {
         im.workflows(list, current.workflows.as_deref().unwrap_or_default(), &mut warnings).await?;
@@ -2150,11 +2173,13 @@ fn check_format(file: &ConfigFile) -> Result<(), AppError> {
         ("importMappings", file.import_mappings.as_ref().map_or(0, Vec::len)),
         ("savedViews", file.saved_views.as_ref().map_or(0, Vec::len)),
         ("workflows", file.workflows.as_ref().map_or(0, Vec::len)),
+        ("webhookEndpoints", file.webhook_endpoints.as_ref().map_or(0, Vec::len)),
+        ("webhookAllowedHosts", file.webhook_allowed_hosts.as_ref().map_or(0, Vec::len)),
     ];
     let total: usize = sections.iter().map(|s| s.1).sum();
     if total > MAX_ENTRIES {
         // Reported at the largest section, the one to split.
-        let (field, _) = sections.iter().max_by_key(|s| s.1).expect("six sections");
+        let (field, _) = sections.iter().max_by_key(|s| s.1).expect("eight sections");
         let held: Vec<String> =
             sections.iter().filter(|s| s.1 > 0).map(|(section, n)| format!("{section}: {n}")).collect();
         return Err(AppError::field(
@@ -2173,7 +2198,8 @@ fn check_format(file: &ConfigFile) -> Result<(), AppError> {
 /// `config.export_import` lets a file in, not past the permission each section
 /// needs on its own admin API: the data model and lookups (which run DDL) need
 /// `datamodel.manage`, UI settings need `customization.manage`, permission
-/// profiles need `profiles.manage`, saved import mappings `cis.import`, shared saved views `views.share`. Checked
+/// profiles need `profiles.manage`, saved import mappings `cis.import`, shared saved views `views.share`, webhook
+/// endpoints and allowlist entries `webhooks.manage`. Checked
 /// for dry runs too, before anything
 /// touches the database. Each profile is still bounded by what the importing
 /// user holds.
@@ -2210,12 +2236,18 @@ fn check_sections(ctx: &RequestContext, file: &ConfigFile) -> Result<(), AppErro
     if file.workflows.as_ref().is_some_and(|w| !w.is_empty()) {
         ctx.require(GlobalPermission::WorkflowsManage)?;
     }
+    if file.webhook_endpoints.as_ref().is_some_and(|w| !w.is_empty())
+        || file.webhook_allowed_hosts.as_ref().is_some_and(|w| !w.is_empty())
+    {
+        ctx.require(GlobalPermission::WebhooksManage)?;
+    }
     Ok(())
 }
 
 pub async fn import(
     pool: &PgPool,
     ctx: &RequestContext,
+    w: &crate::modules::webhooks::Webhooks,
     file: &ConfigFile,
     mode: ImportMode,
 ) -> Result<ImportResult, AppError> {
@@ -2226,7 +2258,7 @@ pub async fn import(
     // every sign-in for the whole import (GH#500): a dry run writes none, and
     // an apply writes them all at the end. Boxed: the import future is too
     // large to sit on a test thread's stack inside the audit scope.
-    let run = Box::pin(engine::collect_previews(run(&mut tx, ctx, file, mode)));
+    let run = Box::pin(engine::collect_previews(run(&mut tx, ctx, w, file, mode)));
     let ((result, schema_changes), audit) = match mode {
         ImportMode::DryRun => (crud::discard_audit(run).await, None),
         ImportMode::Apply => {
@@ -2336,7 +2368,7 @@ pub fn routes() -> Vec<Route> {
             .errors(&[ErrorCode::Conflict, ErrorCode::InUse, ErrorCode::PayloadTooLarge])
             .handle(
                 |api, In(NoPath, Query(q), Body(file)): In<NoPath, Query<ImportQuery>, Body<ConfigFile>>| async move {
-                    Ok(Json(import(&api.pool, &api.ctx, &file, q.mode).await?))
+                    Ok(Json(import(&api.pool, &api.ctx, &api.webhooks, &file, q.mode).await?))
                 },
             ),
     ]
@@ -2345,6 +2377,10 @@ pub fn routes() -> Vec<Route> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn hooks() -> crate::modules::webhooks::Webhooks {
+        crate::modules::webhooks::Webhooks::off(crate::secrets::Keyring::for_tests())
+    }
     use crate::auth::permissions::Permissions;
     use crate::auth::{Credential, Principal};
     use crate::db::scratch;
@@ -2400,22 +2436,22 @@ mod tests {
         let before = schema_change_count(&dst.pool).await;
         let only_import = user_ctx(&dst.pool, "importer", &[GlobalPermission::ConfigExportImport]).await;
         for mode in [ImportMode::DryRun, ImportMode::Apply] {
-            let err = import(&dst.pool, &only_import, &file, mode).await.unwrap_err();
+            let err = import(&dst.pool, &only_import, &hooks(), &file, mode).await.unwrap_err();
             assert_eq!(err.code, ErrorCode::Forbidden, "{mode:?}: {err}");
             assert!(err.message.contains("datamodel.manage"), "{err}");
         }
         let lookups_only = ConfigFile { data_model: None, ui_settings: None, ..file.clone() };
-        let err = import(&dst.pool, &only_import, &lookups_only, ImportMode::Apply).await.unwrap_err();
+        let err = import(&dst.pool, &only_import, &hooks(), &lookups_only, ImportMode::Apply).await.unwrap_err();
         assert!(err.message.contains("datamodel.manage"), "{err}");
         let ui_only = ConfigFile { data_model: None, lookups: None, ..file.clone() };
-        let err = import(&dst.pool, &only_import, &ui_only, ImportMode::Apply).await.unwrap_err();
+        let err = import(&dst.pool, &only_import, &hooks(), &ui_only, ImportMode::Apply).await.unwrap_err();
         assert!(err.message.contains("customization.manage"), "{err}");
         assert_eq!(schema_change_count(&dst.pool).await, before);
 
         // GH#80: profiles need `profiles.manage`; an empty section needs nothing extra.
         let no_profiles = ConfigFile { data_model: None, lookups: None, ui_settings: None, ..file.clone() };
         assert_eq!(no_profiles.permission_profiles.as_deref().map(<[_]>::len), Some(0));
-        import(&dst.pool, &only_import, &no_profiles, ImportMode::DryRun).await.unwrap();
+        import(&dst.pool, &only_import, &hooks(), &no_profiles, ImportMode::DryRun).await.unwrap();
         let empty_profile = ProfileSpec {
             name: "Service Desk".into(),
             description: None,
@@ -2424,7 +2460,7 @@ mod tests {
         };
         let profiles_only = ConfigFile { permission_profiles: Some(vec![empty_profile]), ..no_profiles };
         for mode in [ImportMode::DryRun, ImportMode::Apply] {
-            let err = import(&dst.pool, &only_import, &profiles_only, mode).await.unwrap_err();
+            let err = import(&dst.pool, &only_import, &hooks(), &profiles_only, mode).await.unwrap_err();
             assert_eq!(err.code, ErrorCode::Forbidden, "{mode:?}: {err}");
             assert!(err.message.contains("profiles.manage"), "{err}");
         }
@@ -2441,7 +2477,7 @@ mod tests {
             &[GlobalPermission::ConfigExportImport, GlobalPermission::ProfilesManage],
         )
         .await;
-        assert!(import(&dst.pool, &profile_admin, &profiles_only, ImportMode::Apply).await.unwrap().applied);
+        assert!(import(&dst.pool, &profile_admin, &hooks(), &profiles_only, ImportMode::Apply).await.unwrap().applied);
         assert_eq!(profile_count().await, 1);
 
         // Making a field of an existing type required is checked against its
@@ -2457,7 +2493,7 @@ mod tests {
             crate::auth::permissions::ClassRights { view: true, ..Default::default() },
         )
         .await;
-        let res = import(&dst.pool, &full, &file, ImportMode::Apply).await.unwrap();
+        let res = import(&dst.pool, &full, &hooks(), &file, ImportMode::Apply).await.unwrap();
         assert!(res.applied);
         assert!(schema_change_count(&dst.pool).await > before);
 
@@ -2490,8 +2526,10 @@ mod tests {
             import_mappings: None,
             saved_views: None,
             workflows: None,
+            webhook_endpoints: None,
+            webhook_allowed_hosts: None,
         };
-        import(&db.pool, &RequestContext::system("test", "test"), &file, ImportMode::Apply).await.unwrap();
+        import(&db.pool, &RequestContext::system("test", "test"), &hooks(), &file, ImportMode::Apply).await.unwrap();
 
         let only_export = user_ctx(&db.pool, "exporter", &[GlobalPermission::ConfigExportImport]).await;
         let exported = export(&db.pool, &only_export).await.unwrap();
@@ -2536,8 +2574,10 @@ mod tests {
             import_mappings: None,
             saved_views: None,
             workflows: None,
+            webhook_endpoints: None,
+            webhook_allowed_hosts: None,
         };
-        import(&db.pool, &RequestContext::system("test", "test"), &file, ImportMode::Apply).await.unwrap();
+        import(&db.pool, &RequestContext::system("test", "test"), &hooks(), &file, ImportMode::Apply).await.unwrap();
 
         let rows = |actor: Uuid| {
             let pool = db.pool.clone();
@@ -2616,7 +2656,7 @@ mod tests {
         drop(conn);
         let file = export(&src.pool, &system).await.unwrap();
 
-        let res = import(&dst.pool, &system, &file, ImportMode::Apply).await.unwrap();
+        let res = import(&dst.pool, &system, &hooks(), &file, ImportMode::Apply).await.unwrap();
         let warning = res.warnings.iter().find(|w| w.path == "importMappings.0.definition.columns.1.target");
         assert!(
             warning.is_some_and(|w| w.message.contains("\"Service\"") && w.message.contains("\"Old layout\"")),
@@ -2676,7 +2716,7 @@ mod tests {
         assert_eq!(parsed.0, file);
 
         // Into an empty install: created, then the same file changes nothing.
-        let applied = import(&dst.pool, &system, &file, ImportMode::Apply).await.unwrap();
+        let applied = import(&dst.pool, &system, &hooks(), &file, ImportMode::Apply).await.unwrap();
         let section = applied.summary.iter().find(|s| s.section == "importMappings").unwrap();
         assert_eq!((section.created, section.updated, section.unchanged), (2, 0, 0));
         let back = export(&dst.pool, &system).await.unwrap().import_mappings.unwrap();
@@ -2690,7 +2730,7 @@ mod tests {
             .unwrap()
         };
         assert_eq!(audits().await, 2);
-        let again = import(&dst.pool, &system, &file, ImportMode::Apply).await.unwrap();
+        let again = import(&dst.pool, &system, &hooks(), &file, ImportMode::Apply).await.unwrap();
         let section = again.summary.iter().find(|s| s.section == "importMappings").unwrap();
         assert_eq!((section.created, section.updated, section.unchanged), (0, 0, 2));
         assert_eq!(audits().await, 2);
@@ -2703,7 +2743,7 @@ mod tests {
         m.name = m.name.to_uppercase();
         m.description = Some("Changed".into());
         m.definition = definition("no_such_field");
-        let res = import(&dst.pool, &system, &changed, ImportMode::Apply).await.unwrap();
+        let res = import(&dst.pool, &system, &hooks(), &changed, ImportMode::Apply).await.unwrap();
         let section = res.summary.iter().find(|s| s.section == "importMappings").unwrap();
         assert_eq!((section.created, section.updated, section.unchanged), (0, 1, 1), "{:?}", res.changes);
         assert!(res.warnings.iter().any(|w| w.message.contains("no_such_field")), "{:?}", res.warnings);
@@ -2721,14 +2761,14 @@ mod tests {
         // A class that does not exist here: a warning, and the mapping is kept.
         let mut orphan = changed.clone();
         orphan.import_mappings = Some(vec![ImportMappingSpec { class_key: "not_here".into(), ..mappings[1].clone() }]);
-        let res = import(&dst.pool, &system, &orphan, ImportMode::DryRun).await.unwrap();
+        let res = import(&dst.pool, &system, &hooks(), &orphan, ImportMode::DryRun).await.unwrap();
         assert!(res.warnings.iter().any(|w| w.path == "importMappings.0.classKey"), "{:?}", res.warnings);
         assert_eq!(res.summary.iter().find(|s| s.section == "importMappings").unwrap().created, 1);
 
         // The same class and name twice in one file.
         let mut twice = changed.clone();
         twice.import_mappings = Some(vec![mappings[1].clone(), mappings[1].clone()]);
-        let err = import(&dst.pool, &system, &twice, ImportMode::DryRun).await.unwrap_err();
+        let err = import(&dst.pool, &system, &hooks(), &twice, ImportMode::DryRun).await.unwrap_err();
         assert_eq!(err.code, ErrorCode::ValidationError);
         assert!(err.details.unwrap().iter().any(|d| d.field == "importMappings.1.name" && d.code == "duplicate"));
 
@@ -2737,7 +2777,7 @@ mod tests {
         let exported = export(&dst.pool, &no_import).await.unwrap();
         assert_eq!(exported.import_mappings, None);
         assert!(serde_json::to_value(&exported).unwrap().get("importMappings").is_none());
-        let err = import(&dst.pool, &no_import, &changed, ImportMode::DryRun).await.unwrap_err();
+        let err = import(&dst.pool, &no_import, &hooks(), &changed, ImportMode::DryRun).await.unwrap_err();
         assert_eq!(err.code, ErrorCode::Forbidden);
         assert!(err.message.contains("cis.import"), "{err}");
 
@@ -2746,7 +2786,7 @@ mod tests {
         let importer =
             user_ctx(&dst.pool, "importer", &[GlobalPermission::ConfigExportImport, GlobalPermission::CisImport]).await;
         assert_eq!(export(&dst.pool, &importer).await.unwrap().import_mappings, Some(Vec::new()));
-        let res = import(&dst.pool, &importer, &changed, ImportMode::Apply).await.unwrap();
+        let res = import(&dst.pool, &importer, &hooks(), &changed, ImportMode::Apply).await.unwrap();
         assert!(res.warnings.iter().any(|w| w.message.contains("cannot view")), "{:?}", res.warnings);
         assert!(res.changes.iter().all(|c| c.section != "importMappings"), "{:?}", res.changes);
         assert_eq!(audits().await, 3);
@@ -2755,6 +2795,7 @@ mod tests {
         let err = import(
             &dst.pool,
             &system,
+            &hooks(),
             &ConfigFile { format_version: FORMAT_VERSION + 1, ..changed.clone() },
             ImportMode::DryRun,
         )
@@ -2762,7 +2803,7 @@ mod tests {
         .unwrap_err();
         assert!(format!("{err:?}").contains(&format!("versions 1 to {FORMAT_VERSION}")), "{err:?}");
         let v3 = ConfigFile { format_version: 3, import_mappings: None, ..changed };
-        import(&dst.pool, &system, &v3, ImportMode::DryRun).await.unwrap();
+        import(&dst.pool, &system, &hooks(), &v3, ImportMode::DryRun).await.unwrap();
 
         src.drop().await;
         dst.drop().await;
@@ -2989,7 +3030,7 @@ mod tests {
         assert!(rules.windows(2).all(|w| w[0] < w[1]), "rules not in key order: {rules:?}");
         assert_eq!(comparable(&exported), comparable(&export(&a.pool, &ctx).await.unwrap()));
 
-        import(&b.pool, &ctx, &exported, ImportMode::Apply).await.unwrap();
+        import(&b.pool, &ctx, &hooks(), &exported, ImportMode::Apply).await.unwrap();
         let reexported = export(&b.pool, &ctx).await.unwrap();
         assert_eq!(
             serde_json::to_string_pretty(&comparable(&exported)).unwrap(),
@@ -3011,7 +3052,7 @@ mod tests {
         for c in &mut old.data_model.as_mut().unwrap().classes {
             (c.owner_attribute, c.end_of_life_attribute) = (None, None);
         }
-        import(&b.pool, &ctx, &ConfigFile { format_version: 10, ..old }, ImportMode::Apply).await.unwrap();
+        import(&b.pool, &ctx, &hooks(), &ConfigFile { format_version: 10, ..old }, ImportMode::Apply).await.unwrap();
         assert_eq!(owned(&export(&b.pool, &ctx).await.unwrap()), owned(&reexported));
         a.drop().await;
         b.drop().await;
@@ -3159,7 +3200,7 @@ mod tests {
         let model_attr = attrs.iter().find(|a| a.key == "vendor_model").unwrap();
         assert_eq!(model_attr.parent_attribute.as_deref(), Some("vendor_name"));
 
-        import(&b.pool, &ctx, &exported, ImportMode::Apply).await.unwrap();
+        import(&b.pool, &ctx, &hooks(), &exported, ImportMode::Apply).await.unwrap();
         let reexported = export(&b.pool, &ctx).await.unwrap();
         assert_eq!(
             serde_json::to_string_pretty(&comparable(&exported)).unwrap(),
@@ -3178,9 +3219,9 @@ mod tests {
             a.parent_attribute = None;
         }
         let v2 = ConfigFile { format_version: 2, ..stripped.clone() };
-        let result = import(&b.pool, &ctx, &v2, ImportMode::DryRun).await.unwrap();
+        let result = import(&b.pool, &ctx, &hooks(), &v2, ImportMode::DryRun).await.unwrap();
         assert!(result.changes.is_empty(), "{:?}", result.changes);
-        let result = import(&b.pool, &ctx, &stripped, ImportMode::DryRun).await.unwrap();
+        let result = import(&b.pool, &ctx, &hooks(), &stripped, ImportMode::DryRun).await.unwrap();
         let changed: Vec<(&str, &str)> = result.changes.iter().map(|c| (c.section.as_str(), c.key.as_str())).collect();
         assert_eq!(changed, [("lookupLists", "model")]);
         a.drop().await;
@@ -3220,7 +3261,7 @@ mod tests {
         }))
         .unwrap();
 
-        let dry = import(pool, &ctx, &file, ImportMode::DryRun).await.unwrap();
+        let dry = import(pool, &ctx, &hooks(), &file, ImportMode::DryRun).await.unwrap();
         let paths: Vec<&str> = dry.warnings.iter().map(|w| w.path.as_str()).collect();
         assert_eq!(paths, ["lookups.statuses", "lookups.environments", "lookups.locations", "lookups.owners"]);
         let created: Vec<(&str, &str)> =
@@ -3240,7 +3281,7 @@ mod tests {
                 .all(|s| !["statuses", "environments", "locations", "owners"].contains(&s.section.as_str()))
         );
 
-        import(pool, &ctx, &file, ImportMode::Apply).await.unwrap();
+        import(pool, &ctx, &hooks(), &file, ImportMode::Apply).await.unwrap();
         assert_eq!(legacy_rows().await, before, "the former tables are not written");
         let exported = export(pool, &ctx).await.unwrap();
         let text = serde_json::to_value(&exported).unwrap();
@@ -3266,7 +3307,7 @@ mod tests {
         );
 
         // Importing the same old file again changes nothing: the lists already hold the values.
-        let again = import(pool, &ctx, &file, ImportMode::DryRun).await.unwrap();
+        let again = import(pool, &ctx, &hooks(), &file, ImportMode::DryRun).await.unwrap();
         assert!(again.changes.is_empty(), "{:?}", again.changes);
 
         // Problems in these sections are reported with the rest of the file.
@@ -3277,7 +3318,7 @@ mod tests {
             "lookups": { "statuses": [{ "key": "dup", "name": "A" }, { "key": "dup", "name": "B" }] }
         }))
         .unwrap();
-        let err = import(pool, &ctx, &broken, ImportMode::DryRun).await.unwrap_err();
+        let err = import(pool, &ctx, &hooks(), &broken, ImportMode::DryRun).await.unwrap_err();
         let fields: Vec<String> = err.details.unwrap().into_iter().map(|d| d.field).collect();
         assert!(
             fields.contains(&"lookups.statuses.1".into()) && fields.contains(&"dataModel.attributes.0.class".into()),
@@ -3300,7 +3341,7 @@ mod tests {
         }))
         .unwrap();
         let started = std::time::Instant::now();
-        let dry = import(&db.pool, &ctx, &file, ImportMode::DryRun).await.unwrap();
+        let dry = import(&db.pool, &ctx, &hooks(), &file, ImportMode::DryRun).await.unwrap();
         let took = started.elapsed();
         assert!(took < std::time::Duration::from_secs(120), "{took:?}");
         let created: Vec<&str> =
@@ -3358,14 +3399,14 @@ mod tests {
         assert_eq!(roles, vec![("business_service_member", RelationshipTypeSystemRole::BusinessServiceMember)]);
 
         // The dry run shows the change, the import applies it, and the target then exports the same file.
-        let result = import(&b.pool, &ctx, &exported, ImportMode::DryRun).await.unwrap();
+        let result = import(&b.pool, &ctx, &hooks(), &exported, ImportMode::DryRun).await.unwrap();
         let changed: Vec<(&str, &str, Vec<&str>)> = result
             .changes
             .iter()
             .map(|c| (c.section.as_str(), c.key.as_str(), c.fields.iter().map(|f| f.field.as_str()).collect()))
             .collect();
         assert!(changed.contains(&("relationshipTypes", "connected_to", vec!["impactDirection"])), "{changed:?}");
-        import(&b.pool, &ctx, &exported, ImportMode::Apply).await.unwrap();
+        import(&b.pool, &ctx, &hooks(), &exported, ImportMode::Apply).await.unwrap();
         let reexported = export(&b.pool, &ctx).await.unwrap();
         assert_eq!(
             serde_json::to_string_pretty(&comparable(&exported)).unwrap(),
@@ -3386,9 +3427,9 @@ mod tests {
             l.system_role = None;
         }
         strip_system_roles(&mut v3);
-        let result = import(&b.pool, &ctx, &v3, ImportMode::DryRun).await.unwrap();
+        let result = import(&b.pool, &ctx, &hooks(), &v3, ImportMode::DryRun).await.unwrap();
         assert!(result.changes.is_empty(), "{:?}", result.changes);
-        import(&b.pool, &ctx, &v3, ImportMode::Apply).await.unwrap();
+        import(&b.pool, &ctx, &hooks(), &v3, ImportMode::Apply).await.unwrap();
         assert_eq!(direction(&export(&b.pool, &ctx).await.unwrap(), "connected_to"), Some(ImpactDirection::Both));
 
         // One-way impact on a non-directional type is refused.
@@ -3398,7 +3439,7 @@ mod tests {
                 t.impact_direction = Some(ImpactDirection::SourceToTarget);
             }
         }
-        let err = import(&b.pool, &ctx, &bad, ImportMode::DryRun).await.unwrap_err();
+        let err = import(&b.pool, &ctx, &hooks(), &bad, ImportMode::DryRun).await.unwrap_err();
         let fields: Vec<String> = err.details.unwrap().into_iter().map(|d| d.field).collect();
         assert!(fields.iter().any(|f| f.ends_with(".impactDirection")), "{fields:?}");
         a.drop().await;
@@ -3445,7 +3486,7 @@ mod tests {
         keys.sort();
         assert_eq!(keys, vec!["hostname", "serial_number"]);
 
-        let result = import(&b.pool, &ctx, &exported, ImportMode::DryRun).await.unwrap();
+        let result = import(&b.pool, &ctx, &hooks(), &exported, ImportMode::DryRun).await.unwrap();
         let changed: Vec<(&str, Vec<&str>)> = result
             .changes
             .iter()
@@ -3453,7 +3494,7 @@ mod tests {
             .collect();
         assert!(changed.contains(&("hardware.hostname", vec!["isIdentifying"])), "{changed:?}");
         assert!(changed.contains(&("hardware.asset_tag", vec!["isIdentifying"])), "{changed:?}");
-        import(&b.pool, &ctx, &exported, ImportMode::Apply).await.unwrap();
+        import(&b.pool, &ctx, &hooks(), &exported, ImportMode::Apply).await.unwrap();
         let reexported = export(&b.pool, &ctx).await.unwrap();
         assert_eq!(
             serde_json::to_string_pretty(&comparable(&exported)).unwrap(),
@@ -3465,9 +3506,9 @@ mod tests {
         for a in &mut v11.data_model.as_mut().unwrap().attributes {
             a.is_identifying = None;
         }
-        let result = import(&b.pool, &ctx, &v11, ImportMode::DryRun).await.unwrap();
+        let result = import(&b.pool, &ctx, &hooks(), &v11, ImportMode::DryRun).await.unwrap();
         assert!(result.changes.iter().all(|c| c.fields.is_empty()), "{:?}", result.changes);
-        import(&b.pool, &ctx, &v11, ImportMode::Apply).await.unwrap();
+        import(&b.pool, &ctx, &hooks(), &v11, ImportMode::Apply).await.unwrap();
         let mut keys = identifying(&export(&b.pool, &ctx).await.unwrap());
         keys.sort();
         assert_eq!(keys, vec!["hostname", "serial_number"]);
@@ -3511,7 +3552,7 @@ mod tests {
 
         // Created archived, and imported again it stays archived.
         for _ in 0..2 {
-            let res = import(pool, &ctx, &old, ImportMode::Apply).await.unwrap();
+            let res = import(pool, &ctx, &hooks(), &old, ImportMode::Apply).await.unwrap();
             assert!(
                 res.warnings.iter().any(|w| w.path == at && w.message.contains("core Criticality")),
                 "{:?}",
@@ -3525,7 +3566,7 @@ mod tests {
             .execute(pool)
             .await
             .unwrap();
-        let res = import(pool, &ctx, &old, ImportMode::Apply).await.unwrap();
+        let res = import(pool, &ctx, &hooks(), &old, ImportMode::Apply).await.unwrap();
         assert!(!res.warnings.iter().any(|w| w.path == at), "{:?}", res.warnings);
         assert_eq!(field_state().await, Some(true));
         db.drop().await;
@@ -3607,8 +3648,9 @@ mod tests {
         assert_eq!(desk.class_permissions[0].class_system_role, Some(ClassSystemRole::BusinessService));
 
         // The dry run says what it matched, and changes the target's class, not a new "service".
-        let result =
-            import(&dst.pool, &ctx, &file, ImportMode::DryRun).await.unwrap_or_else(|e| panic!("{e}: {:?}", e.details));
+        let result = import(&dst.pool, &ctx, &hooks(), &file, ImportMode::DryRun)
+            .await
+            .unwrap_or_else(|e| panic!("{e}: {:?}", e.details));
         let matched: Vec<&str> = result
             .warnings
             .iter()
@@ -3627,7 +3669,7 @@ mod tests {
         let fields: Vec<&str> = class_change.fields.iter().map(|f| f.field.as_str()).collect();
         assert!(fields.contains(&"name") && !fields.contains(&"systemRole") && !fields.contains(&"area"), "{fields:?}");
 
-        import(&dst.pool, &ctx, &file, ImportMode::Apply).await.unwrap();
+        import(&dst.pool, &ctx, &hooks(), &file, ImportMode::Apply).await.unwrap();
         let (id, key, name, area) = system_class(dst.pool.clone()).await;
         assert_eq!(
             (id, key.as_str(), name.as_str(), area.as_str()),
@@ -3656,7 +3698,7 @@ mod tests {
         .unwrap();
         assert_eq!(grant, (true, true), "the grant on service lands on business_service");
         // Importing the same file again changes nothing.
-        let again = import(&dst.pool, &ctx, &file, ImportMode::DryRun).await.unwrap();
+        let again = import(&dst.pool, &ctx, &hooks(), &file, ImportMode::DryRun).await.unwrap();
         assert!(again.changes.is_empty(), "{:?}", again.changes);
 
         // A grant resolves by classSystemRole, whatever its class key says; the member type by role too.
@@ -3673,7 +3715,7 @@ mod tests {
                 t.forward_label = "contains".into();
             }
         }
-        let result = import(&dst.pool, &ctx, &by_role, ImportMode::Apply)
+        let result = import(&dst.pool, &ctx, &hooks(), &by_role, ImportMode::Apply)
             .await
             .unwrap_or_else(|e| panic!("{e}: {:?}", e.details));
         let changes: Vec<(&str, &str)> = result.changes.iter().map(|c| (c.section.as_str(), c.key.as_str())).collect();
@@ -3708,15 +3750,16 @@ mod tests {
         other.key = "business_service".into();
         other.system_role = None;
         clash.data_model.as_mut().unwrap().classes.push(other);
-        let err = import(&dst.pool, &ctx, &clash, ImportMode::DryRun).await.unwrap_err();
+        let err = import(&dst.pool, &ctx, &hooks(), &clash, ImportMode::DryRun).await.unwrap_err();
         let codes: Vec<(String, String)> = err.details.unwrap().into_iter().map(|d| (d.field, d.code)).collect();
         assert!(codes.iter().any(|(f, c)| f.ends_with(".key") && c == "conflict"), "{codes:?}");
 
         // Version 4 (no roles): matched by key, so "service" is an ordinary new class here.
         let mut v4 = ConfigFile { format_version: 4, ..file.clone() };
         strip_system_roles(&mut v4);
-        let result =
-            import(&dst.pool, &ctx, &v4, ImportMode::DryRun).await.unwrap_or_else(|e| panic!("{e}: {:?}", e.details));
+        let result = import(&dst.pool, &ctx, &hooks(), &v4, ImportMode::DryRun)
+            .await
+            .unwrap_or_else(|e| panic!("{e}: {:?}", e.details));
         let changes: Vec<(&str, &str, ChangeAction)> =
             result.changes.iter().map(|c| (c.section.as_str(), c.key.as_str(), c.action)).collect();
         assert!(changes.contains(&("classes", "service", ChangeAction::Create)), "{changes:?}");
@@ -3753,7 +3796,7 @@ mod tests {
             }))
             .unwrap()
         };
-        import(pool, &ctx, &file("v1"), ImportMode::Apply).await.unwrap();
+        import(pool, &ctx, &hooks(), &file("v1"), ImportMode::Apply).await.unwrap();
 
         for (mode, name) in [(ImportMode::DryRun, "v2"), (ImportMode::Apply, "v3")] {
             let mut blocker = pool.begin().await.unwrap();
@@ -3765,7 +3808,7 @@ mod tests {
                 .unwrap();
             let running = tokio::spawn({
                 let (pool, ctx, file) = (pool.clone(), ctx.clone(), file(name));
-                async move { import(&pool, &ctx, &file, mode).await }
+                async move { import(&pool, &ctx, &hooks(), &file, mode).await }
             });
             // Wait until the import is stuck on the second list.
             let mut waits = 0;
@@ -3829,7 +3872,7 @@ mod tests {
             || async { sqlx::query_scalar::<_, i64>("SELECT count(*) FROM audit_log").fetch_one(pool).await.unwrap() };
         let before = audit_rows().await;
         for mode in [ImportMode::DryRun, ImportMode::Apply] {
-            let err = import(pool, &ctx, &file, mode).await.unwrap_err();
+            let err = import(pool, &ctx, &hooks(), &file, mode).await.unwrap_err();
             assert_eq!(err.code, ErrorCode::ValidationError);
             let d = &err.details.unwrap()[0];
             assert_eq!((d.field.as_str(), d.code.as_str()), ("dataModel", "too_big"), "{}", d.message);

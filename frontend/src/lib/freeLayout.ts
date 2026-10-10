@@ -172,11 +172,11 @@ export function stackOrder(tab: LayoutTab): LayoutSection[] {
 }
 
 export type LayerMove = "front" | "forward" | "backward" | "back";
-export const LAYER_MOVES: { move: LayerMove; label: string; keys: string }[] = [
-  { move: "front", label: "Bring to front", keys: "Ctrl+Shift+PageUp" },
-  { move: "forward", label: "Bring forward", keys: "Ctrl+PageUp" },
-  { move: "backward", label: "Send backward", keys: "Ctrl+PageDown" },
-  { move: "back", label: "Send to back", keys: "Ctrl+Shift+PageDown" },
+export const LAYER_MOVES: { move: LayerMove; keys: string }[] = [
+  { move: "front", keys: "Ctrl+Shift+PageUp" },
+  { move: "forward", keys: "Ctrl+PageUp" },
+  { move: "backward", keys: "Ctrl+PageDown" },
+  { move: "back", keys: "Ctrl+Shift+PageDown" },
 ];
 
 /** Icons of the layer moves, for toolbars (the buttons carry the labels as their names). */

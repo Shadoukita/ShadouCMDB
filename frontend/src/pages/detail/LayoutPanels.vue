@@ -9,6 +9,7 @@ import AttributeValue from "./AttributeValue.vue";
 import RecordSection from "../../components/RecordSection.vue";
 import BlockContent from "./BlockContent.vue";
 import CoreFieldValue from "./CoreFieldValue.vue";
+import { t } from "../../i18n";
 
 /**
  * One tab of the detail page's fields (lib/uiSettings resolveLayout): its
@@ -104,12 +105,12 @@ const orphanKeys = computed(() => {
         </div>
       </RecordSection>
       <section v-if="!g.free && archivedDefs.length > 0" class="panel" data-section="_archived">
-        <div class="panel-header"><h2>Archived fields</h2></div>
+        <div class="panel-header"><h2>{{ t("record.archived.title") }}</h2></div>
         <div class="panel-body">
-          <p class="hint no-margin-top">These fields are no longer in use. Their stored values are kept for reference and cannot be edited.</p>
+          <p class="hint no-margin-top">{{ t("record.archived.hint") }}</p>
           <div :class="gridClass(3)">
             <div v-for="d in archivedDefs" :key="d.key" :class="['field', 'field-ro', cellClass(1, 3)]" :data-field="`archived.${d.key}`">
-              <span :id="roId(`archived.${d.key}`)" class="label" dir="auto">{{ d.label }} <span class="muted">(archived)</span></span>
+              <span :id="roId(`archived.${d.key}`)" class="label" dir="auto">{{ d.label }} <span class="muted">{{ t("record.archived.suffix") }}</span></span>
               <div class="ro-value" role="group" :aria-labelledby="roId(`archived.${d.key}`)">
                 <AttributeValue :def="d" :value="values[d.key]" :ref-info="refs[d.key]" :self="self" :trail="trail" />
               </div>
@@ -118,7 +119,7 @@ const orphanKeys = computed(() => {
         </div>
       </section>
       <section v-if="!g.free && orphanKeys.length > 0" class="panel">
-        <div class="panel-header"><h2>Not defined by this class</h2></div>
+        <div class="panel-header"><h2>{{ t("record.orphans.title") }}</h2></div>
         <div class="panel-body">
           <div :class="gridClass(3)">
             <div v-for="k in orphanKeys" :key="k" :class="['field', 'field-ro', cellClass(1, 3)]">

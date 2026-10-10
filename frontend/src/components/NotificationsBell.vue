@@ -59,6 +59,7 @@ const KIND_ICONS: Record<NotificationKind, IconName> = {
   workflow_transition: "arrow-right",
   import_finished: "upload",
   workflow_action: "bell",
+  webhook_suspended: "triangle-alert",
 };
 
 // A new arrival changes the count: refresh an open list with it.

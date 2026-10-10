@@ -3,6 +3,7 @@ import { RouterLink } from "vue-router";
 import type { Ci } from "../../api/queries";
 import CiStateBadge from "../../components/CiStateBadge.vue";
 import CriticalityBadge from "../../components/CriticalityBadge.vue";
+import { t } from "../../i18n";
 import { formatDateTime } from "../../lib/format";
 
 /** Read-only value of one built-in CI field. The class links to the inventory filtered by it. */
@@ -16,9 +17,9 @@ defineProps<{ ci: Ci; field: string }>();
   <CriticalityBadge v-else-if="field === 'criticality'" :value="ci.criticality" show-unset />
   <template v-else-if="field === 'validFrom'">{{ formatDateTime(ci.validFrom) }}</template>
   <template v-else-if="field === 'validUntil'">
-    <template v-if="ci.validUntil">{{ formatDateTime(ci.validUntil) }}</template><span v-else class="muted">Open-ended</span>
+    <template v-if="ci.validUntil">{{ formatDateTime(ci.validUntil) }}</template><span v-else class="muted">{{ t("record.openEnded") }}</span>
   </template>
   <CiStateBadge v-else-if="field === 'active'" :ci="ci" show-active />
   <template v-else-if="field === 'createdAt'">{{ formatDateTime(ci.createdAt) }}</template>
-  <template v-else-if="field === 'updatedAt'">{{ formatDateTime(ci.updatedAt) }} <span class="muted">· version {{ ci.version }}</span></template>
+  <template v-else-if="field === 'updatedAt'">{{ formatDateTime(ci.updatedAt) }} <span class="muted">· {{ t("record.versionSuffix", { version: ci.version }) }}</span></template>
 </template>

@@ -9,6 +9,11 @@
 //! business services with their members and owners are never part of it, and
 //! neither are personal saved views or anyone's default view (user data).
 //!
+//! Webhook endpoints are (version 14), without their secrets: an endpoint
+//! carries `authHeaderSet` only, and an import creates a new one suspended
+//! (`secret_required`) with a fresh signing secret that an administrator
+//! rotates and shares with the receiver before resuming it.
+//!
 //! Identity providers are not part of it either. If they ever are, their
 //! secrets stay out: a provider carries `clientSecretSet` / `bindPasswordSet`
 //! only, an import creates it disabled, and an administrator enters the secret
@@ -50,7 +55,8 @@ pub const FORMAT: &str = "shadoucmdb.config";
 /// the owner and end-of-life fields of a class (`ownerAttribute`, `endOfLifeAttribute`, for the data-quality
 /// checks), version 12 identifying fields (`isIdentifying`, not copied when a CI is cloned), version 13 the subtitle
 /// field of a class (`subtitleAttribute`) and the category of relationship types, version 14 attribute actions on
-/// workflow transitions (`setAttributes`, part of the graph); versions 1 to 14 are read.
+/// workflow transitions (`setAttributes`, part of the graph), webhook endpoints and the webhook host allowlist
+/// (`webhookEndpoints`, `webhookAllowedHosts`; never a secret); versions 1 to 14 are read.
 pub const FORMAT_VERSION: i32 = 14;
 
 fn yes() -> bool {
@@ -775,11 +781,80 @@ fn workflows_schema() -> Schema {
 /// Workflows per file.
 pub const MAX_WORKFLOWS: usize = 500;
 
+// ---------------------------------------------------------------------------
+// Webhooks
+// ---------------------------------------------------------------------------
+
+/// Endpoints and allowlist entries per file.
+pub const MAX_WEBHOOK_ENTRIES: usize = 1000;
+
+fn default_timeout_ms() -> i32 {
+    10_000
+}
+
+fn default_per_minute() -> i32 {
+    120
+}
+
+fn default_in_flight() -> i16 {
+    2
+}
+
+/// A webhook endpoint without its secrets: imported as new, it is suspended (`secret_required`) until an
+/// administrator rotates its signing secret, shares it with the receiver and resumes it
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WebhookEndpointSpec {
+    #[schema(pattern = "^[a-z][a-z0-9_-]{0,62}$")]
+    pub key: String,
+    #[schema(min_length = 1, max_length = 100)]
+    pub name: String,
+    #[schema(min_length = 1, max_length = 2048)]
+    pub url: String,
+    #[schema(minimum = 1000, maximum = 30000)]
+    #[serde(default = "default_timeout_ms")]
+    pub timeout_ms: i32,
+    #[schema(minimum = 1, maximum = 6000)]
+    #[serde(default = "default_per_minute")]
+    pub max_per_minute: i32,
+    #[schema(minimum = 1, maximum = 16)]
+    #[serde(default = "default_in_flight")]
+    pub max_in_flight: i16,
+    /// The source's auth header name, if it had one; its value never travels, so it is not imported
+    #[serde(default)]
+    pub auth_header_name: Option<String>,
+    #[serde(default)]
+    pub auth_header_set: bool,
+}
+
+/// A host webhooks may reach
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WebhookAllowedHostSpec {
+    #[schema(min_length = 1, max_length = 255)]
+    pub host_pattern: String,
+    #[schema(minimum = 1, maximum = 65535)]
+    #[serde(default)]
+    pub port: Option<i32>,
+    #[serde(default)]
+    pub allow_http: bool,
+    #[serde(default)]
+    pub comment: Option<String>,
+}
+
+fn webhook_endpoints_schema() -> Schema {
+    list::<WebhookEndpointSpec>(MAX_WEBHOOK_ENTRIES)
+}
+
+fn webhook_allowed_hosts_schema() -> Schema {
+    list::<WebhookAllowedHostSpec>(MAX_WEBHOOK_ENTRIES)
+}
+
 fn exported_at_schema() -> Schema {
     schemas::nullable_string_schema(64)
 }
 
-/// A whole configuration: data model, lookups, permission profiles, UI settings, saved import mappings, shared saved views and workflows (no users, passwords, CIs, personal views or workflow instances)
+/// A whole configuration: data model, lookups, permission profiles, UI settings, saved import mappings, shared saved views, workflows and webhook endpoints (no users, passwords, secrets, CIs, personal views or workflow instances)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConfigFile {
@@ -819,6 +894,16 @@ pub struct ConfigFile {
     #[schema(schema_with = workflows_schema)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflows: Option<Vec<WorkflowSpec>>,
+    /// Webhook endpoints (version 14), never their signing secret or header value. Left out of an export when the
+    /// caller does not hold `webhooks.manage`.
+    #[schema(schema_with = webhook_endpoints_schema)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webhook_endpoints: Option<Vec<WebhookEndpointSpec>>,
+    /// The webhook host allowlist (version 14). Left out of an export when the caller does not hold
+    /// `webhooks.manage`.
+    #[schema(schema_with = webhook_allowed_hosts_schema)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webhook_allowed_hosts: Option<Vec<WebhookAllowedHostSpec>>,
 }
 
 impl crate::api::route::Check for ConfigFile {

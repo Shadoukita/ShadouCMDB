@@ -222,7 +222,7 @@ async fn each_constraint_refuses_what_it_should() {
     let endpoint = id(
         pool,
         "INSERT INTO webhook_endpoints (key, name, url, secret_ciphertext, secret_key_id)
-         VALUES ('itsm-prod', 'ITSM', 'https://itsm.corp.example/hook', '\\x01', '\\x02') RETURNING id",
+         VALUES ('itsm-prod', 'ITSM', 'https://itsm.corp.example/hook', decode(repeat('01', 44), 'hex'), 1) RETURNING id",
     )
     .await;
     let insert_action = |key: &str, kind: &str, trigger: &str, transition: &str, endpoint: &str| {
@@ -251,7 +251,7 @@ async fn each_constraint_refuses_what_it_should() {
     let endpoint_row = |key: &str, columns: &str, values: &str| {
         format!(
             "INSERT INTO webhook_endpoints (key, name, url, secret_ciphertext, secret_key_id{columns})
-             VALUES ('{key}', 'E', 'https://e.corp.example/', '\\x01', '\\x02'{values})"
+             VALUES ('{key}', 'E', 'https://e.corp.example/', decode(repeat('01', 44), 'hex'), 1{values})"
         )
     };
     ok(
@@ -259,14 +259,19 @@ async fn each_constraint_refuses_what_it_should() {
         &endpoint_row(
             "rotated",
             ", previous_secret_ciphertext, previous_secret_key_id, previous_secret_until",
-            ", '\\x03', '\\x04', now()",
+            ", decode(repeat('03', 44), 'hex'), 2, now()",
         ),
     )
     .await;
-    refused(pool, &endpoint_row("e1", ", previous_secret_ciphertext", ", '\\x03'"), CHECK).await;
+    refused(pool, &endpoint_row("e1", ", previous_secret_ciphertext", ", decode(repeat('03', 44), 'hex')"), CHECK)
+        .await;
     refused(
         pool,
-        &endpoint_row("e2", ", previous_secret_ciphertext, previous_secret_until", ", '\\x03', now()"),
+        &endpoint_row(
+            "e2",
+            ", previous_secret_ciphertext, previous_secret_until",
+            ", decode(repeat('03', 44), 'hex'), now()",
+        ),
         CHECK,
     )
     .await;
@@ -278,7 +283,7 @@ async fn each_constraint_refuses_what_it_should() {
     refused(
         pool,
         "INSERT INTO webhook_endpoints (key, name, url, secret_ciphertext, secret_key_id)
-         VALUES ('ftp', 'E', 'ftp://e.corp.example/', '\\x01', '\\x02')",
+         VALUES ('ftp', 'E', 'ftp://e.corp.example/', decode(repeat('01', 44), 'hex'), 1)",
         CHECK,
     )
     .await;
