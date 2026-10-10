@@ -65,7 +65,7 @@ describe("locale", () => {
 describe("parameters and plurals", () => {
   test("simple parameters", () => {
     assert.equal(t("services.owners.remove", { name: "Ops team", role: "Technical owners" }), "Remove Ops team as Technical owners");
-    assert.equal(t("services.tab.members", { n: 0 }), "Members (0)");
+    assert.equal(t("services.picker.selected", { n: 0 }), "Selected (0)");
   });
   test("English plurals", () => {
     assert.equal(t("services.picker.submit", { n: 1 }), "Add 1 member");
