@@ -12,7 +12,7 @@ import type {
 } from "../api/workflows";
 import { checkSetAttributes, setAttributeFromApi, setAttributeToApi, type DraftSetAttribute } from "./workflowActions";
 import { checkSteps, stepFromApi, stepToApi, type DraftApprovalStep } from "./workflowApprovals";
-import { t, type MessageKey } from "../i18n/index";
+import { hasMessage, t, type MessageKey } from "../i18n/index";
 
 export type ConditionOp = "eq" | "ne" | "in" | "notIn" | "isSet" | "isNotSet" | "gt" | "gte" | "lt" | "lte" | "contains";
 export type FieldDataType = "text" | "number" | "integer" | "boolean" | "enum" | "date" | "datetime" | "ip" | "cidr" | "reference" | "lookup";
@@ -74,18 +74,10 @@ export const categoryLabel = (c: string) => {
   return k ? t(k) : c;
 };
 
-export const OP_LABELS: Record<ConditionOp, string> = {
-  eq: "is",
-  ne: "is not",
-  in: "is one of",
-  notIn: "is none of",
-  isSet: "is set",
-  isNotSet: "is not set",
-  gt: "is greater than",
-  gte: "is at least",
-  lt: "is less than",
-  lte: "is at most",
-  contains: "contains",
+/** A comparison in the active locale (`is`, `is one of`…), for the condition editor and `describeConditions`. */
+export const opLabel = (op: ConditionOp | string) => {
+  const k = `wfDesign.op.${op}`;
+  return hasMessage(k) ? t(k) : op;
 };
 
 const ORDERED: FieldDataType[] = ["number", "integer", "date", "datetime"];
@@ -157,14 +149,14 @@ export function countLeaves(n: ConditionNode): number {
   return n.kind === "leaf" ? 1 : n.children.reduce((sum, c) => sum + countLeaves(c), 0);
 }
 
-/** One plain-language line per condition, for the transition table: `Environment is Production and …`. */
+/** One plain-language line per condition in the active locale, for the transition table and the version view: `Environment is Production and …`. */
 export function describeConditions(n: ConditionNode, label: (field: string) => string = (f) => f): string {
   if (n.kind === "group") {
     const parts = n.children.map((c) => (c.kind === "group" && c.children.length > 1 ? `(${describeConditions(c, label)})` : describeConditions(c, label)));
-    return parts.join(n.mode === "all" ? " and " : " or ");
+    return parts.join(` ${t(n.mode === "all" ? "wfDesign.cond.and" : "wfDesign.cond.or")} `);
   }
   const v = !opTakesValue(n.op) ? "" : Array.isArray(n.value) ? ` ${n.value.join(", ")}` : ` ${String(n.value ?? "")}`;
-  return `${label(n.field)} ${OP_LABELS[n.op] ?? n.op}${v}`;
+  return `${label(n.field)} ${opLabel(n.op)}${v}`;
 }
 
 // ---------- Draft <-> API ----------
@@ -392,40 +384,40 @@ export function checkDraft(d: Draft): PlacedProblem[] {
   const stateKeys = new Set<string>();
   d.states.forEach((s, i) => {
     const target: ProblemTarget = { kind: "state", key: s.key };
-    if (!KEY.test(s.key)) add(target, `states[${i}].key`, "The key must be lower-case letters, digits and _, starting with a letter (max 63).");
-    else if (stateKeys.has(s.key)) add(target, `states[${i}].key`, `Another state already has the key ${s.key}.`, "duplicate");
+    if (!KEY.test(s.key)) add(target, `states[${i}].key`, t("wfDesign.check.keyFormat"));
+    else if (stateKeys.has(s.key)) add(target, `states[${i}].key`, t("wfDesign.state.keyTaken", { key: s.key }), "duplicate");
     stateKeys.add(s.key);
-    if (!s.name.trim()) add(target, `states[${i}].name`, "The state needs a name.", "required");
+    if (!s.name.trim()) add(target, `states[${i}].name`, t("wfDesign.check.stateName"), "required");
   });
   const transitionKeys = new Set<string>();
-  d.transitions.forEach((t, i) => {
-    const target: ProblemTarget = { kind: "transition", key: t.key };
-    if (!KEY.test(t.key)) add(target, `transitions[${i}].key`, "The key must be lower-case letters, digits and _, starting with a letter (max 63).");
-    else if (transitionKeys.has(t.key)) add(target, `transitions[${i}].key`, `Another transition already has the key ${t.key}.`, "duplicate");
-    transitionKeys.add(t.key);
-    if (!t.name.trim()) add(target, `transitions[${i}].name`, "The transition needs a name.", "required");
-    if (!stateKeys.has(t.from)) add(target, `transitions[${i}].from`, "Choose the state it starts from.", "required");
-    if (!stateKeys.has(t.to)) add(target, `transitions[${i}].to`, "Choose the state it leads to.", "required");
-    else if (t.from === t.to) add(target, `transitions[${i}].to`, "A transition must lead to another state.", "self_loop");
+  d.transitions.forEach((tr, i) => {
+    const target: ProblemTarget = { kind: "transition", key: tr.key };
+    if (!KEY.test(tr.key)) add(target, `transitions[${i}].key`, t("wfDesign.check.keyFormat"));
+    else if (transitionKeys.has(tr.key)) add(target, `transitions[${i}].key`, t("wfDesign.tr.keyTaken", { key: tr.key }), "duplicate");
+    transitionKeys.add(tr.key);
+    if (!tr.name.trim()) add(target, `transitions[${i}].name`, t("wfDesign.check.trName"), "required");
+    if (!stateKeys.has(tr.from)) add(target, `transitions[${i}].from`, t("wfDesign.check.from"), "required");
+    if (!stateKeys.has(tr.to)) add(target, `transitions[${i}].to`, t("wfDesign.check.to"), "required");
+    else if (tr.from === tr.to) add(target, `transitions[${i}].to`, t("wfDesign.check.selfLoop"), "self_loop");
     const fields = new Set<string>();
-    t.fields.forEach((f, j) => {
-      if (!f.attribute) add(target, `transitions[${i}].fields[${j}].attribute`, "Choose a field or remove the row.", "required");
-      else if (fields.has(f.attribute)) add(target, `transitions[${i}].fields[${j}].attribute`, `The field ${f.attribute} is listed twice.`, "duplicate");
+    tr.fields.forEach((f, j) => {
+      if (!f.attribute) add(target, `transitions[${i}].fields[${j}].attribute`, t("wfDesign.check.fieldRow"), "required");
+      else if (fields.has(f.attribute)) add(target, `transitions[${i}].fields[${j}].attribute`, t("wfDesign.check.fieldTwice", { field: f.attribute }), "duplicate");
       fields.add(f.attribute);
     });
-    const leaves = countLeaves(t.conditions);
-    if (leaves > MAX_CONDITION_LEAVES) add(target, `transitions[${i}].conditions`, `At most ${MAX_CONDITION_LEAVES} conditions.`, "too_many_leaves");
+    const leaves = countLeaves(tr.conditions);
+    if (leaves > MAX_CONDITION_LEAVES) add(target, `transitions[${i}].conditions`, t("wfDesign.check.maxLeaves", { n: MAX_CONDITION_LEAVES }), "too_many_leaves");
     const walk = (n: ConditionNode, path: string) => {
       if (n.kind === "group") return n.children.forEach((c, j) => walk(c, `${path}.${n.mode}[${j}]`));
-      if (!n.field) return add(target, `${path}.field`, "A condition has no field: choose one or remove it.", "required");
+      if (!n.field) return add(target, `${path}.field`, t("wfDesign.check.noField"), "required");
       if (!opTakesValue(n.op)) return;
       const v = n.value;
       const empty = v === undefined || v === null || v === "" || (Array.isArray(v) && v.length === 0) || (typeof v === "number" && !Number.isFinite(v));
-      if (empty) add(target, `${path}.value`, `The condition on ${n.field} needs a value.`, "required");
+      if (empty) add(target, `${path}.value`, t("wfDesign.check.noValue", { field: n.field }), "required");
     };
-    walk(t.conditions, `transitions[${i}].conditions`);
-    for (const p of checkSteps(t.approval)) add(target, `transitions[${i}].${p.path}`, p.message, p.code);
-    for (const p of checkSetAttributes(t.setAttributes)) add(target, `transitions[${i}].${p.path}`, p.message, p.code);
+    walk(tr.conditions, `transitions[${i}].conditions`);
+    for (const p of checkSteps(tr.approval)) add(target, `transitions[${i}].${p.path}`, p.message, p.code);
+    for (const p of checkSetAttributes(tr.setAttributes)) add(target, `transitions[${i}].${p.path}`, p.message, p.code);
   });
   return out;
 }

@@ -3,6 +3,7 @@
 // land, the grants matrix and the diagram's edge geometry. Run: npm run test:unit -w frontend
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
+import { setLocaleForTests } from "../src/i18n/index";
 import {
   COLUMN_STEP,
   NODE_H,
@@ -85,6 +86,15 @@ describe("conditions", () => {
   test("conditions read as one line", () => {
     const text = describeConditions(parseConditions(VERSION.transitions[0].conditions), (k) => k.toUpperCase());
     assert.equal(text, "ENVIRONMENT is prod and (RISK is at most 3 or NOTES is set)");
+  });
+  test("conditions and the local checks read in the active locale", (t) => {
+    t.after(() => setLocaleForTests(null));
+    setLocaleForTests("de");
+    const text = describeConditions(parseConditions(VERSION.transitions[0].conditions), (k) => k.toUpperCase());
+    assert.equal(text, "ENVIRONMENT ist prod und (RISK ist höchstens 3 oder NOTES ist gesetzt)");
+    const d = draft();
+    d.states[0].name = " ";
+    assert.ok(checkDraft(d).some((p) => p.message === "Der Zustand braucht einen Namen."));
   });
 });
 

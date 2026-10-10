@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { t } from "../../../i18n";
 import { categoryLabel, NODE_H, NODE_W, type Draft, type PlacedProblem, type Position } from "../../../lib/workflowDraft";
 import { EDGE_LABEL_MAX, edgeGeometry, shorten } from "../../../lib/workflowGraph";
 
@@ -55,6 +56,24 @@ const edges = computed(() =>
     { w: NODE_W, h: NODE_H },
   ),
 );
+
+/** What a screen reader hears for a state's box and a transition's arrow: its name, then its flags and problems. */
+function nodeLabel(s: Draft["states"][number]): string {
+  const sev = severity("state", s.key);
+  return [
+    t("wfDesign.graph.state", { name: s.name, category: categoryLabel(s.category) }),
+    s.terminal ? t("wfDesign.graph.terminal") : "",
+    props.draft.initialState === s.key ? t("wfDesign.graph.initial") : "",
+    sev ? t(sev === "error" ? "wfDesign.graph.hasErrors" : "wfDesign.graph.hasWarnings") : "",
+  ]
+    .filter(Boolean)
+    .join(", ");
+}
+function edgeLabel(e: { key: string; name: string; from: string; to: string }): string {
+  const sev = severity("transition", e.key);
+  const text = t("wfDesign.graph.transition", { name: e.name, from: nameOf(e.from), to: nameOf(e.to) });
+  return sev ? `${text}, ${t(sev === "error" ? "wfDesign.graph.hasErrors" : "wfDesign.graph.hasWarnings")}` : text;
+}
 
 const isSelected = (kind: "state" | "transition", key: string) => props.selected?.kind === kind && props.selected.key === key;
 
@@ -147,7 +166,7 @@ function onEdgeKey(e: KeyboardEvent, key: string) {
         :height="size.h"
         :viewBox="`0 0 ${size.w} ${size.h}`"
         role="group"
-        :aria-label="readonly ? 'Workflow diagram' : 'Workflow diagram. Drag a state, or focus it and use the arrow keys, to move it.'"
+        :aria-label="readonly ? t('wfDesign.graph.label') : t('wfDesign.graph.labelEdit')"
         @pointermove="onPointerMove"
         @pointerup="onPointerUp"
         @pointercancel="drag = null"
@@ -168,7 +187,7 @@ function onEdgeKey(e: KeyboardEvent, key: string) {
           :class="['wf-node', `cat-${s.category}`, severity('state', s.key), { selected: isSelected('state', s.key), terminal: s.terminal, readonly }]"
           :tabindex="0"
           role="button"
-          :aria-label="`State ${s.name}, ${categoryLabel(s.category)}${s.terminal ? ', terminal' : ''}${draft.initialState === s.key ? ', initial' : ''}${severity('state', s.key) ? `, has ${severity('state', s.key)}s` : ''}`"
+          :aria-label="nodeLabel(s)"
           :aria-pressed="isSelected('state', s.key)"
           @pointerdown="onPointerDown($event, s.key)"
           @keydown="onNodeKey($event, s.key)"
@@ -189,7 +208,7 @@ function onEdgeKey(e: KeyboardEvent, key: string) {
           :class="['wf-edge', severity('transition', e.key), { selected: isSelected('transition', e.key) }]"
           :tabindex="0"
           role="button"
-          :aria-label="`Transition ${e.name}: ${nameOf(e.from)} to ${nameOf(e.to)}${severity('transition', e.key) ? `, has ${severity('transition', e.key)}s` : ''}`"
+          :aria-label="edgeLabel(e)"
           :aria-pressed="isSelected('transition', e.key)"
           @click="emit('select', { kind: 'transition', key: e.key })"
           @keydown="onEdgeKey($event, e.key)"
@@ -203,6 +222,6 @@ function onEdgeKey(e: KeyboardEvent, key: string) {
     </div>
   </div>
   <p v-if="more.left || more.right || more.down" class="wf-canvas-hint" data-testid="wf-canvas-hint">
-    The diagram is larger than this panel: scroll it to see the other states.
+    {{ t("wfDesign.graph.overflow") }}
   </p>
 </template>
