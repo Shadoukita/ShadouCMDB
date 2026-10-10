@@ -16,7 +16,7 @@ import AttributeInput from "../../../components/AttributeInput.vue";
 import FormDialog from "../../../components/FormDialog.vue";
 import SchemaChangeDialog from "../../../components/SchemaChangeDialog.vue";
 import TechnicalNameField from "../../../components/TechnicalNameField.vue";
-import { t, type MessageKey } from "../../../i18n";
+import { hasMessage, t, type MessageKey } from "../../../i18n";
 import { toApiValue, toFormValue, type AttributeShape } from "../../../lib/attributeValues";
 import { changedFields } from "../../../lib/changes";
 import { DATA_TYPES, validationKind } from "../../../lib/dataTypes";
@@ -155,7 +155,10 @@ const draft = computed<AttributeShape>(() => ({
 }));
 const vKind = computed(() => validationKind(dataType.value));
 const concreteClasses = computed(() => flattenTree(classes.data.value ?? []));
-const typeHint = computed(() => (DATA_TYPES.find((d) => d.key === dataType.value)?.hint ? t(`dm.attr.typeHint.${dataType.value}` as MessageKey) : undefined));
+const typeHint = computed(() => {
+  const key = `dm.attr.typeHint.${dataType.value}`;
+  return hasMessage(key) ? t(key) : undefined;
+});
 const refClassName = computed(() => classes.data.value?.find((c) => c.id === referenceClassId.value)?.name);
 const listName = computed(() => lists.data.value?.find((l) => l.id === lookupListId.value)?.name);
 /** The parent list of the chosen list, if it depends on one. */

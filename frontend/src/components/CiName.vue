@@ -3,7 +3,8 @@ import { computed } from "vue";
 import { RouterLink } from "vue-router";
 import { ApiError } from "../api/client";
 import { useCi } from "../api/queries";
-import { HIDDEN_CI } from "../lib/format";
+import { t } from "../i18n";
+import { hiddenCi } from "../lib/format";
 
 /**
  * A CI named by id alone (e.g. a reference value in the import check): its label as a link. One GET per id, cached,
@@ -16,9 +17,9 @@ const hidden = computed(() => ci.error.value instanceof ApiError && (ci.error.va
 
 <template>
   <RouterLink v-if="ci.data.value" :to="`/cis/${id}`" dir="auto">
-    {{ ci.data.value.label }}{{ ci.data.value.deletedAt ? " (deleted)" : "" }}
+    {{ ci.data.value.label }}{{ ci.data.value.deletedAt ? ` ${t("record.deletedSuffix")}` : "" }}
   </RouterLink>
   <span v-else-if="ci.isLoading.value" class="muted">…</span>
-  <span v-else-if="hidden" class="muted" title="The CI does not exist or you do not have permission to view it">{{ HIDDEN_CI }}</span>
-  <span v-else class="mono muted" title="Could not load the CI">{{ id }}</span>
+  <span v-else-if="hidden" class="muted" :title="t('record.ciName.hidden')">{{ hiddenCi() }}</span>
+  <span v-else class="mono muted" :title="t('record.ciName.loadFailed')">{{ id }}</span>
 </template>

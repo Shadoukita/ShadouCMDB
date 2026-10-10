@@ -1,5 +1,6 @@
 // Hover text for the audit log's sign-in, MFA and API token rows.
 import type { AuditEntry } from "../../api/queries";
+import { t } from "../../i18n";
 
 export const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);
 
@@ -17,14 +18,14 @@ export function clientTitle(e: Pick<AuditEntry, "action" | "entityType" | "newVa
   const snap = (e.newValue ?? {}) as Record<string, unknown>;
   const session = (snap.session ?? {}) as Record<string, unknown>;
   const parts = [
-    str(snap.reason) && `Reason: ${snap.reason}`,
-    typeof snap.lockedForSeconds === "number" && `Locked for ${snap.lockedForSeconds}s`,
+    str(snap.reason) && t("audit.client.reason", { reason: String(snap.reason) }),
+    typeof snap.lockedForSeconds === "number" && t("audit.client.lockedFor", { n: snap.lockedForSeconds }),
     // Sign-in rows already name the address in the Record column.
-    e.entityType !== "sessions" && str(snap.ipAddress) && `Address: ${snap.ipAddress}`,
-    str(session.ipAddress) && str(snap.ipAddress) !== str(session.ipAddress) && `Session opened from ${session.ipAddress}`,
-    str(snap.peerIpAddress) && `Peer address: ${snap.peerIpAddress}`,
-    str(snap.claimedIpAddress) && `Claimed address (unverified): ${snap.claimedIpAddress}`,
-    (str(snap.userAgent) || str(session.userAgent)) && `Browser: ${str(snap.userAgent) ?? str(session.userAgent)}`,
+    e.entityType !== "sessions" && str(snap.ipAddress) && t("audit.client.address", { address: String(snap.ipAddress) }),
+    str(session.ipAddress) && str(snap.ipAddress) !== str(session.ipAddress) && t("audit.client.sessionFrom", { address: String(session.ipAddress) }),
+    str(snap.peerIpAddress) && t("audit.client.peerAddress", { address: String(snap.peerIpAddress) }),
+    str(snap.claimedIpAddress) && t("audit.client.claimedAddress", { address: String(snap.claimedIpAddress) }),
+    (str(snap.userAgent) || str(session.userAgent)) && t("audit.client.browser", { agent: str(snap.userAgent) ?? str(session.userAgent) }),
   ].filter((p): p is string => typeof p === "string");
   return parts.length ? parts.join("\n") : undefined;
 }

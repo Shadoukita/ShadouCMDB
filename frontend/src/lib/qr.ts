@@ -1,4 +1,5 @@
 import qrcode from "qrcode-generator";
+import { t } from "../i18n";
 
 /** Modules of white around the code: phone cameras need it to find the code. */
 export const QR_QUIET = 4;
@@ -82,7 +83,7 @@ export function qrLabelPng(l: QrLabel, modulePx = 10): Promise<Blob> {
   canvas.width = w * modulePx;
   canvas.height = Math.ceil(h * modulePx);
   const ctx = canvas.getContext("2d");
-  if (!ctx) return Promise.reject(new Error("This browser cannot draw the PNG image."));
+  if (!ctx) return Promise.reject(new Error(t("qr.pngUnsupported")));
   ctx.fillStyle = "#fff";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.fillStyle = "#000";
@@ -95,7 +96,7 @@ export function qrLabelPng(l: QrLabel, modulePx = 10): Promise<Blob> {
     ctx.font = `${SUB_SIZE * modulePx}px ${LABEL_FONT}`;
     ctx.fillText(fit(l.subtitle, w, SUB_SIZE), (w / 2) * modulePx, (y1 + LINE_GAP + SUB_SIZE) * modulePx);
   }
-  return new Promise((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("This browser cannot draw the PNG image."))), "image/png"));
+  return new Promise((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error(t("qr.pngUnsupported")))), "image/png"));
 }
 
 /** Saves `blob` as `name` through a temporary link (the file is made in the browser). */

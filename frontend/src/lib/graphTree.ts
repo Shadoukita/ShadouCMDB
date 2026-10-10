@@ -1,7 +1,7 @@
 // Rows of GraphTree (pages/detail/GraphTree.vue), the indented tree of the relationship map and
 // of the impact analysis: flattened depth-first, each with its level and how its edge reads.
 import type { RelationshipGraph } from "../api/queries";
-import { plural } from "./format";
+import { t } from "../i18n";
 import type { ImpactTreeRow } from "./impact";
 
 export interface TreeRow {
@@ -74,7 +74,7 @@ export function impactRows(rows: readonly ImpactTreeRow[]): TreeRow[] {
     node: { id: r.item.id, label: r.item.name, classId: r.item.classId, className: r.item.className, active: r.item.active },
     hasChildren: r.hasChildren,
     criticality: r.item.criticality,
-    note: r.item.reachedByCount > 1 ? `also reached via ${plural(r.item.reachedByCount - 1, "other relationship")}` : undefined,
+    note: r.item.reachedByCount > 1 ? t("record.tree.alsoReachedVia", { n: r.item.reachedByCount - 1 }) : undefined,
   }));
 }
 

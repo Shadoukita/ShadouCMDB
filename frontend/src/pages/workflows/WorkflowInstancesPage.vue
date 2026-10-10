@@ -226,7 +226,7 @@ const crumbs = computed(() => [{ label: t("inventory.crumb"), to: "/cis" }, { la
               <td dir="auto">{{ className(i.classKey) }}</td>
               <td>
                 <RouterLink :to="`/workflows/${i.id}`" dir="auto">{{ i.definitionName }}</RouterLink>
-                <span class="muted mono"> v{{ i.versionNo }}</span>
+                <span class="muted mono"> {{ t("wfRun.instance.versionChip", { n: i.versionNo }) }}</span>
               </td>
               <td><WorkflowStateBadge :state="i.state" /></td>
               <td><WorkflowStatusBadge :status="i.status" /></td>

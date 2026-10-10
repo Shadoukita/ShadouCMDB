@@ -43,13 +43,13 @@ function onReference(ci: CiSummary | null) {
 <template>
   <select v-if="def.dataType === 'boolean'" :id="id" v-model="model" v-bind="aria">
     <option value="">{{ t("common.notSet") }}</option>
-    <option value="true">Yes</option>
-    <option value="false">No</option>
+    <option value="true">{{ t("common.yes") }}</option>
+    <option value="false">{{ t("common.no") }}</option>
   </select>
   <select v-else-if="def.dataType === 'enum'" :id="id" v-model="model" v-bind="aria">
     <option value="">{{ t("common.notSet") }}</option>
     <option v-for="ev in enumValues" :key="ev" :value="ev">{{ ev }}</option>
-    <option v-if="model !== '' && !enumValues.includes(model)" :value="model">{{ model }} (no longer allowed)</option>
+    <option v-if="model !== '' && !enumValues.includes(model)" :value="model">{{ t("attr.input.noLongerAllowed", { value: model }) }}</option>
   </select>
   <input
     v-else-if="def.dataType === 'integer' || def.dataType === 'number'"

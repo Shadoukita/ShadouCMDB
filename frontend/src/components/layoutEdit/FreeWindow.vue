@@ -170,7 +170,7 @@ function onKey(e: KeyboardEvent) {
   // Keys move by exact steps: no snapping.
   const r = dragBox(box.value, edges, dx, dy, { width: props.areaWidth, minH: minHeightOf(props.frame), others: [], snap: false });
   emit("frame", fromBox(r.box, props.areaWidth, props.frame), false);
-  emit("gestureEnd", `Window ${label.value}: ${describeBox(r.box)}.`);
+  emit("gestureEnd", t("layoutEditor.window.readout", { window: label.value, box: describeBox(r.box) }));
 }
 
 // ---------- The layering menu ----------

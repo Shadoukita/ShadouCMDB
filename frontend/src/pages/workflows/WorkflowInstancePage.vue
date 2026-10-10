@@ -264,7 +264,7 @@ async function reload() {
                 <td dir="auto">{{ e.kind === "transition" ? transitionName(e.transitionKey) : t(EVENT_LABELS[e.kind]) }}</td>
                 <td>
                   <template v-if="e.fromStateKey">{{ stateName(e.fromStateKey) }} → </template>{{ stateName(e.toStateKey) }}
-                  <span v-if="e.kind === 'migrate'" class="muted mono"> (v{{ e.fromVersionNo }} → v{{ e.toVersionNo }})</span>
+                  <span v-if="e.kind === 'migrate'" class="muted mono"> ({{ t("wfRun.instance.versionChip", { n: e.fromVersionNo }) }} → {{ t("wfRun.instance.versionChip", { n: e.toVersionNo }) }})</span>
                 </td>
                 <td dir="auto">{{ actor(e) }}</td>
                 <td class="wf-wrap">

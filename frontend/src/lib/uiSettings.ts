@@ -397,15 +397,11 @@ export function pageLabel(page: UiPage): string {
 
 // ---------- Dashboard ----------
 
-export const WIDGET_TYPES: { type: UiWidgetType; label: string; hint: string }[] = [
-  { type: "count_by_class", label: "CIs by class", hint: "Counts per class, optionally only some classes" },
-  { type: "count_by_lookup", label: "CIs by lookup value", hint: "Counts per value of one lookup list, e.g. status" },
-  { type: "recent_changes", label: "Recently changed", hint: "The latest changed CIs" },
-  { type: "saved_search", label: "Saved search", hint: "CIs matching classes, filters and a sort" },
-];
+/** The widget types an admin can add, in menu order. Names and hints: `dashboard.widget.*`, `customization.dashboard.hint.*`. */
+export const WIDGET_TYPES: { type: UiWidgetType }[] = (["count_by_class", "count_by_lookup", "recent_changes", "saved_search"] as const).map((type) => ({ type }));
 export function widgetLabel(type: UiWidgetType): string {
   const key = `dashboard.widget.${type}`;
-  return hasMessage(key) ? t(key) : (WIDGET_TYPES.find((w) => w.type === type)?.label ?? type);
+  return hasMessage(key) ? t(key) : type;
 }
 
 /**
