@@ -18,6 +18,8 @@
 //! [`MAX_ACTIVE_DELEGATIONS`].
 
 use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
@@ -30,6 +32,7 @@ use crate::api::schemas::{Page, Paged};
 use crate::auth::permissions::ClassOp;
 use crate::data::crud::{self, AuditAction, AuditEntry};
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
+use crate::modules::business_services::service::may_browse_directory;
 
 const ENTITY: &str = "Approval delegation";
 const ENTITY_TYPE: &str = "workflow_approval_delegations";
@@ -332,6 +335,103 @@ pub async fn create_for(
         admin: b.principal_user_id != me.user_id,
     };
     create(pool, ctx, n).await
+}
+
+// ---------------------------------------------------------------------------
+// Delegate picker
+// ---------------------------------------------------------------------------
+
+/// Exact-username lookups a caller without the directory right may make in
+/// [`LOOKUP_WINDOW`]: enough for a picker, too few to guess a directory.
+const MAX_EXACT_LOOKUPS: u32 = 30;
+const LOOKUP_WINDOW: Duration = Duration::from_secs(60);
+
+/// Per user: when their window started and the lookups in it. In-process, so
+/// each server process counts on its own.
+static EXACT_LOOKUPS: LazyLock<Mutex<HashMap<Uuid, (Instant, u32)>>> = LazyLock::new(Mutex::default);
+
+/// Counts one exact-username lookup by `user`; 429 RATE_LIMITED past the cap.
+fn admit_exact_lookup(user: Uuid) -> Result<(), AppError> {
+    let now = Instant::now();
+    let mut seen = EXACT_LOOKUPS.lock().map_err(|_| AppError::internal())?;
+    if seen.len() > 10_000 {
+        seen.retain(|_, (start, _)| now.duration_since(*start) < LOOKUP_WINDOW);
+    }
+    let (start, n) = seen.entry(user).or_insert((now, 0));
+    if now.duration_since(*start) >= LOOKUP_WINDOW {
+        (*start, *n) = (now, 0);
+    }
+    if *n >= MAX_EXACT_LOOKUPS {
+        let wait = LOOKUP_WINDOW.saturating_sub(now.duration_since(*start)).as_secs().max(1);
+        let mut err = AppError::new(
+            ErrorCode::RateLimited,
+            format!("Too many user lookups. Try again in {wait} s, or enter the exact username."),
+        );
+        err.retry_after = Some(wait);
+        return Err(err);
+    }
+    *n += 1;
+    Ok(())
+}
+
+/// Users the caller may delegate their approvals to: a search for a caller
+/// who may look up users, else the one user with exactly that username, so
+/// the picker is no way round `GET /principals` (GH#839). Disabled accounts
+/// and the caller are never offered, and an exact miss looks the same
+/// whichever of the three it was.
+pub async fn candidates(
+    pool: &PgPool,
+    ctx: &RequestContext,
+    q: &WorkflowApprovalDelegateQuery,
+) -> Result<WorkflowApprovalDelegateCandidateList, AppError> {
+    let me = ctx.principal().ok_or_else(crate::api::context::unauthenticated)?.user_id;
+    let query_error = |code: &str, message: &str| {
+        AppError::validation(vec![FieldError {
+            location: FieldLocation::Query,
+            field: "q".into(),
+            message: message.into(),
+            code: code.into(),
+        }])
+    };
+    let text = q.q.as_deref().map(str::trim).ok_or_else(|| query_error("required", "Required"))?;
+    match text.chars().count() {
+        0..2 => return Err(query_error("too_small", "Too small: expected string to have >=2 characters")),
+        n if n > MAX_DELEGATE_QUERY => {
+            return Err(query_error(
+                "too_big",
+                &format!("Too big: expected string to have <={MAX_DELEGATE_QUERY} characters"),
+            ));
+        }
+        _ => {}
+    }
+    let mut conn = pool.acquire().await?;
+    if may_browse_directory(&mut conn, ctx).await? {
+        let pattern = crate::api::schemas::like_pattern(text);
+        let prefix = format!("{}%", crate::api::schemas::escape_like(&text.to_lowercase()));
+        let data = sqlx::query_as(
+            "SELECT id, username, display_name FROM cmdb.users
+             WHERE is_active AND id <> $1 AND (display_name ILIKE $2 OR username ILIKE $2)
+             ORDER BY (lower(display_name) LIKE $3 OR lower(username) LIKE $3) DESC, lower(display_name), id
+             LIMIT $4",
+        )
+        .bind(me)
+        .bind(pattern)
+        .bind(prefix)
+        .bind(MAX_DELEGATE_CANDIDATES)
+        .fetch_all(&mut *conn)
+        .await?;
+        return Ok(WorkflowApprovalDelegateCandidateList { data, exact_match_only: false });
+    }
+    admit_exact_lookup(me)?;
+    let data = sqlx::query_as(
+        "SELECT id, username, display_name FROM cmdb.users
+         WHERE lower(username) = lower($2) AND is_active AND id <> $1",
+    )
+    .bind(me)
+    .bind(text)
+    .fetch_all(&mut *conn)
+    .await?;
+    Ok(WorkflowApprovalDelegateCandidateList { data, exact_match_only: true })
 }
 
 // ---------------------------------------------------------------------------
