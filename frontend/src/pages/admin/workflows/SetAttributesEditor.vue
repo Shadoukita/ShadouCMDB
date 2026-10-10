@@ -4,6 +4,7 @@ import type { AttributeDefinition } from "../../../api/datamodel";
 import { t } from "../../../i18n";
 import { MAX_SET_ATTRIBUTES, defaultMode, modesFor, setTargetRefusal, type DraftSetAttribute, type SetMode } from "../../../lib/workflowActions";
 import type { PlacedProblem } from "../../../lib/workflowDraft";
+import { problemText } from "../../../lib/workflowProblems";
 import ConditionValueInput from "./ConditionValueInput.vue";
 
 /**
@@ -67,7 +68,7 @@ const listProblems = computed(() => props.problems.filter((p) => /\.setAttribute
     </legend>
     <p class="hint no-margin">{{ t("wfActions.set.intro") }}</p>
     <ul v-if="listProblems.length" class="wf-problems">
-      <li v-for="(p, i) in listProblems" :key="i" :class="p.severity">{{ p.message }}</li>
+      <li v-for="(p, i) in listProblems" :key="i" :class="p.severity">{{ problemText(p) }}</li>
     </ul>
     <table v-if="list.length" class="data wf-fields">
       <caption class="sr-only">{{ t("wfActions.set.caption") }}</caption>
@@ -84,7 +85,7 @@ const listProblems = computed(() => props.problems.filter((p) => /\.setAttribute
           <td class="wrap">
             {{ label(s.attribute) }} <span class="mono muted">{{ s.attribute }}</span>
             <span v-if="!fieldByKey.has(s.attribute)" class="badge danger">{{ t("wfActions.set.notOnType") }}</span>
-            <span v-for="(p, k) in problemsOf(j)" :key="k" :class="p.severity === 'error' ? 'error' : 'hint'">{{ p.message }}</span>
+            <span v-for="(p, k) in problemsOf(j)" :key="k" :class="p.severity === 'error' ? 'error' : 'hint'">{{ problemText(p) }}</span>
           </td>
           <td>
             <select

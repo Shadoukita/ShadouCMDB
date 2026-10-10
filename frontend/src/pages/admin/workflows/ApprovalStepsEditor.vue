@@ -12,6 +12,7 @@ import {
   type DueUnit,
 } from "../../../lib/workflowApprovals";
 import type { PlacedProblem } from "../../../lib/workflowDraft";
+import { problemText } from "../../../lib/workflowProblems";
 
 /**
  * The approval policy of one transition (SHAA-1869 A5): its ordered steps, each with a name and key,
@@ -63,7 +64,8 @@ function problemsOf(j: number) {
   return props.problems.filter((p) => re.test(p.path));
 }
 function fieldError(j: number, field: string) {
-  return problemsOf(j).find((p) => p.severity === "error" && p.path.endsWith(`.steps[${j}].${field}`))?.message;
+  const p = problemsOf(j).find((p) => p.severity === "error" && p.path.endsWith(`.steps[${j}].${field}`));
+  return p && problemText(p);
 }
 const policyProblems = computed(() => props.problems.filter((p) => /\.approval(\.steps)?$/.test(p.path)));
 </script>
@@ -73,7 +75,7 @@ const policyProblems = computed(() => props.problems.filter((p) => /\.approval(\
     <legend>{{ t("wfApproval.legend") }}</legend>
     <p class="hint no-margin">{{ t("wfApproval.intro") }}</p>
     <ul v-if="policyProblems.length" class="wf-problems">
-      <li v-for="(p, i) in policyProblems" :key="i" :class="p.severity">{{ p.message }}</li>
+      <li v-for="(p, i) in policyProblems" :key="i" :class="p.severity">{{ problemText(p) }}</li>
     </ul>
     <p v-if="steps.length === 0" class="muted no-margin">{{ t("wfApproval.none") }}</p>
     <ol class="wf-steps">
@@ -82,7 +84,7 @@ const policyProblems = computed(() => props.problems.filter((p) => /\.approval(\
           <legend>{{ t("wfApproval.step.legend", { n: j + 1, name: s.name || s.key }) }}</legend>
           <ul v-if="problemsOf(j).some((p) => p.severity === 'warning')" class="wf-problems">
             <li v-for="(p, i) in problemsOf(j).filter((p) => p.severity === 'warning')" :key="i" class="warning">
-              <span class="badge warn">{{ t("wfApproval.warning") }}</span> {{ p.message }}
+              <span class="badge warn">{{ t("wfApproval.warning") }}</span> {{ problemText(p) }}
             </li>
           </ul>
           <div class="form-grid">

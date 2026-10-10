@@ -172,6 +172,20 @@ export function hasMessage(key: string): key is MessageKey {
   return Object.hasOwn(en, key);
 }
 
+/** The parameters message `key` uses (both catalogs use the same ones; the catalog test checks it). */
+export function messageParams(key: MessageKey): string[] {
+  const out = new Set<string>();
+  const walk = (nodes: Node[]) => {
+    for (const node of nodes) {
+      if (typeof node === "string" || node.kind === "hash") continue;
+      out.add(node.name);
+      if (node.kind === "plural") for (const branch of node.branches.values()) walk(branch);
+    }
+  };
+  walk(parseMessage(en[key]));
+  return [...out];
+}
+
 /** A number in the active locale ("1,200" in English, "1.200" in German). */
 export function formatNumber(n: number): string {
   return cached(numberFormats, currentLocale(), () => new Intl.NumberFormat(currentLocale())).format(n);

@@ -12,6 +12,7 @@ import type {
 } from "../api/workflows";
 import { checkSetAttributes, setAttributeFromApi, setAttributeToApi, type DraftSetAttribute } from "./workflowActions";
 import { checkSteps, stepFromApi, stepToApi, type DraftApprovalStep } from "./workflowApprovals";
+import { paramsFromBody } from "./workflowProblems";
 import { hasMessage, t, type MessageKey } from "../i18n/index";
 
 export type ConditionOp = "eq" | "ne" | "in" | "notIn" | "isSet" | "isNotSet" | "gt" | "gte" | "lt" | "lte" | "contains";
@@ -317,12 +318,18 @@ export function problemTarget(path: string, saved: Pick<WorkflowDraftBody, "stat
   return { kind: "graph" };
 }
 
-export interface PlacedProblem extends Pick<WorkflowProblem, "code" | "message" | "severity" | "path"> {
+export interface PlacedProblem extends Pick<WorkflowProblem, "code" | "message" | "severity" | "path" | "params"> {
   target: ProblemTarget;
+  /** Found before sending (`checkDraft`): `message` is already in the active locale. */
+  localized?: boolean;
 }
 
-export function placeProblems(problems: Pick<WorkflowProblem, "code" | "message" | "severity" | "path">[], saved: Pick<WorkflowDraftBody, "states" | "transitions">): PlacedProblem[] {
-  return problems.map((p) => ({ ...p, target: problemTarget(p.path, saved) }));
+/**
+ * Problems on what they are about, with the params the API sent completed from the body they are
+ * about (a save refusal sends none): `problemText` words them in the active locale.
+ */
+export function placeProblems(problems: Pick<WorkflowProblem, "code" | "message" | "severity" | "path" | "params">[], saved: Pick<WorkflowDraftBody, "states" | "transitions">): PlacedProblem[] {
+  return problems.map((p) => ({ ...p, params: { ...paramsFromBody(p.path, saved), ...p.params }, target: problemTarget(p.path, saved) }));
 }
 
 /** Problems about one state or transition, errors first. */
@@ -380,7 +387,7 @@ const KEY = /^[a-z][a-z0-9_]{0,62}$/;
  */
 export function checkDraft(d: Draft): PlacedProblem[] {
   const out: PlacedProblem[] = [];
-  const add = (target: ProblemTarget, path: string, message: string, code = "invalid") => out.push({ target, path, message, code, severity: "error" });
+  const add = (target: ProblemTarget, path: string, message: string, code = "invalid") => out.push({ target, path, message, code, severity: "error", localized: true });
   const stateKeys = new Set<string>();
   d.states.forEach((s, i) => {
     const target: ProblemTarget = { kind: "state", key: s.key };

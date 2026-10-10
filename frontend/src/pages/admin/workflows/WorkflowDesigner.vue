@@ -42,6 +42,7 @@ import {
 import { t } from "../../../i18n";
 import { describeSetAttribute } from "../../../lib/workflowActions";
 import { changedPolicies, describePolicy } from "../../../lib/workflowApprovals";
+import { problemText } from "../../../lib/workflowProblems";
 import { useFlashStore } from "../../../stores/flash";
 import StateInspector from "./StateInspector.vue";
 import TransitionInspector from "./TransitionInspector.vue";
@@ -351,7 +352,23 @@ const runningOnOlder = computed(() =>
   (versions.data.value?.data ?? []).filter((v) => v.status !== "draft").reduce((sum, v) => sum + (v.activeInstanceCount ?? 0), 0),
 );
 const newlyGated = computed(() => (draft.value ? changedPolicies(draft.value.transitions, current.data.value?.transitions) : []));
-const publishWarnings = computed(() => (lint.value?.problems ?? []).filter((p) => p.severity === "warning"));
+const publishWarnings = computed(() => (lint.value && savedBody.value ? placeProblems(lint.value.problems, savedBody.value) : []).filter((p) => p.severity === "warning"));
+/** A publish the lint refused after all (the draft or the model changed since the check): its problems, worded like the check's. */
+const publishRefusal = computed<PlacedProblem[] | null>(() => {
+  const e = publish.error.value;
+  if (!(e instanceof ApiError) || e.code !== "VALIDATION_ERROR" || !e.details.length || !savedBody.value) return null;
+  const known = lint.value?.problems ?? [];
+  return placeProblems(
+    e.details.map((d) => ({
+      path: d.field,
+      code: d.code ?? "invalid",
+      message: d.message,
+      severity: "error" as const,
+      params: known.find((p) => p.path === d.field && p.code === d.code)?.params,
+    })),
+    savedBody.value,
+  );
+});
 
 function openPublish() {
   publish.reset();
@@ -372,6 +389,10 @@ function confirmPublish() {
         selected.value = null;
         flash.show(t("wfDesign.published", { n: v.versionNo }));
         void router.push({ query: { tab: "versions" } });
+      },
+      onError: (e) => {
+        // The check panel shows what changed since the last check.
+        if (e instanceof ApiError && e.code === "VALIDATION_ERROR") void runLint();
       },
     },
   );
@@ -444,7 +465,7 @@ function confirmPublish() {
             <button v-if="p.target.kind !== 'graph'" type="button" class="btn-link" @click="selectProblem(p)">
               {{ t(p.target.kind === "state" ? "wfDesign.problem.state" : "wfDesign.problem.transition", { key: p.target.key }) }}
             </button>
-            {{ p.message }}
+            {{ problemText(p) }}
           </li>
         </ul>
       </div>
@@ -604,7 +625,14 @@ function confirmPublish() {
       @cancel="publishing = false"
       @confirm="confirmPublish"
     >
-      <ErrorAlert v-if="publish.isError.value" :error="publish.error.value" :title="t('wfDesign.publishFailed')" />
+      <div v-if="publishRefusal" class="alert alert-error" role="alert" data-testid="wf-publish-refused">
+        <strong>{{ t("wfDesign.publishFailed") }}</strong>
+        <div>{{ t("wfDesign.publishRefused", { n: publishRefusal.length }) }}</div>
+        <ul class="no-margin">
+          <li v-for="(p, i) in publishRefusal" :key="i">{{ problemText(p) }}</li>
+        </ul>
+      </div>
+      <ErrorAlert v-else-if="publish.isError.value" :error="publish.error.value" :title="t('wfDesign.publishFailed')" />
       <p>
         {{ t("wfDesign.publishBody") }}
       </p>
@@ -615,7 +643,7 @@ function confirmPublish() {
       <div v-if="publishWarnings.length" class="alert alert-warn">
         <strong>{{ t("wfDesign.check.warnings", { n: publishWarnings.length }) }}</strong>
         <ul class="no-margin">
-          <li v-for="(w, i) in publishWarnings" :key="i">{{ w.message }}</li>
+          <li v-for="(w, i) in publishWarnings" :key="i">{{ problemText(w) }}</li>
         </ul>
       </div>
       <div class="field">

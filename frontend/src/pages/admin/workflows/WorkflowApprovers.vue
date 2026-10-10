@@ -30,6 +30,7 @@ import {
   type DraftApprover,
   type StepRow,
 } from "../../../lib/workflowApprovals";
+import { problemText } from "../../../lib/workflowProblems";
 import ApproverAddForm from "./ApproverAddForm.vue";
 import ApproverPreview from "./ApproverPreview.vue";
 
@@ -159,7 +160,7 @@ onBeforeUnmount(() => window.removeEventListener("beforeunload", onBeforeUnload)
       <ul v-if="generalProblems.length && !dirty" class="wf-problems" :aria-label="t('wfApprovers.lint')">
         <li v-for="(p, i) in generalProblems" :key="i" :class="p.severity">
           <span :class="['badge', p.severity === 'error' ? 'danger' : 'warn']">{{ p.severity === "error" ? t("wfApproval.error") : t("wfApproval.warning") }}</span>
-          {{ p.message }}
+          {{ problemText(p) }}
         </li>
       </ul>
     </div>
@@ -178,7 +179,7 @@ onBeforeUnmount(() => window.removeEventListener("beforeunload", onBeforeUnload)
           <ul v-if="!dirty && stepProblems(problems, r.transitionKey, r.stepKey).length" class="wf-problems">
             <li v-for="(p, i) in stepProblems(problems, r.transitionKey, r.stepKey)" :key="i" :class="p.severity">
               <span :class="['badge', p.severity === 'error' ? 'danger' : 'warn']">{{ p.severity === "error" ? t("wfApproval.error") : t("wfApproval.warning") }}</span>
-              {{ p.message }}
+              {{ problemText(p) }}
             </li>
           </ul>
           <table v-if="ofRow(r).length" class="data wf-approver-table">
