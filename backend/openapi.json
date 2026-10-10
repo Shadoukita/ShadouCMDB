@@ -58435,6 +58435,16 @@
               "error",
               "warning"
             ]
+          },
+          "params": {
+            "type": "object",
+            "description": "The data `message` is built from, by name, so a client can word the problem in its own language: `state`, `transition`, `step` (keys), `attribute` (a field key), `class` (a type key), `dataType`, `value`, `op`, `valueFrom`, `expected` (`date_or_datetime`, `date` or `person_reference`), `workflow` (another workflow's key, or `hiddenWorkflow` when the caller may not see which), `approverKind` (`profile`, `group` or `user`) and `approver` (its name), `refersTo` (a type key), `excluded` (a transition key), `options`, `pattern`, and the numbers `limit`, `required` and `available`. Only the names that apply are present; left out when there are none. More names may be added.",
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number"
+              ]
+            }
           }
         },
         "additionalProperties": false

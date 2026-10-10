@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { t } from "../../../i18n";
 import type { PlacedProblem } from "../../../lib/workflowDraft";
+import { problemText } from "../../../lib/workflowProblems";
 
 /** The lint's problems about one state or transition, errors first. */
 defineProps<{ problems: PlacedProblem[] }>();
@@ -10,7 +11,7 @@ defineProps<{ problems: PlacedProblem[] }>();
   <ul v-if="problems.length" class="wf-problems" :aria-label="t('wfDesign.problems')">
     <li v-for="(p, i) in problems" :key="i" :class="p.severity">
       <span :class="['badge', p.severity === 'error' ? 'danger' : 'warn']">{{ p.severity === "error" ? t("wfApproval.error") : t("wfApproval.warning") }}</span>
-      {{ p.message }}
+      {{ problemText(p) }}
     </li>
   </ul>
 </template>

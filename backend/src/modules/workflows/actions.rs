@@ -837,7 +837,7 @@ async fn static_members(conn: &mut PgConnection, actions: &[WorkflowAction]) -> 
 }
 
 fn warning(path: String, code: &str, message: String) -> WorkflowProblem {
-    WorkflowProblem { path, code: code.into(), message, severity: WorkflowProblemSeverity::Warning }
+    WorkflowProblem::new(path, WorkflowProblemSeverity::Warning, code, message)
 }
 
 /// The lint of definition `d`'s actions (warnings only; what is refused is refused on save).
