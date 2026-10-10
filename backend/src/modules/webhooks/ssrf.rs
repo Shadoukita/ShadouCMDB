@@ -4,8 +4,9 @@
 //! Every resolved address must be outside the blocked ranges (unless the
 //! operator allows its network with `WEBHOOK_ALLOW_PRIVATE_CIDRS`), and never
 //! a cloud metadata address, whatever the operator allows. An IPv6 address
-//! that carries an IPv4 one (IPv4-mapped, NAT64, 6to4, IPv4-compatible) is
-//! judged by the IPv4 address too. The request then goes to the vetted
+//! that carries an IPv4 one (IPv4-mapped, SIIT, NAT64 well-known and
+//! local-use, 6to4, Teredo, IPv4-compatible) is judged by the IPv4 address
+//! too. The request then goes to the vetted
 //! addresses only (the client's resolver is pinned to them), so a name that
 //! resolves differently a moment later (DNS rebinding) changes nothing.
 
@@ -37,8 +38,12 @@ const BLOCKED_V4: &[(&str, &str)] = &[
 const BLOCKED_V6: &[(&str, &str)] = &[
     ("::/128", "unspecified"),
     ("::1/128", "loopback"),
+    ("64:ff9b:1::/48", "local-use NAT64"),
+    ("100::/64", "discard-only"),
+    ("2001::/23", "IETF protocol assignments"),
     ("fc00::/7", "unique local"),
     ("fe80::/10", "link-local"),
+    ("fec0::/10", "site-local"),
     ("ff00::/8", "multicast"),
     ("2001:db8::/32", "documentation"),
 ];
@@ -55,15 +60,21 @@ pub struct Blocked {
 }
 
 /// The IPv4 address an IPv6 address carries, if it is of a form that does:
-/// IPv4-mapped (`::ffff:a.b.c.d`), NAT64 (`64:ff9b::/96`), 6to4 (`2002::/16`)
-/// or the deprecated IPv4-compatible form (`::a.b.c.d`).
+/// IPv4-mapped (`::ffff:a.b.c.d`), SIIT IPv4-translated (`::ffff:0:a.b.c.d`),
+/// NAT64 well-known (`64:ff9b::/96`) or local-use (`64:ff9b:1::/48`, read as
+/// the usual /96 layout), 6to4 (`2002::/16`), Teredo (`2001::/32`, the client
+/// address: the low 32 bits inverted) or the deprecated IPv4-compatible form
+/// (`::a.b.c.d`).
 pub fn embedded_v4(ip: &Ipv6Addr) -> Option<Ipv4Addr> {
     let s = ip.segments();
     let low = Ipv4Addr::new((s[6] >> 8) as u8, s[6] as u8, (s[7] >> 8) as u8, s[7] as u8);
     match s {
         [0, 0, 0, 0, 0, 0xffff, _, _] => Some(low),
+        [0, 0, 0, 0, 0xffff, 0, _, _] => Some(low),
         [0x64, 0xff9b, 0, 0, 0, 0, _, _] => Some(low),
+        [0x64, 0xff9b, 1, ..] => Some(low),
         [0x2002, a, b, ..] => Some(Ipv4Addr::new((a >> 8) as u8, a as u8, (b >> 8) as u8, b as u8)),
+        [0x2001, 0, ..] => Some(Ipv4Addr::from(!u32::from(low))),
         // `::` and `::1` are blocked as themselves first.
         [0, 0, 0, 0, 0, 0, _, _] => Some(low),
         _ => None,
@@ -218,12 +229,19 @@ pub mod tests {
             "fe80::1",
             "ff02::1",
             "2001:db8::1",
+            "fec0::1",
+            "100::1",
+            "2001:0:4136:e378:8000:63bf:f5ff:fffe",
+            "2001:2::1",
+            "64:ff9b:1::808:808",
             // Carriers of a blocked IPv4 address.
             "::ffff:127.0.0.1",
             "::ffff:10.0.0.1",
             "64:ff9b::a00:1",
             "2002:a00:1::1",
             "::127.0.0.1",
+            "::ffff:0:a00:1",
+            "::ffff:0:127.0.0.1",
         ] {
             assert!(check(ip(a), &[]).is_err(), "{a} must be refused");
         }
@@ -242,7 +260,11 @@ pub mod tests {
             "fd00:ec2::254",
             "100.100.100.200",
             "64:ff9b::a9fe:a9fe",
+            "64:ff9b:1::a9fe:a9fe",
             "::ffff:169.254.169.254",
+            "::ffff:0:169.254.169.254",
+            // Teredo, client 169.254.169.254 (inverted: 5601:5601).
+            "2001:0:4136:e378:8000:63bf:5601:5601",
         ] {
             let refused = check(ip(a), &allowed).unwrap_err();
             assert!(refused.why.starts_with("cloud metadata"), "{a}: {refused:?}");
@@ -251,6 +273,31 @@ pub mod tests {
         assert_eq!(check(ip("169.254.169.253"), &allowed), Ok(()));
         let nat64 = check(ip("64:ff9b::a9fe:a9fe"), &[]).unwrap_err();
         assert_eq!(nat64.why, "cloud metadata service (169.254.169.254)");
+    }
+
+    #[test]
+    fn ipv4_carriers_decode_the_address_they_reach() {
+        let v6 = |s: &str| s.parse::<Ipv6Addr>().unwrap();
+        let v4 = |s: &str| Some(s.parse::<Ipv4Addr>().unwrap());
+        assert_eq!(embedded_v4(&v6("::ffff:0:a00:1")), v4("10.0.0.1"));
+        assert_eq!(embedded_v4(&v6("64:ff9b:1::a00:1")), v4("10.0.0.1"));
+        assert_eq!(embedded_v4(&v6("2001:0:4136:e378:8000:63bf:f5ff:fffe")), v4("10.0.0.1"));
+        assert_eq!(embedded_v4(&v6("2001:db8::a00:1")), None);
+        assert_eq!(embedded_v4(&v6("2606:4700::1111")), None);
+    }
+
+    #[test]
+    fn an_allowed_local_nat64_prefix_still_judges_the_ipv4_address() {
+        // An operator whose egress goes through a local-use NAT64 gateway opens
+        // the prefix; the IPv4 address behind it is still judged.
+        let allowed: Vec<IpNetwork> = vec!["64:ff9b:1::/48".parse().unwrap()];
+        assert_eq!(check(ip("64:ff9b:1::808:808"), &allowed), Ok(()));
+        let refused = check(ip("64:ff9b:1::a00:1"), &allowed).unwrap_err();
+        assert_eq!(refused.why, "private network (10.0.0.1)");
+        // The same for Teredo: the client address is judged.
+        let allowed: Vec<IpNetwork> = vec!["2001::/32".parse().unwrap()];
+        let refused = check(ip("2001:0:4136:e378:8000:63bf:f5ff:fffe"), &allowed).unwrap_err();
+        assert_eq!(refused.why, "private network (10.0.0.1)");
     }
 
     #[test]
