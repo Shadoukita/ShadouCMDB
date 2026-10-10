@@ -3976,6 +3976,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/approval-delegations/candidates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Find a user to delegate your approvals to
+         * @description For the delegate picker of `createMyApprovalDelegation`: active users other than you, with only their id, username and display name. A caller who may look up users (the rights of `searchPrincipals`) gets a substring search on display name and username, at most 20. No other right is needed: anyone else gets `exactMatchOnly: true` and at most the one user whose username is `q` (case-insensitive): no listing, and no answer that tells a disabled account, your own or none apart (GH#839). 400 VALIDATION_ERROR on `q` (`required`, `too_small`, `too_big`); 429 RATE_LIMITED past 30 exact-username lookups a minute. Needs a signed-in session. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        get: operations["listMyApprovalDelegateCandidates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me/approval-delegations/{id}/revoke": {
         parameters: {
             query?: never;
@@ -8764,6 +8784,25 @@ export interface components {
             comment: string | null;
             /** Format: date-time */
             decidedAt: string;
+        };
+        /** @description A user you may delegate your approvals to */
+        WorkflowApprovalDelegateCandidate: {
+            /**
+             * Format: uuid
+             * @description For `delegateUserId`
+             */
+            id: string;
+            username: string;
+            displayName: string;
+        };
+        WorkflowApprovalDelegateCandidateList: {
+            /** @description Active users other than you; at most 20, best match first */
+            data: components["schemas"]["WorkflowApprovalDelegateCandidate"][];
+            /**
+             * @description You may not look up users (GH#839): `q` was taken as an exact username, and an empty `data` does not say
+             *     whether such an account exists, is disabled or is yours
+             */
+            exactMatchOnly: boolean;
         };
         /** @description A time-boxed delegation of one user's approvals to another (never deleted: revoked, so the history stays) */
         WorkflowApprovalDelegation: {
@@ -36100,6 +36139,92 @@ export interface operations {
             };
             /** @description Body is not of an accepted media type (application/json unless the operation lists others) */
             415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listMyApprovalDelegateCandidates: {
+        parameters: {
+            query?: {
+                /** @description With the directory right: matched (case-insensitive substring) against display names and usernames. Without it: the exact username (case-insensitive) */
+                q?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowApprovalDelegateCandidateList"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Too many requests (code RATE_LIMITED): failed password attempts, or the limit named in details[0].code; see the Retry-After header */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };

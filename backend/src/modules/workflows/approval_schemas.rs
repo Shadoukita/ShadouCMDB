@@ -735,6 +735,52 @@ pub struct WorkflowApprovalMyDelegationList {
 }
 paged!(WorkflowApprovalMyDelegationList);
 
+/// Longest delegate lookup text.
+pub const MAX_DELEGATE_QUERY: usize = 100;
+/// Most delegate candidates in one answer.
+pub const MAX_DELEGATE_CANDIDATES: i64 = 20;
+
+fn delegate_q_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(Type::String)
+        .min_length(Some(2))
+        .max_length(Some(MAX_DELEGATE_QUERY))
+        .description(Some(
+            "With the directory right: matched (case-insensitive substring) against display names and usernames. \
+             Without it: the exact username (case-insensitive)",
+        ))
+        .into()
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[serde(rename_all = "camelCase")]
+#[into_params(parameter_in = Query)]
+pub struct WorkflowApprovalDelegateQuery {
+    /// Required
+    #[param(required = false, schema_with = delegate_q_schema)]
+    pub q: Option<String>,
+}
+
+/// A user you may delegate your approvals to
+#[derive(Debug, Clone, Serialize, ToSchema, sqlx::FromRow)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowApprovalDelegateCandidate {
+    /// For `delegateUserId`
+    pub id: Uuid,
+    pub username: String,
+    pub display_name: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowApprovalDelegateCandidateList {
+    /// Active users other than you; at most 20, best match first
+    pub data: Vec<WorkflowApprovalDelegateCandidate>,
+    /// You may not look up users (GH#839): `q` was taken as an exact username, and an empty `data` does not say
+    /// whether such an account exists, is disabled or is yours
+    pub exact_match_only: bool,
+}
+
 #[derive(Debug, Deserialize, IntoParams)]
 #[serde(rename_all = "camelCase")]
 #[into_params(parameter_in = Query)]

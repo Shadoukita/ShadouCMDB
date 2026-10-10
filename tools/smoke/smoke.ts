@@ -1260,6 +1260,16 @@ async function workflows(x: Json) {
   await post(delegations, { delegateUserId: adminMe.user.id, ...window }, 400);
   const deputyPassword = `wf-deputy-${RUN}-password`;
   const deputy = (await post('/api/v1/admin/users', { username: `smoke-wf-deputy-${RUN}`, displayName: 'Smoke deputy', email: `wf-deputy-${RUN}@example.com`, password: deputyPassword })).json;
+  // SHAA-2927: the delegate picker; a search with the /principals right, else one exact username.
+  const candidates = `${delegations}/candidates`;
+  await get(candidates, 400);
+  const found = (await get(`${candidates}?q=${encodeURIComponent(`deputy-${RUN}`)}`)).json;
+  check(!found.exactMatchOnly && found.data.some((u: Json) => u.id === deputy.id), 'an administrator searches for a delegate');
+  await as(await login(deputy.username, deputyPassword), async () => {
+    const exact = (await get(`${candidates}?q=${encodeURIComponent(approver.username.toUpperCase())}`)).json;
+    check(exact.exactMatchOnly && exact.data.length === 1 && exact.data[0].id === approver.id, 'a plain user finds a delegate by exact username');
+    check((await get(`${candidates}?q=${encodeURIComponent(approver.username.slice(0, -1))}`)).json.data.length === 0, 'a plain user cannot list users');
+  });
   const selfNamed = await post(adminDelegations, { principalUserId: approver.id, delegateUserId: adminMe.user.id, ...window }, 400);
   check(selfNamed.json?.error?.details?.[0]?.code === 'creator', 'an administrator cannot name themselves as delegate');
   const assigned = (await post(adminDelegations, { principalUserId: approver.id, delegateUserId: deputy.id, ...window })).json;

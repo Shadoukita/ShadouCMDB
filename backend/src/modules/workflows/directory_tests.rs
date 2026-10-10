@@ -164,3 +164,71 @@ async fn directory_lookups_need_the_principals_right() {
     assert_eq!(usernames(&shown), ["alice", "bob"], "{shown}");
     assert_eq!((hidden["included"].clone(), shown["included"].clone()), (json!(2), json!(2)));
 }
+
+const CANDIDATES: &str = "/api/v1/me/approval-delegations/candidates";
+
+async fn get(w: &World, creds: &Creds, q: &str) -> (u16, Value) {
+    let path = if q.is_empty() { CANDIDATES.to_owned() } else { format!("{CANDIDATES}?q={q}") };
+    w.call(creds, "GET", &path, None).await
+}
+
+fn ids(v: &Value) -> Vec<String> {
+    v["data"].as_array().unwrap().iter().map(|u| u["username"].as_str().unwrap().to_owned()).collect()
+}
+
+/// SHAA-2927: anyone may find the delegate for "Delegate my approvals", but
+/// without the `/principals` right only by the exact username, with one
+/// answer for an account that does not exist, is disabled or is the caller's.
+#[tokio::test]
+async fn delegate_candidates_list_only_with_the_principals_right() {
+    let Some(db) = scratch::database("workflow_delegate_candidates").await else { return };
+    let w = world(&db).await;
+    let (_, alice) = w.user("alice", &[w.approvers]).await;
+    w.user("alicia", &[w.approvers]).await;
+    let (_, carol) = w.user("carol", &[w.approvers]).await;
+    sqlx::query("UPDATE users SET is_active = false WHERE id = $1").bind(carol).execute(&w.pool).await.unwrap();
+    let viewers = w.profile("Server viewers", &[(w.server, false)]).await;
+    let (pat, _) = w.user("pat", &[viewers]).await;
+    let full = w.profile("User admins", &[]).await;
+    grant(&w, full, "users.manage").await;
+    let (useradmin, _) = w.user("useradmin", &[full]).await;
+
+    for (q, code) in [("", "required"), ("a", "too_small")] {
+        let (status, v) = get(&w, &pat, q).await;
+        assert_eq!((status, v["error"]["details"][0]["code"].clone()), (400, json!(code)), "{v}");
+    }
+
+    // Without the right: the exact username, any case, and nothing more.
+    let (status, v) = get(&w, &pat, "ALICE").await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(v["exactMatchOnly"], true);
+    assert_eq!(v["data"], json!([{ "id": alice, "username": "alice", "displayName": "alice" }]));
+    let (_, v) = get(&w, &pat, "ali").await;
+    assert_eq!(v, json!({ "data": [], "exactMatchOnly": true }));
+    for q in ["carol", "pat", "nosuchuser"] {
+        assert_eq!(get(&w, &pat, q).await, (200, json!({ "data": [], "exactMatchOnly": true })), "{q}");
+    }
+
+    // With it: a search, without the caller or disabled accounts.
+    let (status, v) = get(&w, &useradmin, "ali").await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(v["exactMatchOnly"], false);
+    assert_eq!(ids(&v), ["alice", "alicia"], "{v}");
+    let (_, v) = get(&w, &useradmin, "a").await;
+    assert_eq!(v["error"]["details"][0]["code"], "too_small", "{v}");
+    let (_, v) = get(&w, &useradmin, "car").await;
+    assert_eq!(ids(&v), Vec::<String>::new(), "{v}");
+    let (_, v) = get(&w, &useradmin, "useradmin").await;
+    assert_eq!(ids(&v), Vec::<String>::new(), "{v}");
+
+    // Exact lookups are counted: 30 a minute, then 429 with Retry-After.
+    let mut used = 5;
+    while used < 30 {
+        assert_eq!(get(&w, &pat, "alice").await.0, 200);
+        used += 1;
+    }
+    let (status, v) = get(&w, &pat, "alice").await;
+    assert_eq!((status, v["error"]["code"].clone()), (429, json!("RATE_LIMITED")), "{v}");
+    // The search is not counted.
+    assert_eq!(get(&w, &useradmin, "ali").await.0, 200);
+}

@@ -755,6 +755,7 @@ const RUN_TAG: &str = "Workflow instances";
 const APPROVAL_TAG: &str = "Workflow approvals";
 const APPROVAL: &str = "/api/v1/workflow-approval-requests/{id}";
 const MY_DELEGATIONS: &str = "/api/v1/me/approval-delegations";
+const MY_DELEGATE_CANDIDATES: &str = "/api/v1/me/approval-delegations/candidates";
 const MY_DELEGATION_REVOKE: &str = "/api/v1/me/approval-delegations/{id}/revoke";
 const DELEGATIONS: &str = "/api/v1/admin/approval-delegations";
 const DELEGATION_REVOKE: &str = "/api/v1/admin/approval-delegations/{id}/revoke";
@@ -1114,6 +1115,25 @@ pub fn runtime_routes() -> Vec<Route> {
             .handle(
                 |api, In(NoPath, NoQuery, Body(b)): In<NoPath, NoQuery, Body<WorkflowApprovalDelegationCreate>>| async move {
                     Ok(WithStatus(StatusCode::CREATED, runtime::delegations::create_mine(&api.pool, &api.ctx, &b).await?))
+                },
+            ),
+        route(Method::GET, MY_DELEGATE_CANDIDATES, "listMyApprovalDelegateCandidates")
+            .tag(APPROVAL_TAG)
+            .summary("Find a user to delegate your approvals to")
+            .description(
+                "For the delegate picker of `createMyApprovalDelegation`: active users other than you, with only \
+                 their id, username and display name. A caller who may look up users (the rights of `searchPrincipals`) \
+                 gets a substring search on display name and username, at most 20. No other right is needed: anyone \
+                 else gets `exactMatchOnly: true` and at most the one user whose username is `q` \
+                 (case-insensitive): no listing, and no answer that tells a disabled account, your own or none \
+                 apart (GH#839). 400 VALIDATION_ERROR on `q` (`required`, `too_small`, `too_big`); 429 \
+                 RATE_LIMITED past 30 exact-username lookups a minute. Needs a signed-in session.",
+            )
+            .session_only()
+            .errors(&[ErrorCode::RateLimited])
+            .handle(
+                |api, In(NoPath, Query(q), NoBody): In<NoPath, Query<WorkflowApprovalDelegateQuery>, NoBody>| async move {
+                    Ok(Json(runtime::delegations::candidates(&api.pool, &api.ctx, &q).await?))
                 },
             ),
         route(Method::POST, MY_DELEGATION_REVOKE, "revokeMyApprovalDelegation")
