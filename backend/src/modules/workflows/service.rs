@@ -78,6 +78,32 @@ pub(crate) fn check_version(sent: i32, current: i32) -> Result<(), AppError> {
     Err(stale("workflow", "version", &format!("version {sent}"), &format!("version {current}")))
 }
 
+/// Checks a user or group (`what`) given as `given` before it is looked up
+/// (GH#839). By id always; by name only for a caller who may look up users and
+/// groups (`directory`), or when the workflow already stores it under that
+/// name (`kept`, lowercased), so an unchanged list saves. Otherwise one answer
+/// whether or not the name exists, so it is no way round `GET /principals`.
+pub(crate) fn directory_ref(
+    directory: bool,
+    kept: &HashSet<String>,
+    given: &str,
+    field: String,
+    what: &str,
+) -> Result<(), FieldError> {
+    if directory || validate::is_uuid(given) || kept.contains(&given.to_lowercase()) {
+        return Ok(());
+    }
+    Err(FieldError {
+        location: FieldLocation::Body,
+        field,
+        message: format!(
+            "Give the {what} by id: looking up {what}s by name needs {}",
+            crate::modules::business_services::service::DIRECTORY_RIGHT
+        ),
+        code: "directory_lookup_forbidden".into(),
+    })
+}
+
 async fn version_row(
     conn: &mut PgConnection,
     definition: Uuid,

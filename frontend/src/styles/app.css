@@ -1367,3 +1367,11 @@ dialog.member-picker td .badge {
   overflow-wrap: anywhere;
 }
 
+/* Approval delegations (SHAA-2916): the user pickers span the form, and a problem turns the hint they are
+   described by into an error. */
+.delegation-picker {
+  grid-column: 1 / -1;
+}
+.delegation-picker.invalid .hint {
+  color: var(--c-danger-text);
+}
