@@ -60,10 +60,11 @@ watch(
 const filtered = computed(() => !!(get("q") || get("class") || get("active")));
 const total = computed(() => list.data.value?.page.total ?? 0);
 const rows = computed(() => list.data.value?.data ?? []);
-const newHref = computed(() => {
+/** New workflow, on the type the list is filtered by; `template` starts it from a ready-made graph. */
+const newHref = (template?: string) => {
   const c = classByKey.value.get(get("class"));
-  return c ? `/admin/workflows/new?classId=${c.id}` : "/admin/workflows/new";
-});
+  return { path: "/admin/workflows/new", query: { ...(c ? { classId: c.id } : {}), ...(template ? { template } : {}) } };
+};
 
 function clearFilters() {
   qText.value = "";
@@ -81,7 +82,8 @@ function clearFilters() {
         <span v-if="list.isFetching.value && !list.isLoading.value" class="spinner" :aria-label="t('common.refreshing')" />
       </div>
       <div class="actions">
-        <RouterLink class="btn btn-primary" :to="newHref"><Icon name="plus" />{{ t("wfAdmin.new") }}</RouterLink>
+        <RouterLink class="btn" :to="newHref('lifecycle')" data-testid="wf-new-lifecycle">{{ t("wfTemplate.newLifecycle") }}</RouterLink>
+        <RouterLink class="btn btn-primary" :to="newHref()"><Icon name="plus" />{{ t("wfAdmin.new") }}</RouterLink>
       </div>
     </div>
     <p class="page-intro">{{ t("wfAdmin.list.intro") }}</p>
@@ -122,7 +124,10 @@ function clearFilters() {
     </EmptyState>
     <EmptyState v-else-if="list.data.value && total === 0" icon="network" :title="t('wfAdmin.list.empty.title')" data-testid="workflows-empty">
       {{ t("wfAdmin.list.empty.body") }}
-      <template #actions><RouterLink class="btn btn-primary" :to="newHref">{{ t("wfAdmin.new") }}</RouterLink></template>
+      <template #actions>
+        <RouterLink class="btn btn-primary" :to="newHref()">{{ t("wfAdmin.new") }}</RouterLink>
+        <RouterLink class="btn" :to="newHref('lifecycle')">{{ t("wfTemplate.newLifecycle") }}</RouterLink>
+      </template>
     </EmptyState>
     <EmptyState v-else-if="list.data.value && rows.length === 0" :title="t('common.pastEnd')">
       <template #actions><button type="button" class="btn" @click="update({})">{{ t("common.firstPage") }}</button></template>
