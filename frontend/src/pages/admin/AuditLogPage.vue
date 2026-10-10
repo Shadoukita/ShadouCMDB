@@ -177,11 +177,11 @@ function purgeTitle(snap: Record<string, unknown>): string | undefined {
     .filter(([, n]) => typeof n === "number")
     .map(([action, n]) => `  ${action}: ${n}`);
   const parts = [
-    str(snap.cutoff) && `Cutoff: ${formatDateTime(snap.cutoff as string)}`,
-    counts.length ? `Deleted:\n${counts.join("\n")}` : "Deleted: nothing",
-    typeof snap.sessionsDeleted === "number" && snap.sessionsDeleted > 0 && `Expired sessions deleted: ${snap.sessionsDeleted}`,
-    str(snap.operator) && `Operator: ${snap.operator}`,
-    str(snap.clientAddress) && `From: ${snap.clientAddress}`,
+    str(snap.cutoff) && t("audit.purge.cutoff", { when: formatDateTime(snap.cutoff as string) }),
+    counts.length ? `${t("audit.purge.deleted")}\n${counts.join("\n")}` : t("audit.purge.deletedNothing"),
+    typeof snap.sessionsDeleted === "number" && snap.sessionsDeleted > 0 && t("audit.purge.sessions", { n: snap.sessionsDeleted }),
+    str(snap.operator) && t("audit.purge.operator", { operator: String(snap.operator) }),
+    str(snap.clientAddress) && t("audit.purge.from", { address: String(snap.clientAddress) }),
   ].filter((p): p is string => typeof p === "string");
   return parts.join("\n");
 }

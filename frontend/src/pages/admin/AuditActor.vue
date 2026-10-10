@@ -2,6 +2,7 @@
 import { computed } from "vue";
 import { RouterLink } from "vue-router";
 import type { AuditEntry } from "../../api/queries";
+import { hasMessage, t } from "../../i18n";
 import { useSessionStore } from "../../stores/session";
 
 /**
@@ -17,14 +18,17 @@ const to = computed(() => {
   if (session.can("audit.view")) return { path: "/admin/audit", query: { actorId: props.entry.actorId! } };
   return undefined;
 });
-const TYPE_LABEL: Record<string, string> = { system: "system", user: "user", api_client: "API client", import: "import" };
+const typeLabel = (type: string) => {
+  const key = `customization.history.actor.${type}`;
+  return hasMessage(key) ? t(key) : type;
+};
 </script>
 
 <template>
   <span class="actor">
     <RouterLink v-if="to && entry.actorName" :to="to" dir="auto">{{ entry.actorName }}</RouterLink>
     <bdi v-else-if="entry.actorName">{{ entry.actorName }}</bdi>
-    <span v-else class="muted">unknown</span>
-    <span v-if="entry.actorType !== 'user'" class="muted"> ({{ TYPE_LABEL[entry.actorType] ?? entry.actorType }})</span>
+    <span v-else class="muted">{{ t("audit.actor.unknown") }}</span>
+    <span v-if="entry.actorType !== 'user'" class="muted"> ({{ typeLabel(entry.actorType) }})</span>
   </span>
 </template>

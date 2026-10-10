@@ -95,7 +95,7 @@ const startCommentError = computed(() =>
           <tr v-for="v in rows" :key="v.instance.id" :class="{ disabled: v.instance.status !== 'active' }">
             <td>
               <RouterLink :to="`/workflows/${v.instance.id}`" dir="auto">{{ v.instance.definitionName }}</RouterLink>
-              <span class="muted mono"> v{{ v.instance.versionNo }}</span>
+              <span class="muted mono"> {{ t("wfRun.instance.versionChip", { n: v.instance.versionNo }) }}</span>
             </td>
             <td><WorkflowStateBadge :state="v.instance.state" /></td>
             <td><WorkflowStatusBadge :status="v.instance.status" /></td>
@@ -137,7 +137,7 @@ const startCommentError = computed(() =>
         <ErrorAlert v-if="start.isError.value && !startCommentError" :error="start.error.value" :title="t('wfRun.start.failed')" />
         <FormField id="wf-start-def" v-slot="p" :label="t('wfRun.col.workflow')" required>
           <select :id="p.id" v-model="startId">
-            <option v-for="s in startable" :key="s.definitionId" :value="s.definitionId" dir="auto">{{ s.definitionName }} (v{{ s.versionNo }})</option>
+            <option v-for="s in startable" :key="s.definitionId" :value="s.definitionId" dir="auto">{{ s.definitionName }} ({{ t("wfRun.instance.versionChip", { n: s.versionNo }) }})</option>
           </select>
         </FormField>
         <FormField id="wf-start-comment" v-slot="p" :label="t('wfRun.comment')" :error="startCommentError" :hint="t('wfRun.commentOptional')">

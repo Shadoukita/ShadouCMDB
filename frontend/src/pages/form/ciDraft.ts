@@ -7,7 +7,7 @@ import { t } from "../../i18n";
 import { clonedValue, type CloneSource } from "../../lib/ciClone";
 import { hintFor, nowFormValue, toFormValue, type FormValue } from "../../lib/attributeValues";
 import { ciEdits, type CoreValues } from "../../lib/ciEdits";
-import { HIDDEN_CI } from "../../lib/format";
+import { hiddenCi } from "../../lib/format";
 import { ATTRIBUTE_PREFIX, attributeKey, BUILTIN, CORE_FIELDS } from "../../lib/uiSettings";
 import { useSessionStore } from "../../stores/session";
 
@@ -291,6 +291,6 @@ const DATETIME = { dataType: "datetime" } as const;
 
 function referenceNames(ci: Ci | undefined): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(ci?.attributeReferences ?? {})) out[k] = v.hidden ? HIDDEN_CI : (v.name ?? v.id);
+  for (const [k, v] of Object.entries(ci?.attributeReferences ?? {})) out[k] = v.hidden ? hiddenCi() : (v.name ?? v.id);
   return out;
 }

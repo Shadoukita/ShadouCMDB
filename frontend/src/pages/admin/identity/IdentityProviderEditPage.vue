@@ -570,11 +570,13 @@ const notFound = computed(() => {
             <div class="form-grid">
               <FormField id="idp-ldap-url" :label="t('idp.ldap.url')" required wide :error="fieldErrors['ldap.url']" :hint="transport">
                 <template #default="{ id: fid, invalid, describedBy }">
+                  <!-- i18n-lint-allow: an LDAP example in directory syntax, shown as typed -->
                   <input :id="fid" v-model="form.url" class="mono" type="text" spellcheck="false" autocomplete="off" placeholder="ldaps://dc1.example.com" :aria-invalid="invalid" :aria-describedby="describedBy" />
                 </template>
               </FormField>
               <FormField id="idp-ldap-bindDn" :label="t('idp.ldap.bindDn')" wide :error="fieldErrors['ldap.bindDn']" :hint="t('idp.ldap.bindDnHint')">
                 <template #default="{ id: fid, invalid, describedBy }">
+                  <!-- i18n-lint-allow: an LDAP example in directory syntax, shown as typed -->
                   <input :id="fid" v-model="form.bindDn" class="mono" type="text" spellcheck="false" autocomplete="off" placeholder="CN=svc-cmdb,OU=Service Accounts,DC=example,DC=com" :aria-invalid="invalid" :aria-describedby="describedBy" />
                 </template>
               </FormField>
@@ -589,6 +591,7 @@ const notFound = computed(() => {
               />
               <FormField id="idp-ldap-userBaseDn" :label="t('idp.ldap.userBaseDn')" required wide :error="fieldErrors['ldap.userBaseDn']">
                 <template #default="{ id: fid, invalid, describedBy }">
+                  <!-- i18n-lint-allow: an LDAP example in directory syntax, shown as typed -->
                   <input :id="fid" v-model="form.userBaseDn" class="mono" type="text" spellcheck="false" autocomplete="off" placeholder="OU=Staff,DC=example,DC=com" :aria-invalid="invalid" :aria-describedby="describedBy" />
                 </template>
               </FormField>
@@ -626,6 +629,7 @@ const notFound = computed(() => {
           <div class="panel-body stack">
             <FormField id="idp-caCertificate" :label="t('idp.tls.ca')" :error="fieldErrors.caCertificate" :hint="t('idp.tls.caHint')">
               <template #default="{ id: fid, invalid, describedBy }">
+                <!-- i18n-lint-allow: a PEM header is not translated -->
                 <textarea :id="fid" v-model="form.caCertificate" class="mono" rows="4" spellcheck="false" placeholder="-----BEGIN CERTIFICATE-----" :aria-invalid="invalid" :aria-describedby="describedBy" />
               </template>
             </FormField>

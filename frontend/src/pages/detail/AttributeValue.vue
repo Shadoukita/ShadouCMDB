@@ -4,7 +4,7 @@ import CiLink from "../../components/CiLink.vue";
 import LookupValueName from "../../components/LookupValueName.vue";
 import { t } from "../../i18n";
 import { isMultiline } from "../../lib/attributeValues";
-import { formatDate, formatDateTime, HIDDEN_CI } from "../../lib/format";
+import { formatDate, formatDateTime, hiddenCi } from "../../lib/format";
 import type { TrailStep } from "../../lib/trail";
 
 /**
@@ -25,13 +25,13 @@ const isUrl = (v: unknown) => /^https?:\/\//.test(String(v));
      cannot reorder the unit, label or link next to it. -->
 <template>
   <span v-if="value === null || value === undefined || value === ''" class="muted">—</span>
-  <template v-else-if="def.dataType === 'boolean'">{{ value ? "Yes" : "No" }}</template>
+  <template v-else-if="def.dataType === 'boolean'">{{ value ? t("common.yes") : t("common.no") }}</template>
   <template v-else-if="def.dataType === 'date'">{{ formatDate(String(value)) }}</template>
   <template v-else-if="def.dataType === 'datetime'">{{ formatDateTime(String(value)) }}</template>
   <span v-else-if="def.dataType === 'ip' || def.dataType === 'cidr'" class="mono">{{ String(value) }}</span>
-  <span v-else-if="def.dataType === 'reference' && refInfo?.hidden" class="muted" :title="t('record.hiddenClassTitle')">{{ HIDDEN_CI }}</span>
+  <span v-else-if="def.dataType === 'reference' && refInfo?.hidden" class="muted" :title="t('record.hiddenClassTitle')">{{ hiddenCi() }}</span>
   <CiLink v-else-if="def.dataType === 'reference'" :id="String(value)" :from="self" :trail="trail">
-    {{ refInfo?.name ?? String(value) }}{{ refInfo?.deleted ? " (deleted)" : "" }}
+    {{ refInfo?.name ?? String(value) }}{{ refInfo?.deleted ? ` ${t("record.deletedSuffix")}` : "" }}
   </CiLink>
   <LookupValueName v-else-if="def.dataType === 'lookup'" :list-id="def.lookupListId" :value-id="String(value)" />
   <span v-else-if="isMultiline(def) || (def.dataType === 'text' && String(value).includes('\n'))" class="multiline" dir="auto">{{ String(value) }}</span>

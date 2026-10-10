@@ -280,7 +280,7 @@ export function compareItems(a: ImpactItem, b: ImpactItem, sort: string, viaName
 /** The rows of the list view, grouped (§1.4): groups in a meaningful order, rows sorted within. */
 export function groupItems(items: readonly ImpactItem[], group: ImpactGroup, sort: string, viaName: (i: ImpactItem) => string): ImpactGroupRows[] {
   const sorted = [...items].sort((a, b) => compareItems(a, b, sort, viaName));
-  if (group === "none") return [{ key: "all", label: "All affected CIs", items: sorted }];
+  if (group === "none") return [{ key: "all", label: t("impact.group.all"), items: sorted }];
   const groups = new Map<string, ImpactGroupRows & { order: number | string }>();
   for (const i of sorted) {
     let key: string;

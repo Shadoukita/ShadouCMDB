@@ -14,7 +14,7 @@ function formatter(kind: "dateTime" | "dateOnly"): Intl.DateTimeFormat {
 }
 
 /** Placeholder for a reference into a class the caller may not view (the API withholds its name). */
-export const HIDDEN_CI = "Hidden CI";
+export const hiddenCi = (): string => t("record.hiddenCi");
 
 export function formatDateTime(iso: string | null | undefined): string {
   if (!iso) return "";
@@ -41,13 +41,9 @@ export function formatRelative(iso: string): string {
   return formatDate(iso);
 }
 
-export function plural(n: number, one: string, many = `${one}s`): string {
-  return `${n.toLocaleString()} ${n === 1 ? one : many}`;
-}
-
 /** File sizes as operators read them: "23.4 MB", "512 KB" (binary units, as the server's limits are). */
 export function formatBytes(n: number): string {
-  if (n < 1024) return `${n.toLocaleString()} bytes`;
+  if (n < 1024) return t("format.bytes", { n });
   const units = ["KB", "MB", "GB"];
   let v = n / 1024;
   let i = 0;
@@ -55,7 +51,7 @@ export function formatBytes(n: number): string {
     v /= 1024;
     i++;
   }
-  return `${v.toLocaleString(undefined, { maximumFractionDigits: v < 10 ? 1 : 0 })} ${units[i]}`;
+  return `${v.toLocaleString(currentLocale(), { maximumFractionDigits: v < 10 ? 1 : 0 })} ${units[i]}`;
 }
 
 /**
