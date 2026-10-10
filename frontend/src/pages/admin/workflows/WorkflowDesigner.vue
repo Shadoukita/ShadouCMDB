@@ -39,7 +39,7 @@ import {
   type PlacedProblem,
   type Position,
 } from "../../../lib/workflowDraft";
-import { t, t as tr } from "../../../i18n";
+import { t } from "../../../i18n";
 import { describeSetAttribute } from "../../../lib/workflowActions";
 import { changedPolicies, describePolicy } from "../../../lib/workflowApprovals";
 import { useFlashStore } from "../../../stores/flash";
@@ -212,19 +212,19 @@ async function reloadStored() {
 async function beforeLeave() {
   if (!dirty.value) return true;
   if (await flush()) return true;
-  return window.confirm("This draft has changes that could not be saved. Leave and lose them?");
+  return window.confirm(t("wfDesign.leave"));
 }
 onBeforeRouteLeave(beforeLeave);
 onBeforeRouteUpdate(beforeLeave);
 
 const saveState = computed(() => {
-  if (conflict.value) return { tone: "warn", text: "Not saved: the draft changed elsewhere" };
-  if (status.value === "saving") return { tone: "", text: "Saving…" };
-  if (localProblems.value.length) return { tone: "warn", text: "Not saved: fix the marked problems" };
-  if (saveError.value) return { tone: "warn", text: "Not saved" };
-  if (dirty.value) return { tone: "", text: "Unsaved changes" };
-  if (status.value === "linting") return { tone: "", text: "Saved · checking…" };
-  return { tone: "ok", text: "All changes saved" };
+  if (conflict.value) return { tone: "warn", text: t("wfDesign.save.conflict") };
+  if (status.value === "saving") return { tone: "", text: t("common.saving") };
+  if (localProblems.value.length) return { tone: "warn", text: t("wfDesign.save.fix") };
+  if (saveError.value) return { tone: "warn", text: t("wfDesign.save.failed") };
+  if (dirty.value) return { tone: "", text: t("wfDesign.save.dirty") };
+  if (status.value === "linting") return { tone: "", text: t("wfDesign.save.checking") };
+  return { tone: "ok", text: t("wfDesign.save.ok") };
 });
 
 // ---------- Starting and discarding a draft ----------
@@ -281,7 +281,7 @@ const selectedTransition = computed(() =>
 function addState() {
   const d = draft.value!;
   const key = uniqueKey("new_state", d.states.map((s) => s.key));
-  d.states.push({ key, name: "New state", category: d.states.length ? "active" : "open", terminal: false, stateValue: null });
+  d.states.push({ key, name: t("wfDesign.newState"), category: d.states.length ? "active" : "open", terminal: false, stateValue: null });
   if (!d.initialState) d.initialState = key;
   // Next to the selected state, else below the others.
   const near = selectedState.value ? d.positions[selectedState.value.key] : undefined;
@@ -370,7 +370,7 @@ function confirmPublish() {
         lint.value = null;
         savedFingerprint.value = "";
         selected.value = null;
-        flash.show(`Version ${v.versionNo} published. New instances start on it; running ones stay on their version.`);
+        flash.show(t("wfDesign.published", { n: v.versionNo }));
         void router.push({ query: { tab: "versions" } });
       },
     },
@@ -379,71 +379,70 @@ function confirmPublish() {
 </script>
 
 <template>
-  <LoadingState v-if="draftQ.isLoading.value" label="Loading the draft…" />
+  <LoadingState v-if="draftQ.isLoading.value" :label="t('wfDesign.loading')" />
   <ErrorAlert v-else-if="draftQ.isError.value" :error="draftQ.error.value" :on-retry="() => draftQ.refetch()" />
 
   <!-- No draft: everything is published. -->
-  <EmptyState v-else-if="!draft" :title="workflow.currentVersionNo ? 'No draft' : 'No draft yet'" data-testid="wf-no-draft">
+  <EmptyState v-else-if="!draft" :title="workflow.currentVersionNo ? t('wfDesign.noDraft.title') : t('wfDesign.noDraft.titleFirst')" data-testid="wf-no-draft">
     <template v-if="workflow.currentVersionNo">
-      Version {{ workflow.currentVersionNo }} is current. To change the workflow, start a draft from it; running instances are not affected
-      until you publish.
+      {{ t("wfDesign.noDraft.body", { n: workflow.currentVersionNo }) }}
     </template>
-    <template v-else>Start a draft to design this workflow's states and transitions.</template>
-    <ErrorAlert v-if="startError" :error="startError" title="The draft was not created" />
+    <template v-else>{{ t("wfDesign.noDraft.bodyFirst") }}</template>
+    <ErrorAlert v-if="startError" :error="startError" :title="t('wfDesign.startFailed')" />
     <template #actions>
       <button type="button" class="btn btn-primary" :disabled="starting || (!!workflow.currentVersionNo && !current.data.value)" @click="startDraft">
-        {{ starting ? "Creating…" : workflow.currentVersionNo ? `Start a draft from version ${workflow.currentVersionNo}` : "Start a draft" }}
+        {{ starting ? t("wfDesign.creating") : workflow.currentVersionNo ? t("wfDesign.startFrom", { n: workflow.currentVersionNo }) : t("wfDesign.start") }}
       </button>
     </template>
   </EmptyState>
 
   <template v-else>
     <div class="toolbar wf-toolbar">
-      <button type="button" class="btn" @click="addState">+ State</button>
-      <button type="button" class="btn" :disabled="draft.states.length < 2" @click="addTransition">+ Transition</button>
-      <button type="button" class="btn" :disabled="draft.states.length === 0" @click="arrange">Arrange</button>
+      <button type="button" class="btn" @click="addState">{{ t("wfDesign.addState") }}</button>
+      <button type="button" class="btn" :disabled="draft.states.length < 2" @click="addTransition">{{ t("wfDesign.addTransition") }}</button>
+      <button type="button" class="btn" :disabled="draft.states.length === 0" @click="arrange">{{ t("wfDesign.arrange") }}</button>
       <span :class="['wf-save-state', saveState.tone]" role="status" aria-live="polite" data-testid="wf-save-state">{{ saveState.text }}</span>
       <div class="toolbar-end">
-        <button type="button" class="btn btn-quiet-danger" @click="(discard.reset(), (discarding = true))">Discard draft…</button>
+        <button type="button" class="btn btn-quiet-danger" @click="(discard.reset(), (discarding = true))">{{ t("wfDesign.discard") }}</button>
         <button
           type="button"
           class="btn btn-primary"
           :disabled="!canPublish"
-          :title="canPublish ? undefined : 'Publishing needs a saved draft the check finds no errors in.'"
+          :title="canPublish ? undefined : t('wfDesign.publishHint')"
           @click="openPublish"
         >
-          Publish version {{ workflow.draftVersionNo ?? "" }}…
+          {{ t("wfDesign.publishOpen", { n: workflow.draftVersionNo ?? "" }) }}
         </button>
       </div>
     </div>
 
     <div v-if="conflict" class="alert alert-warn" role="alert">
-      <strong>The draft changed elsewhere.</strong>
-      <div>Someone saved, published or discarded this draft since you opened it. Your latest changes were not saved.</div>
-      <div><button type="button" class="btn btn-sm" @click="reloadStored">Load the stored draft</button></div>
+      <strong>{{ t("wfDesign.conflict.title") }}</strong>
+      <div>{{ t("wfDesign.conflict.body") }}</div>
+      <div><button type="button" class="btn btn-sm" @click="reloadStored">{{ t("wfDesign.conflict.reload") }}</button></div>
     </div>
-    <ErrorAlert v-else-if="saveError && !(saveError instanceof ApiError && saveError.code === 'VALIDATION_ERROR')" :error="saveError" title="The draft was not saved" :on-retry="() => void flush()" />
+    <ErrorAlert v-else-if="saveError && !(saveError instanceof ApiError && saveError.code === 'VALIDATION_ERROR')" :error="saveError" :title="t('wfDesign.saveFailed')" :on-retry="() => void flush()" />
     <div v-else-if="saveError" class="alert alert-error" role="alert">
-      <strong>The draft was not saved.</strong> The API refused it for the problems marked below.
+      <strong>{{ t("wfDesign.saveFailed") }}.</strong> {{ t("wfDesign.refused") }}
     </div>
 
     <section class="panel wf-lint" aria-labelledby="wf-lint-title" data-testid="wf-lint">
       <div class="panel-header">
-        <h2 id="wf-lint-title">Check</h2>
-        <span v-if="errorCount" class="badge danger">{{ errorCount }} {{ errorCount === 1 ? "error" : "errors" }}</span>
-        <span v-if="warningCount" class="badge warn">{{ warningCount }} {{ warningCount === 1 ? "warning" : "warnings" }}</span>
-        <span v-if="!errorCount && !warningCount && lint?.valid && !dirty" class="badge ok">Ready to publish</span>
+        <h2 id="wf-lint-title">{{ t("wfDesign.check.title") }}</h2>
+        <span v-if="errorCount" class="badge danger">{{ t("wfDesign.check.errors", { n: errorCount }) }}</span>
+        <span v-if="warningCount" class="badge warn">{{ t("wfDesign.check.warnings", { n: warningCount }) }}</span>
+        <span v-if="!errorCount && !warningCount && lint?.valid && !dirty" class="badge ok">{{ t("wfDesign.check.ready") }}</span>
       </div>
       <div class="panel-body">
-        <ErrorAlert v-if="lintError" :error="lintError" title="The draft could not be checked" :on-retry="runLint" />
+        <ErrorAlert v-if="lintError" :error="lintError" :title="t('wfDesign.check.failed')" :on-retry="runLint" />
         <p v-else-if="problems.length === 0" class="muted no-margin">
-          {{ lint?.valid ? "No problems: the draft can be published." : "Checking…" }}
+          {{ lint?.valid ? t("wfDesign.check.none") : t("wfDesign.check.checking") }}
         </p>
         <ul v-else class="wf-problems">
           <li v-for="(p, i) in problems" :key="i" :class="p.severity">
-            <span :class="['badge', p.severity === 'error' ? 'danger' : 'warn']">{{ p.severity === "error" ? "Error" : "Warning" }}</span>
+            <span :class="['badge', p.severity === 'error' ? 'danger' : 'warn']">{{ p.severity === "error" ? t("wfApproval.error") : t("wfApproval.warning") }}</span>
             <button v-if="p.target.kind !== 'graph'" type="button" class="btn-link" @click="selectProblem(p)">
-              {{ p.target.kind === "state" ? "State" : "Transition" }} {{ p.target.key }}
+              {{ t(p.target.kind === "state" ? "wfDesign.problem.state" : "wfDesign.problem.transition", { key: p.target.key }) }}
             </button>
             {{ p.message }}
           </li>
@@ -453,10 +452,10 @@ function confirmPublish() {
 
     <div class="wf-designer-wrap">
       <div class="wf-designer">
-        <section class="panel wf-diagram" aria-label="Diagram">
-          <EmptyState v-if="draft.states.length === 0" title="No states yet">
-            Add the first state; it becomes the initial state. Then add the states it leads to and the transitions between them.
-            <template #actions><button type="button" class="btn btn-primary" @click="addState">+ State</button></template>
+        <section class="panel wf-diagram" :aria-label="t('wfDesign.diagram')">
+          <EmptyState v-if="draft.states.length === 0" icon="network" :title="t('wfDesign.noStates.title')">
+            {{ t("wfDesign.noStates.body") }}
+            <template #actions><button type="button" class="btn btn-primary" @click="addState">{{ t("wfDesign.addState") }}</button></template>
           </EmptyState>
           <WorkflowGraph v-else :draft="draft" :selected="selected" :problems="problems" :state-values="stateValues" @select="select" @move="move" />
         </section>
@@ -487,7 +486,7 @@ function confirmPublish() {
             @remove="removeTransition(selectedTransition.key)"
           />
           <section v-else class="panel">
-            <div class="panel-body muted">Select a state or transition in the diagram or the tables to edit it.</div>
+            <div class="panel-body muted">{{ t("wfDesign.selectHint") }}</div>
           </section>
         </div>
       </div>
@@ -495,135 +494,134 @@ function confirmPublish() {
 
     <div class="grid-2">
       <section class="panel" aria-labelledby="wf-states-title">
-        <div class="panel-header"><h2 id="wf-states-title">States ({{ draft.states.length }})</h2></div>
+        <div class="panel-header"><h2 id="wf-states-title">{{ t("wfDesign.states.title", { n: draft.states.length }) }}</h2></div>
         <div v-if="draft.states.length" class="table-wrap">
           <table class="data">
             <thead>
               <tr>
-                <th scope="col">Name</th>
-                <th scope="col">Key</th>
-                <th scope="col">Category</th>
-                <th scope="col">State value</th>
+                <th scope="col">{{ t("wfDesign.col.name") }}</th>
+                <th scope="col">{{ t("wfDesign.col.key") }}</th>
+                <th scope="col">{{ t("wfDesign.col.category") }}</th>
+                <th scope="col">{{ t("wfDesign.col.stateValue") }}</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="s in draft.states" :key="s.key" :class="{ selected: selected?.kind === 'state' && selected.key === s.key }">
                 <td class="wrap wf-name-cell">
                   <button type="button" class="btn-link" @click="select({ kind: 'state', key: s.key })">{{ s.name }}</button>
-                  <span v-if="draft.initialState === s.key" class="badge info spaced">Initial</span>
-                  <span v-if="s.terminal" class="badge spaced">Terminal</span>
+                  <span v-if="draft.initialState === s.key" class="badge info spaced">{{ t("wfDesign.initial") }}</span>
+                  <span v-if="s.terminal" class="badge spaced">{{ t("wfDesign.terminal") }}</span>
                   <span v-if="marker('state', s.key)" :class="['badge', 'spaced', marker('state', s.key) === 'error' ? 'danger' : 'warn']">
-                    {{ marker("state", s.key) === "error" ? "Error" : "Warning" }}
+                    {{ marker("state", s.key) === "error" ? t("wfApproval.error") : t("wfApproval.warning") }}
                   </span>
                 </td>
                 <td class="mono">{{ s.key }}</td>
                 <td>{{ categoryLabel(s.category) }}</td>
-                <td :class="{ muted: !s.stateValue }" :title="s.stateValue ?? undefined">{{ s.stateValue ? stateValueName(s.stateValue) : "None" }}</td>
+                <td :class="{ muted: !s.stateValue }" :title="s.stateValue ?? undefined">{{ s.stateValue ? stateValueName(s.stateValue) : t("wfAdmin.none") }}</td>
               </tr>
             </tbody>
           </table>
         </div>
-        <div v-else class="panel-body muted">None.</div>
+        <div v-else class="panel-body muted">{{ t("wfDesign.states.empty") }}</div>
       </section>
       <section class="panel" aria-labelledby="wf-transitions-title">
-        <div class="panel-header"><h2 id="wf-transitions-title">Transitions ({{ draft.transitions.length }})</h2></div>
+        <div class="panel-header"><h2 id="wf-transitions-title">{{ t("wfDesign.transitions.title", { n: draft.transitions.length }) }}</h2></div>
         <div v-if="draft.transitions.length" class="table-wrap">
           <table class="data">
             <thead>
               <tr>
-                <th scope="col">Name</th>
-                <th scope="col">From → to</th>
-                <th scope="col">Needs</th>
+                <th scope="col">{{ t("wfDesign.col.name") }}</th>
+                <th scope="col">{{ t("wfDesign.col.fromTo") }}</th>
+                <th scope="col">{{ t("wfDesign.col.needs") }}</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="t in draft.transitions" :key="t.key" :class="{ selected: selected?.kind === 'transition' && selected.key === t.key }">
+              <tr v-for="tn in draft.transitions" :key="tn.key" :class="{ selected: selected?.kind === 'transition' && selected.key === tn.key }">
                 <td class="wrap wf-name-cell">
-                  <button type="button" class="btn-link" @click="select({ kind: 'transition', key: t.key })">{{ t.name }}</button>{{ " " }}
-                  <span class="mono muted">{{ t.key }}</span>
-                  <span v-if="marker('transition', t.key)" :class="['badge', 'spaced', marker('transition', t.key) === 'error' ? 'danger' : 'warn']">
-                    {{ marker("transition", t.key) === "error" ? "Error" : "Warning" }}
+                  <button type="button" class="btn-link" @click="select({ kind: 'transition', key: tn.key })">{{ tn.name }}</button>{{ " " }}
+                  <span class="mono muted">{{ tn.key }}</span>
+                  <span v-if="marker('transition', tn.key)" :class="['badge', 'spaced', marker('transition', tn.key) === 'error' ? 'danger' : 'warn']">
+                    {{ marker("transition", tn.key) === "error" ? t("wfApproval.error") : t("wfApproval.warning") }}
                   </span>
                 </td>
-                <td class="wrap">{{ stateName(t.from) }} → {{ stateName(t.to) }}</td>
-                <td :title="describeConditions(t.conditions, labelOf)">
+                <td class="wrap">{{ stateName(tn.from) }} → {{ stateName(tn.to) }}</td>
+                <td :title="describeConditions(tn.conditions, labelOf)">
                   <span class="cell-clip">
-                    <span v-if="t.requiresComment">Comment. </span>
-                    <span v-if="t.fields.length">{{ t.fields.length }} {{ t.fields.length === 1 ? "field" : "fields" }}. </span>
-                    <span v-if="t.conditions.children.length">If {{ describeConditions(t.conditions, labelOf) }}. </span>
-                    <span v-if="t.approval.length" class="badge info" data-testid="wf-gated">{{ describePolicy(t.approval) }}</span>
-                    <span v-if="t.setAttributes.length" :title="t.setAttributes.map((s) => describeSetAttribute(s, labelOf)).join('; ')">
-                      {{ tr("wfActions.set.count", { n: t.setAttributes.length }) }}
+                    <span v-if="tn.requiresComment">{{ t("wfDesign.needs.comment") }}{{ " " }}</span>
+                    <span v-if="tn.fields.length">{{ t("wfDesign.needs.fields", { n: tn.fields.length }) }}{{ " " }}</span>
+                    <span v-if="tn.conditions.children.length">{{ t("wfDesign.needs.if", { conditions: describeConditions(tn.conditions, labelOf) }) }}{{ " " }}</span>
+                    <span v-if="tn.approval.length" class="badge info" data-testid="wf-gated">{{ describePolicy(tn.approval) }}</span>
+                    <span v-if="tn.setAttributes.length" :title="tn.setAttributes.map((s) => describeSetAttribute(s, labelOf)).join('; ')">
+                      {{ t("wfActions.set.count", { n: tn.setAttributes.length }) }}
                     </span>
-                    <span v-if="!t.requiresComment && !t.fields.length && !t.conditions.children.length && !t.approval.length && !t.setAttributes.length" class="muted">Nothing</span>
+                    <span v-if="!tn.requiresComment && !tn.fields.length && !tn.conditions.children.length && !tn.approval.length && !tn.setAttributes.length" class="muted">{{ t("wfDesign.needs.nothing") }}</span>
                   </span>
                 </td>
               </tr>
             </tbody>
           </table>
         </div>
-        <div v-else class="panel-body muted">None. Add at least two states, then a transition between them.</div>
+        <div v-else class="panel-body muted">{{ t("wfDesign.transitions.empty") }}</div>
       </section>
     </div>
 
     <ConfirmDialog
       :open="!!removingState"
-      :title="`Delete state ${removingState ? stateName(removingState) : ''}?`"
-      confirm-label="Delete state"
+      :title="t('wfDesign.removeState.title', { name: removingState ? stateName(removingState) : '' })"
+      :confirm-label="t('wfDesign.removeState.confirm')"
       @cancel="removingState = null"
       @confirm="confirmRemoveState"
     >
-      <p>The state is removed from the draft. Published versions and running instances are not affected.</p>
+      <p>{{ t("wfDesign.removeState.body") }}</p>
       <p v-if="removingStateTransitions.length">
-        {{ removingStateTransitions.length === 1 ? "This transition goes" : "These transitions go" }} with it:
-        <strong>{{ removingStateTransitions.map((t) => t.name).join(", ") }}</strong>.
+        {{ t("wfDesign.removeState.goes", { n: removingStateTransitions.length }) }}
+        <strong>{{ removingStateTransitions.map((x) => x.name).join(", ") }}</strong>.
       </p>
     </ConfirmDialog>
 
     <ConfirmDialog
       :open="discarding"
-      title="Discard this draft?"
-      confirm-label="Discard draft"
+      :title="t('wfDesign.discardTitle')"
+      :confirm-label="t('wfDesign.discardConfirm')"
       :busy="discard.isPending.value"
       @cancel="discarding = false"
       @confirm="confirmDiscard"
     >
-      <ErrorAlert v-if="discard.isError.value" :error="discard.error.value" title="The draft was not discarded" />
+      <ErrorAlert v-if="discard.isError.value" :error="discard.error.value" :title="t('wfDesign.discardFailed')" />
       <p>
-        Every unpublished change to the states, transitions, fields and conditions is lost.
-        {{ workflow.currentVersionNo ? `Version ${workflow.currentVersionNo} stays current.` : "The workflow has no published version." }}
+        {{ t("wfDesign.discardBody") }}
+        {{ workflow.currentVersionNo ? t("wfDesign.discardStays", { n: workflow.currentVersionNo }) : t("wfDesign.discardNoVersion") }}
       </p>
     </ConfirmDialog>
 
     <ConfirmDialog
       :open="publishing"
-      :title="`Publish version ${workflow.draftVersionNo ?? ''}?`"
-      confirm-label="Publish"
+      :title="t('wfDesign.publishTitle', { n: workflow.draftVersionNo ?? '' })"
+      :confirm-label="t('wfDesign.publish')"
       tone="primary"
       :busy="publish.isPending.value"
-      busy-label="Publishing…"
+      :busy-label="t('wfDesign.publishing')"
       @cancel="publishing = false"
       @confirm="confirmPublish"
     >
-      <ErrorAlert v-if="publish.isError.value" :error="publish.error.value" title="The version was not published" />
+      <ErrorAlert v-if="publish.isError.value" :error="publish.error.value" :title="t('wfDesign.publishFailed')" />
       <p>
-        The version becomes current: new instances start on it. Instances already running stay on their version. A published version
-        never changes again, and the fields it uses cannot be archived or retyped while it exists.
+        {{ t("wfDesign.publishBody") }}
       </p>
       <div v-if="runningOnOlder > 0 && newlyGated.length" class="alert alert-warn" data-testid="wf-publish-running">
         <strong>{{ t("wfApproval.publish.runningTitle", { n: runningOnOlder }) }}</strong>
         <div>{{ t("wfApproval.publish.runningBody", { n: runningOnOlder, transitions: newlyGated.join(", ") }) }}</div>
       </div>
       <div v-if="publishWarnings.length" class="alert alert-warn">
-        <strong>{{ publishWarnings.length }} {{ publishWarnings.length === 1 ? "warning" : "warnings" }}</strong>
+        <strong>{{ t("wfDesign.check.warnings", { n: publishWarnings.length }) }}</strong>
         <ul class="no-margin">
           <li v-for="(w, i) in publishWarnings" :key="i">{{ w.message }}</li>
         </ul>
       </div>
       <div class="field">
-        <label for="wf-change-note">Change note</label>
+        <label for="wf-change-note">{{ t("wfDesign.changeNote") }}</label>
         <textarea id="wf-change-note" v-model="changeNote" rows="3" maxlength="2000" aria-describedby="wf-change-note-hint" />
-        <span id="wf-change-note-hint" class="hint">Optional. Recorded with the version and in the audit log.</span>
+        <span id="wf-change-note-hint" class="hint">{{ t("wfDesign.changeNoteHint") }}</span>
       </div>
     </ConfirmDialog>
   </template>

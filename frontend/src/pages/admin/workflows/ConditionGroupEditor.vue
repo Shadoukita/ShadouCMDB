@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { AttributeDefinition } from "../../../api/datamodel";
+import { t } from "../../../i18n";
 import {
   MAX_CONDITION_DEPTH,
-  OP_LABELS,
   defaultValue,
+  opLabel,
   opTakesValue,
   opsFor,
   type ConditionGroup,
@@ -52,18 +53,18 @@ function setOp(leaf: ConditionLeaf, op: ConditionOp) {
 </script>
 
 <template>
-  <div :class="['wf-cond-group', { nested: depth > 1 }]" role="group" :aria-label="depth === 1 ? 'Conditions' : 'Condition group'">
+  <div :class="['wf-cond-group', { nested: depth > 1 }]" role="group" :aria-label="depth === 1 ? t('wfDesign.tr.conditions') : t('wfDesign.cond.group')">
     <div class="wf-cond-head">
-      <select v-model="group.mode" :aria-label="depth === 1 ? 'How the conditions combine' : 'How this group combines'" :disabled="disabled">
-        <option value="all">All of these hold</option>
-        <option value="any">Any of these holds</option>
+      <select v-model="group.mode" :aria-label="depth === 1 ? t('wfDesign.cond.modeRoot') : t('wfDesign.cond.modeGroup')" :disabled="disabled">
+        <option value="all">{{ t("wfDesign.cond.all") }}</option>
+        <option value="any">{{ t("wfDesign.cond.any") }}</option>
       </select>
-      <button type="button" class="btn btn-sm" :disabled="disabled || fields.length === 0" @click="addLeaf">+ Condition</button>
-      <button v-if="depth < MAX_CONDITION_DEPTH" type="button" class="btn btn-sm" :disabled="disabled" @click="addGroup">+ Group</button>
-      <button v-if="depth > 1" type="button" class="btn btn-sm btn-quiet-danger" :disabled="disabled" @click="emit('remove')">Remove group</button>
+      <button type="button" class="btn btn-sm" :disabled="disabled || fields.length === 0" @click="addLeaf">{{ t("wfDesign.cond.add") }}</button>
+      <button v-if="depth < MAX_CONDITION_DEPTH" type="button" class="btn btn-sm" :disabled="disabled" @click="addGroup">{{ t("wfDesign.cond.addGroup") }}</button>
+      <button v-if="depth > 1" type="button" class="btn btn-sm btn-quiet-danger" :disabled="disabled" @click="emit('remove')">{{ t("wfDesign.cond.removeGroup") }}</button>
     </div>
     <p v-if="group.children.length === 0" class="muted no-margin">
-      {{ depth === 1 ? "No conditions: the transition can always run." : "An empty group is ignored." }}
+      {{ depth === 1 ? t("wfDesign.cond.none") : t("wfDesign.cond.emptyGroup") }}
     </p>
     <template v-for="(c, i) in group.children" :key="i">
       <ConditionGroupEditor
@@ -76,17 +77,17 @@ function setOp(leaf: ConditionLeaf, op: ConditionOp) {
         @remove="remove(i)"
       />
       <div v-else class="wf-cond-leaf">
-        <select :value="c.field" :aria-label="`Condition ${i + 1}: field`" :disabled="disabled" @change="setField(c, ($event.target as HTMLSelectElement).value)">
-          <option v-if="!byKey.has(c.field)" :value="c.field" disabled>{{ c.field || "Choose a field…" }}</option>
+        <select :value="c.field" :aria-label="t('wfDesign.cond.field', { n: i + 1 })" :disabled="disabled" @change="setField(c, ($event.target as HTMLSelectElement).value)">
+          <option v-if="!byKey.has(c.field)" :value="c.field" disabled>{{ c.field || t("wfDesign.cond.chooseField") }}</option>
           <option v-for="f in fields" :key="f.key" :value="f.key">{{ f.label }}</option>
         </select>
-        <select :value="c.op" :aria-label="`Condition ${i + 1}: comparison`" :disabled="disabled" @change="setOp(c, ($event.target as HTMLSelectElement).value as ConditionOp)">
-          <option v-for="op in opsFor(typeOf(c.field))" :key="op" :value="op">{{ OP_LABELS[op] }}</option>
+        <select :value="c.op" :aria-label="t('wfDesign.cond.op', { n: i + 1 })" :disabled="disabled" @change="setOp(c, ($event.target as HTMLSelectElement).value as ConditionOp)">
+          <option v-for="op in opsFor(typeOf(c.field))" :key="op" :value="op">{{ opLabel(op) }}</option>
         </select>
         <div v-if="opTakesValue(c.op)" class="wf-cond-value">
-          <ConditionValueInput :id="`${idPrefix}-${i}-value`" :leaf="c" :field="byKey.get(c.field)" :label="`Condition ${i + 1}: value`" />
+          <ConditionValueInput :id="`${idPrefix}-${i}-value`" :leaf="c" :field="byKey.get(c.field)" :label="t('wfDesign.cond.value', { n: i + 1 })" />
         </div>
-        <button type="button" class="btn btn-sm btn-quiet-danger" :aria-label="`Remove condition ${i + 1}`" :disabled="disabled" @click="remove(i)">Remove</button>
+        <button type="button" class="btn btn-sm btn-quiet-danger" :aria-label="t('wfDesign.cond.remove', { n: i + 1 })" :disabled="disabled" @click="remove(i)">{{ t("wfApproval.remove") }}</button>
       </div>
     </template>
   </div>
