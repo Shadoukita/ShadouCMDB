@@ -173,7 +173,7 @@ test("notifications: a webhook picks an active endpoint; the key is typed when t
   await page.getByRole("button", { name: "+ Notification" }).click();
   const editor = page.getByTestId("wf-action-editor-0");
   await editor.getByLabel("Kind").selectOption("webhook");
-  const picker = editor.getByLabel("Endpoint", { exact: true });
+  const picker = editor.getByRole("combobox", { name: "Endpoint", exact: true });
   await expect(picker).toBeEnabled();
   await expect(picker.locator("option")).toHaveText(["Choose…", "ITSM (itsm)", "Monitoring (monitoring) · paused", "SIEM (siem) · suspended"]);
   await expect(picker.locator("option:disabled")).toHaveText(["Choose…", "Monitoring (monitoring) · paused", "SIEM (siem) · suspended"]);

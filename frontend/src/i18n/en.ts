@@ -3724,7 +3724,7 @@ export const en = {
   "wfActions.check.tooManyRecipients": "At most {n} recipient sources.",
   "wfActions.check.participant": "The requester and the approvers exist only for approval triggers.",
   "wfActions.check.address": "A fixed address has no inbox: e-mail only.",
-  "wfActions.check.endpoint": "Enter the endpoint's key.",
+  "wfActions.check.endpoint": "Choose the endpoint.",
   "wfActions.check.endpointKey": "An endpoint key is lower-case letters, digits, _ and -, starting with a letter.",
   "wfActions.check.tooManyAttributes": "At most {n} fields.",
   "wfActions.check.placeholder": "Unknown placeholder {name}.",

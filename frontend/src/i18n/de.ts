@@ -3738,7 +3738,7 @@ export const de: { [K in MessageKey]: string } = {
   "wfActions.check.tooManyRecipients": "Höchstens {n} Empfängerquellen.",
   "wfActions.check.participant": "Antragsteller und Genehmigende gibt es nur bei Genehmigungsauslösern.",
   "wfActions.check.address": "Eine feste Adresse hat keinen Posteingang: nur E-Mail.",
-  "wfActions.check.endpoint": "Geben Sie den Schlüssel des Endpunkts ein.",
+  "wfActions.check.endpoint": "Wählen Sie den Endpunkt.",
   "wfActions.check.endpointKey": "Ein Endpunktschlüssel besteht aus Kleinbuchstaben, Ziffern, _ und -, beginnend mit einem Buchstaben.",
   "wfActions.check.tooManyAttributes": "Höchstens {n} Felder.",
   "wfActions.check.placeholder": "Unbekannter Platzhalter {name}.",
