@@ -48,7 +48,7 @@ function commitKey() {
   if (next === props.transition.key) return;
   const err =
     keyError(next) ??
-    (next === "_cancel" ? "_cancel is reserved." : props.draft.transitions.some((t) => t.key === next) ? `Another transition already has the key ${next}.` : undefined);
+    (next === "_cancel" ? t("wfDesign.tr.keyReserved", { key: next }) : props.draft.transitions.some((x) => x.key === next) ? t("wfDesign.tr.keyTaken", { key: next }) : undefined);
   keyProblem.value = err;
   if (err) return;
   // Steps of other transitions that exclude this one's actors follow the new key.
@@ -90,7 +90,7 @@ const notifications = computed(() => (actionsQ.data.value?.actions ?? []).filter
 <template>
   <section class="panel wf-inspector" aria-labelledby="wf-tr-title">
     <div class="panel-header">
-      <h2 id="wf-tr-title">Transition: {{ transition.name || transition.key }}</h2>
+      <h2 id="wf-tr-title">{{ t("wfDesign.tr.title", { name: transition.name || transition.key }) }}</h2>
     </div>
     <div class="tabs wf-inspector-tabs" role="tablist" :aria-label="t('wfActions.inspector.tabs')">
       <button
@@ -145,12 +145,12 @@ const notifications = computed(() => (actionsQ.data.value?.actions ?? []).filter
       <ProblemList :problems="problems" />
       <div class="form-grid">
         <div class="field">
-          <label :for="fid('name')">Name<span class="req" aria-hidden="true">*</span></label>
+          <label :for="fid('name')">{{ t("wfDesign.col.name") }}<span class="req" aria-hidden="true">*</span></label>
           <input :id="fid('name')" v-model="transition.name" type="text" maxlength="100" aria-required="true" autocomplete="off" :aria-describedby="`${fid('name')}-hint`" />
-          <span :id="`${fid('name')}-hint`" class="hint">The action operators see, e.g. "Approve".</span>
+          <span :id="`${fid('name')}-hint`" class="hint">{{ t("wfDesign.tr.nameHint") }}</span>
         </div>
         <div class="field">
-          <label :for="fid('key')">Key<span class="req" aria-hidden="true">*</span></label>
+          <label :for="fid('key')">{{ t("wfDesign.col.key") }}<span class="req" aria-hidden="true">*</span></label>
           <input
             :id="fid('key')"
             v-model="keyText"
@@ -166,62 +166,62 @@ const notifications = computed(() => (actionsQ.data.value?.actions ?? []).filter
           />
           <span v-if="keyProblem" :id="`${fid('key')}-err`" class="error">{{ keyProblem }}</span>
           <span v-else :id="`${fid('key')}-hint`" class="hint">
-            {{ grantedKeys.has(transition.key) ? "Grants are given by key: a new key needs its grants again." : "Grants and the API name the transition by its key." }}
+            {{ grantedKeys.has(transition.key) ? t("wfDesign.tr.keyHintGranted") : t("wfDesign.tr.keyHint") }}
           </span>
         </div>
         <div class="field">
-          <label :for="fid('from')">From state</label>
+          <label :for="fid('from')">{{ t("wfDesign.tr.from") }}</label>
           <select :id="fid('from')" v-model="transition.from">
             <option v-for="s in draft.states" :key="s.key" :value="s.key">{{ s.name }}</option>
           </select>
         </div>
         <div class="field">
-          <label :for="fid('to')">To state</label>
+          <label :for="fid('to')">{{ t("wfDesign.tr.to") }}</label>
           <select :id="fid('to')" v-model="transition.to">
             <option v-for="s in draft.states" :key="s.key" :value="s.key" :disabled="s.key === transition.from">{{ s.name }}</option>
           </select>
         </div>
       </div>
-      <label class="checkbox-row"><input v-model="transition.requiresComment" type="checkbox" /> A comment is required to run it</label>
+      <label class="checkbox-row"><input v-model="transition.requiresComment" type="checkbox" /> {{ t("wfDesign.tr.comment") }}</label>
 
       <fieldset class="group">
-        <legend>Fields to fill in</legend>
-        <p class="hint no-margin">Shown in the transition dialog. A required field must have a value for the transition to run.</p>
+        <legend>{{ t("wfDesign.tr.fields") }}</legend>
+        <p class="hint no-margin">{{ t("wfDesign.tr.fieldsHint") }}</p>
         <table v-if="transition.fields.length" class="data wf-fields">
           <thead>
             <tr>
-              <th scope="col">Field</th>
-              <th scope="col">Required</th>
-              <th scope="col"><span class="sr-only">Remove</span></th>
+              <th scope="col">{{ t("wfDesign.tr.field") }}</th>
+              <th scope="col">{{ t("common.required") }}</th>
+              <th scope="col"><span class="sr-only">{{ t("wfApproval.remove") }}</span></th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="(f, i) in transition.fields" :key="f.attribute || i">
               <td>
                 {{ fieldByKey.get(f.attribute)?.label ?? f.attribute }} <span class="mono muted">{{ f.attribute }}</span>
-                <span v-if="!fieldByKey.has(f.attribute)" class="badge danger">Not a field of the type</span>
+                <span v-if="!fieldByKey.has(f.attribute)" class="badge danger">{{ t("wfDesign.tr.notField") }}</span>
               </td>
-              <td><input v-model="f.required" type="checkbox" :aria-label="`${fieldByKey.get(f.attribute)?.label ?? f.attribute} is required`" /></td>
+              <td><input v-model="f.required" type="checkbox" :aria-label="t('wfDesign.tr.isRequired', { field: fieldByKey.get(f.attribute)?.label ?? f.attribute })" /></td>
               <td class="row-actions">
-                <button type="button" class="btn btn-sm btn-quiet-danger" @click="transition.fields.splice(i, 1)">Remove</button>
+                <button type="button" class="btn btn-sm btn-quiet-danger" @click="transition.fields.splice(i, 1)">{{ t("wfApproval.remove") }}</button>
               </td>
             </tr>
           </tbody>
         </table>
         <div class="inline-control">
-          <select v-model="toAdd" aria-label="Field to add">
-            <option value="">Add a field…</option>
+          <select v-model="toAdd" :aria-label="t('wfDesign.tr.fieldToAdd')">
+            <option value="">{{ t("wfDesign.tr.addField") }}</option>
             <option v-for="f in unusedFields" :key="f.key" :value="f.key" :disabled="f.key === stateFieldKey">
-              {{ f.key === stateFieldKey ? `${f.label} (state field: set by the states)` : f.label }}
+              {{ f.key === stateFieldKey ? t("wfDesign.tr.stateField", { field: f.label }) : f.label }}
             </option>
           </select>
-          <button type="button" class="btn btn-sm" :disabled="!toAdd" @click="addField">Add</button>
+          <button type="button" class="btn btn-sm" :disabled="!toAdd" @click="addField">{{ t("wfDesign.tr.add") }}</button>
         </div>
       </fieldset>
 
       <fieldset class="group">
-        <legend>Conditions</legend>
-        <p class="hint no-margin">Checked on the CI's current values when the transition runs; it can run only when they hold.</p>
+        <legend>{{ t("wfDesign.tr.conditions") }}</legend>
+        <p class="hint no-margin">{{ t("wfDesign.tr.conditionsHint") }}</p>
         <ConditionGroupEditor :group="transition.conditions" :fields="fields" :depth="1" :id-prefix="`wf-cond-${transition.key}`" />
       </fieldset>
 
@@ -229,7 +229,7 @@ const notifications = computed(() => (actionsQ.data.value?.actions ?? []).filter
     </div>
     <div class="panel-body">
       <div class="inline-actions">
-        <button type="button" class="btn btn-sm btn-quiet-danger" @click="emit('remove')">Delete transition</button>
+        <button type="button" class="btn btn-sm btn-quiet-danger" @click="emit('remove')">{{ t("wfDesign.tr.delete") }}</button>
       </div>
     </div>
   </section>

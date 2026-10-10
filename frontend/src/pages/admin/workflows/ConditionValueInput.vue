@@ -2,6 +2,7 @@
 import { computed } from "vue";
 import { useLookupListValues, type AttributeDefinition } from "../../../api/datamodel";
 import CiPicker from "../../../components/CiPicker.vue";
+import { t } from "../../../i18n";
 import { opTakesList, type ConditionLeaf, type ConditionOp } from "../../../lib/workflowDraft";
 
 /**
@@ -64,9 +65,9 @@ const refSelected = computed(() => (typeof props.leaf.value === "string" && prop
   <fieldset v-if="list && hasChoices" class="wf-choices" :aria-label="label">
     <label v-for="c in choices" :key="c.key" class="checkbox-row">
       <input type="checkbox" :checked="values.includes(c.key)" @change="toggleChoice(c.key, ($event.target as HTMLInputElement).checked)" />
-      {{ c.label }}<span v-if="c.inactive" class="muted"> (retired)</span>
+      {{ c.label }}<span v-if="c.inactive" class="muted"> {{ t("wfDesign.retired") }}</span>
     </label>
-    <span v-if="choices.length === 0" class="muted">This field has no values.</span>
+    <span v-if="choices.length === 0" class="muted">{{ t("wfDesign.value.noValues") }}</span>
   </fieldset>
   <input
     v-else-if="list"
@@ -74,16 +75,16 @@ const refSelected = computed(() => (typeof props.leaf.value === "string" && prop
     type="text"
     :aria-label="label"
     :value="listText"
-    :placeholder="type === 'reference' ? 'CI ids, separated by commas' : 'Values, separated by commas'"
+    :placeholder="type === 'reference' ? t('wfDesign.value.refList') : t('wfDesign.value.list')"
     @change="setListText(($event.target as HTMLInputElement).value)"
   />
   <select v-else-if="hasChoices" :id="id" v-model="leaf.value" :aria-label="label">
-    <option value="" disabled>Choose…</option>
-    <option v-for="c in choices" :key="c.key" :value="c.key">{{ c.label }}{{ c.inactive ? " (retired)" : "" }}</option>
+    <option value="" disabled>{{ t("wfDesign.value.choose") }}</option>
+    <option v-for="c in choices" :key="c.key" :value="c.key">{{ c.label }}{{ c.inactive ? ` ${t("wfDesign.retired")}` : "" }}</option>
   </select>
   <select v-else-if="type === 'boolean'" :id="id" v-model="leaf.value" :aria-label="label">
-    <option :value="true">Yes</option>
-    <option :value="false">No</option>
+    <option :value="true">{{ t("common.yes") }}</option>
+    <option :value="false">{{ t("common.no") }}</option>
   </select>
   <input
     v-else-if="type === 'number' || type === 'integer'"
@@ -108,7 +109,7 @@ const refSelected = computed(() => (typeof props.leaf.value === "string" && prop
     :id="id"
     :class-id="field?.referenceClassId"
     :selected="refSelected"
-    placeholder="Search for a CI…"
+    :placeholder="t('wfDesign.value.searchCi')"
     @select="leaf.value = $event?.id ?? ''"
   />
   <input v-else :id="id" v-model.trim="leaf.value" type="text" maxlength="1000" :aria-label="label" />

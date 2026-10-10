@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import type { LookupListValue } from "../../../api/datamodel";
+import { t } from "../../../i18n";
 import { keyError } from "../../../lib/keys";
 import { CATEGORIES, categoryLabel, renameState, type Draft, type DraftState, type PlacedProblem } from "../../../lib/workflowDraft";
 import ProblemList from "./ProblemList.vue";
@@ -29,7 +30,7 @@ watch(
 function commitKey() {
   const next = keyText.value.trim();
   if (next === props.state.key) return;
-  const err = keyError(next) ?? (props.draft.states.some((s) => s.key === next) ? `Another state already has the key ${next}.` : undefined);
+  const err = keyError(next) ?? (props.draft.states.some((s) => s.key === next) ? t("wfDesign.state.keyTaken", { key: next }) : undefined);
   keyProblem.value = err;
   if (err) return;
   renameState(props.draft, props.state.key, next);
@@ -46,19 +47,19 @@ const fid = (f: string) => `wf-state-${f}`;
 <template>
   <section class="panel wf-inspector" aria-labelledby="wf-state-title">
     <div class="panel-header">
-      <h2 id="wf-state-title">State: {{ state.name || state.key }}</h2>
-      <span v-if="isInitial" class="badge info">Initial</span>
-      <span v-if="state.terminal" class="badge">Terminal</span>
+      <h2 id="wf-state-title">{{ t("wfDesign.state.title", { name: state.name || state.key }) }}</h2>
+      <span v-if="isInitial" class="badge info">{{ t("wfDesign.initial") }}</span>
+      <span v-if="state.terminal" class="badge">{{ t("wfDesign.terminal") }}</span>
     </div>
     <div class="panel-body stack">
       <ProblemList :problems="problems" />
       <div class="form-grid">
         <div class="field">
-          <label :for="fid('name')">Name<span class="req" aria-hidden="true">*</span></label>
+          <label :for="fid('name')">{{ t("wfDesign.col.name") }}<span class="req" aria-hidden="true">*</span></label>
           <input :id="fid('name')" v-model="state.name" type="text" maxlength="100" aria-required="true" autocomplete="off" />
         </div>
         <div class="field">
-          <label :for="fid('key')">Key<span class="req" aria-hidden="true">*</span></label>
+          <label :for="fid('key')">{{ t("wfDesign.col.key") }}<span class="req" aria-hidden="true">*</span></label>
           <input
             :id="fid('key')"
             v-model="keyText"
@@ -73,34 +74,34 @@ const fid = (f: string) => `wf-state-${f}`;
             @change="commitKey"
           />
           <span v-if="keyProblem" :id="`${fid('key')}-err`" class="error">{{ keyProblem }}</span>
-          <span v-else :id="`${fid('key')}-hint`" class="hint">Renaming it updates the transitions that use it.</span>
+          <span v-else :id="`${fid('key')}-hint`" class="hint">{{ t("wfDesign.state.keyHint") }}</span>
         </div>
         <div class="field">
-          <label :for="fid('category')">Category</label>
+          <label :for="fid('category')">{{ t("wfDesign.col.category") }}</label>
           <select :id="fid('category')" v-model="state.category" :aria-describedby="`${fid('category')}-hint`">
             <option v-for="c in CATEGORIES" :key="c.value" :value="c.value">{{ categoryLabel(c.value) }}</option>
           </select>
-          <span :id="`${fid('category')}-hint`" class="hint">What reaching this state means, for lists and reports.</span>
+          <span :id="`${fid('category')}-hint`" class="hint">{{ t("wfDesign.state.categoryHint") }}</span>
         </div>
         <div class="field">
-          <label :for="fid('value')">{{ stateFieldLabel ? `${stateFieldLabel} value` : "State field value" }}</label>
+          <label :for="fid('value')">{{ stateFieldLabel ? t("wfDesign.state.value", { field: stateFieldLabel }) : t("wfDesign.state.valueGeneric") }}</label>
           <select :id="fid('value')" v-model="state.stateValue" :disabled="!stateValues" :aria-describedby="`${fid('value')}-hint`">
-            <option :value="null">None</option>
-            <option v-if="unknownValue" :value="state.stateValue">{{ state.stateValue }} (not in the list)</option>
-            <option v-for="v in stateValues ?? []" :key="v.id" :value="v.key">{{ v.name }}{{ v.isActive ? "" : " (retired)" }}</option>
+            <option :value="null">{{ t("wfAdmin.none") }}</option>
+            <option v-if="unknownValue" :value="state.stateValue">{{ t("wfDesign.state.notInList", { value: state.stateValue ?? "" }) }}</option>
+            <option v-for="v in stateValues ?? []" :key="v.id" :value="v.key">{{ v.name }}{{ v.isActive ? "" : ` ${t("wfDesign.retired")}` }}</option>
           </select>
           <span :id="`${fid('value')}-hint`" class="hint">
-            {{ stateValues ? "Reaching this state sets the state field to this value." : "This workflow drives no state field (see Settings)." }}
+            {{ stateValues ? t("wfDesign.state.valueHint") : t("wfDesign.state.noField") }}
           </span>
         </div>
       </div>
-      <label class="checkbox-row"><input v-model="state.terminal" type="checkbox" /> Terminal: reaching it completes the instance</label>
-      <p class="muted no-margin">{{ incoming }} incoming, {{ outgoing }} outgoing {{ outgoing === 1 ? "transition" : "transitions" }}.</p>
+      <label class="checkbox-row"><input v-model="state.terminal" type="checkbox" /> {{ t("wfDesign.state.terminal") }}</label>
+      <p class="muted no-margin">{{ t("wfDesign.state.links", { in: incoming, n: outgoing }) }}</p>
       <div class="inline-actions">
         <button type="button" class="btn btn-sm" :disabled="isInitial" @click="draft.initialState = state.key">
-          {{ isInitial ? "This is the initial state" : "Make initial state" }}
+          {{ isInitial ? t("wfDesign.state.isInitial") : t("wfDesign.state.makeInitial") }}
         </button>
-        <button type="button" class="btn btn-sm btn-quiet-danger" @click="emit('remove')">Delete state…</button>
+        <button type="button" class="btn btn-sm btn-quiet-danger" @click="emit('remove')">{{ t("wfDesign.state.delete") }}</button>
       </div>
     </div>
   </section>
