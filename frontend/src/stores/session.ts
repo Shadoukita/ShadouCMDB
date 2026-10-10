@@ -119,6 +119,11 @@ export const useSessionStore = defineStore("session", () => {
     clear("anonymous");
   }
 
+  /** Sets the language of the e-mails the server sends this user (`null`: the server's default, MAIL_DEFAULT_LOCALE). */
+  async function setMailLocale(locale: Session["locale"]) {
+    apply(await authApi.updateMe({ locale }));
+  }
+
   /** Re-reads permissions (e.g. after editing a profile the current user holds). */
   async function refresh() {
     try {
@@ -154,6 +159,7 @@ export const useSessionStore = defineStore("session", () => {
     logout,
     markExpired,
     refresh,
+    setMailLocale,
     can,
     isAdministrator,
     adminAccess,

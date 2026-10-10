@@ -55,6 +55,8 @@ export const authApi = {
   me: () => unwrap(api.GET("/api/v1/auth/me")),
   /** For an account created before e-mails were required: answers the session, now linked to its Person CI. */
   enterEmail: (email: string) => unwrap(api.PUT("/api/v1/auth/email", { body: { email } })),
+  /** The language of the e-mails the server sends this user (`null`: the server's default); answers the session. */
+  updateMe: (body: Body<"/api/v1/auth/me", "patch">) => unwrap(api.PATCH("/api/v1/auth/me", { body })),
 };
 
 /** Changes the signed-in user's own password; the API ends their other sessions and renews this one under new cookies. */

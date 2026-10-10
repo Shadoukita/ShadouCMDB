@@ -49,6 +49,11 @@ export const ADMIN_SECTIONS: AdminSection[] = [
   // Named as the page's heading (audit A2).
   { key: "templates", label: t("admin.section.templates"), group: DATA_MODEL, to: "/admin/templates", permissions: ["datamodel.manage"] },
   { key: "workflows", label: t("admin.section.workflows"), group: PROCESSES, to: "/admin/workflows", permissions: ["workflows.manage"] },
+  // How workflow actions are being delivered; webhook deliveries show only with webhooks.manage too (SHAA-2725 §8).
+  { key: "workflow-deliveries", label: t("admin.section.deliveries"), group: PROCESSES, to: "/admin/workflow-deliveries", permissions: ["workflows.manage"] },
+  // workflows.manage sees the endpoints by name only, to choose one in a workflow action.
+  { key: "webhooks", label: t("admin.section.webhooks"), group: PROCESSES, to: "/admin/webhooks", permissions: ["webhooks.manage", "workflows.manage"] },
+  { key: "mail", label: t("admin.section.mail"), group: PROCESSES, to: "/admin/mail", permissions: ["workflows.manage", "webhooks.manage"] },
   { key: "customization", label: t("admin.section.customization"), group: SYSTEM, to: "/admin/customization", permissions: ["customization.manage"] },
   // Switches bulk import on for the instance: the API allows only the Administrator profile.
   { key: "import", label: t("admin.section.import"), group: SYSTEM, to: "/admin/import", permissions: [], administratorOnly: true },

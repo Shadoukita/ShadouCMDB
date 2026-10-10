@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from "vue-router";
+import { onBeforeRouteLeave, onBeforeRouteUpdate, RouterLink, useRoute, useRouter } from "vue-router";
 import { useAllProfiles } from "../../../api/admin";
 import { ApiError } from "../../../api/client";
-import { useCiClasses, useClassAttributes } from "../../../api/queries";
+import { MAX_PAGE, useCiClasses, useClassAttributes } from "../../../api/queries";
 import {
   useSaveActions,
   useWorkflowActions,
@@ -75,8 +75,12 @@ const baseVersion = ref(0);
 const storedKeys = ref<string[]>([]);
 const dirty = computed(() => serialize(list.value) !== base.value);
 const editing = ref<DraftAction | null>(null);
-/** The endpoints a webhook action can pick: loaded once an action is a webhook. */
-const endpointsQ = useWebhookEndpoints(() => list.value.some((a) => a.kind === "webhook"));
+/**
+ * The endpoints a webhook action can pick: loaded once an action is a webhook. A `workflows.manage`-only
+ * caller gets key, name and status. The API serves at most MAX_PAGE; beyond that the picker still shows
+ * the action's own key.
+ */
+const endpointsQ = useWebhookEndpoints({ limit: MAX_PAGE }, () => list.value.some((a) => a.kind === "webhook"));
 const endpoints = computed(() => endpointsQ.data.value?.data ?? null);
 
 function seed(a: WorkflowActions) {
@@ -235,6 +239,7 @@ const loading = computed(() => actionsQ.isLoading.value || draft.isLoading.value
     <div class="panel-header">
       <h2 id="wf-actions-title">{{ t("wfActions.title") }}</h2>
       <span v-if="!dirty && lint.length" class="badge warn">{{ t("wfApprovers.warnings", { n: lint.length }) }}</span>
+      <RouterLink class="btn btn-sm" :to="{ path: '/admin/workflow-deliveries', query: { workflow: workflow.id } }">{{ t("wfActions.deliveries") }}</RouterLink>
     </div>
     <div class="panel-body stack">
       <p class="muted no-margin">{{ t("wfActions.intro") }}</p>
