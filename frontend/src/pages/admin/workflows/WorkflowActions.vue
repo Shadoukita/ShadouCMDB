@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from "vue-router";
+import { onBeforeRouteLeave, onBeforeRouteUpdate, RouterLink, useRoute, useRouter } from "vue-router";
 import { useAllProfiles } from "../../../api/admin";
 import { ApiError } from "../../../api/client";
 import { MAX_PAGE, useCiClasses, useClassAttributes } from "../../../api/queries";
@@ -237,6 +237,7 @@ const loading = computed(() => actionsQ.isLoading.value || draft.isLoading.value
     <div class="panel-header">
       <h2 id="wf-actions-title">{{ t("wfActions.title") }}</h2>
       <span v-if="!dirty && lint.length" class="badge warn">{{ t("wfApprovers.warnings", { n: lint.length }) }}</span>
+      <RouterLink class="btn btn-sm" :to="{ path: '/admin/workflow-deliveries', query: { workflow: workflow.id } }">{{ t("wfActions.deliveries") }}</RouterLink>
     </div>
     <div class="panel-body stack">
       <p class="muted no-margin">{{ t("wfActions.intro") }}</p>

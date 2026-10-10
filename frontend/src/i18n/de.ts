@@ -3664,6 +3664,7 @@ export const de: { [K in MessageKey]: string } = {
   "wfActions.andMore": "{first} und {n} weitere",
   "wfActions.disabled": "Aus",
   "wfActions.newName": "Neue Benachrichtigung",
+  "wfActions.deliveries": "Zustellungen",
   "wfActions.kind.inbox": "Posteingang",
   "wfActions.kind.email": "E-Mail",
   "wfActions.kind.webhook": "Webhook",

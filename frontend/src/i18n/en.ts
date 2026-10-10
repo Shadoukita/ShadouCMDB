@@ -3650,6 +3650,7 @@ export const en = {
   "wfActions.andMore": "{first} and {n} more",
   "wfActions.disabled": "Off",
   "wfActions.newName": "New notification",
+  "wfActions.deliveries": "Deliveries",
   "wfActions.kind.inbox": "Inbox",
   "wfActions.kind.email": "E-mail",
   "wfActions.kind.webhook": "Webhook",
