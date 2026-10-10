@@ -128,6 +128,7 @@ const APPROVERS: &str = "/api/v1/admin/workflow-definitions/{id}/approvers";
 const APPROVER_PREVIEW: &str = "/api/v1/admin/workflow-definitions/{id}/approvers/preview";
 const ACTIONS: &str = "/api/v1/admin/workflow-definitions/{id}/actions";
 const ACTION_PREVIEW: &str = "/api/v1/admin/workflow-definitions/{id}/actions/{key}/preview";
+const ACTION_TEST: &str = "/api/v1/admin/workflow-definitions/{id}/actions/{key}/test";
 const ACTION_SUMMARY: &str = "/api/v1/admin/workflow-definitions/{id}/actions/summary";
 const DELIVERIES: &str = "/api/v1/admin/workflow-definitions/{id}/action-deliveries";
 const DELIVERY: &str = "/api/v1/admin/workflow-definitions/{id}/action-deliveries/{deliveryId}";
@@ -574,6 +575,39 @@ pub fn routes() -> Vec<Route> {
                     webhooks_on: api.webhooks.cfg.allowed,
                 };
                     Ok(Json(actions::preview(&api.pool, &api.ctx, &path, &q, &limits).await?))
+                },
+            ),
+        route(Method::POST, ACTION_TEST, "testWorkflowAction")
+            .tag(TAG)
+            .summary("Send a test of a saved action to yourself: one e-mail, one signed ping, or one inbox entry")
+            .description(
+                "For the designer's Test send. Nothing goes to the action's recipients and nothing is queued: \
+                 `email` sends the action's message in the caller's language, marked as a test, to the caller's own \
+                 address; `webhook` sends one signed `ping` to the action's endpoint after the URL rules and address \
+                 checks a delivery runs (as `POST /admin/webhook-endpoints/{id}/ping`; no `webhooks.manage` needed); \
+                 `inbox` writes one notification to the caller. With `ciId` the message is about that CI. A refusal \
+                 by the relay or the receiver is the result (`ok` false, `statusCode`, `reason`), not an error \
+                 status. Audited as `workflow.action_test` on the workflow. 404 for an unknown action (also one not \
+                 saved yet) and for a CI that does not exist or the caller may not view; 409 MAIL_NOT_CONFIGURED \
+                 with `MAIL=off`, 409 WEBHOOKS_DISABLED while webhooks are off, 409 CONFLICT when the caller has no \
+                 e-mail address or the endpoint is paused or suspended; 429 RATE_LIMITED beyond 10 tests a minute.",
+            )
+            .requires(manage)
+            .session_only()
+            .class_checked()
+            .errors(&[
+                ErrorCode::NotFound,
+                ErrorCode::MailNotConfigured,
+                ErrorCode::WebhooksDisabled,
+                ErrorCode::Conflict,
+                ErrorCode::RateLimited,
+            ])
+            .handle(
+                |api,
+                 In(path, Query(q), NoBody): In<actions::ActionKeyPath, Query<actions::WorkflowActionPreviewQuery>, NoBody>| async move {
+                    Ok(Json(
+                        actions::test_send::test(&api.pool, &api.ctx, &api.mail, &api.webhooks, &path, &q).await?,
+                    ))
                 },
             ),
         route(Method::GET, ACTION_SUMMARY, "getWorkflowActionsSummary")

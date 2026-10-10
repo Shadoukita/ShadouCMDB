@@ -77,6 +77,8 @@ pub enum EntityType {
     WorkflowInstances,
     ImportJobs,
     WebhookEndpoints,
+    /// A workflow: the designer's test of one of its actions (`data.test` true)
+    WorkflowDefinitions,
 }
 
 /// One notification of the caller
@@ -85,8 +87,9 @@ pub enum EntityType {
 pub struct Notification {
     pub id: Uuid,
     pub kind: Kind,
-    /// The record to open: an approval request, a workflow instance, an import job or a webhook endpoint. It may be
-    /// gone by now (an import record past its retention); the client then says so.
+    /// The record to open: an approval request, a workflow instance, an import job, a webhook endpoint or a workflow (a
+    /// test of one of its actions). It may be gone by now (an import record past its retention); the client then says
+    /// so.
     pub entity_type: EntityType,
     pub entity_id: Uuid,
     /// The CI it is about; null when it is about no CI (imports)
@@ -100,7 +103,8 @@ pub struct Notification {
     /// `workflow_transition` plus `actionKey`, `actionName`, `approvalRequestId` and `requestNo` (`event` is the
     /// workflow event's kind: `transition`, `approval_request`, `approval_decision`, `approval_close`,
     /// `approval_overdue`, `cancel`, `force`, ...). `webhook_suspended`: `endpointKey`, `endpointName`, `reason`,
-    /// `consecutiveFailures`. Any may be null.
+    /// `consecutiveFailures`. A designer's test of a `workflow_action` has `test` true, `definitionId` and no instance.
+    /// Any may be null.
     #[schema(value_type = Object)]
     pub data: Value,
     pub created_at: DateTime<Utc>,

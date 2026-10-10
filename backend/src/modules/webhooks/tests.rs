@@ -1320,3 +1320,75 @@ async fn an_echoing_receiver_puts_no_payload_or_secret_in_the_error_audit_or_log
     }
     e.db.drop().await;
 }
+
+/// SHAA-3042: the designer's test send of a webhook action is one signed
+/// `ping` to the action's endpoint, for a caller with `workflows.manage` but
+/// not `webhooks.manage`; a paused endpoint is 409 CONFLICT and webhooks off
+/// 409 WEBHOOKS_DISABLED.
+#[tokio::test]
+async fn a_webhook_action_test_pings_its_endpoint_for_a_designer() {
+    let (ca, tls) = tls_server("hook.example.test");
+    let Some(e) = env("webhooks_action_test", on(&["127.0.0.0/8"]), Some(&ca)).await else { return };
+    let w = &e.w;
+    let receiver = Receiver::start(Some(tls)).await;
+    e.allow("hook.example.test", Some(receiver.port), false).await;
+    let (id, secret) =
+        e.endpoint("itsm", &format!("https://hook.example.test:{}/hooks", receiver.port), json!({})).await;
+    e.action("itsm", json!([])).await;
+    let designers = w.profile("Designers", &[(w.server, true)]).await;
+    sqlx::query(
+        "INSERT INTO permission_profile_global_permissions (profile_id, permission) VALUES ($1, 'workflows.manage')",
+    )
+    .bind(designers)
+    .execute(&w.pool)
+    .await
+    .unwrap();
+    let (designer, _) = w.user("designer", &[designers]).await;
+    let test = format!("{DEFS}/{}/actions/sync/test", w.definition);
+
+    let (status, v) = w.call(&designer, "POST", &test, None).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(
+        (v["ok"].as_bool(), v["kind"].as_str(), v["to"].as_str(), v["statusCode"].as_u64()),
+        (Some(true), Some("webhook"), Some("itsm"), Some(200)),
+        "{v}"
+    );
+    let hits = receiver.hits();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].header("x-shadoucmdb-event"), "ping");
+    let now = chrono::Utc::now().timestamp();
+    assert!(signing::verify(&secret, hits[0].header("x-shadoucmdb-signature"), &hits[0].body, now));
+    let (status, _) = w.call(&designer, "POST", &format!("{ENDPOINTS}/{id}/ping"), None).await;
+    assert_eq!(status, 403, "the endpoint's own ping needs webhooks.manage");
+    assert_eq!(count(&w.pool, "SELECT count(*) FROM workflow_action_runs").await, 0, "nothing queued");
+    let audited: Value = sqlx::query_scalar("SELECT new_value FROM audit_log WHERE action = 'workflow.action_test'")
+        .fetch_one(&w.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        (audited["to"].as_str(), audited["ok"].as_bool(), audited["statusCode"].as_u64()),
+        (Some("itsm"), Some(true), Some(200))
+    );
+
+    // The receiver's refusal is the result.
+    receiver.answer(500, Vec::new());
+    let (status, v) = w.call(&designer, "POST", &test, None).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(
+        (v["ok"].as_bool(), v["reason"].as_str(), v["statusCode"].as_u64()),
+        (Some(false), Some("http_status"), Some(500))
+    );
+
+    // Paused: refused, nothing sent.
+    w.ok("POST", &format!("{ENDPOINTS}/{id}/pause"), json!(null)).await;
+    let (status, v) = w.call(&designer, "POST", &test, None).await;
+    assert_eq!((status, code(&v)), (409, "CONFLICT"), "{v}");
+    assert!(v["error"]["message"].as_str().unwrap().contains("paused"), "{v}");
+    assert_eq!(receiver.hits().len(), 2);
+
+    // Webhooks off.
+    let off_app = app_with_webhooks(e.db.pool.clone(), Arc::new(Webhooks::off(Keyring::for_tests())));
+    let (status, v, _) = call(&off_app, "POST", &test, &designer, None).await;
+    assert_eq!((status, code(&v)), (409, "WEBHOOKS_DISABLED"), "{v}");
+    e.db.drop().await;
+}

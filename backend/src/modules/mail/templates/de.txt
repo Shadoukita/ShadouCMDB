@@ -18,6 +18,7 @@ subject.minimal = {workflow}: Ein Workflow-Ereignis erfordert Ihre Aufmerksamkei
 subject.bulk = {workflow}: {transition} wurde auf {count} Configuration Items angewendet
 subject.digest = ShadouCMDB: {count} Workflow-Benachrichtigungen der letzten Stunde
 subject.test = ShadouCMDB: Testnachricht
+subject.action_test = [TEST] {subject}
 
 # Der erste Satz: was geschehen ist und was, falls überhaupt, zu tun ist.
 lead.transition = {actor} hat den Übergang {transition} des Workflows {workflow} auf {ci} angewendet; der Status ist jetzt {to}. Diese Nachricht dient Ihrer Information; Sie müssen nichts tun.
@@ -34,6 +35,9 @@ lead.minimal = Ein Workflow-Ereignis in ShadouCMDB erfordert Ihre Aufmerksamkeit
 lead.bulk = {actor} hat den Übergang {transition} des Workflows {workflow} auf {count} Configuration Items angewendet. Diese Nachricht dient Ihrer Information; Sie müssen nichts tun.
 lead.digest = Sie haben innerhalb einer Stunde mehr als {max} Workflow-Nachrichten erhalten; die übrigen Nachrichten dieser Stunde sind hier zusammengefasst. Zu tun ist nur, was die einzelnen Einträge verlangen.
 lead.test = Dies ist eine Testnachricht von ShadouCMDB, angefordert von {user}. Sie bestätigt, dass der E-Mail-Versand funktioniert. Sie müssen nichts tun.
+
+# The test of an action from the workflow designer: its first paragraph.
+intro.action_test = Dies ist ein Test der Aktion {action}, im Workflow-Designer angefordert von {user}. An keinem Konfigurationselement hat sich etwas geändert; die Angaben unten zeigen, was eine echte Nachricht enthielte.
 
 # Detailzeilen.
 label.ci = Configuration Item

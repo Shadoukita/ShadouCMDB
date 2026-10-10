@@ -338,6 +338,85 @@ async fn an_inbox_action_reaches_viewers_only_and_a_refused_transition_queues_no
     db.drop().await;
 }
 
+/// SHAA-3042: the designer's test send of an inbox action reaches the caller
+/// only (not the action's recipients), queues nothing, is listed in the
+/// caller's inbox and audited; an action that is not saved is 404, a caller
+/// without `workflows.manage` 403, and the 11th test in a minute 429.
+#[tokio::test]
+async fn an_inbox_test_send_notifies_the_caller_only() {
+    let Some(db) = scratch::database("workflow_actions_inbox_test").await else { return };
+    let w = world(&db).await;
+    let ops = w.profile("Ops", &[(w.server, false)]).await;
+    let (ops_user, _) = w.user("o1", &[ops]).await;
+    let version = version(&w).await;
+    w.ok(
+        "PUT",
+        &actions(&w),
+        json!({ "version": version, "actions": [inbox("tell_ops", "transition", Some("approve"),
+            json!([{ "source": "profile", "profile": "Ops" }]))] }),
+    )
+    .await;
+    let ci = w.ci(w.server).await;
+    let test = |key: &str, q: &str| format!("{}/{key}/test{q}", actions(&w));
+
+    let v = w.ok("POST", &test("tell_ops", &format!("?ciId={ci}")), json!(null)).await;
+    assert_eq!(
+        (v["ok"].as_bool(), v["kind"].as_str(), v["to"].as_str(), v["key"].as_str()),
+        (Some(true), Some("inbox"), Some("inbox"), Some("tell_ops")),
+        "{v}"
+    );
+    let admin = id(&w.pool, "SELECT id FROM users WHERE username = 'admin'").await;
+    let rows: Vec<(Uuid, String, String, Uuid, Option<Uuid>, Value)> = sqlx::query_as(
+        "SELECT user_id, kind, entity_type, entity_id, ci_id, data FROM notifications WHERE kind = 'workflow_action'",
+    )
+    .fetch_all(&w.pool)
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 1, "the caller only, not Ops: {rows:?}");
+    let (user, _, entity_type, entity, row_ci, data) = &rows[0];
+    assert_eq!(
+        (*user, entity_type.as_str(), *entity, *row_ci),
+        (admin, "workflow_definitions", w.definition, Some(ci))
+    );
+    assert_eq!(
+        (data["test"].as_bool(), data["actionKey"].as_str(), data["event"].as_str(), data["transitionName"].as_str()),
+        (Some(true), Some("tell_ops"), Some("transition"), Some("Approve")),
+        "{data}"
+    );
+    assert_eq!(count(&w.pool, "SELECT count(*) FROM workflow_action_runs").await, 0, "nothing queued");
+    let list = w.ok("GET", "/api/v1/notifications", json!(null)).await;
+    assert_eq!(list["data"][0]["entityType"], "workflow_definitions", "{list}");
+    let audited: Vec<Value> =
+        sqlx::query_scalar("SELECT new_value FROM audit_log WHERE action = 'workflow.action_test' AND entity_id = $1")
+            .bind(w.definition)
+            .fetch_all(&w.pool)
+            .await
+            .unwrap();
+    assert_eq!(audited.len(), 1);
+    assert_eq!((audited[0]["action"].as_str(), audited[0]["ok"].as_bool()), (Some("tell_ops"), Some(true)));
+
+    // Only saved actions; a CI the caller may view; workflows.manage.
+    let (status, v) = w.call(&w.admin, "POST", &test("not_saved", ""), None).await;
+    assert_eq!((status, code(&v)), (404, "NOT_FOUND"), "{v}");
+    assert!(v["error"]["message"].as_str().unwrap().contains("save the actions"), "{v}");
+    let (status, v) = w.call(&w.admin, "POST", &test("tell_ops", &format!("?ciId={}", Uuid::new_v4())), None).await;
+    assert_eq!((status, code(&v)), (404, "NOT_FOUND"), "{v}");
+    let (status, v) = w.call(&ops_user, "POST", &test("tell_ops", ""), None).await;
+    assert_eq!((status, code(&v)), (403, "FORBIDDEN"), "{v}");
+
+    // 10 a minute.
+    for _ in 1..super::test_send::MAX_PER_MINUTE {
+        w.ok("POST", &test("tell_ops", ""), json!(null)).await;
+    }
+    let (status, v) = w.call(&w.admin, "POST", &test("tell_ops", ""), None).await;
+    assert_eq!((status, code(&v)), (429, "RATE_LIMITED"), "{v}");
+    assert_eq!(
+        count(&w.pool, "SELECT count(*) FROM notifications WHERE kind = 'workflow_action'").await,
+        super::test_send::MAX_PER_MINUTE
+    );
+    db.drop().await;
+}
+
 /// GH#848: `WORKFLOW_ACTIONS_MAX_RECIPIENTS` counts only the users who are
 /// told, as the preview does. An inactive and a blind user who sort first by
 /// id are skipped without using up the cap; of two viewers, the first is told

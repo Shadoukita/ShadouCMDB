@@ -18,6 +18,7 @@ subject.minimal = {workflow}: a workflow event needs your attention
 subject.bulk = {workflow}: {transition} was applied to {count} configuration items
 subject.digest = ShadouCMDB: {count} workflow notifications from the last hour
 subject.test = ShadouCMDB: test message
+subject.action_test = [TEST] {subject}
 
 # The first sentence: what happened, and what, if anything, the reader must do.
 lead.transition = {actor} applied the transition {transition} of workflow {workflow} to {ci}, which is now in state {to}. This message is for your information; no action is needed.
@@ -34,6 +35,9 @@ lead.minimal = A workflow event needs your attention in ShadouCMDB: workflow {wo
 lead.bulk = {actor} applied the transition {transition} of workflow {workflow} to {count} configuration items. This message is for your information; no action is needed.
 lead.digest = You received more than {max} workflow messages within an hour, so the rest of that hour's messages are collected here. No action is needed beyond what each entry asks for.
 lead.test = This is a test message from ShadouCMDB, sent at the request of {user}. It confirms that outbound e-mail works. No action is needed.
+
+# The test of an action from the workflow designer: its first paragraph.
+intro.action_test = This is a test of the action {action}, sent from the workflow designer at the request of {user}. Nothing happened to any configuration item; the details below show what a real message would contain.
 
 # Detail rows.
 label.ci = Configuration item

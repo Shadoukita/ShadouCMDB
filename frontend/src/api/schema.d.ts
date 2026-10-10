@@ -3471,6 +3471,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/workflow-definitions/{id}/actions/{key}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send a test of a saved action to yourself: one e-mail, one signed ping, or one inbox entry
+         * @description Requires `workflows.manage`. For the designer's Test send. Nothing goes to the action's recipients and nothing is queued: `email` sends the action's message in the caller's language, marked as a test, to the caller's own address; `webhook` sends one signed `ping` to the action's endpoint after the URL rules and address checks a delivery runs (as `POST /admin/webhook-endpoints/{id}/ping`; no `webhooks.manage` needed); `inbox` writes one notification to the caller. With `ciId` the message is about that CI. A refusal by the relay or the receiver is the result (`ok` false, `statusCode`, `reason`), not an error status. Audited as `workflow.action_test` on the workflow. 404 for an unknown action (also one not saved yet) and for a CI that does not exist or the caller may not view; 409 MAIL_NOT_CONFIGURED with `MAIL=off`, 409 WEBHOOKS_DISABLED while webhooks are off, 409 CONFLICT when the caller has no e-mail address or the endpoint is paused or suspended; 429 RATE_LIMITED beyond 10 tests a minute. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         */
+        post: operations["testWorkflowAction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/workflow-definitions/{id}/actions/summary": {
         parameters: {
             query?: never;
@@ -4495,7 +4515,7 @@ export interface components {
             actorId: string | null;
             actorName: string | null;
             /** @enum {string} */
-            action: "create" | "update" | "delete" | "restore" | "login.success" | "login.failure" | "login.locked" | "logout" | "session.revoke" | "audit.purge" | "token.use" | "mfa.enrol" | "mfa.disable" | "mfa.failure" | "mfa.recovery_code_used" | "mfa.recovery_codes" | "schema_change.refused" | "export" | "import.commit" | "import.report_read" | "session.reauthenticate" | "session.reauthentication_required" | "workflow.publish" | "workflow.start" | "workflow.cancel" | "workflow.transition" | "workflow.migrate" | "workflow.force" | "workflow.approval_request" | "workflow.approval_decide" | "workflow.approval_close" | "workflow.approval_overdue" | "backup.restore" | "workflow.approval_refresh" | "webhook_endpoint.rotate_secret" | "webhook_endpoint.suspend" | "webhook_endpoint.resume" | "workflow.action_dead" | "workflow.action_retry" | "workflow.action_discard" | "workflow.action_suppressed" | "mail.test";
+            action: "create" | "update" | "delete" | "restore" | "login.success" | "login.failure" | "login.locked" | "logout" | "session.revoke" | "audit.purge" | "token.use" | "mfa.enrol" | "mfa.disable" | "mfa.failure" | "mfa.recovery_code_used" | "mfa.recovery_codes" | "schema_change.refused" | "export" | "import.commit" | "import.report_read" | "session.reauthenticate" | "session.reauthentication_required" | "workflow.publish" | "workflow.start" | "workflow.cancel" | "workflow.transition" | "workflow.migrate" | "workflow.force" | "workflow.approval_request" | "workflow.approval_decide" | "workflow.approval_close" | "workflow.approval_overdue" | "backup.restore" | "workflow.approval_refresh" | "webhook_endpoint.rotate_secret" | "webhook_endpoint.suspend" | "webhook_endpoint.resume" | "workflow.action_dead" | "workflow.action_retry" | "workflow.action_discard" | "workflow.action_suppressed" | "mail.test" | "workflow.action_test";
             /** @description Table of the changed entity, e.g. configuration_items (sessions for authentication events) */
             entityType: string;
             /** Format: uuid */
@@ -6786,8 +6806,9 @@ export interface components {
             id: string;
             kind: components["schemas"]["NotificationKind"];
             /**
-             * @description The record to open: an approval request, a workflow instance, an import job or a webhook endpoint. It may be
-             *     gone by now (an import record past its retention); the client then says so.
+             * @description The record to open: an approval request, a workflow instance, an import job, a webhook endpoint or a workflow (a
+             *     test of one of its actions). It may be gone by now (an import record past its retention); the client then says
+             *     so.
              */
             entityType: components["schemas"]["NotificationEntityType"];
             /** Format: uuid */
@@ -6807,7 +6828,8 @@ export interface components {
              *     `workflow_transition` plus `actionKey`, `actionName`, `approvalRequestId` and `requestNo` (`event` is the
              *     workflow event's kind: `transition`, `approval_request`, `approval_decision`, `approval_close`,
              *     `approval_overdue`, `cancel`, `force`, ...). `webhook_suspended`: `endpointKey`, `endpointName`, `reason`,
-             *     `consecutiveFailures`. Any may be null.
+             *     `consecutiveFailures`. A designer's test of a `workflow_action` has `test` true, `definitionId` and no instance.
+             *     Any may be null.
              */
             data: Record<string, never>;
             /** Format: date-time */
@@ -6822,7 +6844,7 @@ export interface components {
          * @description What a notification opens
          * @enum {string}
          */
-        NotificationEntityType: "workflow_approval_requests" | "workflow_instances" | "import_jobs" | "webhook_endpoints";
+        NotificationEntityType: "workflow_approval_requests" | "workflow_instances" | "import_jobs" | "webhook_endpoints" | "workflow_definitions";
         /** @enum {string} */
         NotificationKind: "approval_requested" | "approval_closed" | "workflow_transition" | "import_finished" | "workflow_action" | "webhook_suspended";
         NotificationList: {
@@ -8817,6 +8839,32 @@ export interface components {
              * @description Its age in seconds
              */
             oldestPendingAgeSeconds?: number | null;
+        };
+        /** @description What a test send came to */
+        WorkflowActionTestResult: {
+            key: string;
+            kind: components["schemas"]["WorkflowActionKind"];
+            /**
+             * @description It arrived: the relay accepted the e-mail (it may still bounce later), the receiver answered 2xx, or the
+             *     inbox entry was written
+             */
+            ok: boolean;
+            /** @description Where it went: the caller's e-mail address, the endpoint's key, or `inbox` */
+            to: string;
+            /**
+             * Format: int32
+             * @description The relay's SMTP reply code when it refused, or the receiver's HTTP status
+             */
+            statusCode?: number | null;
+            /**
+             * @description Why it failed: `smtp_rejected` (5xx) or `smtp_deferred` (no connection, 4xx) for e-mail; for a webhook as
+             *     a delivery would record it (`host_not_allowed`, `address_blocked:<ip>`, `redirect_not_followed`,
+             *     `http_status`, `unreachable`, ...)
+             */
+            reason?: string | null;
+            message: string;
+            /** Format: int64 */
+            durationMs: number;
         };
         /**
          * @description What fires an action
@@ -27704,7 +27752,7 @@ export interface operations {
                 entityType?: "configuration_items" | "ci_relationships" | "ci_classes" | "ci_attribute_definitions" | "relationship_types" | "relationship_type_rules" | "statuses" | "environments" | "locations" | "owners" | "users" | "permission_profiles" | "ui_settings" | "ui_assets" | "sessions" | "audit_log" | "areas" | "schema_changes" | "api_tokens" | "identity_providers" | "lookup_lists" | "lookup_list_values" | "import_jobs" | "import_settings" | "import_mappings" | "user_groups" | "saved_views" | "config" | "inventory" | "ci_layout_overrides" | "workflow_definitions" | "workflow_approval_delegations" | "ci_notes" | "ci_note_settings" | "webhook_endpoints" | "webhook_allowed_hosts" | "workflow_action_deliveries";
                 /** @description History of these entities */
                 entityId?: string;
-                action?: "create" | "update" | "delete" | "restore" | "login.success" | "login.failure" | "login.locked" | "logout" | "session.revoke" | "audit.purge" | "token.use" | "mfa.enrol" | "mfa.disable" | "mfa.failure" | "mfa.recovery_code_used" | "mfa.recovery_codes" | "schema_change.refused" | "export" | "import.commit" | "import.report_read" | "session.reauthenticate" | "session.reauthentication_required" | "workflow.publish" | "workflow.start" | "workflow.cancel" | "workflow.transition" | "workflow.migrate" | "workflow.force" | "workflow.approval_request" | "workflow.approval_decide" | "workflow.approval_close" | "workflow.approval_overdue" | "backup.restore" | "workflow.approval_refresh" | "webhook_endpoint.rotate_secret" | "webhook_endpoint.suspend" | "webhook_endpoint.resume" | "workflow.action_dead" | "workflow.action_retry" | "workflow.action_discard" | "workflow.action_suppressed" | "mail.test";
+                action?: "create" | "update" | "delete" | "restore" | "login.success" | "login.failure" | "login.locked" | "logout" | "session.revoke" | "audit.purge" | "token.use" | "mfa.enrol" | "mfa.disable" | "mfa.failure" | "mfa.recovery_code_used" | "mfa.recovery_codes" | "schema_change.refused" | "export" | "import.commit" | "import.report_read" | "session.reauthenticate" | "session.reauthentication_required" | "workflow.publish" | "workflow.start" | "workflow.cancel" | "workflow.transition" | "workflow.migrate" | "workflow.force" | "workflow.approval_request" | "workflow.approval_decide" | "workflow.approval_close" | "workflow.approval_overdue" | "backup.restore" | "workflow.approval_refresh" | "webhook_endpoint.rotate_secret" | "webhook_endpoint.suspend" | "webhook_endpoint.resume" | "workflow.action_dead" | "workflow.action_retry" | "workflow.action_discard" | "workflow.action_suppressed" | "mail.test" | "workflow.action_test";
                 /** @description Entries by these kinds of actor: one or more of system, user, api_client and import, comma-separated (or the key repeated) */
                 actorType?: string;
                 /** @description Changes made by this user (their id) */
@@ -33423,6 +33471,114 @@ export interface operations {
             };
             /** @description Request not completed in time (code REQUEST_TIMEOUT) */
             408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unexpected server error (code INTERNAL_ERROR) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    testWorkflowAction: {
+        parameters: {
+            query?: {
+                /** @description Judge the view right on this CI's type; without it, on the workflow's type */
+                ciId?: string;
+            };
+            header?: never;
+            path: {
+                id: string;
+                /** @description Action key */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowActionTestResult"];
+                };
+            };
+            /** @description Invalid input (code VALIDATION_ERROR) with per-field details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not found (code NOT_FOUND) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request not completed in time (code REQUEST_TIMEOUT) */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict: CONFLICT (not allowed in this state) or MAIL_NOT_CONFIGURED (outbound e-mail is off: MAIL=off). Nothing was sent */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Too many requests (code RATE_LIMITED): failed password attempts, or the limit named in details[0].code; see the Retry-After header */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };

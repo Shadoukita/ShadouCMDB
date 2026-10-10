@@ -95,6 +95,7 @@ pub fn why_label(why: &Why) -> String {
         Why::Approver => "participant approvers".into(),
         Why::Delegate(n) => format!("delegate of {n}"),
         Why::Address => "address".into(),
+        Why::Test => "test".into(),
     }
 }
 

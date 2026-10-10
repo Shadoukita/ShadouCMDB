@@ -2263,6 +2263,7 @@ export const de: { [K in MessageKey]: string } = {
   "event.action.workflow.action_discard": "Zustellungen von Workflow-Aktionen verworfen",
   "event.action.workflow.action_suppressed": "Workflow-Aktionen unterdrückt",
   "event.action.mail.test": "Test-E-Mail gesendet",
+  "event.action.workflow.action_test": "Workflow-Aktion getestet",
   // ---- 9a/A begin: A classes ----
   "dm.classes.title": "CI-Klassen",
   "dm.classes.create": "Neue Klasse",

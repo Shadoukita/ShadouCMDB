@@ -260,6 +260,8 @@ pub enum Why {
     /// On behalf of this user.
     Delegate(String),
     Address,
+    /// The recipient sent a test of the action to themselves.
+    Test,
 }
 
 fn why_text(locale: Locale, why: &Why, workflow: &str) -> String {
@@ -276,6 +278,7 @@ fn why_text(locale: Locale, why: &Why, workflow: &str) -> String {
         Why::Approver => t(locale, "why.approver", &[]),
         Why::Delegate(name) => t(locale, "why.delegate", &[("name", name)]),
         Why::Address => t(locale, "why.address", &[("workflow", workflow)]),
+        Why::Test => t(locale, "why.test", &[]),
     }
 }
 
@@ -505,6 +508,26 @@ fn intro(locale: Locale, e: &Event, custom: &Custom) -> Vec<String> {
 
 /// One event to one recipient. `content` Minimal names no CI (the caller passes `e.ci` None too).
 pub fn single(locale: Locale, content: Content, custom: &Custom, e: &Event, why: &[Why], action: &str) -> Rendered {
+    let (subject, body) = single_parts(locale, content, custom, e, why, action);
+    layout(locale, subject, body)
+}
+
+/// The designer's test of an action (`POST .../actions/{key}/test`): the message [`single`] writes, marked as a
+/// test in the subject and in a first paragraph that names `user`, who asked for it and is the only recipient.
+pub fn action_test(locale: Locale, content: Content, custom: &Custom, e: &Event, action: &str, user: &str) -> Rendered {
+    let (subject, mut body) = single_parts(locale, content, custom, e, &[Why::Test], action);
+    body.intro.insert(0, t(locale, "intro.action_test", &[("action", &inline(action)), ("user", &inline(user))]));
+    layout(locale, t(locale, "subject.action_test", &[("subject", &subject)]), body)
+}
+
+fn single_parts(
+    locale: Locale,
+    content: Content,
+    custom: &Custom,
+    e: &Event,
+    why: &[Why],
+    action: &str,
+) -> (String, Body) {
     let args = event_args(locale, e);
     let a = targs(&args);
     let minimal = content == Content::Minimal || e.ci.is_none();
@@ -528,7 +551,7 @@ pub fn single(locale: Locale, content: Content, custom: &Custom, e: &Event, why:
         link: e.url.clone(),
         footer: footer(locale, why, &e.workflow, action),
     };
-    layout(locale, subject, body)
+    (subject, body)
 }
 
 /// One transition applied to many CIs by one bulk request: one message that
