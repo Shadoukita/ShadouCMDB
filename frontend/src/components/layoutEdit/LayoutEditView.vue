@@ -2,6 +2,7 @@
 import type { EffectiveAttribute } from "../../api/queries";
 import type { LayoutEditor } from "../../lib/layoutEditor";
 import type { PanelKind } from "../../lib/uiSettings";
+import { t } from "../../i18n";
 import ErrorAlert from "../ErrorAlert.vue";
 import LoadingState from "../LoadingState.vue";
 import LayoutCanvas from "./LayoutCanvas.vue";
@@ -23,10 +24,10 @@ defineSlots<{
 </script>
 
 <template>
-  <LoadingState v-if="editor.loading" label="Loading the layout…" />
-  <ErrorAlert v-else-if="editor.loadError" :error="editor.loadError" title="Could not load the layout for editing" :on-retry="() => editor.reload()" />
-  <ErrorAlert v-else-if="attrsError" :error="attrsError" title="Could not load the class's attributes" />
-  <LoadingState v-else-if="!attrs || !editor.layout" label="Loading attribute definitions…" />
+  <LoadingState v-if="editor.loading" :label="t('layoutEditor.loading')" />
+  <ErrorAlert v-else-if="editor.loadError" :error="editor.loadError" :title="t('layoutEditor.loadFailed')" :on-retry="() => editor.reload()" />
+  <ErrorAlert v-else-if="attrsError" :error="attrsError" :title="t('layoutEditor.attrsFailed')" />
+  <LoadingState v-else-if="!attrs || !editor.layout" :label="t('record.loadingAttrs')" />
   <template v-else>
     <LayoutEditBar :editor="editor" :class-name="className" />
     <LayoutCanvas :editor="editor" :attrs="attrs" :form="form">

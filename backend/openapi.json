@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "ShadouCMDB API",
-    "description": "REST API for ShadouCMDB. This API is the only database client; the web UI uses nothing else.\n\n- Collections are paginated with `limit`/`offset` and return `{ data, page: { limit, offset, total } }`, except `listIdentityProviders` (a plain array), `listCiClassEffectiveAttributes`, `listTemplates` and `listImportMappings` (`{ data }` with every item), `listSavedViews` (`{ data, limits }` with every item), `countSavedViews` (`{ data, cap, truncated }`, at most 50 views), `searchPrincipals` (`{ data }`, at most 20 matches), `listConfigurationItemServices` (`{ data, truncated, visibility }`, at most 200 services), `getWorkflowInstanceSummary` (`{ data }`, one count per workflow and state), `getConfigurationItemWorkflows` (`{ data, startable }`, running instances and the 20 that ended last) and the `.../usage` operations (`{ inUse, data }`).\n- `sort=field` ascending, `sort=-field` descending. `q` searches. Filters that take ids accept comma-separated lists.\n- Every error uses the `ErrorEnvelope` shape; invalid input is always 400 `VALIDATION_ERROR` with per-field `details`.\n- Sign in with `POST /api/v1/auth/login`; the session travels in the `shadoucmdb_session` cookie (`__Host-shadoucmdb_session` behind HTTPS). Without a live session every operation answers 401 `UNAUTHENTICATED`, except these public ones: `GET /healthz` (getLiveness), `GET /api/v1/version` (getVersion), `GET /readyz` (getReadiness), `GET /api/v1/setup` (getSetupStatus), `POST /api/v1/setup` (completeSetup), `POST /api/v1/auth/login` (login), `POST /api/v1/auth/login/mfa` (loginSecondFactor), `GET /api/v1/auth/providers` (getSignInOptions), `GET /api/v1/auth/oidc/{id}/start` (startOidcSignIn), `GET /api/v1/auth/oidc/callback` (completeOidcSignIn), `GET /api/v1/ui-settings/branding` (getPublicBranding), `GET /api/v1/ui-settings/assets/{kind}` (getUiAsset).\n- POST, PUT, PATCH and DELETE also need the `X-CSRF-Token` header (the `csrfToken` from login or `/api/v1/auth/me`, also in the `shadoucmdb_csrf` cookie, `__Host-shadoucmdb_csrf` behind HTTPS); without it: 403 `CSRF_TOKEN_INVALID`. So do the audited CSV exports (`exportConfigurationItemImpact`, `exportBusinessServiceMembers`, `exportConfig`), although they are GETs, so a link on another site cannot run them as the signed-in user.\n- Scripts and services use an API token instead (`Authorization: Bearer scmdb_...`, created under `/api/v1/admin/api-tokens`). With that header the cookies are ignored and no CSRF token is needed; an invalid, expired or revoked token is 401. A token may do what both its owner and its permission profile allow. Operations that need a signed-in session say so in their description and answer 403 `FORBIDDEN` to a token. Every request made with a token is recorded in the audit log.\n- Permissions come from the permission profiles a user holds. A missing global permission (named in each operation's description) or class permission (view/create/edit/delete) answers 403 `FORBIDDEN`. Lists only contain CIs of classes the user may view.\n- Writes are recorded in the audit log (`/api/v1/audit-log`) with the signed-in user as the actor.\n- Send `X-Request-Id` to correlate a request; it is echoed back and stored with audit rows.\n- Request bodies are limited to 1 MiB (64 KiB on public operations; configuration import allows more): 413 `PAYLOAD_TOO_LARGE`. A request not answered within `HTTP_REQUEST_TIMEOUT_SECS` answers 408 `REQUEST_TIMEOUT`, and so does a request body that does not arrive within `HTTP_BODY_TIMEOUT_SECS` (`HTTP_HEADER_READ_TIMEOUT_SECS` on public operations; configuration import and file uploads excepted).",
+    "description": "REST API for ShadouCMDB. This API is the only database client; the web UI uses nothing else.\n\n- Collections are paginated with `limit`/`offset` and return `{ data, page: { limit, offset, total } }`, except `listIdentityProviders` (a plain array), `listCiClassEffectiveAttributes`, `listTemplates`, `listImportMappings` and `listWebhookAllowedHosts` (`{ data }` with every item), `listSavedViews` (`{ data, limits }` with every item), `countSavedViews` (`{ data, cap, truncated }`, at most 50 views), `searchPrincipals` (`{ data }`, at most 20 matches), `listConfigurationItemServices` (`{ data, truncated, visibility }`, at most 200 services), `getWorkflowInstanceSummary` (`{ data }`, one count per workflow and state), `getConfigurationItemWorkflows` (`{ data, startable }`, running instances and the 20 that ended last) and the `.../usage` operations (`{ inUse, data }`).\n- `sort=field` ascending, `sort=-field` descending. `q` searches. Filters that take ids accept comma-separated lists.\n- Every error uses the `ErrorEnvelope` shape; invalid input is always 400 `VALIDATION_ERROR` with per-field `details`.\n- Sign in with `POST /api/v1/auth/login`; the session travels in the `shadoucmdb_session` cookie (`__Host-shadoucmdb_session` behind HTTPS). Without a live session every operation answers 401 `UNAUTHENTICATED`, except these public ones: `GET /healthz` (getLiveness), `GET /api/v1/version` (getVersion), `GET /readyz` (getReadiness), `GET /api/v1/setup` (getSetupStatus), `POST /api/v1/setup` (completeSetup), `POST /api/v1/auth/login` (login), `POST /api/v1/auth/login/mfa` (loginSecondFactor), `GET /api/v1/auth/providers` (getSignInOptions), `GET /api/v1/auth/oidc/{id}/start` (startOidcSignIn), `GET /api/v1/auth/oidc/callback` (completeOidcSignIn), `GET /api/v1/ui-settings/branding` (getPublicBranding), `GET /api/v1/ui-settings/assets/{kind}` (getUiAsset).\n- POST, PUT, PATCH and DELETE also need the `X-CSRF-Token` header (the `csrfToken` from login or `/api/v1/auth/me`, also in the `shadoucmdb_csrf` cookie, `__Host-shadoucmdb_csrf` behind HTTPS); without it: 403 `CSRF_TOKEN_INVALID`. So do the audited CSV exports (`exportConfigurationItemImpact`, `exportBusinessServiceMembers`, `exportConfig`), although they are GETs, so a link on another site cannot run them as the signed-in user.\n- Scripts and services use an API token instead (`Authorization: Bearer scmdb_...`, created under `/api/v1/admin/api-tokens`). With that header the cookies are ignored and no CSRF token is needed; an invalid, expired or revoked token is 401. A token may do what both its owner and its permission profile allow. Operations that need a signed-in session say so in their description and answer 403 `FORBIDDEN` to a token. Every request made with a token is recorded in the audit log.\n- Permissions come from the permission profiles a user holds. A missing global permission (named in each operation's description) or class permission (view/create/edit/delete) answers 403 `FORBIDDEN`. Lists only contain CIs of classes the user may view.\n- Writes are recorded in the audit log (`/api/v1/audit-log`) with the signed-in user as the actor.\n- Send `X-Request-Id` to correlate a request; it is echoed back and stored with audit rows.\n- Request bodies are limited to 1 MiB (64 KiB on public operations; configuration import allows more): 413 `PAYLOAD_TOO_LARGE`. A request not answered within `HTTP_REQUEST_TIMEOUT_SECS` answers 408 `REQUEST_TIMEOUT`, and so does a request body that does not arrive within `HTTP_BODY_TIMEOUT_SECS` (`HTTP_HEADER_READ_TIMEOUT_SECS` on public operations; configuration import and file uploads excepted).",
     "version": "0.1.0-rc.1"
   },
   "servers": [
@@ -25860,7 +25860,8 @@
                 "approval_closed",
                 "workflow_transition",
                 "import_finished",
-                "workflow_action"
+                "workflow_action",
+                "webhook_suspended"
               ]
             }
           }
@@ -31567,7 +31568,7 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "description": "A whole configuration: data model, lookups, permission profiles, UI settings, saved import mappings, shared saved views and workflows (no users, passwords, CIs, personal views or workflow instances)",
+                "description": "A whole configuration: data model, lookups, permission profiles, UI settings, saved import mappings, shared saved views, workflows and webhook endpoints (no users, passwords, secrets, CIs, personal views or workflow instances)",
                 "required": [
                   "format",
                   "formatVersion"
@@ -31583,8 +31584,8 @@
                   "formatVersion": {
                     "type": "integer",
                     "format": "int32",
-                    "description": "File format version; this server writes version 13 and reads 1 to 13",
-                    "maximum": 13,
+                    "description": "File format version; this server writes version 14 and reads 1 to 14",
+                    "maximum": 14,
                     "minimum": 1
                   },
                   "exportedAt": {
@@ -32037,6 +32038,101 @@
                       "additionalProperties": false
                     },
                     "maxItems": 500
+                  },
+                  "webhookEndpoints": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "description": "A webhook endpoint without its secrets: imported as new, it is suspended (`secret_required`) until an\nadministrator rotates its signing secret, shares it with the receiver and resumes it",
+                      "required": [
+                        "key",
+                        "name",
+                        "url"
+                      ],
+                      "properties": {
+                        "key": {
+                          "type": "string",
+                          "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+                        },
+                        "name": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "minLength": 1
+                        },
+                        "url": {
+                          "type": "string",
+                          "maxLength": 2048,
+                          "minLength": 1
+                        },
+                        "timeoutMs": {
+                          "type": "integer",
+                          "format": "int32",
+                          "maximum": 30000,
+                          "minimum": 1000
+                        },
+                        "maxPerMinute": {
+                          "type": "integer",
+                          "format": "int32",
+                          "maximum": 6000,
+                          "minimum": 1
+                        },
+                        "maxInFlight": {
+                          "type": "integer",
+                          "format": "int32",
+                          "maximum": 16,
+                          "minimum": 1
+                        },
+                        "authHeaderName": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "The source's auth header name, if it had one; its value never travels, so it is not imported"
+                        },
+                        "authHeaderSet": {
+                          "type": "boolean"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "maxItems": 1000
+                  },
+                  "webhookAllowedHosts": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "description": "A host webhooks may reach",
+                      "required": [
+                        "hostPattern"
+                      ],
+                      "properties": {
+                        "hostPattern": {
+                          "type": "string",
+                          "maxLength": 255,
+                          "minLength": 1
+                        },
+                        "port": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ],
+                          "format": "int32",
+                          "maximum": 65535,
+                          "minimum": 1
+                        },
+                        "allowHttp": {
+                          "type": "boolean"
+                        },
+                        "comment": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "maxItems": 1000
                   }
                 },
                 "additionalProperties": false
@@ -34579,7 +34675,7 @@
           "Workflow definitions"
         ],
         "summary": "Replace who may decide each step of the workflow's approval policies",
-        "description": "Requires `workflows.manage`. `approvers` is the complete new set. Send the workflow's `version`: 409 VERSION_CONFLICT if it changed in between. Exactly the field `source` names is set (400 `required` or `source_mismatch`); profiles, groups and users are given by id or by name (a user by username), a field by id or by key. 400 VALIDATION_ERROR: `unknown_step` on `approvers[i].stepKey` for a step that no version and not the draft has, `not_found` for an unknown profile, group or user, `unknown_attribute` or `attribute_type` on `approvers[i].attribute` unless it is a reference field of the workflow's type (own or inherited) to the Person type, and `duplicate`. A change bumps the workflow's version and is audited as an `update` with the assignments before and after, by name. The response carries the lint's warnings (`problems`). Assignments of a step that only the draft had are dropped (audited the same way) when the draft is deleted or saved without it. After the change is saved, the active steps of the workflow's pending approval requests are resolved again from the new assignments (up to 200 at once; the approval sweep finishes the rest), each change of a step's approvers audited on its CI as `workflow.approval_refresh` with actor `system`. Decisions already cast stand. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "description": "Requires `workflows.manage`. `approvers` is the complete new set. Send the workflow's `version`: 409 VERSION_CONFLICT if it changed in between. Exactly the field `source` names is set (400 `required` or `source_mismatch`); profiles, groups and users are given by id or by name (a user by username), a field by id or by key. 400 VALIDATION_ERROR: `unknown_step` on `approvers[i].stepKey` for a step that no version and not the draft has, `not_found` for an unknown profile, group or user, `directory_lookup_forbidden` for a group or user given by name by a caller who may not look up users and groups (the edit permission on business services or `users.manage`, as for `GET /principals`) unless the workflow already has it under that name, whether or not it exists, `unknown_attribute` or `attribute_type` on `approvers[i].attribute` unless it is a reference field of the workflow's type (own or inherited) to the Person type, and `duplicate`. A change bumps the workflow's version and is audited as an `update` with the assignments before and after, by name. The response carries the lint's warnings (`problems`). Assignments of a step that only the draft had are dropped (audited the same way) when the draft is deleted or saved without it. After the change is saved, the active steps of the workflow's pending approval requests are resolved again from the new assignments (up to 200 at once; the approval sweep finishes the rest), each change of a step's approvers audited on its CI as `workflow.approval_refresh` with actor `system`. Decisions already cast stand. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
         "operationId": "replaceWorkflowApprovers",
         "parameters": [
           {
@@ -34826,7 +34922,7 @@
           "Workflow definitions"
         ],
         "summary": "Who could decide one approval step, and why each user is in or out",
-        "description": "Requires `workflows.manage`. Resolves the step's assignments to users, for the CI `ciId` or, without it, in general (the field and service owner sources are then not resolved). Each user is `eligible`, or out with a reason: `inactive` (the account is disabled), `no_view_right` (no profile of theirs lets them view the CI's type, so they would never see the request), `excluded` (the `requestedBy` user: four-eyes), or `escalation_only`. Each source tells how many users it resolved to, and why none when it is empty. With `ciId` and `requestedBy`, the sources and parts a request by that user would not use are marked: `dropped` on a field source (or on a service owner source none of whose owners is left), and `droppedParts` listing each service owner or membership left out, with who made the change. Membership is read now; a running request reads it when each decision is made. 400 `unknown_step` for a step no version or draft has; 400 `not_covered` when the workflow does not run on the CI's type; 404 for a CI that does not exist or that the caller may not view.",
+        "description": "Requires `workflows.manage`. Resolves the step's assignments to users, for the CI `ciId` or, without it, in general (the field and service owner sources are then not resolved). Each user is `eligible`, or out with a reason: `inactive` (the account is disabled), `no_view_right` (no profile of theirs lets them view the CI's type, so they would never see the request), `excluded` (the `requestedBy` user: four-eyes), or `escalation_only`. Each source tells how many users it resolved to, and why none when it is empty. A caller who may not look up users (as for `GET /principals`) gets the counts with `users` empty and `usersHidden: true`. With `ciId` and `requestedBy`, the sources and parts a request by that user would not use are marked: `dropped` on a field source (or on a service owner source none of whose owners is left), and `droppedParts` listing each service owner or membership left out, with who made the change. Membership is read now; a running request reads it when each decision is made. 400 `unknown_step` for a step no version or draft has; 400 `not_covered` when the workflow does not run on the CI's type; 404 for a CI that does not exist or that the caller may not view.",
         "operationId": "previewWorkflowApprovers",
         "parameters": [
           {
@@ -34977,7 +35073,7 @@
           "Workflow definitions"
         ],
         "summary": "The workflow's notification actions: who is told what, when",
-        "description": "Requires `workflows.manage`. An action has a kind (`inbox`: an entry in each recipient's notifications; `email` and `webhook` come in a later release), a trigger (`transition`, `approval_requested`, `approval_step`, `approval_closed`, `approval_overdue` on the transition `transition`, or `instance_cancelled`, `instance_forced`) and recipient sources, resolved when the action runs. Actions are on the definition: a change applies at once to every version, without publishing. Nothing is sent from the request that runs the transition; the event's transaction queues a run, and the action workers deliver it after commit to each recipient who may then view the CI's type. `problems` holds the lint's warnings.",
+        "description": "Requires `workflows.manage`. An action has a kind (`inbox`: an entry in each recipient's notifications; `webhook`: a signed request to a registered endpoint, carrying the CI fields listed in `settings.includeAttributes`; `email` comes in a later release), a trigger (`transition`, `approval_requested`, `approval_step`, `approval_closed`, `approval_overdue` on the transition `transition`, or `instance_cancelled`, `instance_forced`) and recipient sources, resolved when the action runs. Actions are on the definition: a change applies at once to every version, without publishing. Nothing is sent from the request that runs the transition; the event's transaction queues a run, and the action workers deliver it after commit to each recipient who may then view the CI's type. `problems` holds the lint's warnings (also `endpoint_not_active` for a webhook action whose endpoint is paused or suspended, and `webhooks_disabled` while the operator has webhooks off).",
         "operationId": "getWorkflowActions",
         "parameters": [
           {
@@ -35086,7 +35182,7 @@
           "Workflow definitions"
         ],
         "summary": "Replace the workflow's notification actions",
-        "description": "Requires `workflows.manage`. `actions` is the complete new set, in order; an action keeps its id and its delivery history by `key`. Send the workflow's `version`: 409 VERSION_CONFLICT if it changed in between. A change bumps the workflow's version and is audited as an `update` with the actions before and after, recipients by name. 400 VALIDATION_ERROR: `required` / `not_applicable` / `source_mismatch` for fields the kind, trigger or source needs or does not take; `unknown_transition` for a transition no version and not the draft has; `not_found` for an unknown profile, group or user; `duplicate`; `too_many_actions` beyond 10 per trigger and transition; `unknown_placeholder` in an e-mail text; `kind_unavailable` for `email` and `webhook`, and `source_unavailable` for sources other than `profile`, `group` and `user`, until the release that delivers them. Runs already queued for a removed or disabled action are cancelled. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "description": "Requires `workflows.manage`. `actions` is the complete new set, in order; an action keeps its id and its delivery history by `key`. Send the workflow's `version`: 409 VERSION_CONFLICT if it changed in between. A change bumps the workflow's version and is audited as an `update` with the actions before and after, recipients by name. 400 VALIDATION_ERROR: `required` / `not_applicable` / `source_mismatch` for fields the kind, trigger or source needs or does not take; `unknown_transition` for a transition no version and not the draft has; `not_found` for an unknown profile, group or user; `directory_lookup_forbidden` for a group or user given by name by a caller who may not look up users and groups (the edit permission on business services or `users.manage`, as for `GET /principals`) unless the workflow already has it under that name, whether or not it exists; `duplicate`; `too_many_actions` beyond 10 per trigger and transition; `unknown_placeholder` in an e-mail text; for a webhook, `not_found` for an unknown endpoint key, `endpoint_not_active` when a new or changed action names a paused or suspended endpoint, and `unknown_attribute` for an `includeAttributes` key that is not a field of the workflow's type (own or inherited); `kind_unavailable` for `email`, and `source_unavailable` for sources other than `profile`, `group` and `user`, until the release that delivers them. Choosing an endpoint needs no `webhooks.manage`. Runs already queued for a removed or disabled action are cancelled. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
         "operationId": "replaceWorkflowActions",
         "parameters": [
           {
@@ -35257,7 +35353,7 @@
           "Workflow definitions"
         ],
         "summary": "Who an action would notify now, and why each user is in or out",
-        "description": "Requires `workflows.manage`. Resolves the action's recipient sources to users as a run would now: `included`, or out with a reason (`inactive`, `no_view`: may not view the type of the CI `ciId`, or of the workflow without it, `truncated`: beyond `WORKFLOW_ACTIONS_MAX_RECIPIENTS`). Whoever runs the event is left out too unless the action sets `excludeActor: false`. Nothing is sent. 404 for an unknown action, and for a CI that does not exist or that the caller may not view.",
+        "description": "Requires `workflows.manage`. Resolves the action's recipient sources to users as a run would now: `included`, or out with a reason (`inactive`, `no_view`: may not view the type of the CI `ciId`, or of the workflow without it, `truncated`: beyond `WORKFLOW_ACTIONS_MAX_RECIPIENTS`). Whoever runs the event is left out too unless the action sets `excludeActor: false`. Nothing is sent. A caller who may not look up users (as for `GET /principals`) gets `included` with `users` empty and `usersHidden: true`. 404 for an unknown action, and for a CI that does not exist or that the caller may not view.",
         "operationId": "previewWorkflowAction",
         "parameters": [
           {
@@ -35379,6 +35475,1081 @@
           },
           {
             "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/workflow-definitions/{id}/actions/summary": {
+      "get": {
+        "tags": [
+          "Workflow definitions"
+        ],
+        "summary": "How the workflow's actions are being delivered: counts by status, oldest pending, the queue",
+        "description": "Requires `workflows.manage`. Per action (in order, then deleted actions that still have deliveries): the deliveries queued in the last 24 hours and 7 days by their status now (`discarded` is a dead delivery an administrator gave up on), the runs suppressed in the last 24 hours (queue full or loop breaker: nothing was delivered for them), and when the oldest pending delivery was queued or retried. `queue` is the whole outbox, every workflow: `overloaded` while new runs are suppressed, the `backlog` the workers last counted and when (`checkedAt` grows old when no process runs workers), and the limits in force. Webhook actions are included only with `webhooks.manage`.",
+        "operationId": "getWorkflowActionsSummary",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowActionsSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/workflow-definitions/{id}/action-deliveries": {
+      "get": {
+        "tags": [
+          "Workflow definitions"
+        ],
+        "summary": "The workflow's action deliveries, newest first (paginated; filter by action, status, kind, time, instance, event or CI)",
+        "description": "Requires `workflows.manage`. One delivery per recipient of a run: its status (`pending`, `sending`, `held`, `delivered`, `skipped`, `dead`, or `discarded` for a dead one an administrator gave up on) with the reason, attempts since the last retry, when a pending one is due, and the last status code. `from` and `to` bound when the run queued it. A fixed e-mail address is shown masked; a user's address is never stored. `ciLabel` is null when the CI is gone or the caller may not view its type. Webhook deliveries are listed only with `webhooks.manage`.",
+        "operationId": "listWorkflowActionDeliveries",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size (1-200)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Rows to skip",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0,
+              "maximum": 1000000,
+              "minimum": 0
+            }
+          },
+          {
+            "name": "actionKey",
+            "in": "query",
+            "description": "Stable machine key, lower_snake_case",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{0,62}$"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Where a delivery stands",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "sending",
+                "held",
+                "delivered",
+                "skipped",
+                "dead",
+                "discarded"
+              ]
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "How an action delivers",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "inbox",
+                "email",
+                "webhook"
+              ]
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Only deliveries queued at or after this time",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Only deliveries queued before this time",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "instanceId",
+            "in": "query",
+            "description": "Only deliveries of this instance",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "eventId",
+            "in": "query",
+            "description": "Only deliveries of this instance event",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "ciId",
+            "in": "query",
+            "description": "Only deliveries about this CI",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "Sort field; prefix with \"-\" for descending. One of: createdAt, completedAt, nextAttemptAt, attempts, status, actionKey",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "-createdAt",
+              "enum": [
+                "createdAt",
+                "-createdAt",
+                "completedAt",
+                "-completedAt",
+                "nextAttemptAt",
+                "-nextAttemptAt",
+                "attempts",
+                "-attempts",
+                "status",
+                "-status",
+                "actionKey",
+                "-actionKey"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowActionDeliveryList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/workflow-definitions/{id}/action-deliveries/{deliveryId}": {
+      "get": {
+        "tags": [
+          "Workflow definitions"
+        ],
+        "summary": "One action delivery with its last error, its run and the event it tells of",
+        "description": "Requires `workflows.manage`. `event` is null once the event went to the archive with its CI. 404 for a delivery of another workflow, and for a webhook delivery without `webhooks.manage`.",
+        "operationId": "getWorkflowActionDelivery",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "deliveryId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowActionDeliveryDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/workflow-definitions/{id}/action-deliveries/{deliveryId}/retry": {
+      "post": {
+        "tags": [
+          "Workflow definitions"
+        ],
+        "summary": "Send a dead or held delivery again, with fresh attempts",
+        "description": "Requires `workflows.manage`. The delivery becomes `pending`, due now, with `attempts` 0; its max age (`WORKFLOW_ACTIONS_MAX_AGE_HOURS`) counts from the retry. The workers send it as any other, to the recipient's current address. Audited as `workflow.action_retry` (status before and after). 409 CONFLICT `not_retryable` unless it is `dead` or `held` and of an e-mail or webhook action (inbox entries are written when the run fans out). Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "retryWorkflowActionDelivery",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "deliveryId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowActionDelivery"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/workflow-definitions/{id}/action-deliveries/{deliveryId}/discard": {
+      "post": {
+        "tags": [
+          "Workflow definitions"
+        ],
+        "summary": "Give up on a pending, held or dead delivery",
+        "description": "Requires `workflows.manage`. The delivery becomes `discarded` (stored as `dead` with reason `discarded`) and is never sent; it is kept for `WORKFLOW_ACTIONS_DEAD_RETENTION_DAYS`. Audited as `workflow.action_discard` (status before and after). 409 CONFLICT `not_discardable` for a delivery being sent, delivered, skipped or already discarded. Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "discardWorkflowActionDelivery",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "deliveryId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowActionDelivery"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/workflow-definitions/{id}/action-deliveries/retry": {
+      "post": {
+        "tags": [
+          "Workflow definitions"
+        ],
+        "summary": "Retry up to 1,000 deliveries, by id or by filter",
+        "description": "Requires `workflows.manage`. With `ids`, each dead or held delivery of an e-mail or webhook action is retried as by retryWorkflowActionDelivery; the others are listed in `refused` (`not_found`, `not_retryable`). With `filter`, the first 1,000 deliveries it selects that can be retried, oldest first; `more` tells that others remain. One transaction, one `workflow.action_retry` audit row per delivery (`bulk: true`). Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "retryWorkflowActionDeliveries",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "Retry or discard several deliveries: by id, or every one a filter selects",
+                "properties": {
+                  "ids": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "description": "These deliveries (1-1000)",
+                    "maxItems": 1000,
+                    "minItems": 1
+                  },
+                  "filter": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/WorkflowActionDeliveryFilter",
+                        "description": "The first 1,000 deliveries this selects that the operation applies to, oldest first"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowActionDeliveryBulkResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large (code PAYLOAD_TOO_LARGE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/workflow-definitions/{id}/action-deliveries/discard": {
+      "post": {
+        "tags": [
+          "Workflow definitions"
+        ],
+        "summary": "Discard up to 1,000 deliveries, by id or by filter",
+        "description": "Requires `workflows.manage`. With `ids`, each pending, held or dead delivery is discarded as by discardWorkflowActionDelivery; the others are listed in `refused` (`not_found`, `not_discardable`). With `filter`, the first 1,000 deliveries it selects that can be discarded, oldest first; `more` tells that others remain. One transaction, one `workflow.action_discard` audit row per delivery (`bulk: true`). Needs a signed-in session: API tokens get 403 FORBIDDEN.",
+        "operationId": "discardWorkflowActionDeliveries",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "Retry or discard several deliveries: by id, or every one a filter selects",
+                "properties": {
+                  "ids": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "description": "These deliveries (1-1000)",
+                    "maxItems": 1000,
+                    "minItems": 1
+                  },
+                  "filter": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/WorkflowActionDeliveryFilter",
+                        "description": "The first 1,000 deliveries this selects that the operation applies to, oldest first"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowActionDeliveryBulkResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large (code PAYLOAD_TOO_LARGE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
           }
         ]
       }
@@ -39390,6 +40561,1654 @@
           }
         ]
       }
+    },
+    "/api/v1/admin/webhook-endpoints": {
+      "get": {
+        "tags": [
+          "Webhooks"
+        ],
+        "summary": "List webhook endpoints (never their secrets)",
+        "description": "For `webhooks.manage` holders. A caller with `workflows.manage` only (to pick an endpoint for a workflow action) gets the key, name and status of each, every other field null; anyone else 403.",
+        "operationId": "listWebhookEndpoints",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size (1-200)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Rows to skip",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0,
+              "minimum": 0
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Only endpoints in this status",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Whether an endpoint is called",
+              "enum": [
+                "active",
+                "paused",
+                "suspended"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookEndpointList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Webhooks"
+        ],
+        "summary": "Register a webhook endpoint; the response shows its signing secret once",
+        "description": "Requires `webhooks.manage`. The URL must be absolute https (http only when the operator set WEBHOOK_ALLOW_HTTP=true and the matching allowlist entry has `allowHttp`), without user name, password or fragment, and its host (and port) must be on the allowlist and inside the operator's WEBHOOK_ALLOWED_HOSTS: 400 VALIDATION_ERROR at `url` with `host_not_allowed`, `http_not_allowed`, `url_userinfo`, `url_fragment`, `invalid_url` or `too_long` otherwise. The server generates the signing secret (`whsec_...`) and returns it in this response only: copy it to the receiver now. `authHeader` is a static header sent with every request (e.g. `Authorization`); its value is write-only, and a name the server sets itself is refused (`reserved`). Where the request goes is judged again before every attempt, on the addresses the host resolves to then. 409 WEBHOOKS_DISABLED while the operator has not set WEBHOOKS_ALLOWED=true. Needs a signed-in session: API tokens get 403 FORBIDDEN. The session's owner must have signed in or confirmed their credentials (`reauthenticate`, POST /api/v1/auth/reauthenticate) in the last 10 minutes: 403 REAUTHENTICATION_REQUIRED otherwise, audited as `session.reauthentication_required`.",
+        "operationId": "createWebhookEndpoint",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "Register a webhook receiver",
+                "required": [
+                  "key",
+                  "name",
+                  "url"
+                ],
+                "properties": {
+                  "key": {
+                    "type": "string",
+                    "description": "Stable key: lower case, digits, _ and -; actions and configuration files name it",
+                    "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+                  },
+                  "name": {
+                    "type": "string",
+                    "maxLength": 100,
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "url": {
+                    "type": "string",
+                    "description": "Absolute https URL (http only with WEBHOOK_ALLOW_HTTP=true and an allowlist entry that allows it), no user name or password, no fragment; its host and port must be on the allowlist",
+                    "maxLength": 2048,
+                    "minLength": 1
+                  },
+                  "timeoutMs": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "format": "int32",
+                    "description": "Time allowed per attempt (1,000-30,000 ms, default 10,000)",
+                    "maximum": 30000,
+                    "minimum": 1000
+                  },
+                  "maxPerMinute": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "format": "int32",
+                    "description": "Requests per minute at most (1-6,000, default 120)",
+                    "maximum": 6000,
+                    "minimum": 1
+                  },
+                  "maxInFlight": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "format": "int32",
+                    "description": "Requests in flight at most (1-16, default 2)",
+                    "maximum": 16,
+                    "minimum": 1
+                  },
+                  "authHeader": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/WebhookAuthHeaderInput"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookEndpointCreated"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the session's owner has not confirmed their credentials in the last 10 minutes (code REAUTHENTICATION_REQUIRED; POST /api/v1/auth/reauthenticate, then send the request again)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large (code PAYLOAD_TOO_LARGE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/webhook-endpoints/{id}": {
+      "get": {
+        "tags": [
+          "Webhooks"
+        ],
+        "summary": "Get one webhook endpoint (never its secret or header value)",
+        "description": "Requires `webhooks.manage`.",
+        "operationId": "getWebhookEndpoint",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookEndpoint"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Webhooks"
+        ],
+        "summary": "Delete a webhook endpoint that no workflow action uses",
+        "description": "Requires `webhooks.manage`. 409 IN_USE while a workflow action names it (the message lists them). Its deliveries still waiting die (`endpoint_deleted`), each audited as `workflow.action_dead`.",
+        "operationId": "deleteWebhookEndpoint",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success, no content"
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "Webhooks"
+        ],
+        "summary": "Change a webhook endpoint (partial)",
+        "description": "Requires `webhooks.manage`. A new `url` meets the rules of createWebhookEndpoint. `authHeader`: an object replaces the header, null removes it, left out keeps it. The status changes only through pause and resume. 409 WEBHOOKS_DISABLED while the operator has not set WEBHOOKS_ALLOWED=true.",
+        "operationId": "updateWebhookEndpoint",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "Change an endpoint (partial)",
+                "required": [
+                  "version"
+                ],
+                "properties": {
+                  "version": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 1
+                  },
+                  "name": {
+                    "type": "string",
+                    "maxLength": 100,
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "url": {
+                    "type": "string",
+                    "description": "Absolute https URL (http only with WEBHOOK_ALLOW_HTTP=true and an allowlist entry that allows it), no user name or password, no fragment; its host and port must be on the allowlist",
+                    "maxLength": 2048,
+                    "minLength": 1
+                  },
+                  "timeoutMs": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "format": "int32",
+                    "maximum": 30000,
+                    "minimum": 1000
+                  },
+                  "maxPerMinute": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "format": "int32",
+                    "maximum": 6000,
+                    "minimum": 1
+                  },
+                  "maxInFlight": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "format": "int32",
+                    "maximum": 16,
+                    "minimum": 1
+                  },
+                  "authHeader": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/WebhookAuthHeaderInput"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "An object replaces the header, null removes it, left out keeps it"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookEndpoint"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large (code PAYLOAD_TOO_LARGE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/webhook-endpoints/{id}/rotate-secret": {
+      "post": {
+        "tags": [
+          "Webhooks"
+        ],
+        "summary": "Replace the signing secret; the response shows the new one once",
+        "description": "Requires `webhooks.manage`. For `graceHours` (default 24, 0 to 168) every request carries a second `v1=` signature made with the previous secret, so the receiver can switch without missing a request. An endpoint suspended with `secret_required` becomes paused: share the new secret with the receiver, then resume it. 409 WEBHOOKS_DISABLED while the operator has not set WEBHOOKS_ALLOWED=true. Needs a signed-in session: API tokens get 403 FORBIDDEN. The session's owner must have signed in or confirmed their credentials (`reauthenticate`, POST /api/v1/auth/reauthenticate) in the last 10 minutes: 403 REAUTHENTICATION_REQUIRED otherwise, audited as `session.reauthentication_required`.",
+        "operationId": "rotateWebhookSecret",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "Replace the signing secret",
+                "properties": {
+                  "graceHours": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "format": "int32",
+                    "description": "Hours the current secret is still sent next to the new one (0-168, default 24); 0 drops it at once",
+                    "maximum": 168,
+                    "minimum": 0
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookSecretRotated"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the session's owner has not confirmed their credentials in the last 10 minutes (code REAUTHENTICATION_REQUIRED; POST /api/v1/auth/reauthenticate, then send the request again)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (not allowed in this state), VERSION_CONFLICT, or WEBHOOKS_DISABLED (the operator has not enabled webhooks: WEBHOOKS_ALLOWED=false). Nothing was changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large (code PAYLOAD_TOO_LARGE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/webhook-endpoints/{id}/ping": {
+      "post": {
+        "tags": [
+          "Webhooks"
+        ],
+        "summary": "Send a signed test request (`ping`) and say what came of it",
+        "description": "Requires `webhooks.manage`. Runs the URL rules and the address checks a delivery runs, then sends one `ping` event (also to a paused or suspended endpoint). Answers 200 with `ok` and the reason a delivery would record (`host_not_allowed`, `address_blocked:<ip>`, `redirect_not_followed`, ...). Nothing is stored and the circuit breaker does not count it. 409 WEBHOOKS_DISABLED while the operator has not set WEBHOOKS_ALLOWED=true.",
+        "operationId": "pingWebhookEndpoint",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookPingResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (not allowed in this state), VERSION_CONFLICT, or WEBHOOKS_DISABLED (the operator has not enabled webhooks: WEBHOOKS_ALLOWED=false). Nothing was changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/webhook-endpoints/{id}/pause": {
+      "post": {
+        "tags": [
+          "Webhooks"
+        ],
+        "summary": "Pause an endpoint: its deliveries are held until it is resumed",
+        "description": "Requires `webhooks.manage`. Held deliveries older than WORKFLOW_ACTIONS_MAX_AGE_HOURS die as `endpoint_suspended`. Audited as `webhook_endpoint.suspend` with reason `paused`. A paused or suspended endpoint is left as it is.",
+        "operationId": "pauseWebhookEndpoint",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookEndpoint"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/webhook-endpoints/{id}/resume": {
+      "post": {
+        "tags": [
+          "Webhooks"
+        ],
+        "summary": "Resume a paused or suspended endpoint and send its held deliveries",
+        "description": "Requires `webhooks.manage`. Its URL must still be allowed (400 `host_not_allowed` otherwise) and its secrets must decrypt: an endpoint created by a configuration import, restored under another key or reset with `webhooks reset-undecryptable` needs a secret rotation first (422 SECRET_REQUIRED). The failure count starts again at 0. 409 WEBHOOKS_DISABLED while the operator has not set WEBHOOKS_ALLOWED=true.",
+        "operationId": "resumeWebhookEndpoint",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookEndpoint"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (not allowed in this state), VERSION_CONFLICT, or WEBHOOKS_DISABLED (the operator has not enabled webhooks: WEBHOOKS_ALLOWED=false). Nothing was changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The stored secret must be entered again (code SECRET_REQUIRED): the patch changes the server address or bind DN it would be sent to; details name the secret's field (code secret_required). Nothing was changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/webhook-allowed-hosts": {
+      "get": {
+        "tags": [
+          "Webhooks"
+        ],
+        "summary": "The hosts webhooks may reach (an empty list allows none)",
+        "description": "Requires `webhooks.manage`. Answers `{ data }` with every entry; the list is short and not paginated.",
+        "operationId": "listWebhookAllowedHosts",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookAllowedHostList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Webhooks"
+        ],
+        "summary": "Allow webhooks to a host",
+        "description": "Requires `webhooks.manage`. An exact host, `*.domain` (any name one label or more below it; never a bare `*`) or an IP address (matched only literally), with an optional port. When the operator set WEBHOOK_ALLOWED_HOSTS, the entry must lie inside it (400 `host_not_allowed`), and `allowHttp` needs WEBHOOK_ALLOW_HTTP=true (400 `http_not_allowed`). 409 CONFLICT for an entry that exists. 409 WEBHOOKS_DISABLED while the operator has not set WEBHOOKS_ALLOWED=true. Needs a signed-in session: API tokens get 403 FORBIDDEN. The session's owner must have signed in or confirmed their credentials (`reauthenticate`, POST /api/v1/auth/reauthenticate) in the last 10 minutes: 403 REAUTHENTICATION_REQUIRED otherwise, audited as `session.reauthentication_required`.",
+        "operationId": "createWebhookAllowedHost",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "Allow webhooks to a host",
+                "required": [
+                  "hostPattern"
+                ],
+                "properties": {
+                  "hostPattern": {
+                    "type": "string",
+                    "description": "`itsm.corp.example`, `*.corp.example` (one label or more below it, never a bare `*`), or an IP address",
+                    "maxLength": 255,
+                    "minLength": 1
+                  },
+                  "port": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "format": "int32",
+                    "maximum": 65535,
+                    "minimum": 1
+                  },
+                  "allowHttp": {
+                    "type": "boolean"
+                  },
+                  "comment": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 500,
+                        "minLength": 1,
+                        "pattern": "\\S"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookAllowedHost"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the session's owner has not confirmed their credentials in the last 10 minutes (code REAUTHENTICATION_REQUIRED; POST /api/v1/auth/reauthenticate, then send the request again)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: CONFLICT (duplicate or not allowed in this state), IN_USE, VERSION_CONFLICT or LAST_ADMINISTRATOR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large (code PAYLOAD_TOO_LARGE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Body is not of an accepted media type (application/json unless the operation lists others)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/webhook-allowed-hosts/{id}": {
+      "delete": {
+        "tags": [
+          "Webhooks"
+        ],
+        "summary": "Remove an allowlist entry; endpoints it alone allowed are suspended",
+        "description": "Requires `webhooks.manage`. Every endpoint whose URL no remaining entry allows is suspended with reason `host_not_allowed` (audited) and listed in the response; its deliveries are held.",
+        "operationId": "deleteWebhookAllowedHost",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookAllowedHostDeleted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input (code VALIDATION_ERROR) with per-field details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, session expired, invalid/expired/revoked API token, or wrong credentials (code UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (code NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request not completed in time (code REQUEST_TIMEOUT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error (code INTERNAL_ERROR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable (code DATABASE_UNAVAILABLE), migrations pending (code SCHEMA_NOT_MIGRATED; run `shadoucmdb migrate`), or too many requests in progress (code SERVER_BUSY; see the Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "csrfHeader": [],
+            "sessionCookie": []
+          },
+          {
+            "apiToken": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -41226,7 +44045,7 @@
       },
       "ConfigFile": {
         "type": "object",
-        "description": "A whole configuration: data model, lookups, permission profiles, UI settings, saved import mappings, shared saved views and workflows (no users, passwords, CIs, personal views or workflow instances)",
+        "description": "A whole configuration: data model, lookups, permission profiles, UI settings, saved import mappings, shared saved views, workflows and webhook endpoints (no users, passwords, secrets, CIs, personal views or workflow instances)",
         "required": [
           "format",
           "formatVersion"
@@ -41242,8 +44061,8 @@
           "formatVersion": {
             "type": "integer",
             "format": "int32",
-            "description": "File format version; this server writes version 13 and reads 1 to 13",
-            "maximum": 13,
+            "description": "File format version; this server writes version 14 and reads 1 to 14",
+            "maximum": 14,
             "minimum": 1
           },
           "exportedAt": {
@@ -41696,6 +44515,101 @@
               "additionalProperties": false
             },
             "maxItems": 500
+          },
+          "webhookEndpoints": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A webhook endpoint without its secrets: imported as new, it is suspended (`secret_required`) until an\nadministrator rotates its signing secret, shares it with the receiver and resumes it",
+              "required": [
+                "key",
+                "name",
+                "url"
+              ],
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+                },
+                "name": {
+                  "type": "string",
+                  "maxLength": 100,
+                  "minLength": 1
+                },
+                "url": {
+                  "type": "string",
+                  "maxLength": 2048,
+                  "minLength": 1
+                },
+                "timeoutMs": {
+                  "type": "integer",
+                  "format": "int32",
+                  "maximum": 30000,
+                  "minimum": 1000
+                },
+                "maxPerMinute": {
+                  "type": "integer",
+                  "format": "int32",
+                  "maximum": 6000,
+                  "minimum": 1
+                },
+                "maxInFlight": {
+                  "type": "integer",
+                  "format": "int32",
+                  "maximum": 16,
+                  "minimum": 1
+                },
+                "authHeaderName": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The source's auth header name, if it had one; its value never travels, so it is not imported"
+                },
+                "authHeaderSet": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            },
+            "maxItems": 1000
+          },
+          "webhookAllowedHosts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A host webhooks may reach",
+              "required": [
+                "hostPattern"
+              ],
+              "properties": {
+                "hostPattern": {
+                  "type": "string",
+                  "maxLength": 255,
+                  "minLength": 1
+                },
+                "port": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int32",
+                  "maximum": 65535,
+                  "minimum": 1
+                },
+                "allowHttp": {
+                  "type": "boolean"
+                },
+                "comment": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            "maxItems": 1000
           }
         },
         "additionalProperties": false
@@ -46798,7 +49712,7 @@
           },
           "entityType": {
             "$ref": "#/components/schemas/NotificationEntityType",
-            "description": "The record to open: an approval request, a workflow instance or an import job. It may be gone by now (an\nimport record past its retention); the client then says so."
+            "description": "The record to open: an approval request, a workflow instance, an import job or a webhook endpoint. It may be\ngone by now (an import record past its retention); the client then says so."
           },
           "entityId": {
             "type": "string",
@@ -46814,7 +49728,7 @@
           },
           "data": {
             "type": "object",
-            "description": "Display values as they were at the event, by kind. Approvals: `instanceId`, `ciId`, `ciLabel`, `ciIdent`,\n`definitionName`, `transitionKey`, `transitionName`, `requestNo`; `approval_requested` also `stepKey`,\n`stepName`, `dueAt`, `requestedByName`; `approval_closed` also `status`, `closeReason`, `closedByName`.\n`workflow_transition`: `instanceId`, `ciId`, `ciLabel`, `ciIdent`, `definitionName`, `event` (`transition`,\n`cancel`, `force`), `transitionKey`, `transitionName`, `fromStateKey`, `fromStateName`, `toStateKey`,\n`toStateName`, `actorName`. `import_finished`: `fileName`, `classKey`, `status`, `errorCode`. `workflow_action`: those of\n`workflow_transition` plus `actionKey`, `actionName`, `approvalRequestId` and `requestNo` (`event` is the\nworkflow event's kind: `transition`, `approval_request`, `approval_decision`, `approval_close`,\n`approval_overdue`, `cancel`, `force`, ...). Any may be null."
+            "description": "Display values as they were at the event, by kind. Approvals: `instanceId`, `ciId`, `ciLabel`, `ciIdent`,\n`definitionName`, `transitionKey`, `transitionName`, `requestNo`; `approval_requested` also `stepKey`,\n`stepName`, `dueAt`, `requestedByName`; `approval_closed` also `status`, `closeReason`, `closedByName`.\n`workflow_transition`: `instanceId`, `ciId`, `ciLabel`, `ciIdent`, `definitionName`, `event` (`transition`,\n`cancel`, `force`), `transitionKey`, `transitionName`, `fromStateKey`, `fromStateName`, `toStateKey`,\n`toStateName`, `actorName`. `import_finished`: `fileName`, `classKey`, `status`, `errorCode`. `workflow_action`: those of\n`workflow_transition` plus `actionKey`, `actionName`, `approvalRequestId` and `requestNo` (`event` is the\nworkflow event's kind: `transition`, `approval_request`, `approval_decision`, `approval_close`,\n`approval_overdue`, `cancel`, `force`, ...). `webhook_suspended`: `endpointKey`, `endpointName`, `reason`,\n`consecutiveFailures`. Any may be null."
           },
           "createdAt": {
             "type": "string",
@@ -46836,7 +49750,8 @@
         "enum": [
           "workflow_approval_requests",
           "workflow_instances",
-          "import_jobs"
+          "import_jobs",
+          "webhook_endpoints"
         ]
       },
       "NotificationKind": {
@@ -46846,7 +49761,8 @@
           "approval_closed",
           "workflow_transition",
           "import_finished",
-          "workflow_action"
+          "workflow_action",
+          "webhook_suspended"
         ]
       },
       "NotificationList": {
@@ -50961,6 +53877,346 @@
         },
         "additionalProperties": false
       },
+      "WebhookAllowedHost": {
+        "type": "object",
+        "description": "An allowlist entry: a host webhooks may reach",
+        "required": [
+          "id",
+          "hostPattern",
+          "allowHttp",
+          "createdAt",
+          "createdByName"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "hostPattern": {
+            "type": "string",
+            "description": "An exact host (IDNA form), `*.domain` (any name below it), or an IP address"
+          },
+          "port": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The only port allowed; null allows any"
+          },
+          "allowHttp": {
+            "type": "boolean",
+            "description": "Plain http to this host, if the operator also allows it (WEBHOOK_ALLOW_HTTP)"
+          },
+          "comment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "createdByName": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WebhookAllowedHostDeleted": {
+        "type": "object",
+        "description": "The allowlist entry was removed",
+        "required": [
+          "suspendedEndpoints"
+        ],
+        "properties": {
+          "suspendedEndpoints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Keys of the endpoints suspended (`host_not_allowed`) because no entry allows their URL any more"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WebhookAllowedHostList": {
+        "type": "object",
+        "description": "The allowlist, every entry (it is short)",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WebhookAllowedHost"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "WebhookAuthHeaderInput": {
+        "type": "object",
+        "description": "A static header sent with every request (e.g. `Authorization: Bearer ...`); its value is write-only",
+        "required": [
+          "name",
+          "value"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9-]{1,64}$"
+          },
+          "value": {
+            "type": "string",
+            "writeOnly": true,
+            "maxLength": 4096,
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false
+      },
+      "WebhookEndpoint": {
+        "type": "object",
+        "description": "A registered webhook receiver. Never carries its signing secret or header value.",
+        "required": [
+          "id",
+          "key",
+          "name",
+          "status",
+          "version"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/WebhookEndpointStatus"
+          },
+          "suspendedReason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the server suspended it: `breaker` (too many failures in a row), `host_not_allowed` (its host left the\nallowlist), `restored` (restored from a backup), `secret_required` (created by a configuration import, or its\nsecret could not be decrypted)"
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The fields below are null to a caller without `webhooks.manage`"
+          },
+          "unencrypted": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "The URL is plain http (allowed by the operator and the allowlist entry): requests are not encrypted"
+          },
+          "payloadVersion": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "timeoutMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "maxPerMinute": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "maxInFlight": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "authHeaderName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The auth header's name; its value is never returned"
+          },
+          "authHeaderSet": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "previousSecretUntil": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Until when the signing secret before the last rotation is still sent (a second `v1=` in the signature)"
+          },
+          "consecutiveFailures": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "lastSuccessAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "lastFailureAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "createdAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Send it back with a change; a stale one fails with 409 VERSION_CONFLICT"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WebhookEndpointCreated": {
+        "type": "object",
+        "description": "An endpoint just created, with its signing secret: shown this once, never again",
+        "required": [
+          "endpoint",
+          "secret"
+        ],
+        "properties": {
+          "endpoint": {
+            "$ref": "#/components/schemas/WebhookEndpoint"
+          },
+          "secret": {
+            "type": "string",
+            "description": "`whsec_...`: the receiver keys HMAC-SHA256 with this whole string to check `X-ShadouCMDB-Signature`"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WebhookEndpointList": {
+        "type": "object",
+        "required": [
+          "data",
+          "page"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WebhookEndpoint"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageMeta"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WebhookEndpointStatus": {
+        "type": "string",
+        "description": "Whether an endpoint is called",
+        "enum": [
+          "active",
+          "paused",
+          "suspended"
+        ]
+      },
+      "WebhookPingResult": {
+        "type": "object",
+        "description": "What the test request came to",
+        "required": [
+          "ok",
+          "message",
+          "durationMs"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "description": "The receiver answered 2xx"
+          },
+          "statusCode": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The receiver's HTTP status, if it answered",
+            "minimum": 0
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it failed, as a delivery would record it: `host_not_allowed`, `http_not_allowed`,\n`address_blocked:<ip>`, `redirect_not_followed`, `http_status`, `unreachable`, `secret_unreadable`"
+          },
+          "message": {
+            "type": "string"
+          },
+          "durationMs": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WebhookSecretRotated": {
+        "type": "object",
+        "description": "A new signing secret, shown this once",
+        "required": [
+          "endpoint",
+          "secret"
+        ],
+        "properties": {
+          "endpoint": {
+            "$ref": "#/components/schemas/WebhookEndpoint"
+          },
+          "secret": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "WorkflowAction": {
         "type": "object",
         "description": "One notification action of a workflow",
@@ -51047,6 +54303,468 @@
           "minimal",
           "standard",
           "detailed"
+        ]
+      },
+      "WorkflowActionDelivery": {
+        "type": "object",
+        "description": "One message of an action to one recipient",
+        "required": [
+          "id",
+          "runId",
+          "eventId",
+          "actionKey",
+          "kind",
+          "instanceId",
+          "ciId",
+          "recipient",
+          "status",
+          "attempts",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "runId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "eventId": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The instance event that queued the run"
+          },
+          "actionKey": {
+            "type": "string"
+          },
+          "actionName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The action's name; null once the action was deleted"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/WorkflowActionKind"
+          },
+          "instanceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "ciId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "ciLabel": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The CI's label; null when the CI is gone or the caller may not view its type"
+          },
+          "recipient": {
+            "$ref": "#/components/schemas/WorkflowActionDeliveryRecipient"
+          },
+          "status": {
+            "$ref": "#/components/schemas/WorkflowActionDeliveryStatus"
+          },
+          "statusReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "attempts": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Attempts made (since the last retry)"
+          },
+          "nextAttemptAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When a pending delivery is due; null otherwise"
+          },
+          "lastStatusCode": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The last attempt's HTTP or SMTP status code"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the run queued it"
+          },
+          "completedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was delivered, skipped or given up"
+          },
+          "retriedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When an administrator last retried it"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowActionDeliveryBulkResult": {
+        "type": "object",
+        "description": "What a bulk retry or discard did",
+        "required": [
+          "changed",
+          "ids",
+          "refused",
+          "more"
+        ],
+        "properties": {
+          "changed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Deliveries changed (one audit row each)"
+          },
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Their ids"
+          },
+          "refused": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowActionDeliveryRefused"
+            },
+            "description": "With `ids`: those left as they were, and why"
+          },
+          "more": {
+            "type": "boolean",
+            "description": "With `filter`: more deliveries match than one request changes; send it again"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowActionDeliveryCounts": {
+        "type": "object",
+        "description": "Deliveries by status",
+        "required": [
+          "pending",
+          "sending",
+          "held",
+          "delivered",
+          "skipped",
+          "dead",
+          "discarded"
+        ],
+        "properties": {
+          "pending": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "sending": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "held": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "delivered": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "skipped": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "dead": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "discarded": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowActionDeliveryDetail": {
+        "type": "object",
+        "description": "A delivery with its last error, its run and its event",
+        "required": [
+          "delivery",
+          "runStatus"
+        ],
+        "properties": {
+          "delivery": {
+            "$ref": "#/components/schemas/WorkflowActionDelivery"
+          },
+          "lastError": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The last attempt's error (at most 1 KiB): connection, TLS or protocol detail"
+          },
+          "runStatus": {
+            "type": "string",
+            "description": "The run's status: `fanned_out` once its deliveries were written"
+          },
+          "runStatusReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "event": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowActionDeliveryEvent",
+                "description": "The event; null once it went to the archive with its CI"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowActionDeliveryEvent": {
+        "type": "object",
+        "description": "The instance event a delivery tells of",
+        "required": [
+          "kind",
+          "toStateKey",
+          "occurredAt"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "`transition`, `start`, `cancel`, `force`, `approval_requested`, ..."
+          },
+          "transitionKey": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fromStateKey": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "toStateKey": {
+            "type": "string"
+          },
+          "actorName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who caused it, as recorded"
+          },
+          "occurredAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowActionDeliveryFilter": {
+        "type": "object",
+        "description": "The deliveries a bulk retry or discard selects (all optional; at most 1,000, oldest first)",
+        "properties": {
+          "actionKey": {
+            "type": "string",
+            "description": "Stable machine key, lower_snake_case",
+            "pattern": "^[a-z][a-z0-9_]{0,62}$"
+          },
+          "status": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowActionDeliveryStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowActionKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Queued at or after"
+          },
+          "to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Queued before"
+          },
+          "instanceId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "eventId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 1
+          },
+          "ciId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowActionDeliveryList": {
+        "type": "object",
+        "required": [
+          "data",
+          "page"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowActionDelivery"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageMeta"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowActionDeliveryRecipient": {
+        "type": "object",
+        "description": "Who or what a delivery goes to",
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/WorkflowActionRecipientKind"
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The user's or the endpoint's id; null once it was deleted, and for an address"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The user's display name or the endpoint's name; null once it was deleted, and for an address"
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The user's username"
+          },
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A fixed address, masked (`c***@corp.example`)"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowActionDeliveryRefusal": {
+        "type": "string",
+        "description": "Why a delivery was left as it was",
+        "enum": [
+          "not_found",
+          "not_retryable",
+          "not_discardable"
+        ]
+      },
+      "WorkflowActionDeliveryRefused": {
+        "type": "object",
+        "description": "A delivery a bulk request left as it was",
+        "required": [
+          "id",
+          "reason"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/WorkflowActionDeliveryRefusal"
+          },
+          "status": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowActionDeliveryStatus",
+                "description": "Its status, when it exists"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowActionDeliveryStatus": {
+        "type": "string",
+        "description": "Where a delivery stands",
+        "enum": [
+          "pending",
+          "sending",
+          "held",
+          "delivered",
+          "skipped",
+          "dead",
+          "discarded"
         ]
       },
       "WorkflowActionEndpointRef": {
@@ -51176,6 +54894,7 @@
           "included",
           "users",
           "truncated",
+          "usersHidden",
           "excludesActor"
         ],
         "properties": {
@@ -51208,6 +54927,10 @@
           "truncated": {
             "type": "boolean",
             "description": "More users than listed"
+          },
+          "usersHidden": {
+            "type": "boolean",
+            "description": "`users` is left empty because the caller may not look up users (the edit permission on business services or\n`users.manage`, as for `GET /principals`); `included` is still given"
           },
           "excludesActor": {
             "type": "boolean",
@@ -51256,6 +54979,56 @@
               "type": "string"
             },
             "description": "The sources that name them, as `group CAB`"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowActionQueue": {
+        "type": "object",
+        "description": "The whole action queue (every workflow) and its limits",
+        "required": [
+          "overloaded",
+          "backlog",
+          "checkedAt",
+          "queueMax",
+          "maxPerInstancePerHour",
+          "maxAttempts",
+          "maxAgeHours"
+        ],
+        "properties": {
+          "overloaded": {
+            "type": "boolean",
+            "description": "Pending runs and deliveries reached `WORKFLOW_ACTIONS_QUEUE_MAX`: new runs are suppressed"
+          },
+          "backlog": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Pending runs and pending or held deliveries, as the workers last counted them (capped at `queueMax`)"
+          },
+          "checkedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the workers last counted; old when no worker runs"
+          },
+          "queueMax": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`WORKFLOW_ACTIONS_QUEUE_MAX`"
+          },
+          "maxPerInstancePerHour": {
+            "type": "integer",
+            "format": "int32",
+            "description": "`WORKFLOW_ACTIONS_MAX_PER_INSTANCE_PER_HOUR`, as the workers last wrote it"
+          },
+          "maxAttempts": {
+            "type": "integer",
+            "format": "int32",
+            "description": "`WORKFLOW_ACTIONS_MAX_ATTEMPTS`"
+          },
+          "maxAgeHours": {
+            "type": "integer",
+            "format": "int32",
+            "description": "`WORKFLOW_ACTIONS_MAX_AGE_HOURS`"
           }
         },
         "additionalProperties": false
@@ -51402,6 +55175,15 @@
         },
         "additionalProperties": false
       },
+      "WorkflowActionRecipientKind": {
+        "type": "string",
+        "description": "What a delivery is addressed to",
+        "enum": [
+          "user",
+          "address",
+          "endpoint"
+        ]
+      },
       "WorkflowActionRecipientSource": {
         "type": "string",
         "description": "Where an action's recipients come from",
@@ -51503,6 +55285,67 @@
         },
         "additionalProperties": false
       },
+      "WorkflowActionSummary": {
+        "type": "object",
+        "description": "One action's deliveries",
+        "required": [
+          "key",
+          "kind",
+          "enabled",
+          "last24h",
+          "last7d",
+          "suppressed24h"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Null for an action deleted since (its deliveries keep its key)"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/WorkflowActionKind"
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "False when disabled or deleted"
+          },
+          "last24h": {
+            "$ref": "#/components/schemas/WorkflowActionDeliveryCounts",
+            "description": "Queued in the last 24 hours, by status now"
+          },
+          "last7d": {
+            "$ref": "#/components/schemas/WorkflowActionDeliveryCounts",
+            "description": "Queued in the last 7 days, by status now"
+          },
+          "suppressed24h": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Runs suppressed in the last 24 hours (queue full, loop breaker): nothing was delivered for them"
+          },
+          "oldestPendingAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the oldest pending delivery was queued (or retried)"
+          },
+          "oldestPendingAgeSeconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Its age in seconds"
+          }
+        },
+        "additionalProperties": false
+      },
       "WorkflowActionTrigger": {
         "type": "string",
         "description": "What fires an action",
@@ -51542,7 +55385,28 @@
             "items": {
               "$ref": "#/components/schemas/WorkflowProblem"
             },
-            "description": "Warnings: `unknown_transition` (the current version lacks it; kept for instances on older versions),\n`recipients_cannot_view` (no active user of a source may view the workflow's type), `too_many_recipients`\n(more than `WORKFLOW_ACTIONS_MAX_RECIPIENTS` users; the rest are left out), `missing_locale` and\n`minimal_placeholder` (e-mail)"
+            "description": "Warnings: `unknown_transition` (the current version lacks it; kept for instances on older versions),\n`recipients_cannot_view` (no active user of a source may view the workflow's type), `too_many_recipients`\n(more than `WORKFLOW_ACTIONS_MAX_RECIPIENTS` users; the rest are left out), `missing_locale` and\n`minimal_placeholder` (e-mail), `endpoint_not_active` and `webhooks_disabled` (webhook)"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowActionsSummary": {
+        "type": "object",
+        "description": "How a workflow's actions are being delivered",
+        "required": [
+          "actions",
+          "queue"
+        ],
+        "properties": {
+          "actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowActionSummary"
+            },
+            "description": "The workflow's actions in order, then deleted actions that still have deliveries"
+          },
+          "queue": {
+            "$ref": "#/components/schemas/WorkflowActionQueue"
           }
         },
         "additionalProperties": false
@@ -52692,6 +56556,7 @@
           "eligibleCount",
           "users",
           "truncated",
+          "usersHidden",
           "sources"
         ],
         "properties": {
@@ -52731,6 +56596,10 @@
           "truncated": {
             "type": "boolean",
             "description": "More users were resolved than are listed"
+          },
+          "usersHidden": {
+            "type": "boolean",
+            "description": "`users` is left empty because the caller may not look up users (the edit permission on business services\nor `users.manage`, as for `GET /principals`); the counts are still given"
           },
           "sources": {
             "type": "array",
@@ -54424,6 +58293,34 @@
           "business"
         ]
       },
+      "WorkflowSetAttribute": {
+        "type": "object",
+        "description": "One attribute action: when the transition runs, the CI's field `attribute` is set to `value`, or to what\n`valueFrom` names (exactly one of the two). Written with the rights of who runs the transition, validated as a\nCI update is; a value that no longer validates fails the transition (422 WORKFLOW_ACTION_INVALID).",
+        "required": [
+          "attribute"
+        ],
+        "properties": {
+          "attribute": {
+            "type": "string",
+            "description": "Stable machine key, lower_snake_case",
+            "pattern": "^[a-z][a-z0-9_]{0,62}$"
+          },
+          "value": {
+            "description": "The value to set, in the field's type: text, number, boolean, a date (YYYY-MM-DD), a datetime (RFC 3339), an IP address or CIDR; enum and lookup values by key. Checked against the field's rules when the version is published, and again when the transition runs. Not for reference fields (CI ids do not travel between installs): use `valueFrom: actor` or `clear`."
+          },
+          "valueFrom": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowValueFrom"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "WorkflowStartable": {
         "type": "object",
         "description": "A workflow that can be started on a CI",
@@ -54637,6 +58534,14 @@
                 "type": "null"
               }
             ]
+          },
+          "setAttributes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowSetAttribute"
+            },
+            "description": "Attribute actions: fields of the CI the transition sets when it runs, in the same transaction, after the\nfields sent and before the instance moves on (for a transition with approval: when the final approval\napplies it). Conditions are checked before, never on what the actions set. Left out: none. Part of the\nchecksum only when present, so a version without actions keeps the checksum it had before actions\nexisted.",
+            "maxItems": 20
           }
         },
         "additionalProperties": false
@@ -54731,6 +58636,16 @@
           }
         },
         "additionalProperties": false
+      },
+      "WorkflowValueFrom": {
+        "type": "string",
+        "description": "Where an attribute action takes its value from, instead of a literal `value`",
+        "enum": [
+          "now",
+          "today",
+          "actor",
+          "clear"
+        ]
       },
       "WorkflowVersion": {
         "type": "object",
@@ -55108,6 +59023,9 @@
     },
     {
       "name": "Workflow approvals"
+    },
+    {
+      "name": "Webhooks"
     }
   ]
 }

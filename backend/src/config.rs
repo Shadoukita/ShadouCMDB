@@ -361,7 +361,7 @@ pub struct WorkflowActionsConfig {
     pub poll: Duration,
     /// `WORKFLOW_ACTIONS_MAX_ATTEMPTS` (1 to 20): attempts before a delivery is dead.
     pub max_attempts: i16,
-    /// `WORKFLOW_ACTIONS_MAX_RECIPIENTS` (1 to 5000): recipients of one run, after expansion.
+    /// `WORKFLOW_ACTIONS_MAX_RECIPIENTS` (1 to 5000): users one run notifies, after expansion.
     pub max_recipients: usize,
     /// `WORKFLOW_ACTIONS_QUEUE_MAX` (10 to 10000000): pending runs and deliveries before new runs are suppressed.
     pub queue_max: i64,
@@ -390,6 +390,52 @@ impl Default for WorkflowActionsConfig {
             dead_retention_days: 90,
         }
     }
+}
+
+/// The proxy webhook requests go through (`WEBHOOK_PROXY`, else
+/// `HTTPS_PROXY` and `NO_PROXY`).
+#[derive(Clone, Default, PartialEq, Eq)]
+pub enum WebhookProxy {
+    /// Direct connections: neither is set, or `WEBHOOK_PROXY=none`.
+    #[default]
+    Direct,
+    /// `WEBHOOK_PROXY`: every webhook request.
+    Explicit(url::Url),
+    /// `HTTPS_PROXY` (or `https_proxy`), except for the hosts in `NO_PROXY`.
+    FromEnv { url: url::Url, no_proxy: Option<String> },
+}
+
+impl std::fmt::Debug for WebhookProxy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Scheme, host and port only: `HTTPS_PROXY` may carry a password.
+        let shown = |u: &url::Url| {
+            format!("{}://{}:{}", u.scheme(), u.host_str().unwrap_or(""), u.port_or_known_default().unwrap_or(0))
+        };
+        match self {
+            WebhookProxy::Direct => f.write_str("Direct"),
+            WebhookProxy::Explicit(u) => write!(f, "Explicit({})", shown(u)),
+            WebhookProxy::FromEnv { url, no_proxy } => write!(f, "FromEnv({}, no_proxy: {no_proxy:?})", shown(url)),
+        }
+    }
+}
+
+/// Outbound webhooks (`WEBHOOK*`, design SHAA-2725 §5): the operator's
+/// ceiling over what administrators may configure, and how requests leave.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WebhooksConfig {
+    /// `WEBHOOKS_ALLOWED` (default false): off, no endpoint can be created or called.
+    pub allowed: bool,
+    /// `WEBHOOK_ALLOWED_HOSTS`: the hosts the administrator's allowlist must stay inside; unset, any host.
+    pub allowed_hosts: Option<crate::modules::webhooks::hosts::HostCeiling>,
+    /// `WEBHOOK_ALLOW_PRIVATE_CIDRS`: networks of the blocked ranges that may be reached (never cloud metadata).
+    pub allow_private: Vec<ipnetwork::IpNetwork>,
+    /// `WEBHOOK_ALLOW_HTTP` (default false): with an allowlist entry that allows it, plain http.
+    pub allow_http: bool,
+    pub proxy: WebhookProxy,
+    /// `WEBHOOK_PROXY_PASSWORD_FILE`: the password for the proxy URL's user name.
+    pub proxy_password_file: Option<PathBuf>,
+    /// `WEBHOOK_TLS_CA_FILE`: a corporate CA trusted besides the public and OS roots.
+    pub tls_ca_file: Option<PathBuf>,
 }
 
 /// Hard ceilings of the `BUSINESS_SERVICE_*` settings (the nesting ceiling is
@@ -437,6 +483,7 @@ pub struct Config {
     pub notifications: NotificationConfig,
     pub approval_sweep: ApprovalSweepConfig,
     pub workflow_actions: WorkflowActionsConfig,
+    pub webhooks: WebhooksConfig,
 }
 
 /// The env file the variables were read from (`--env-file`, or `./.env`), as an absolute path.
@@ -508,6 +555,7 @@ impl std::fmt::Debug for Config {
             notifications,
             approval_sweep,
             workflow_actions,
+            webhooks,
         } = self;
         f.debug_struct("Config")
             .field("api_host", api_host)
@@ -529,6 +577,7 @@ impl std::fmt::Debug for Config {
             .field("notifications", notifications)
             .field("approval_sweep", approval_sweep)
             .field("workflow_actions", workflow_actions)
+            .field("webhooks", webhooks)
             .finish()
     }
 }
@@ -986,6 +1035,8 @@ impl Config {
                 .unwrap_or(d.dead_retention_days),
         };
 
+        let webhooks = webhooks_config(&mut r);
+
         let encryption = EncryptionConfig {
             key_file: r.raw("ENCRYPTION_KEY_FILE").map(PathBuf::from),
             previous_key_file: r.raw("ENCRYPTION_KEY_PREVIOUS_FILE").map(PathBuf::from),
@@ -1062,7 +1113,77 @@ impl Config {
             notifications,
             approval_sweep,
             workflow_actions,
+            webhooks,
         })
+    }
+}
+
+/// The `WEBHOOK*` variables; `HTTPS_PROXY` and `NO_PROXY` only when `WEBHOOK_PROXY` is unset.
+fn webhooks_config(r: &mut Reader<'_>) -> WebhooksConfig {
+    let allowed_hosts = r.raw("WEBHOOK_ALLOWED_HOSTS").and_then(|s| {
+        crate::modules::webhooks::hosts::HostCeiling::parse(&s)
+            .map_err(|e| r.errors.push(format!("WEBHOOK_ALLOWED_HOSTS: {e}")))
+            .ok()
+    });
+    let mut allow_private = Vec::new();
+    for entry in r.raw("WEBHOOK_ALLOW_PRIVATE_CIDRS").unwrap_or_default().split(',').map(str::trim) {
+        if entry.is_empty() {
+            continue;
+        }
+        match entry.parse::<ipnetwork::IpNetwork>() {
+            Ok(net) if net.prefix() == 0 => r.errors.push(format!(
+                "WEBHOOK_ALLOW_PRIVATE_CIDRS: {entry} opens every address; list the networks webhook receivers are in"
+            )),
+            Ok(net) => allow_private.push(net),
+            Err(_) => {
+                r.errors.push(format!("WEBHOOK_ALLOW_PRIVATE_CIDRS: {entry:?} is not a CIDR (e.g. 10.20.0.0/16)"))
+            }
+        }
+    }
+    let proxy_url = |r: &mut Reader<'_>, key: &str, raw: &str| -> Option<url::Url> {
+        match url::Url::parse(raw) {
+            Ok(u) if matches!(u.scheme(), "http" | "https") && u.host().is_some() => Some(u),
+            _ => {
+                r.errors.push(format!("{key}: expected an http:// or https:// proxy URL"));
+                None
+            }
+        }
+    };
+    let proxy = match r.raw("WEBHOOK_PROXY") {
+        Some(v) if v == "none" => WebhookProxy::Direct,
+        Some(v) => match proxy_url(r, "WEBHOOK_PROXY", &v) {
+            Some(u) if u.password().is_some() => {
+                r.errors.push(
+                    "WEBHOOK_PROXY: put the proxy password in WEBHOOK_PROXY_PASSWORD_FILE, not in the URL".to_owned(),
+                );
+                WebhookProxy::Direct
+            }
+            Some(u) => WebhookProxy::Explicit(u),
+            None => WebhookProxy::Direct,
+        },
+        None => match r.raw("HTTPS_PROXY").or_else(|| r.raw("https_proxy")) {
+            Some(v) => match proxy_url(r, "HTTPS_PROXY", &v) {
+                Some(url) => WebhookProxy::FromEnv { url, no_proxy: r.raw("NO_PROXY").or_else(|| r.raw("no_proxy")) },
+                None => WebhookProxy::Direct,
+            },
+            None => WebhookProxy::Direct,
+        },
+    };
+    let proxy_password_file = r.raw("WEBHOOK_PROXY_PASSWORD_FILE").map(PathBuf::from);
+    if proxy_password_file.is_some() && !matches!(&proxy, WebhookProxy::Explicit(u) if !u.username().is_empty()) {
+        r.errors.push(
+            "WEBHOOK_PROXY_PASSWORD_FILE: only used with WEBHOOK_PROXY=http://user@proxy:port (a user name in the URL)"
+                .to_owned(),
+        );
+    }
+    WebhooksConfig {
+        allowed: r.bool("WEBHOOKS_ALLOWED", false),
+        allowed_hosts,
+        allow_private,
+        allow_http: r.bool("WEBHOOK_ALLOW_HTTP", false),
+        proxy,
+        proxy_password_file,
+        tls_ca_file: r.raw("WEBHOOK_TLS_CA_FILE").map(PathBuf::from),
     }
 }
 

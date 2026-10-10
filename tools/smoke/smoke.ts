@@ -780,6 +780,7 @@ async function main() {
   await customization({ serverClass, server, adminMe });
   await savedViews({ serverClass });
   await workflows({ infra, adminMe });
+  await webhooks();
   await realTables({ inService, infra, adminMe });
 
   // --- Deletes and history ------------------------------------------------------
@@ -1102,6 +1103,21 @@ async function workflows(x: Json) {
   await get(`${actions}/nope/preview`, 404);
   check((await put(actions, { version: withAction.version, actions: [] })).json.actions.length === 0, 'the action is removed');
 
+  // Actions S3b (SHAA-2831): the deliveries list, the summary, retry and discard.
+  const deliveries = `${base}/${def.id}/action-deliveries`;
+  const listed = (await get(`${deliveries}?status=dead&limit=10`)).json;
+  check(Array.isArray(listed.data) && typeof listed.page?.total === 'number', 'the deliveries of a workflow are listed by status');
+  const summary = (await get(`${actions}/summary`)).json;
+  check(Array.isArray(summary.actions) && typeof summary.queue?.overloaded === 'boolean', 'the action summary reports the queue');
+  const noDelivery = `${deliveries}/00000000-0000-4000-8000-000000000000`;
+  await get(noDelivery, 404);
+  await post(`${noDelivery}/retry`, undefined, 404);
+  await post(`${noDelivery}/discard`, undefined, 404);
+  const retried = (await post(`${deliveries}/retry`, { ids: ['00000000-0000-4000-8000-000000000000'] }, 200)).json;
+  check(retried.changed === 0 && retried.refused[0]?.reason === 'not_found', 'a bulk retry refuses an unknown delivery');
+  const discarded = (await post(`${deliveries}/discard`, { filter: { status: 'dead', from: new Date().toISOString() } }, 200)).json;
+  check(discarded.changed === 0 && discarded.more === false, 'a bulk discard by filter reports what it changed');
+
   // Runtime (SHAA-1424): an instance on a CI is started, run, forced and cancelled.
   console.log('\n# Workflow instances');
   const current = (await get(`${base}/${def.id}`)).json;
@@ -1269,6 +1285,61 @@ async function workflows(x: Json) {
   await del(`${base}/${def.id}`, 409); // it has run on a CI: deactivate it instead
   const active = (await get(`${base}/${def.id}`)).json;
   check((await patch(`${base}/${def.id}`, { version: active.version, isActive: false })).json.isActive === false, 'a workflow that has run is deactivated');
+}
+
+/**
+ * Webhook endpoints and the allowlist (SHAA-2735): every operation. Off unless the operator sets
+ * WEBHOOKS_ALLOWED=true, which CI does not: then every change is refused with WEBHOOKS_DISABLED and
+ * nothing is stored. With webhooks on, an endpoint is created, changed, re-keyed, paused, resumed,
+ * pinged (the .test host does not resolve) and deleted; the signing secret is shown only once.
+ */
+async function webhooks() {
+  console.log('\n# Webhooks');
+  const hosts = '/api/v1/admin/webhook-allowed-hosts';
+  const endpoints = '/api/v1/admin/webhook-endpoints';
+  const unknown = '00000000-0000-4000-8000-000000000000';
+  check(Array.isArray((await get(hosts)).json.data), 'the allowlist is listed');
+  check(Array.isArray((await get(`${endpoints}?limit=10`)).json.data), 'the endpoints are listed');
+  await post(hosts, { host: 'hooks.example.test' }, 400);
+  await post(endpoints, { key: 'Bad Key', name: 'x', url: 'https://hooks.example.test/' }, 400);
+  await get(`${endpoints}/${unknown}`, 404);
+  await call('POST', `${endpoints}/${unknown}/pause`, undefined, 404);
+
+  const entry = await call('POST', hosts, { hostPattern: `smoke-${RUN}.example.test`, comment: 'Smoke' }, undefined, {}, { accept: [201, 409] });
+  if (entry.status === 409) {
+    check(entry.json?.error?.code === 'WEBHOOKS_DISABLED', 'with webhooks off the allowlist cannot be changed');
+    const off = await post(endpoints, { key: `smoke_${RUN}`, name: 'Smoke', url: `https://smoke-${RUN}.example.test/hook` }, 409);
+    check(off.json?.error?.code === 'WEBHOOKS_DISABLED', 'with webhooks off no endpoint can be created');
+    await patch(`${endpoints}/${unknown}`, { version: 1, name: 'x' }, 409);
+    await call('POST', `${endpoints}/${unknown}/rotate-secret`, {}, 409);
+    await call('POST', `${endpoints}/${unknown}/ping`, undefined, 409);
+    await call('POST', `${endpoints}/${unknown}/resume`, undefined, 409);
+    await del(`${endpoints}/${unknown}`, 404);
+    await del(`${hosts}/${unknown}`, 404);
+    return;
+  }
+  check(entry.status === 201 && entry.json.hostPattern === `smoke-${RUN}.example.test`, 'an allowlist entry is added');
+  await post(endpoints, { key: `smoke_out_${RUN}`, name: 'x', url: 'https://not-allowed.example.test/' }, 400);
+  await post(endpoints, { key: `smoke_cred_${RUN}`, name: 'x', url: `https://user:pw@smoke-${RUN}.example.test/` }, 400);
+  const created = (await post(endpoints, {
+    key: `smoke_${RUN}`,
+    name: 'Smoke',
+    url: `https://smoke-${RUN}.example.test/hook`,
+    authHeader: { name: 'Authorization', value: `Bearer smoke-${RUN}` },
+  })).json;
+  const id = created.endpoint.id;
+  check(typeof created.secret === 'string' && created.secret.length > 0, 'the signing secret is shown on creation');
+  const one = (await get(`${endpoints}/${id}`)).json;
+  check(!('secret' in one) && one.authHeaderSet === true, 'the secret and header value are not shown again');
+  check((await patch(`${endpoints}/${id}`, { version: one.version, name: 'Smoke renamed' })).json.name === 'Smoke renamed', 'the endpoint is renamed');
+  await patch(`${endpoints}/${id}`, { version: one.version, name: 'stale' }, 409);
+  check(typeof (await call('POST', `${endpoints}/${id}/rotate-secret`, { graceHours: 1 }, 200)).json.secret === 'string', 'the secret is rotated');
+  check((await call('POST', `${endpoints}/${id}/pause`, undefined, 200)).json.status === 'paused', 'the endpoint is paused');
+  await call('POST', `${endpoints}/${id}/resume`, undefined, 200);
+  check((await call('POST', `${endpoints}/${id}/ping`, undefined, 200)).json.ok === false, 'a ping to a host that does not resolve fails without a 5xx');
+  await del(`${endpoints}/${id}`);
+  await del(`${endpoints}/${id}`, 404);
+  await call('DELETE', `${hosts}/${entry.json.id}`, undefined, 200);
 }
 
 /** Saved views (SHAA-578): every operation, resolution into list parameters, defaults and the shared-copy audit. */
@@ -2152,7 +2223,7 @@ async function customization(x: Json) {
   const file = exported.json;
   const raw = JSON.stringify(file);
   check(/^attachment; filename="shadoucmdb-config-/.test(exported.headers.get('content-disposition') ?? ''), 'the export downloads as a file');
-  check(file.format === 'shadoucmdb.config' && file.formatVersion === 13 && Array.isArray(file.workflows) && Array.isArray(file.importMappings) && Array.isArray(file.savedViews) && file.dataModel.areas.some((a: Json) => a.key === 'infrastruktur') && !('users' in file) && !raw.includes('argon2') && !raw.includes('"username"') && !raw.includes('password'), 'the export has no users or password hashes');
+  check(file.format === 'shadoucmdb.config' && file.formatVersion === 14 && Array.isArray(file.workflows) && Array.isArray(file.importMappings) && Array.isArray(file.savedViews) && file.dataModel.areas.some((a: Json) => a.key === 'infrastruktur') && !('users' in file) && !raw.includes('argon2') && !raw.includes('"username"') && !raw.includes('password'), 'the export has no users or password hashes');
   check(file.permissionProfiles.every((p: Json) => p.name !== 'Administrator') && file.uiSettings.logo?.data === PNG_1X1, 'the export has editable profiles and the images');
   check(file.dataModel.attributes.every((a: Json) => typeof a.class === 'string' && !('classId' in a)), 'the export refers to classes by key');
   const noop = (await post('/api/v1/admin/config/import?mode=dry_run', file, 200)).json;
@@ -2201,7 +2272,7 @@ async function customization(x: Json) {
   attr.dataType = 'text';
   const immutable = await post('/api/v1/admin/config/import?mode=dry_run', retyped, 400);
   check(immutable.json.error?.details?.some((d: Json) => d.code === 'immutable'), 'the data type of an existing attribute cannot change');
-  await post('/api/v1/admin/config/import?mode=apply', { format: 'shadoucmdb.config', formatVersion: 14 }, 400);
+  await post('/api/v1/admin/config/import?mode=apply', { format: 'shadoucmdb.config', formatVersion: 15 }, 400);
   // Format 4: saved import mappings, merged by class key and name (SHAA-714 §6.2).
   const cfgMapping = { name: `Smoke config ${RUN}`, classKey: 'server', definition: { mode: 'create_only', columns: [{ header: 'Hostname', target: { kind: 'attribute', key: 'hostname' } }, { header: 'Notes', target: { kind: 'ignore' } }] } };
   const mappingFile = { format: 'shadoucmdb.config', formatVersion: 4, importMappings: [cfgMapping] };

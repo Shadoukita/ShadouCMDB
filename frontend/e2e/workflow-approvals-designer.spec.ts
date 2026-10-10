@@ -170,7 +170,7 @@ test("the approvers matrix: five sources and an escalation, with the lint per st
   await cab.getByLabel("Source", { exact: true }).selectOption("service_owner");
   await expect(cab.getByText("The step already has this approver.")).toBeVisible();
 
-  await expect(page.getByTestId("wf-approvers").locator(".panel-header .badge")).toHaveText("Unsaved changes");
+  await expect(page.getByRole("region", { name: "Save" })).toContainText("Unsaved changes");
   await page.getByTestId("wf-approvers-save").click();
   await expect(page.getByRole("status").filter({ hasText: /Approvers saved/ })).toBeVisible();
   await expect(tech.locator("tbody tr")).toHaveCount(2);
@@ -211,6 +211,8 @@ test("the preview for one CI: who would be asked, resolved by the API", async ({
   const result = preview.getByTestId("wf-preview-result");
   await expect(result).toContainText("2 users may decide this step");
   await expect(result).toContainText("the step needs 2 approvals");
+  // The live region is in the DOM before the first run, so screen readers announce the summary (GH-850).
+  await expect(preview.getByTestId("wf-preview-status")).toContainText("2 users may decide this step");
   const users = preview.getByTestId("wf-preview-users");
   for (const m of MEMBERS) await expect(users.getByRole("row", { name: new RegExp(m) })).toContainText("Eligible");
   await expect(users.getByRole("row", { name: new RegExp(HEAD) })).toContainText("Only once overdue");

@@ -116,7 +116,7 @@ const columns = computed(() => listColumns(view.value?.columns));
               {{ t("customization.lists.labelNotChosen") }}
             </p>
           </div>
-          <div class="form-grid" style="grid-template-columns: 1fr">
+          <div class="form-grid form-grid-1">
             <div class="field">
               <label for="lv-sort">{{ t("customization.lists.defaultSort") }}</label>
               <div class="inline-control">
@@ -148,14 +148,14 @@ const columns = computed(() => listColumns(view.value?.columns));
             </p>
           </div>
         </div>
-        <div style="margin-top: var(--space-3)">
+        <div class="space-above">
           <button type="button" class="btn" @click="removeView">{{ t("customization.lists.useDefault", { class: cls.name }) }}</button>
         </div>
       </template>
     </div>
   </section>
 
-  <section v-if="cls" class="preview-frame" style="margin-top: var(--space-3)" :aria-label="t('customization.lists.preview')">
+  <section v-if="cls" class="preview-frame" :aria-label="t('customization.lists.preview')">
     <p class="preview-label">{{ t("customization.lists.previewLabel", { class: cls.name }) }}</p>
     <LoadingState v-if="preview.isLoading.value" />
     <ErrorAlert v-else-if="preview.isError.value" :error="preview.error.value" :on-retry="() => preview.refetch()" />

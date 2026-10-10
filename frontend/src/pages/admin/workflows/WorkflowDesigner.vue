@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRouter } from "vue-router";
 import { ApiError } from "../../../api/client";
 import { useLookupListValues } from "../../../api/datamodel";
-import { useClassAttributes } from "../../../api/queries";
+import { useCiClasses, useClassAttributes } from "../../../api/queries";
 import {
   useDiscardDraft,
   usePublishDraft,
@@ -22,7 +22,7 @@ import EmptyState from "../../../components/EmptyState.vue";
 import ErrorAlert from "../../../components/ErrorAlert.vue";
 import LoadingState from "../../../components/LoadingState.vue";
 import {
-  CATEGORIES,
+  categoryLabel,
   COLUMN_STEP,
   autoLayout,
   checkDraft,
@@ -39,7 +39,8 @@ import {
   type PlacedProblem,
   type Position,
 } from "../../../lib/workflowDraft";
-import { t } from "../../../i18n";
+import { t, t as tr } from "../../../i18n";
+import { describeSetAttribute } from "../../../lib/workflowActions";
 import { changedPolicies, describePolicy } from "../../../lib/workflowApprovals";
 import { useFlashStore } from "../../../stores/flash";
 import StateInspector from "./StateInspector.vue";
@@ -64,6 +65,8 @@ const grantedKeys = computed(() => new Set((grants.data.value?.grants ?? []).fil
 const attrs = useClassAttributes(() => props.workflow.classId);
 const fields = computed(() => (attrs.data.value ?? []).filter((a) => a.isActive));
 const labelOf = (key: string) => fields.value.find((f) => f.key === key)?.label ?? key;
+const classes = useCiClasses();
+const personClassIds = computed(() => new Set((classes.data.value ?? []).filter((c) => c.systemRole === "person").map((c) => c.id)));
 const stateField = computed(() => (attrs.data.value ?? []).find((a) => a.id === props.workflow.stateAttributeId));
 const stateValuesQ = useLookupListValues(() => stateField.value?.lookupListId);
 const stateValues = computed(() => (props.workflow.stateAttributeId ? (stateValuesQ.data.value ?? []) : null));
@@ -293,7 +296,7 @@ function addTransition() {
   const to = d.states.find((s) => s.key !== from && !d.transitions.some((t) => t.from === from && t.to === s.key))?.key ?? d.states.find((s) => s.key !== from)!.key;
   const toName = d.states.find((s) => s.key === to)?.name ?? to;
   const key = uniqueKey(`to_${to}`.slice(0, 60), d.transitions.map((t) => t.key));
-  d.transitions.push({ key, name: toName, from, to, requiresComment: false, fields: [], conditions: { kind: "group", mode: "all", children: [] }, approval: [] });
+  d.transitions.push({ key, name: toName, from, to, requiresComment: false, fields: [], conditions: { kind: "group", mode: "all", children: [] }, approval: [], setAttributes: [] });
   selected.value = { kind: "transition", key };
 }
 
@@ -329,7 +332,6 @@ function selectProblem(p: PlacedProblem) {
 /** A state value by its lookup value's name, as the inspector shows it; the key when the value is gone from the list. */
 const stateValueName = (key: string) => stateValues.value?.find((v) => v.key === key)?.name ?? key;
 const stateName = (key: string) => draft.value?.states.find((s) => s.key === key)?.name ?? key;
-const categoryLabel = (c: string) => CATEGORIES.find((x) => x.value === c)?.label ?? c;
 const marker = (kind: "state" | "transition", key: string) => {
   const mine = problemsFor(problems.value, kind, key);
   return mine[0]?.severity;
@@ -473,12 +475,14 @@ function confirmPublish() {
           <TransitionInspector
             v-else-if="selectedTransition"
             :key="`t-${selectedTransition.key}`"
+            :workflow-id="wid"
             :draft="draft"
             :transition="selectedTransition"
             :problems="problemsFor(problems, 'transition', selectedTransition.key)"
             :fields="fields"
             :state-field-key="stateField?.key"
             :granted-keys="grantedKeys"
+            :person-class-ids="personClassIds"
             @renamed="(k) => (selected = { kind: 'transition', key: k })"
             @remove="removeTransition(selectedTransition.key)"
           />
@@ -548,7 +552,10 @@ function confirmPublish() {
                     <span v-if="t.fields.length">{{ t.fields.length }} {{ t.fields.length === 1 ? "field" : "fields" }}. </span>
                     <span v-if="t.conditions.children.length">If {{ describeConditions(t.conditions, labelOf) }}. </span>
                     <span v-if="t.approval.length" class="badge info" data-testid="wf-gated">{{ describePolicy(t.approval) }}</span>
-                    <span v-if="!t.requiresComment && !t.fields.length && !t.conditions.children.length && !t.approval.length" class="muted">Nothing</span>
+                    <span v-if="t.setAttributes.length" :title="t.setAttributes.map((s) => describeSetAttribute(s, labelOf)).join('; ')">
+                      {{ tr("wfActions.set.count", { n: t.setAttributes.length }) }}
+                    </span>
+                    <span v-if="!t.requiresComment && !t.fields.length && !t.conditions.children.length && !t.approval.length && !t.setAttributes.length" class="muted">Nothing</span>
                   </span>
                 </td>
               </tr>

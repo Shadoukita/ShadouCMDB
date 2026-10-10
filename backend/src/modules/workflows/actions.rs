@@ -12,12 +12,15 @@
 //! 0075) writes a run per matching action in the event's transaction, and the
 //! workers of [`outbox`] deliver it after commit.
 //!
-//! This slice delivers the in-app inbox to profiles, groups and named users.
-//! The schema and its checks cover every kind and source; e-mail (S4),
-//! webhooks (S5) and the CI-dependent and participant sources (S4) are
-//! refused with `kind_unavailable` / `source_unavailable` until their slice
-//! ships, so nothing is saved that would never be delivered.
+//! The in-app inbox goes to profiles, groups and named users; a webhook to a
+//! registered endpoint (`modules::webhooks`). The schema and its checks cover
+//! every kind and source; e-mail and the CI-dependent and participant sources
+//! (S4) are refused with `kind_unavailable` / `source_unavailable` until their
+//! slice ships, so nothing is saved that would never be delivered.
 
+pub mod deliveries;
+#[cfg(test)]
+mod deliveries_tests;
 #[cfg(test)]
 mod edge_tests;
 pub mod outbox;
@@ -47,6 +50,7 @@ use crate::auth::permissions::ClassOp;
 use crate::data::auth as auth_data;
 use crate::data::crud::{self, AuditAction, AuditEntry};
 use crate::http::error::{AppError, ErrorCode, FieldError, FieldLocation};
+use crate::modules::business_services::service::may_browse_directory;
 
 /// Actions per (trigger, transition) of one definition; also the database's limit (0073).
 pub const MAX_PER_TRIGGER: usize = 10;
@@ -66,7 +70,7 @@ pub enum WorkflowActionKind {
     Inbox,
     /// An e-mail to each recipient (not available yet)
     Email,
-    /// A signed HTTPS request to a registered endpoint (not available yet)
+    /// A signed HTTPS request to a registered endpoint
     Webhook,
 }
 
@@ -636,7 +640,7 @@ pub struct WorkflowActions {
     /// Warnings: `unknown_transition` (the current version lacks it; kept for instances on older versions),
     /// `recipients_cannot_view` (no active user of a source may view the workflow's type), `too_many_recipients`
     /// (more than `WORKFLOW_ACTIONS_MAX_RECIPIENTS` users; the rest are left out), `missing_locale` and
-    /// `minimal_placeholder` (e-mail)
+    /// `minimal_placeholder` (e-mail), `endpoint_not_active` and `webhooks_disabled` (webhook)
     pub problems: Vec<WorkflowProblem>,
 }
 
@@ -797,7 +801,8 @@ pub fn specs(actions: &[WorkflowAction]) -> Value {
 /// Transition keys of definition `id`: in any version or the draft, and in its current version.
 async fn transition_keys(conn: &mut PgConnection, id: Uuid) -> Result<(HashSet<String>, HashSet<String>), AppError> {
     let rows: Vec<(String, bool)> = sqlx::query_as(
-        "SELECT DISTINCT t.key, v.id = d.current_version_id FROM cmdb.workflow_transitions t
+        // A workflow with only a draft has no current version: `=` would be NULL there.
+        "SELECT DISTINCT t.key, v.id IS NOT DISTINCT FROM d.current_version_id FROM cmdb.workflow_transitions t
          JOIN cmdb.workflow_versions v ON v.id = t.version_id
          JOIN cmdb.workflow_definitions d ON d.id = v.definition_id
          WHERE v.definition_id = $1",
@@ -841,8 +846,17 @@ async fn problems(
     d: &WorkflowDefinition,
     actions: &[WorkflowAction],
     max_recipients: usize,
+    webhooks_on: bool,
 ) -> Result<Vec<WorkflowProblem>, AppError> {
     let (_, current) = transition_keys(&mut *conn, d.id).await?;
+    let endpoint_ids: Vec<Uuid> = actions.iter().filter_map(|a| a.endpoint.as_ref().map(|e| e.id)).collect();
+    let endpoint_status: HashMap<Uuid, String> =
+        sqlx::query_as::<_, (Uuid, String)>("SELECT id, status FROM cmdb.webhook_endpoints WHERE id = ANY($1)")
+            .bind(&endpoint_ids)
+            .fetch_all(&mut *conn)
+            .await?
+            .into_iter()
+            .collect();
     let members = static_members(&mut *conn, actions).await?;
     let users: Vec<Uuid> = members.iter().map(|(_, u)| *u).collect::<BTreeSet<_>>().into_iter().collect();
     let permissions = auth_data::load_permissions_of(&mut *conn, &users).await?;
@@ -868,6 +882,26 @@ async fn problems(
                     a.key
                 ),
             ));
+        }
+        if let Some(e) = &a.endpoint {
+            if !webhooks_on {
+                out.push(warning(
+                    format!("{path}.endpoint"),
+                    "webhooks_disabled",
+                    format!(
+                        "Webhooks are switched off on this server (WEBHOOKS_ALLOWED=false): action {} sends nothing, \
+                         its deliveries die as webhooks_disabled",
+                        a.key
+                    ),
+                ));
+            }
+            if let Some(status) = endpoint_status.get(&e.id).filter(|s| *s != "active") {
+                out.push(warning(
+                    format!("{path}.endpoint"),
+                    "endpoint_not_active",
+                    format!("Webhook endpoint {} is {status}: its deliveries are held until it is resumed", e.key),
+                ));
+            }
         }
         let mut reached: HashSet<Uuid> = HashSet::new();
         for (j, r) in a.recipients.iter().enumerate() {
@@ -944,11 +978,12 @@ pub async fn get(
     ctx: &RequestContext,
     id: Uuid,
     max_recipients: usize,
+    webhooks_on: bool,
 ) -> Result<WorkflowActions, AppError> {
     let mut conn = pool.acquire().await?;
     let d = service::load_for(&mut conn, ctx, id, false, service::Access::Read).await?;
     let actions = load(&mut conn, id).await?;
-    let problems = problems(&mut conn, &d, &actions, max_recipients).await?;
+    let problems = problems(&mut conn, &d, &actions, max_recipients, webhooks_on).await?;
     Ok(WorkflowActions { version: d.version, actions, problems })
 }
 
@@ -966,11 +1001,24 @@ pub async fn replace(
     id: Uuid,
     b: &WorkflowActionsReplace,
     max_recipients: usize,
+    webhooks_on: bool,
 ) -> Result<WorkflowActions, AppError> {
     let mut tx = pool.begin().await?;
     let before = service::load_for(&mut tx, ctx, id, true, service::Access::Write).await?;
     service::check_version(b.version, before.version)?;
     let (known, _) = transition_keys(&mut tx, id).await?;
+    let old = load(&mut tx, id).await?;
+    let endpoint_keys: Vec<&str> = b.actions.iter().filter_map(|a| a.endpoint.as_deref()).collect();
+    let endpoints: Vec<(Uuid, String, String)> =
+        sqlx::query_as("SELECT id, key, status FROM cmdb.webhook_endpoints WHERE key = ANY($1)")
+            .bind(&endpoint_keys)
+            .fetch_all(&mut *tx)
+            .await?;
+    let fields = if b.actions.iter().any(|a| a.settings.include_attributes.is_some()) {
+        Some(super::graph::Fields::load(&mut tx, before.class_id).await?)
+    } else {
+        None
+    };
     let named = |f: fn(&WorkflowActionRecipientInput) -> &Option<String>| -> Vec<String> {
         b.actions
             .iter()
@@ -1001,23 +1049,64 @@ pub async fn replace(
         let by_id = validate::is_uuid(given).then(|| given.parse::<Uuid>().ok()).flatten();
         list.iter().find(|(id, name)| Some(*id) == by_id || name.to_lowercase() == given.to_lowercase()).map(|r| r.0)
     };
+    // Users and groups by name only for who may look them up (GH#839).
+    let directory = may_browse_directory(&mut tx, ctx).await?;
+    let kept = |source: WorkflowActionRecipientSource| -> HashSet<String> {
+        old.iter()
+            .flat_map(|a| a.recipients.iter())
+            .filter(|r| r.source == source)
+            .filter_map(|r| r.group.as_ref().or(r.user.as_ref()))
+            .map(|p| p.name.to_lowercase())
+            .collect()
+    };
+    let (kept_groups, kept_users) =
+        (kept(WorkflowActionRecipientSource::Group), kept(WorkflowActionRecipientSource::User));
 
     let mut errors = Vec::new();
     let mut resolved: Vec<Vec<Resolved>> = Vec::with_capacity(b.actions.len());
+    let mut endpoint_ids: Vec<Option<Uuid>> = Vec::with_capacity(b.actions.len());
     for (i, a) in b.actions.iter().enumerate() {
         let path = format!("actions[{i}]");
         match a.kind {
-            WorkflowActionKind::Inbox => {}
+            WorkflowActionKind::Inbox | WorkflowActionKind::Webhook => {}
             WorkflowActionKind::Email => errors.push(body_error(
                 format!("{path}.kind"),
                 "kind_unavailable",
                 "E-mail actions are not available yet: they need the outbound mail settings of a later release".into(),
             )),
-            WorkflowActionKind::Webhook => errors.push(body_error(
-                format!("{path}.kind"),
-                "kind_unavailable",
-                "Webhook actions are not available yet: they need the webhook endpoints of a later release".into(),
+        }
+        let endpoint = a.endpoint.as_deref().and_then(|k| endpoints.iter().find(|(_, key, _)| key == k));
+        match (a.endpoint.as_deref(), endpoint) {
+            (Some(k), None) => errors.push(body_error(
+                format!("{path}.endpoint"),
+                "not_found",
+                format!("No webhook endpoint with key {k}"),
             )),
+            (Some(_), Some((eid, key, status))) if status != "active" => {
+                // An unchanged action keeps working once the endpoint is resumed; a
+                // new or re-pointed one may not start on an endpoint that is off.
+                let unchanged = old.iter().any(|o| o.key == a.key && o.endpoint.as_ref().is_some_and(|e| e.id == *eid));
+                if !unchanged {
+                    errors.push(body_error(
+                        format!("{path}.endpoint"),
+                        "endpoint_not_active",
+                        format!("Webhook endpoint {key} is {status}; resume it first"),
+                    ));
+                }
+            }
+            _ => {}
+        }
+        endpoint_ids.push(endpoint.map(|e| e.0));
+        if let (Some(keys), Some(fields)) = (&a.settings.include_attributes, &fields) {
+            for (j, k) in keys.iter().enumerate() {
+                if fields.by_key(k).is_none() {
+                    errors.push(body_error(
+                        format!("{path}.settings.includeAttributes[{j}]"),
+                        "unknown_attribute",
+                        format!("Type {} has no field {k} (own or inherited)", fields.class_key),
+                    ));
+                }
+            }
         }
         if let Some(t) = &a.transition
             && !known.contains(t)
@@ -1049,12 +1138,23 @@ pub async fn replace(
                 _ => (&users, r.user.as_deref(), "user"),
             };
             let given = given.unwrap_or_default();
+            let field = match r.source {
+                WorkflowActionRecipientSource::Profile => "profile",
+                WorkflowActionRecipientSource::Group => "group",
+                _ => "user",
+            };
+            let checked = match r.source {
+                WorkflowActionRecipientSource::Profile => Ok(()),
+                WorkflowActionRecipientSource::Group => {
+                    service::directory_ref(directory, &kept_groups, given, format!("{rpath}.{field}"), what)
+                }
+                _ => service::directory_ref(directory, &kept_users, given, format!("{rpath}.{field}"), what),
+            };
+            if let Err(e) = checked {
+                errors.push(e);
+                continue;
+            }
             let Some(found) = find(list_of, given) else {
-                let field = match r.source {
-                    WorkflowActionRecipientSource::Profile => "profile",
-                    WorkflowActionRecipientSource::Group => "group",
-                    _ => "user",
-                };
                 errors.push(body_error(format!("{rpath}.{field}"), "not_found", format!("No {what} \"{given}\"")));
                 continue;
             };
@@ -1075,10 +1175,9 @@ pub async fn replace(
         return Err(AppError::validation(errors));
     }
 
-    let old = load(&mut tx, id).await?;
-    let version = store(&mut tx, ctx, &before, &old, &b.actions, &resolved).await?;
+    let version = store(&mut tx, ctx, &before, &old, &b.actions, &resolved, &endpoint_ids).await?;
     let actions = load(&mut tx, id).await?;
-    let problems = problems(&mut tx, &before, &actions, max_recipients).await?;
+    let problems = problems(&mut tx, &before, &actions, max_recipients, webhooks_on).await?;
     tx.commit().await?;
     Ok(WorkflowActions { version, actions, problems })
 }
@@ -1093,6 +1192,7 @@ async fn store(
     old: &[WorkflowAction],
     actions: &[WorkflowActionInput],
     resolved: &[Vec<Resolved>],
+    endpoints: &[Option<Uuid>],
 ) -> Result<i32, AppError> {
     let id = before.id;
     let keys: Vec<&str> = actions.iter().map(|a| a.key.as_str()).collect();
@@ -1117,7 +1217,7 @@ async fn store(
         let row: Uuid = sqlx::query_scalar(
             "INSERT INTO cmdb.workflow_actions
                (definition_id, key, name, kind, trigger, transition_key, enabled, position, endpoint_id, settings)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $10, $9)
              ON CONFLICT (definition_id, key) DO UPDATE SET
                name = EXCLUDED.name, kind = EXCLUDED.kind, trigger = EXCLUDED.trigger,
                transition_key = EXCLUDED.transition_key, enabled = EXCLUDED.enabled, position = EXCLUDED.position,
@@ -1133,6 +1233,7 @@ async fn store(
         .bind(a.enabled)
         .bind(i16::try_from(n + 1).unwrap_or(i16::MAX))
         .bind(settings)
+        .bind(endpoints.get(n).copied().flatten())
         .fetch_one(&mut *tx)
         .await
         .map_err(|e| limit_error(e, n))?;
@@ -1307,6 +1408,9 @@ pub struct WorkflowActionPreview {
     pub users: Vec<WorkflowActionPreviewUser>,
     /// More users than listed
     pub truncated: bool,
+    /// `users` is left empty because the caller may not look up users (the edit permission on business services or
+    /// `users.manage`, as for `GET /principals`); `included` is still given
+    pub users_hidden: bool,
     /// Whoever runs the event is left out as well (`excludeActor`, the default)
     pub excludes_actor: bool,
 }
@@ -1361,6 +1465,11 @@ pub async fn preview(
     users.sort_by(|a, b| a.reason.cmp(&b.reason).then_with(|| a.username.cmp(&b.username)));
     let truncated = users.len() > PREVIEW_USERS;
     users.truncate(PREVIEW_USERS);
+    // The count only for a caller who may not look up users (GH#839).
+    let users_hidden = !may_browse_directory(&mut conn, ctx).await?;
+    if users_hidden {
+        users.clear();
+    }
     Ok(WorkflowActionPreview {
         key: action.key,
         kind: action.kind,
@@ -1368,6 +1477,7 @@ pub async fn preview(
         included: i64::try_from(included).unwrap_or(i64::MAX),
         users,
         truncated,
+        users_hidden,
         excludes_actor: action.settings.exclude_actor.unwrap_or(true),
     })
 }

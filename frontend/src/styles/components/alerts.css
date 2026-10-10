@@ -158,7 +158,7 @@
 }
 .toast-close {
   flex: none;
-  margin-top: -2px;
+  margin-top: calc(-1 * var(--space-0_5));
 }
 @media (prefers-reduced-motion: no-preference) {
   .toast {

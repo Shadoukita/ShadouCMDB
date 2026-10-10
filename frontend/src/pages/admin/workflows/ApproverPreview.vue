@@ -32,12 +32,15 @@ watch(
 );
 const ci = ref<{ id: string; name: string } | null>(null);
 const requester = ref<{ id: string; name: string } | null>(null);
-const requesterByName = ref(false);
-const requesterName = ref("");
+/** /principals refused: the requester can only be picked by an admin who may look up users (GH#839). */
+const requesterForbidden = ref(false);
 
 const result = ref<WorkflowApproverPreview | null>(null);
 const error = ref<unknown>(null);
 const loading = ref(false);
+/** The summary line for screen readers, in a live region that is always in the DOM: a region inserted
+ * together with its text is not announced, so the first run and the run after an error would be silent. */
+const announcement = ref("");
 let controller: AbortController | undefined;
 onBeforeUnmount(() => controller?.abort());
 
@@ -56,10 +59,14 @@ async function run() {
   controller = c;
   loading.value = true;
   error.value = null;
+  announcement.value = "";
   try {
-    const requestedBy = requesterByName.value ? requesterName.value.trim() || undefined : requester.value?.id;
+    const requestedBy = requesterForbidden.value ? undefined : requester.value?.id;
     const res = await previewApprovers(props.workflowId, { transition, step, ciId: ci.value?.id, requestedBy }, c.signal);
-    if (!c.signal.aborted) result.value = res;
+    if (!c.signal.aborted) {
+      result.value = res;
+      announcement.value = summary(res);
+    }
   } catch (e) {
     if (!c.signal.aborted) {
       error.value = e;
@@ -71,10 +78,17 @@ async function run() {
 }
 
 const reasonTone: Record<string, string> = { eligible: "ok", escalation_only: "info", excluded: "warn", no_view_right: "danger", inactive: "off" };
-const shortfall = computed(() => {
-  const r = result.value;
+const shortfall = computed(() => isShort(result.value));
+function isShort(r: WorkflowApproverPreview | null): boolean {
   return !!r && r.requiredApprovals !== null && r.eligibleCount < r.requiredApprovals;
-});
+}
+function summary(r: WorkflowApproverPreview): string {
+  const parts = [t("wfPreview.eligible", { n: r.eligibleCount })];
+  if (r.requiredApprovals !== null) parts.push(t("wfPreview.needs", { n: r.requiredApprovals }));
+  if (isShort(r)) parts.push(t("wfPreview.short"));
+  if (!r.ciId) parts.push(t("wfPreview.general"));
+  return parts.join(" · ");
+}
 </script>
 
 <template>
@@ -97,9 +111,9 @@ const shortfall = computed(() => {
           <CiPicker id="wf-preview-ci" :class-id="classId" :selected="ci" :placeholder="t('wfPreview.ciPlaceholder')" described-by="wf-preview-ci-hint" @select="pickCi" />
           <span id="wf-preview-ci-hint" class="hint">{{ t("wfPreview.ciHint") }}</span>
         </div>
-        <div v-if="requesterByName" class="field">
-          <label for="wf-preview-requester">{{ t("wfPreview.requesterName") }}</label>
-          <input id="wf-preview-requester" v-model="requesterName" type="text" maxlength="200" autocomplete="off" />
+        <div v-if="requesterForbidden" class="field">
+          <span class="label">{{ t("wfPreview.requester") }}</span>
+          <span class="hint">{{ t("wfPreview.requesterForbidden") }}</span>
         </div>
         <PrincipalCombobox
           v-else
@@ -107,18 +121,19 @@ const shortfall = computed(() => {
           kind="user"
           :hint="requester ? t('wfApprovers.picked', { name: requester.name }) : t('wfPreview.requesterHint')"
           @select="pickRequester"
-          @forbidden="requesterByName = true"
+          @forbidden="requesterForbidden = true"
         />
         <div class="inline-actions wf-preview-actions">
           <button type="submit" class="btn btn-primary btn-sm" :disabled="!stepId || loading" data-testid="wf-preview-run">
             {{ loading ? t("wfPreview.running") : t("wfPreview.run") }}
           </button>
-          <button v-if="requester && !requesterByName" type="button" class="btn btn-sm" @click="requester = null">{{ t("wfPreview.clearRequester") }}</button>
+          <button v-if="requester && !requesterForbidden" type="button" class="btn btn-sm" @click="requester = null">{{ t("wfPreview.clearRequester") }}</button>
         </div>
       </form>
 
+      <p class="sr-only" role="status" aria-live="polite" data-testid="wf-preview-status">{{ announcement }}</p>
       <ErrorAlert v-if="error" :error="error" :title="t('wfPreview.failed')" />
-      <div v-else-if="result" class="stack" aria-live="polite" data-testid="wf-preview-result">
+      <div v-else-if="result" class="stack" data-testid="wf-preview-result">
         <p class="no-margin">
           <strong>{{ t("wfPreview.eligible", { n: result.eligibleCount }) }}</strong>
           <template v-if="result.requiredApprovals !== null"> · {{ t("wfPreview.needs", { n: result.requiredApprovals }) }}</template>
@@ -151,7 +166,8 @@ const shortfall = computed(() => {
             </tbody>
           </table>
         </div>
-        <p v-if="result.users.length === 0" class="muted no-margin">{{ t("wfPreview.nobody") }}</p>
+        <p v-if="result.usersHidden" class="muted no-margin" data-testid="wf-preview-users-hidden">{{ t("wfPreview.usersHidden") }}</p>
+        <p v-else-if="result.users.length === 0" class="muted no-margin">{{ t("wfPreview.nobody") }}</p>
         <div v-else class="table-wrap">
           <table class="data" data-testid="wf-preview-users">
             <caption class="sr-only">{{ t("wfPreview.usersCaption") }}</caption>

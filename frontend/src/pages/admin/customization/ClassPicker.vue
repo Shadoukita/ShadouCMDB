@@ -36,7 +36,7 @@ function optionLabel(c: CiClass): string {
 <template>
   <div class="inline-control class-picker">
     <label for="cust-class">{{ t("customization.classPicker.class") }}</label>
-    <select id="cust-class" :value="selectedKey" style="max-width: 360px" @change="pick(($event.target as HTMLSelectElement).value)">
+    <select id="cust-class" :value="selectedKey" @change="pick(($event.target as HTMLSelectElement).value)">
       <option value="">{{ t("customization.classPicker.choose") }}</option>
       <option v-for="n in tree" :key="n.item.id" :value="n.item.key">
         {{ "  ".repeat(n.depth) }}{{ optionLabel(n.item) }}
@@ -44,8 +44,8 @@ function optionLabel(c: CiClass): string {
     </select>
     <span class="muted">{{ ownCount }}</span>
   </div>
-  <p v-if="unknown.length > 0" class="hint">
+  <p v-if="unknown.length > 0" class="hint class-picker-unknown">
     {{ t("customization.classPicker.unknown") }}
-    <code v-for="k in unknown" :key="k" style="margin-right: 6px">{{ k }}</code>
+    <code v-for="k in unknown" :key="k">{{ k }}</code>
   </p>
 </template>

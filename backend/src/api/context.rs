@@ -82,9 +82,18 @@ pub struct ClientInfo {
     /// stored or logged.
     pub net: crate::auth::throttle::Net,
     /// `X-ShadouCMDB-Cause`: the workflow action delivery a client (a webhook
-    /// receiver) says caused this request. Recorded on the workflow events it
-    /// writes, for the echo-loop breaker (SHAA-2725 §7.4); evidence only.
-    pub cause: Option<Uuid>,
+    /// receiver) says caused this request, for the echo-loop breaker (SHAA-2725
+    /// §7.4). Taken from API tokens only, and recorded on a transition event
+    /// only when it names a webhook delivery sent for that instance (GH#845).
+    pub cause: Option<Cause>,
+}
+
+/// A claimed `X-ShadouCMDB-Cause`, with the age past which no delivery is sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cause {
+    pub delivery: Uuid,
+    /// `WORKFLOW_ACTIONS_MAX_AGE_HOURS`.
+    pub max_age_hours: i32,
 }
 
 /// Per-request context handed to services: the caller, the audit actor and a request id.

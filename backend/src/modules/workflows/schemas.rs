@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use utoipa::openapi::schema::{ArrayBuilder, ObjectBuilder, Schema, Type};
+use utoipa::openapi::schema::{ArrayBuilder, ObjectBuilder, Schema, SchemaType, Type};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
@@ -47,6 +47,18 @@ fn conditions_schema() -> Schema {
              1-100), isSet, isNotSet (no value), gt, gte, lt, lte (number, integer, date and datetime fields), contains \
              (text fields). The value has the field's type; enum and lookup values are given by key. At most 4 levels \
              deep, 32 leaves and 16 KiB. The field is one of the workflow type's own or inherited fields.",
+        ))
+        .into()
+}
+
+fn literal_schema() -> Schema {
+    ObjectBuilder::new()
+        .schema_type(SchemaType::AnyValue)
+        .description(Some(
+            "The value to set, in the field's type: text, number, boolean, a date (YYYY-MM-DD), a datetime (RFC \
+             3339), an IP address or CIDR; enum and lookup values by key. Checked against the field's rules when the \
+             version is published, and again when the transition runs. Not for reference fields (CI ids do not \
+             travel between installs): use `valueFrom: actor` or `clear`.",
         ))
         .into()
 }
@@ -566,6 +578,71 @@ pub struct WorkflowTransition {
     #[schema(required = false)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval: Option<WorkflowApproval>,
+    /// Attribute actions: fields of the CI the transition sets when it runs, in the same transaction, after the
+    /// fields sent and before the instance moves on (for a transition with approval: when the final approval
+    /// applies it). Conditions are checked before, never on what the actions set. Left out: none. Part of the
+    /// checksum only when present, so a version without actions keeps the checksum it had before actions
+    /// existed.
+    #[schema(max_items = 20, required = false)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub set_attributes: Vec<WorkflowSetAttribute>,
+}
+
+/// Where an attribute action takes its value from, instead of a literal `value`
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkflowValueFrom {
+    /// The database clock when the transition runs: a date or datetime field
+    Now,
+    /// The database's current date when the transition runs: a date field
+    Today,
+    /// The Person CI linked to the user who runs the transition (on a final approval: who decides it): a field
+    /// that references Person
+    Actor,
+    /// No value: an optional field
+    Clear,
+}
+
+impl WorkflowValueFrom {
+    /// The `value_from` column's value.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WorkflowValueFrom::Now => "now",
+            WorkflowValueFrom::Today => "today",
+            WorkflowValueFrom::Actor => "actor",
+            WorkflowValueFrom::Clear => "clear",
+        }
+    }
+
+    /// The `value_from` column's value back; `literal` is None.
+    pub fn parse(s: &str) -> Option<WorkflowValueFrom> {
+        match s {
+            "now" => Some(WorkflowValueFrom::Now),
+            "today" => Some(WorkflowValueFrom::Today),
+            "actor" => Some(WorkflowValueFrom::Actor),
+            "clear" => Some(WorkflowValueFrom::Clear),
+            _ => None,
+        }
+    }
+}
+
+/// One attribute action: when the transition runs, the CI's field `attribute` is set to `value`, or to what
+/// `valueFrom` names (exactly one of the two). Written with the rights of who runs the transition, validated as a
+/// CI update is; a value that no longer validates fails the transition (422 WORKFLOW_ACTION_INVALID).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowSetAttribute {
+    /// The key of a field of the workflow's type (its own or inherited). Not the state field of a workflow, an
+    /// identifying field, a field of the same transition, a read-only field, or a reference to another type than
+    /// Person
+    #[schema(schema_with = key_schema)]
+    pub attribute: String,
+    #[schema(schema_with = literal_schema, required = false)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<Value>,
+    #[schema(required = false)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_from: Option<WorkflowValueFrom>,
 }
 
 /// The whole draft graph; it replaces the draft (or creates one)
@@ -1301,6 +1378,9 @@ pub struct WorkflowApproverPreview {
     pub users: Vec<WorkflowApproverPreviewUser>,
     /// More users were resolved than are listed
     pub truncated: bool,
+    /// `users` is left empty because the caller may not look up users (the edit permission on business services
+    /// or `users.manage`, as for `GET /principals`); the counts are still given
+    pub users_hidden: bool,
     pub sources: Vec<WorkflowApproverPreviewSource>,
 }
 

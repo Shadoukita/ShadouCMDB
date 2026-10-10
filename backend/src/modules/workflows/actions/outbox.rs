@@ -29,7 +29,7 @@
 //!
 //! Workers hold no CI, instance or request lock and never write CI data.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -112,6 +112,11 @@ pub enum Outcome {
         status_code: Option<i32>,
         reason: String,
         error: String,
+    },
+    /// Not attempted after all (a webhook endpoint paused or suspended since
+    /// the claim): held, uncounted, until the endpoint is resumed.
+    Held {
+        reason: String,
     },
 }
 
@@ -317,7 +322,7 @@ pub async fn fan_out(pool: &PgPool, cfg: &WorkflowActionsConfig, id: i64, owner:
         (Some((_, kind, ..)), ..) if *kind != run.kind => Some("action_changed"),
         (_, None, _) => Some("event_gone"),
         (_, _, None) => Some("ci_deleted"),
-        _ if run.kind != WorkflowActionKind::Inbox => Some("kind_unavailable"),
+        _ if run.kind == WorkflowActionKind::Email => Some("kind_unavailable"),
         _ => None,
     };
     if let Some(reason) = reason {
@@ -329,35 +334,42 @@ pub async fn fan_out(pool: &PgPool, cfg: &WorkflowActionsConfig, id: i64, owner:
     else {
         return Ok(FanOut::Lost);
     };
+    if run.kind == WorkflowActionKind::Webhook {
+        return fan_out_webhook(tx, id, run.action_id.unwrap_or_default()).await;
+    }
 
-    // Recipients, now: by user id, the first WORKFLOW_ACTIONS_MAX_RECIPIENTS.
+    // Recipients, now, by user id. The cap counts only those who are told, as in the preview.
     let recipients = recipients_of(&mut tx, run.action_id.unwrap_or_default()).await?;
     let mut users: Vec<Uuid> = resolve_static(&mut tx, &recipients).await?.into_keys().collect();
-    let truncated = users.len() > cfg.max_recipients;
-    users.truncate(cfg.max_recipients);
     let active: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM cmdb.users WHERE id = ANY($1) AND is_active")
         .bind(&users)
         .fetch_all(&mut *tx)
         .await?;
     let permissions = auth_data::load_permissions_of(&mut tx, &active).await?;
+    let active: HashSet<Uuid> = active.into_iter().collect();
     let actor = (event.actor_type == "user" || event.actor_type == "api_client")
         .then(|| event.actor_id.as_deref().and_then(|a| a.parse::<Uuid>().ok()))
         .flatten()
         .filter(|_| settings.exclude_actor.unwrap_or(true));
     // The users the built-in notifications of 0072 already told of this event.
-    let builtin: Vec<Uuid> = sqlx::query_scalar(
+    let builtin: HashSet<Uuid> = sqlx::query_scalar::<_, Uuid>(
         "SELECT DISTINCT user_id FROM cmdb.notifications WHERE user_id = ANY($1) AND dedupe_key = ANY($2)",
     )
     .bind(&users)
     .bind(builtin_keys(run.event_id, &event))
     .fetch_all(&mut *tx)
-    .await?;
+    .await?
+    .into_iter()
+    .collect();
 
     let mut keys = Vec::with_capacity(users.len());
     let mut statuses = Vec::with_capacity(users.len());
     let mut reasons: Vec<Option<&str>> = Vec::with_capacity(users.len());
     let mut notify = Vec::new();
-    for u in &users {
+    // Once the cap is full, the next user to be told ends the run as `truncated`: the rest get no
+    // delivery row, so a profile of many thousands does not write a row for each of them.
+    let mut end = users.len();
+    for (i, u) in users.iter().enumerate() {
         let reason = if Some(*u) == actor {
             Some("actor")
         } else if !active.contains(u) {
@@ -369,6 +381,10 @@ pub async fn fan_out(pool: &PgPool, cfg: &WorkflowActionsConfig, id: i64, owner:
         } else {
             None
         };
+        if reason.is_none() && notify.len() >= cfg.max_recipients {
+            end = i;
+            break;
+        }
         keys.push(format!("user:{u}"));
         statuses.push(if reason.is_some() { "skipped" } else { "delivered" });
         reasons.push(reason);
@@ -376,6 +392,8 @@ pub async fn fan_out(pool: &PgPool, cfg: &WorkflowActionsConfig, id: i64, owner:
             notify.push(*u);
         }
     }
+    let truncated = end < users.len();
+    users.truncate(end);
     sqlx::query(
         "INSERT INTO cmdb.workflow_action_deliveries
            (run_id, recipient_key, user_id, status, status_reason, attempts, completed_at)
@@ -412,6 +430,51 @@ pub async fn fan_out(pool: &PgPool, cfg: &WorkflowActionsConfig, id: i64, owner:
     )
     .bind(id)
     .bind(truncated.then_some("truncated"))
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(FanOut::Done)
+}
+
+/// A webhook run: one delivery to the action's endpoint, held while the
+/// endpoint is paused or suspended. No recipient, no view check: the receiver
+/// gets what the action lists, and the payload is built when it is sent.
+async fn fan_out_webhook(mut tx: sqlx::Transaction<'_, sqlx::Postgres>, id: i64, action: Uuid) -> sqlx::Result<FanOut> {
+    let endpoint: Option<(Uuid, String)> = sqlx::query_as(
+        "SELECT e.id, e.status FROM cmdb.workflow_actions a JOIN cmdb.webhook_endpoints e ON e.id = a.endpoint_id
+         WHERE a.id = $1",
+    )
+    .bind(action)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((endpoint, status)) = endpoint else {
+        sqlx::query(
+            "UPDATE cmdb.workflow_action_runs SET status = 'cancelled', status_reason = 'endpoint_deleted',
+               completed_at = now(), lease_owner = NULL, lease_until = NULL WHERE id = $1",
+        )
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        return Ok(FanOut::Cancelled);
+    };
+    let held = status != "active";
+    sqlx::query(
+        "INSERT INTO cmdb.workflow_action_deliveries (run_id, recipient_key, endpoint_id, status, status_reason)
+         VALUES ($1, $2, $3, $4, $5) ON CONFLICT (run_id, recipient_key) DO NOTHING",
+    )
+    .bind(id)
+    .bind(format!("endpoint:{endpoint}"))
+    .bind(endpoint)
+    .bind(if held { "held" } else { "pending" })
+    .bind(held.then(|| format!("endpoint_{status}")))
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE cmdb.workflow_action_runs SET status = 'fanned_out', completed_at = now(),
+           lease_owner = NULL, lease_until = NULL WHERE id = $1",
+    )
+    .bind(id)
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -521,6 +584,9 @@ pub async fn claim_deliveries(
     timeout: Duration,
     n: i64,
 ) -> sqlx::Result<Vec<Claimed>> {
+    if kind == WorkflowActionKind::Webhook {
+        return claim_webhook_deliveries(pool, owner, timeout, n).await;
+    }
     let rows: Vec<ClaimedRow> = sqlx::query_as(
         "UPDATE cmdb.workflow_action_deliveries d
             SET status = 'sending', attempts = d.attempts + 1, lease_owner = $1,
@@ -554,6 +620,82 @@ pub async fn claim_deliveries(
             created_at: r.created_at,
         })
         .collect())
+}
+
+/// [`claim_deliveries`] for webhooks: only for active endpoints, and per
+/// endpoint at most `max_in_flight` sending at once and `max_per_minute`
+/// claimed per minute (design §4.5, §4.6). An endpoint's row is locked while
+/// its deliveries are claimed (`SKIP LOCKED`: another process takes another
+/// endpoint), so both limits hold across processes; the minute's count lives
+/// in `workflow_action_rate_windows`. A delivery still pending for an endpoint
+/// that is no longer active is held first.
+async fn claim_webhook_deliveries(pool: &PgPool, owner: &str, timeout: Duration, n: i64) -> sqlx::Result<Vec<Claimed>> {
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        "UPDATE cmdb.workflow_action_deliveries d SET status = 'held',
+           status_reason = 'endpoint_' || e.status
+         FROM cmdb.webhook_endpoints e
+         WHERE e.id = d.endpoint_id AND e.status <> 'active' AND d.status = 'pending'",
+    )
+    .execute(&mut *tx)
+    .await?;
+    let rows: Vec<ClaimedRow> = sqlx::query_as(
+        "WITH ep AS (
+           SELECT e.id,
+                  least(e.max_in_flight - (SELECT count(*) FROM cmdb.workflow_action_deliveries s
+                                            WHERE s.endpoint_id = e.id AND s.status = 'sending'),
+                        e.max_per_minute - coalesce((SELECT w.count FROM cmdb.workflow_action_rate_windows w
+                                                     WHERE w.scope = 'endpoint:' || e.id
+                                                       AND w.window_start = date_trunc('minute', now())), 0)) AS slots
+           FROM cmdb.webhook_endpoints e
+           WHERE e.status = 'active'
+             AND EXISTS (SELECT 1 FROM cmdb.workflow_action_deliveries p
+                          WHERE p.endpoint_id = e.id AND p.status = 'pending' AND p.next_attempt_at <= now())
+           FOR UPDATE OF e SKIP LOCKED),
+         pick AS (
+           SELECT p.id, p.next_attempt_at FROM ep CROSS JOIN LATERAL (
+             SELECT d.id, d.next_attempt_at FROM cmdb.workflow_action_deliveries d
+              WHERE d.endpoint_id = ep.id AND d.status = 'pending' AND d.next_attempt_at <= now()
+              ORDER BY d.next_attempt_at, d.id LIMIT greatest(ep.slots, 0)) p
+           ORDER BY p.next_attempt_at, p.id LIMIT $3),
+         claimed AS (
+           UPDATE cmdb.workflow_action_deliveries d
+              SET status = 'sending', attempts = d.attempts + 1, lease_owner = $1,
+                  lease_until = now() + $2 * interval '1 millisecond', lease_epoch = d.lease_epoch + 1
+             FROM cmdb.workflow_action_runs r
+            WHERE r.id = d.run_id AND d.id IN (SELECT id FROM pick) AND d.status = 'pending'
+            RETURNING d.id, d.run_id, r.kind, d.recipient_key, d.user_id, d.endpoint_id, d.attempts, d.lease_epoch,
+                      d.created_at),
+         counted AS (
+           INSERT INTO cmdb.workflow_action_rate_windows (scope, window_start, count)
+           SELECT 'endpoint:' || endpoint_id, date_trunc('minute', now()), count(*) FROM claimed GROUP BY endpoint_id
+           ON CONFLICT (scope, window_start)
+             DO UPDATE SET count = cmdb.workflow_action_rate_windows.count + EXCLUDED.count)
+         SELECT * FROM claimed",
+    )
+    .bind(owner)
+    .bind(i64::try_from((timeout + LEASE_MARGIN).as_millis()).unwrap_or(i64::MAX))
+    .bind(n)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(rows.into_iter().map(ClaimedRow::claimed).collect())
+}
+
+impl ClaimedRow {
+    fn claimed(self) -> Claimed {
+        Claimed {
+            id: self.id,
+            run_id: self.run_id,
+            kind: self.kind,
+            recipient_key: self.recipient_key,
+            user_id: self.user_id,
+            endpoint_id: self.endpoint_id,
+            attempts: self.attempts,
+            epoch: self.lease_epoch,
+            created_at: self.created_at,
+        }
+    }
 }
 
 /// Writes the outcome of attempt `c`, if its lease is still the current one.
@@ -593,6 +735,17 @@ pub async fn record(pool: &PgPool, cfg: &WorkflowActionsConfig, c: &Claimed, out
             dead(&mut tx, c, "max_attempts", status_code, &error).await?
         }
         Outcome::Permanent { status_code, reason, error } => dead(&mut tx, c, &reason, status_code, &error).await?,
+        Outcome::Held { reason } => sqlx::query(
+            "UPDATE cmdb.workflow_action_deliveries SET status = 'held', status_reason = $3,
+               attempts = greatest(attempts - 1, 0), lease_owner = NULL, lease_until = NULL
+             WHERE id = $1 AND lease_epoch = $2 AND status = 'sending'",
+        )
+        .bind(c.id)
+        .bind(c.epoch)
+        .bind(reason)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected(),
     };
     tx.commit().await?;
     Ok(written == 1)
@@ -626,7 +779,7 @@ async fn dead(
 
 /// One `workflow.action_dead` row (actor system) per delivery that just died;
 /// no recipient address, no error text.
-async fn audit_dead(tx: &mut PgConnection, ids: &[Uuid]) -> sqlx::Result<()> {
+pub(crate) async fn audit_dead(tx: &mut PgConnection, ids: &[Uuid]) -> sqlx::Result<()> {
     if ids.is_empty() {
         return Ok(());
     }
@@ -704,11 +857,14 @@ pub async fn housekeeping(pool: &PgPool, cfg: &WorkflowActionsConfig) -> sqlx::R
     )
     .fetch_all(&mut *tx)
     .await?;
-    // Never sent late without notice.
+    // Never sent late without notice; a manual retry starts the clock again (0076).
     let expired: Vec<Uuid> = sqlx::query_scalar(
-        "UPDATE cmdb.workflow_action_deliveries SET status = 'dead', status_reason = 'expired', completed_at = now()
+        "UPDATE cmdb.workflow_action_deliveries
+            SET status = 'dead', completed_at = now(),
+                status_reason = CASE WHEN status = 'held' THEN 'endpoint_suspended' ELSE 'expired' END
          WHERE id IN (SELECT id FROM cmdb.workflow_action_deliveries
-                       WHERE status IN ('pending', 'held') AND created_at < now() - $1 * interval '1 hour'
+                       WHERE status IN ('pending', 'held')
+                         AND coalesce(retried_at, created_at) < now() - $1 * interval '1 hour'
                        LIMIT 1000 FOR UPDATE SKIP LOCKED)
          RETURNING id",
     )

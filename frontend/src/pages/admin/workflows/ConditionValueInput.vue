@@ -2,17 +2,18 @@
 import { computed } from "vue";
 import { useLookupListValues, type AttributeDefinition } from "../../../api/datamodel";
 import CiPicker from "../../../components/CiPicker.vue";
-import { opTakesList, type ConditionLeaf } from "../../../lib/workflowDraft";
+import { opTakesList, type ConditionLeaf, type ConditionOp } from "../../../lib/workflowDraft";
 
 /**
  * The value of one condition, in the field's type: a list of keys for dropdown and choice fields,
  * a date or number picker, yes/no, a CI for references. `in`/`notIn` take several values.
- * Dropdown and choice values are stored by key, as the API expects.
+ * Dropdown and choice values are stored by key, as the API expects. Without an operator it edits one
+ * value, as an attribute action's literal.
  */
-const props = defineProps<{ leaf: ConditionLeaf; field?: AttributeDefinition; id: string; label: string }>();
+const props = defineProps<{ leaf: Pick<ConditionLeaf, "value"> & { op?: ConditionOp }; field?: AttributeDefinition; id: string; label: string }>();
 
 const type = computed(() => props.field?.dataType ?? "text");
-const list = computed(() => opTakesList(props.leaf.op));
+const list = computed(() => !!props.leaf.op && opTakesList(props.leaf.op));
 const lookupValues = useLookupListValues(() => (type.value === "lookup" ? props.field?.lookupListId : undefined));
 const choices = computed<{ key: string; label: string; inactive?: boolean }[]>(() => {
   if (type.value === "enum") return (props.field?.enumValues ?? []).map((v) => ({ key: v, label: v }));

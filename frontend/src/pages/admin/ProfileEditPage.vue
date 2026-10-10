@@ -339,7 +339,7 @@ const notFound = computed(() => {
           <ErrorAlert :error="classes.error.value" :on-retry="() => classes.refetch()" />
         </div>
         <template v-else>
-          <div class="table-wrap matrix-wrap">
+          <div class="table-wrap matrix-wrap" role="region" tabindex="0" :aria-label="t('admin.profile.matrix')">
             <table class="data list-table matrix">
               <caption class="sr-only">{{ t("admin.profile.section.classes") }}</caption>
               <colgroup><col class="matrix-name" /></colgroup>

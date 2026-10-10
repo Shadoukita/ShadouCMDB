@@ -31,8 +31,11 @@ const name = ref("");
 const profileId = ref("");
 const attributeId = ref("");
 const ownerRole = ref<ServiceOwnerRole>("business");
-/** /principals needs edit on business services or users.manage: without it, groups and users are named. */
-const byName = ref(false);
+/**
+ * /principals needs edit on business services or users.manage. Without it the API also refuses
+ * groups and users by name (GH#839), so they cannot be added here: profiles can.
+ */
+const directoryForbidden = ref(false);
 
 const candidate = computed<DraftApprover>(() => {
   const base = { transitionKey: props.transitionKey, stepKey: props.stepKey, role: role.value, source: source.value, ref: null, attribute: null, serviceOwnerRole: null };
@@ -44,8 +47,7 @@ const candidate = computed<DraftApprover>(() => {
     }
     case "group":
     case "user":
-      if (byName.value) return { ...base, ref: name.value.trim() ? { id: name.value.trim(), name: name.value.trim() } : null };
-      return { ...base, ref: ref_.value };
+      return { ...base, ref: directoryForbidden.value ? null : ref_.value };
     case "ci_attribute":
       return { ...base, attribute: props.attributes.find((a) => a.id === attributeId.value) ?? null };
     default:
@@ -98,18 +100,21 @@ function add() {
         <option v-for="p in profiles" :key="p.id" :value="p.id">{{ p.name }}</option>
       </select>
     </div>
-    <div v-else-if="(source === 'profile' && profiles === null) || ((source === 'group' || source === 'user') && byName)" class="field">
-      <label :for="fid('name')">{{ t(`wfApprovers.byName.${source as "profile" | "group" | "user"}`) }}</label>
+    <div v-else-if="source === 'profile' && profiles === null" class="field">
+      <label :for="fid('name')">{{ t("wfApprovers.byName.profile") }}</label>
       <input :id="fid('name')" v-model="name" type="text" maxlength="200" autocomplete="off" :aria-describedby="`${fid('name')}-hint`" @keydown.enter.prevent="add" />
       <span :id="`${fid('name')}-hint`" class="hint">{{ t("wfApprovers.byNameHint") }}</span>
     </div>
+    <p v-else-if="(source === 'group' || source === 'user') && directoryForbidden" class="alert alert-warn wf-approver-add-note" role="note">
+      {{ t("wfApprovers.directoryForbidden") }}
+    </p>
     <template v-else-if="source === 'group' || source === 'user'">
       <PrincipalCombobox
         :label="t(source === 'group' ? 'wfApprovers.group' : 'wfApprovers.user')"
         :kind="source"
         :hint="ref_ ? t('wfApprovers.picked', { name: ref_.name }) : undefined"
         @select="pickPrincipal"
-        @forbidden="byName = true"
+        @forbidden="directoryForbidden = true"
       />
     </template>
     <div v-else-if="source === 'ci_attribute'" class="field">

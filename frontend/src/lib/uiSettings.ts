@@ -451,12 +451,17 @@ export const MAX_COLUMNS = 12;
 export type SectionKind = NonNullable<NonNullable<NonNullable<UiClassLayout["tabs"]>[number]["sections"]>[number]["kind"]>;
 export type PanelKind = Exclude<SectionKind, "fields" | "note">;
 /** The detail page's built-in panels, each placeable once per layout. */
-export const PANELS: { kind: PanelKind; label: string; hint: string }[] = [
-  { kind: "record", label: "Record", hint: "The CI's ID, class, and when it was created and last changed" },
-  { kind: "relations", label: "Relationships", hint: "The CI's relationships, with adding and removing them" },
-  { kind: "history", label: "History", hint: "Changes to the CI, field by field" },
-  { kind: "audit", label: "Audit trail", hint: "Who changed the CI when, with the request id" },
-];
+export const PANELS: { kind: PanelKind; readonly label: string; readonly hint: string }[] = (["record", "relations", "history", "audit"] as const).map(
+  (kind) => ({
+    kind,
+    get label() {
+      return t(`record.panel.${kind}`);
+    },
+    get hint() {
+      return t(`record.panel.${kind}.hint`);
+    },
+  }),
+);
 export const panelLabel = (kind: PanelKind) => PANELS.find((p) => p.kind === kind)?.label ?? kind;
 export const isPanelKind = (kind: SectionKind): kind is PanelKind => kind !== "fields" && kind !== "note";
 /** Longest note text, in characters (the API's limit). */
@@ -658,12 +663,12 @@ export function resolveLayout(
   // The record details: what no field section places, wherever the layout puts them (else last, built in).
   const recordFields = record.filter((f) => usable(f) && !taken.has(f)).map(one);
   for (const t of tabs) for (const s of t.sections) if (s.kind === "record") Object.assign(s, { fields: recordFields, items: recordFields });
-  const trailing = [auto("_general", GENERAL_SECTION, [...general, ...ungrouped]), ...groups.map((g) => auto(`_group:${g.group}`, g.group, g.fields))];
+  const trailing = [auto("_general", t("record.section.general"), [...general, ...ungrouped]), ...groups.map((g) => auto(`_group:${g.group}`, g.group, g.fields))];
   // Without tabs, the built-in arrangement: the record details last (on the detail page, which has them).
   if (builtIn && record.length > 0) {
-    trailing.push({ ...auto("_record", "Record", []), fields: recordFields, items: recordFields, kind: "record" });
+    trailing.push({ ...auto("_record", t("record.panel.record"), []), fields: recordFields, items: recordFields, kind: "record" });
   }
-  if (tabs.length === 0) tabs.push({ key: "general", label: GENERAL_SECTION, sections: [] });
+  if (tabs.length === 0) tabs.push({ key: "general", label: t("record.section.general"), sections: [] });
   tabs[0].sections.push(...trailing);
   if (keepEmpty) return tabs.map((t) => ({ ...t, sections: t.sections.filter((s) => !s.auto || s.fields.length > 0) }));
   // A record section always shows (the ID at least); an empty field section does not.

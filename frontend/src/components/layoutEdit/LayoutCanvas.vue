@@ -37,7 +37,7 @@ import {
   type LayoutTab,
   type SeparatorPlace,
 } from "../../lib/layoutDesign";
-import { PRESENTATION_ONLY, type LayoutEditor } from "../../lib/layoutEditor";
+import { presentationOnly, type LayoutEditor } from "../../lib/layoutEditor";
 import {
   ATTRIBUTE_PREFIX,
   attributeKey,
@@ -145,29 +145,29 @@ function showTabOf(field: string) {
 function moveField(field: string, delta: -1 | 1) {
   let into: LayoutSection | undefined;
   props.editor.apply((l) => (into = moveFieldBy(l, field, delta)));
-  if (!into || !layout.value) return say(`${labelOf(field)} is already ${delta < 0 ? "first" : "last"}.`);
+  if (!into || !layout.value) return say(t(delta < 0 ? "layoutEditor.say.alreadyFirst" : "layoutEditor.say.alreadyLast", { field: labelOf(field) }));
   showTabOf(field);
   const at = locate(layout.value, field)!;
-  say(`${labelOf(field)} moved to position ${at.index + 1} of ${at.section.fields?.length} in ${at.section.label}.`);
+  say(t("layoutEditor.say.fieldMoved", { field: labelOf(field), pos: at.index + 1, count: at.section.fields?.length, section: at.section.label }));
   focus(`le-field-${field}`);
 }
 function resizeField(field: string, width: number, drag = false) {
   let w = 1;
   props.editor.apply((l) => (w = setWidth(l, field, width)), drag ? `field:${field}` : undefined);
   const at = layout.value && locate(layout.value, field);
-  if (at) say(`${labelOf(field)}: ${w} of ${at.section.columns} columns.`);
+  if (at) say(t("layoutEditor.say.fieldWidth", { field: labelOf(field), width: w, columns: at.section.columns }));
 }
 function hide(field: string) {
-  if (isCore(field)) return say(`${labelOf(field)} belongs to every CI: it can be moved, not hidden.`);
+  if (isCore(field)) return say(t("layoutEditor.say.coreNotHidden", { field: labelOf(field) }));
   props.editor.apply((l) => hideField(l, field));
-  say(`${labelOf(field)} hidden. It is listed under Hidden fields.`);
+  say(t("layoutEditor.say.hidden", { field: labelOf(field) }));
 }
 function place(field: string, key: string, index?: number) {
   if (!key) return;
   props.editor.apply((l) => placeField(l, field, key, index));
   showTabOf(field);
   const at = layout.value && locate(layout.value, field);
-  say(`${labelOf(field)} moved to ${at?.tab.label} › ${at?.section.label}.`);
+  say(t("layoutEditor.say.placed", { field: labelOf(field), tab: at?.tab.label, section: at?.section.label }));
   focus(`le-field-${field}`);
 }
 /** Shows a hidden field again, in the first field section of the tab in view. */
@@ -180,12 +180,12 @@ function setReadOnly(field: string, on: boolean) {
     const cur = l.readOnlyFields ?? [];
     l.readOnlyFields = on ? [...cur.filter((f) => f !== field), field] : cur.filter((f) => f !== field);
   });
-  say(`${labelOf(field)} is ${on ? "read-only" : "editable"} on the form.`);
+  say(t(on ? "layoutEditor.say.readOnly" : "layoutEditor.say.editable", { field: labelOf(field) }));
 }
 function makeSection(label: string, fields: string[]) {
   let key = "";
   props.editor.apply((l) => (key = adoptFields(l, label, fields).key));
-  say(`Section ${label} added with ${fields.length} field${fields.length === 1 ? "" : "s"}.`);
+  say(t("layoutEditor.say.sectionAdopted", { section: label, n: fields.length }));
   focus(`le-section-${key}`);
 }
 
@@ -195,12 +195,12 @@ function makeSection(label: string, fields: string[]) {
 const sepEdit = ref<SeparatorPlace | null>(null);
 const sepLabel = ref("");
 const sepId = (at: SeparatorPlace) => `le-sep-${at.section}-${at.index}`;
-const sepName = (f: LayoutField) => (f.label ? `Separator ${f.label}` : "Separator");
+const sepName = (f: LayoutField) => (f.label ? t("layoutEditor.separatorNamed", { label: f.label }) : t("layoutEditor.separator"));
 function insertSeparator(s: LayoutSection) {
   let at: SeparatorPlace | undefined;
   props.editor.apply((l) => (at = addSeparator(l, s.key)));
   if (!at) return;
-  say(`Separator added at the end of ${s.label}. Type its label, or leave it empty for a plain line.`);
+  say(t("layoutEditor.say.separatorAdded", { section: s.label }));
   startSeparatorLabel(at, "");
 }
 function startSeparatorLabel(at: SeparatorPlace, label: string) {
@@ -218,7 +218,7 @@ function commitSeparatorLabel() {
   sepEdit.value = null;
   const label = sepLabel.value;
   props.editor.apply((l) => setSeparatorLabel(l, at, label));
-  say(label.trim() ? `Separator labelled ${label.trim()}.` : "Separator without a label.");
+  say(label.trim() ? t("layoutEditor.say.separatorLabelled", { label: label.trim() }) : t("layoutEditor.say.separatorUnlabelled"));
   focus(sepId(at));
 }
 function onSeparatorLabelKey(e: KeyboardEvent) {
@@ -235,15 +235,15 @@ function onSeparatorLabelKey(e: KeyboardEvent) {
 function moveSeparator(from: SeparatorPlace, delta: -1 | 1) {
   let to: SeparatorPlace | undefined;
   props.editor.apply((l) => (to = moveSeparatorBy(l, from, delta)));
-  if (!to || !layout.value) return say(`The separator is already ${delta < 0 ? "first" : "last"}.`);
+  if (!to || !layout.value) return say(t(delta < 0 ? "layoutEditor.say.separatorFirst" : "layoutEditor.say.separatorLast"));
   const at = findSection(layout.value, to.section);
   if (at) activeTabKey.value = at.tab.key;
-  say(`Separator moved to position ${to.index + 1} of ${at?.section.fields?.length} in ${at?.section.label}.`);
+  say(t("layoutEditor.say.separatorMoved", { pos: to.index + 1, count: at?.section.fields?.length, section: at?.section.label }));
   focus(sepId(to));
 }
 function dropSeparator(from: SeparatorPlace) {
   props.editor.apply((l) => removeSeparator(l, from));
-  say("Separator removed.");
+  say(t("layoutEditor.say.separatorRemoved"));
 }
 function onSeparatorKey(at: SeparatorPlace, f: LayoutField, e: KeyboardEvent) {
   if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
@@ -276,17 +276,17 @@ function commitRename() {
   if (!r) return;
   renaming.value = null;
   const label = renameValue.value.trim();
-  const target = r.kind === "tab" ? tabs.value.find((t) => t.key === r.key) : layout.value && findSection(layout.value, r.key)?.section;
+  const target = r.kind === "tab" ? tabs.value.find((tb) => tb.key === r.key) : layout.value && findSection(layout.value, r.key)?.section;
   if (target && label && label !== target.label) {
     props.editor.apply((l) => {
-      const t = r.kind === "tab" ? l.tabs?.find((x) => x.key === r.key) : findSection(l, r.key)?.section;
-      if (!t) return;
+      const own = r.kind === "tab" ? l.tabs?.find((x) => x.key === r.key) : findSection(l, r.key)?.section;
+      if (!own) return;
       // A tab's only section still named after it (a new tab's) follows the new name.
-      const follower = r.kind === "tab" && "sections" in t && t.sections?.length === 1 && t.sections[0].label === t.label ? t.sections[0] : null;
-      t.label = label.slice(0, 100);
-      if (follower) follower.label = t.label;
+      const follower = r.kind === "tab" && "sections" in own && own.sections?.length === 1 && own.sections[0].label === own.label ? own.sections[0] : null;
+      own.label = label.slice(0, 100);
+      if (follower) follower.label = own.label;
     });
-    say(`${r.kind === "tab" ? "Tab" : "Section"} renamed to ${label}.`);
+    say(t(r.kind === "tab" ? "layoutEditor.say.tabRenamed" : "layoutEditor.say.sectionRenamed", { label }));
   }
   focus(r.kind === "tab" ? `le-tab-${r.key}` : `le-section-${r.key}`);
 }
@@ -305,25 +305,25 @@ function onRenameKey(e: KeyboardEvent) {
   }
 }
 
-function onTabClick(t: LayoutTab) {
-  if (t === activeTab.value) startRename("tab", t.key, t.label);
-  else activeTabKey.value = t.key;
+function onTabClick(tb: LayoutTab) {
+  if (tb === activeTab.value) startRename("tab", tb.key, tb.label);
+  else activeTabKey.value = tb.key;
 }
 function onAddTab() {
-  let t: LayoutTab | undefined;
-  props.editor.apply((l) => (t = addTab(l, `Tab ${(l.tabs?.length ?? 0) + 1}`)));
-  if (!t) return;
-  activeTabKey.value = t.key;
-  say(`Tab ${t.label} added with an empty section. Type its name.`);
-  startRename("tab", t.key, t.label);
+  let tb: LayoutTab | undefined;
+  props.editor.apply((l) => (tb = addTab(l, t("layoutEditor.newTab", { n: (l.tabs?.length ?? 0) + 1 }))));
+  if (!tb) return;
+  activeTabKey.value = tb.key;
+  say(t("layoutEditor.say.tabAdded", { tab: tb.label }));
+  startRename("tab", tb.key, tb.label);
 }
-function onMoveTab(t: LayoutTab, delta: -1 | 1) {
+function onMoveTab(tb: LayoutTab, delta: -1 | 1) {
   props.editor.apply((l) => {
-    const own = l.tabs?.find((x) => x.key === t.key);
+    const own = l.tabs?.find((x) => x.key === tb.key);
     if (own) moveTab(l, own, delta);
   });
-  say(`Tab ${t.label} moved ${delta < 0 ? "left" : "right"}.`);
-  focus(`le-tab-${t.key}`);
+  say(t(delta < 0 ? "layoutEditor.say.tabMovedLeft" : "layoutEditor.say.tabMovedRight", { tab: tb.label }));
+  focus(`le-tab-${tb.key}`);
 }
 /** Adds a section at `index` of the tab in view: a window below the others. */
 function insertSection(index: number) {
@@ -332,10 +332,10 @@ function insertSection(index: number) {
   let s: LayoutSection | undefined;
   props.editor.apply((l) => {
     const own = l.tabs?.find((x) => x.key === tab.key);
-    if (own) s = addSection(l, own, "New section", index);
+    if (own) s = addSection(l, own, t("layoutEditor.newSection"), index);
   });
   if (!s) return;
-  say(`Section added to ${tab.label}. Type its name.`);
+  say(t("layoutEditor.say.sectionAdded", { tab: tab.label }));
   startRename("section", s.key, s.label);
 }
 function insertNote(index: number) {
@@ -344,10 +344,10 @@ function insertNote(index: number) {
   let s: LayoutSection | undefined;
   props.editor.apply((l) => {
     const own = l.tabs?.find((x) => x.key === tab.key);
-    if (own) s = addNote(l, own, "Note", "Write the note here.", index);
+    if (own) s = addNote(l, own, t("layoutEditor.addNote"), t("layoutEditor.newNoteText"), index);
   });
   if (!s) return;
-  say(`Note added to ${tab.label}. Type its text.`);
+  say(t("layoutEditor.say.noteAdded", { tab: tab.label }));
   startNote(s);
 }
 function insertPanel(index: number, e: Event) {
@@ -361,8 +361,8 @@ function insertPanel(index: number, e: Event) {
     const own = l.tabs?.find((x) => x.key === tab.key);
     if (own) s = addPanel(l, own, kind, index);
   });
-  if (!s) return say(`The ${panelLabel(kind)} panel is already placed.`);
-  say(`${panelLabel(kind)} panel placed in ${tab.label}.`);
+  if (!s) return say(t("layoutEditor.say.panelAlreadyPlaced", { panel: panelLabel(kind) }));
+  say(t("layoutEditor.say.panelPlaced", { panel: panelLabel(kind), tab: tab.label }));
   focus(`le-section-${s.key}`);
 }
 
@@ -387,7 +387,7 @@ function commitNote() {
   const text = noteDraft.value.slice(0, NOTE_MAX_CHARS);
   noteKey.value = null;
   onSection(key, (_, own) => (own.text = text));
-  say("Note text changed.");
+  say(t("layoutEditor.say.noteChanged"));
   focus(`le-section-${key}`);
 }
 function cancelNote() {
@@ -414,17 +414,17 @@ function onSection(key: string, change: (l: NonNullable<typeof layout.value>, s:
 }
 function onSectionTab(s: LayoutSection, tabKey: string) {
   onSection(s.key, (l, own) => {
-    const t = l.tabs?.find((x) => x.key === tabKey);
-    if (t) moveSectionToTab(l, own, t);
+    const to = l.tabs?.find((x) => x.key === tabKey);
+    if (to) moveSectionToTab(l, own, to);
   });
   activeTabKey.value = tabKey;
-  say(`Section ${s.label} moved to the tab ${tabs.value.find((t) => t.key === tabKey)?.label}.`);
+  say(t("layoutEditor.say.sectionMovedToTab", { section: s.label, tab: tabs.value.find((tb) => tb.key === tabKey)?.label }));
   focus(`le-section-${s.key}`);
 }
 const confirmRemove = ref<{ tab: LayoutTab } | { section: LayoutSection } | null>(null);
 const removeTitle = computed(() => {
   const c = confirmRemove.value;
-  return !c ? "" : "tab" in c ? `Remove the tab ${c.tab.label}?` : `Remove the section ${c.section.label}?`;
+  return !c ? "" : "tab" in c ? t("layoutEditor.removeTabTitle", { tab: c.tab.label }) : t("layoutEditor.removeSectionTitle", { section: c.section.label });
 });
 const removeText = computed(() => (confirmRemove.value && layout.value ? removalSummary(layout.value, confirmRemove.value) : ""));
 function doRemove() {
@@ -436,10 +436,10 @@ function doRemove() {
       const own = l.tabs?.find((x) => x.key === c.tab.key);
       if (own) removeTab(l, own);
     });
-    say(`Tab ${c.tab.label} removed.`);
+    say(t("layoutEditor.say.tabRemoved", { tab: c.tab.label }));
   } else {
     onSection(c.section.key, (l, own) => removeSection(l, own));
-    say(`Section ${c.section.label} removed.`);
+    say(t("layoutEditor.say.sectionRemoved", { section: c.section.label }));
   }
 }
 
@@ -573,29 +573,29 @@ function onGridDrop(section: LayoutSection, e: DragEvent) {
     let to: SeparatorPlace | undefined;
     props.editor.apply((l) => (to = placeSeparator(l, sep, section.key, index)));
     if (!to) return;
-    say(`Separator moved to position ${to.index + 1} in ${section.label}.`);
+    say(t("layoutEditor.say.separatorDropped", { pos: to.index + 1, section: section.label }));
     focus(sepId(to));
   }
 }
-function onTabOver(t: LayoutTab, e: DragEvent) {
+function onTabOver(tb: LayoutTab, e: DragEvent) {
   if (!dragField.value) return;
   e.preventDefault();
-  dropTab.value = t.key;
+  dropTab.value = tb.key;
 }
 /** Dropping on a tab puts the field at the end of the tab's last section (a tab without one gets one). */
-function onTabDrop(t: LayoutTab, e: DragEvent) {
+function onTabDrop(tb: LayoutTab, e: DragEvent) {
   e.preventDefault();
   const field = dragField.value;
   onDragEnd();
   if (!field) return;
   props.editor.apply((l) => {
-    const own = l.tabs?.find((x) => x.key === t.key);
+    const own = l.tabs?.find((x) => x.key === tb.key);
     if (!own) return;
     placeField(l, field, lastFieldSection(l, own).key);
   });
-  activeTabKey.value = t.key;
+  activeTabKey.value = tb.key;
   const at = layout.value && locate(layout.value, field);
-  say(`${labelOf(field)} moved to ${t.label} › ${at?.section.label}.`);
+  say(t("layoutEditor.say.placed", { field: labelOf(field), tab: tb.label, section: at?.section.label }));
 }
 function onHiddenOver(e: DragEvent) {
   if (dragField.value && !isCore(dragField.value)) e.preventDefault();
@@ -615,25 +615,25 @@ function onHiddenDrop(e: DragEvent) {
       :class="{ 'drop-target': dragField && !isCore(dragField) }"
       data-testid="le-hidden"
       role="region"
-      aria-label="Hidden fields"
+      :aria-label="t('layoutEditor.hiddenFields')"
       @dragover="onHiddenOver"
       @drop="onHiddenDrop"
     >
-      <strong>Hidden fields</strong>
-      <ul v-if="hidden.length > 0" aria-label="Hidden fields">
+      <strong>{{ t("layoutEditor.hiddenFields") }}</strong>
+      <ul v-if="hidden.length > 0" :aria-label="t('layoutEditor.hiddenFields')">
         <li v-for="f in hidden" :key="f" draggable="true" @dragstart="onDragStart(f, $event)" @dragend="onDragEnd">
-          {{ labelOf(f) }}<span v-if="defFor(f)?.isRequired" class="badge">required</span>
-          <button type="button" class="btn btn-sm" :aria-label="`Show ${labelOf(f)}`" @click="show(f)">Show</button>
+          {{ labelOf(f) }}<span v-if="defFor(f)?.isRequired" class="badge">{{ t("layoutEditor.required") }}</span>
+          <button type="button" class="btn btn-sm" :aria-label="t('layoutEditor.showField', { field: labelOf(f) })" @click="show(f)">{{ t("layoutEditor.show") }}</button>
         </li>
       </ul>
-      <span v-else class="muted">None.</span>
-      <span class="hint">Drop a field here to hide it from the form and the detail page.</span>
-      <span class="hint" data-testid="le-presentation-only">{{ PRESENTATION_ONLY }}</span>
+      <span v-else class="muted">{{ t("layoutEditor.hiddenNone") }}</span>
+      <span class="hint">{{ t("layoutEditor.hiddenHint") }}</span>
+      <span class="hint" data-testid="le-presentation-only">{{ presentationOnly() }}</span>
     </div>
 
     <div class="le-frame" data-testid="le-frame">
       <div class="layout-container">
-        <div class="le-tabs" role="group" aria-label="Tabs of the layout">
+        <div class="le-tabs" role="group" :aria-label="t('layoutEditor.tabs')">
           <div v-for="tb in tabs" :key="tb.key" :class="['le-tab', { current: tb === activeTab, 'drop-target': dropTab === tb.key }]" @dragover="onTabOver(tb, $event)" @dragleave="dropTab = null" @drop="onTabDrop(tb, $event)">
             <input
               v-if="renaming?.kind === 'tab' && renaming.key === tb.key"
@@ -642,21 +642,21 @@ function onHiddenDrop(e: DragEvent) {
               class="le-rename"
               type="text"
               maxlength="100"
-              aria-label="Tab name"
+              :aria-label="t('layoutEditor.tabName')"
               @keydown="onRenameKey"
               @blur="commitRename"
             />
-            <button v-else :id="`le-tab-${tb.key}`" type="button" class="le-tab-label" :aria-pressed="tb === activeTab" :title="tb === activeTab ? 'Click to rename' : undefined" @click="onTabClick(tb)">
+            <button v-else :id="`le-tab-${tb.key}`" type="button" class="le-tab-label" :aria-pressed="tb === activeTab" :title="tb === activeTab ? t('layoutEditor.clickToRename') : undefined" @click="onTabClick(tb)">
               {{ tb.label }}
             </button>
-            <span v-if="tb === activeTab && !(renaming?.kind === 'tab' && renaming.key === tb.key)" class="le-tab-tools" role="toolbar" :aria-label="`Tab ${tb.label}: layout`">
-              <button type="button" class="btn btn-sm btn-icon" :aria-label="`Rename tab ${tb.label}`" title="Rename" @click="startRename('tab', tb.key, tb.label)"><Icon name="pencil" /></button>
-              <button type="button" class="btn btn-sm btn-icon" :aria-label="`Move tab ${tb.label} left`" title="Move left" :disabled="tabs.indexOf(tb) === 0" @click="onMoveTab(tb, -1)"><Icon name="arrow-left" /></button>
-              <button type="button" class="btn btn-sm btn-icon" :aria-label="`Move tab ${tb.label} right`" title="Move right" :disabled="tabs.indexOf(tb) === tabs.length - 1" @click="onMoveTab(tb, 1)"><Icon name="arrow-right" /></button>
-              <button type="button" class="btn btn-sm btn-icon" :aria-label="`Remove tab ${tb.label}`" title="Remove" :disabled="!layout || !canRemoveTab(layout, tb)" @click="confirmRemove = { tab: tb }"><Icon name="x" /></button>
+            <span v-if="tb === activeTab && !(renaming?.kind === 'tab' && renaming.key === tb.key)" class="le-tab-tools" role="toolbar" :aria-label="t('layoutEditor.tabTools', { tab: tb.label })">
+              <button type="button" class="btn btn-sm btn-icon" :aria-label="t('layoutEditor.renameTab', { tab: tb.label })" :title="t('layoutEditor.rename')" @click="startRename('tab', tb.key, tb.label)"><Icon name="pencil" /></button>
+              <button type="button" class="btn btn-sm btn-icon" :aria-label="t('layoutEditor.moveTabLeft', { tab: tb.label })" :title="t('layoutEditor.moveLeft')" :disabled="tabs.indexOf(tb) === 0" @click="onMoveTab(tb, -1)"><Icon name="arrow-left" /></button>
+              <button type="button" class="btn btn-sm btn-icon" :aria-label="t('layoutEditor.moveTabRight', { tab: tb.label })" :title="t('layoutEditor.moveRight')" :disabled="tabs.indexOf(tb) === tabs.length - 1" @click="onMoveTab(tb, 1)"><Icon name="arrow-right" /></button>
+              <button type="button" class="btn btn-sm btn-icon" :aria-label="t('layoutEditor.removeTab', { tab: tb.label })" :title="t('layoutEditor.remove')" :disabled="!layout || !canRemoveTab(layout, tb)" @click="confirmRemove = { tab: tb }"><Icon name="x" /></button>
             </span>
           </div>
-          <button type="button" class="btn btn-sm le-add" aria-label="Add a tab" @click="onAddTab"><Icon name="plus" />Tab</button>
+          <button type="button" class="btn btn-sm le-add" :aria-label="t('layoutEditor.addTab')" @click="onAddTab"><Icon name="plus" />{{ t("layoutEditor.addTabShort") }}</button>
         </div>
 
         <div
@@ -664,7 +664,7 @@ function onHiddenDrop(e: DragEvent) {
           :class="['le-free', { stacked, 'le-guides': moving && editor.snap }]"
           :style="stacked ? undefined : { '--free-h': `${freeHeight}px`, '--guide': `${GUIDE_PX}px` }"
           role="region"
-          :aria-label="`Tab ${activeTab?.label ?? ''}`"
+          :aria-label="t('layoutEditor.tab', { tab: activeTab?.label ?? '' })"
           data-le-area
         >
           <FreeWindow
@@ -687,7 +687,7 @@ function onHiddenDrop(e: DragEvent) {
             @layer="(m: LayerMove) => onLayer(s, m)"
             @guides="(lines: SnapLine[]) => (guides = lines)"
           >
-            <section :class="['panel', 'layout-panel', 'le-section', { 'le-block': kindOf(s) !== 'fields', invalid: errorsOf(s).length > 0 }]" :aria-label="`Section ${s.label}`">
+            <section :class="['panel', 'layout-panel', 'le-section', { 'le-block': kindOf(s) !== 'fields', invalid: errorsOf(s).length > 0 }]" :aria-label="t('layoutEditor.section', { section: s.label })">
               <div class="panel-header">
                 <h2>
                   <input
@@ -697,50 +697,50 @@ function onHiddenDrop(e: DragEvent) {
                     class="le-rename"
                     type="text"
                     maxlength="100"
-                    aria-label="Section name"
+                    :aria-label="t('layoutEditor.sectionName')"
                     @keydown="onRenameKey"
                     @blur="commitRename"
                   />
-                  <button v-else :id="`le-section-${s.key}`" type="button" class="le-section-label" title="Click to rename" @click="startRename('section', s.key, s.label)">{{ s.label }}</button>
+                  <button v-else :id="`le-section-${s.key}`" type="button" class="le-section-label" :title="t('layoutEditor.clickToRename')" @click="startRename('section', s.key, s.label)">{{ s.label }}</button>
                 </h2>
-                <span v-if="kindOf(s) === 'note'" class="muted"><span class="badge">Note</span><template v-if="s.collapsed"> · starts collapsed</template></span>
-                <span v-else-if="isPanelKind(kindOf(s))" class="muted"><span class="badge">{{ panelLabel(kindOf(s) as PanelKind) }} panel</span><template v-if="s.collapsed"> · starts collapsed</template></span>
-                <span v-else class="muted" data-testid="le-section-size">{{ s.columns }} column{{ s.columns === 1 ? "" : "s" }}<template v-if="s.collapsed"> · starts collapsed</template></span>
-                <span class="le-section-tools" role="toolbar" :aria-label="`Section ${s.label}: layout`">
+                <span v-if="kindOf(s) === 'note'" class="muted"><span class="badge">{{ t("layoutEditor.addNote") }}</span><template v-if="s.collapsed"> · {{ t("layoutEditor.startsCollapsed") }}</template></span>
+                <span v-else-if="isPanelKind(kindOf(s))" class="muted"><span class="badge">{{ t("layoutEditor.panelBadge", { panel: panelLabel(kindOf(s) as PanelKind) }) }}</span><template v-if="s.collapsed"> · {{ t("layoutEditor.startsCollapsed") }}</template></span>
+                <span v-else class="muted" data-testid="le-section-size">{{ t("layoutEditor.columns", { n: s.columns ?? 3 }) }}<template v-if="s.collapsed"> · {{ t("layoutEditor.startsCollapsed") }}</template></span>
+                <span class="le-section-tools" role="toolbar" :aria-label="t('layoutEditor.sectionTools', { section: s.label })">
                   <button
                     v-for="m in LAYER_MOVES"
                     :key="m.move"
                     type="button"
                     class="btn btn-sm"
-                    :aria-label="`${m.label}: ${s.label}`"
-                    :title="`${m.label} (${m.keys} on the window's grip)`"
+                    :aria-label="`${t(`layoutEditor.layer.${m.move}`)}: ${s.label}`"
+                    :title="t('layoutEditor.layerTitle', { label: t(`layoutEditor.layer.${m.move}`), keys: m.keys })"
                     :disabled="m.move === 'front' || m.move === 'forward' ? layerAt(s).index >= layerAt(s).count : layerAt(s).index <= 1"
                     @click="onLayer(s, m.move)"
                   >
                     <Icon :name="LAYER_ICONS[m.move]" />
                   </button>
-                  <button type="button" class="btn btn-sm" :aria-pressed="!!s.collapsed" :aria-label="`Section ${s.label} starts collapsed on the detail page`" @click="onSection(s.key, (_, own) => (own.collapsed = !own.collapsed))">
-                    Collapsed
+                  <button type="button" class="btn btn-sm" :aria-pressed="!!s.collapsed" :aria-label="t('layoutEditor.collapsedLabel', { section: s.label })" @click="onSection(s.key, (_, own) => (own.collapsed = !own.collapsed))">
+                    {{ t("layoutEditor.collapsed") }}
                   </button>
-                  <button v-if="kindOf(s) === 'note'" type="button" class="btn btn-sm" :aria-label="`Edit the text of ${s.label}`" @click="startNote(s)">Edit text</button>
-                  <button v-if="kindOf(s) === 'fields'" type="button" class="btn btn-sm" :aria-label="`Add a separator to ${s.label}`" title="A line across the section between its fields, with an optional label" @click="insertSeparator(s)">
-                    <Icon name="plus" />Separator
+                  <button v-if="kindOf(s) === 'note'" type="button" class="btn btn-sm" :aria-label="t('layoutEditor.editTextOf', { section: s.label })" @click="startNote(s)">{{ t("layoutEditor.editText") }}</button>
+                  <button v-if="kindOf(s) === 'fields'" type="button" class="btn btn-sm" :aria-label="t('layoutEditor.addSeparatorTo', { section: s.label })" :title="t('layoutEditor.separatorTitle')" @click="insertSeparator(s)">
+                    <Icon name="plus" />{{ t("layoutEditor.separator") }}
                   </button>
-                  <select v-if="kindOf(s) === 'fields'" :aria-label="`Columns of ${s.label}`" title="Columns of the section's field grid" :value="s.columns ?? 3" @change="onSection(s.key, (_, own) => setColumns(own, Number(($event.target as HTMLSelectElement).value)))">
-                    <option v-for="n in MAX_COLUMNS" :key="n" :value="n">{{ n }} column{{ n === 1 ? "" : "s" }}</option>
+                  <select v-if="kindOf(s) === 'fields'" :aria-label="t('layoutEditor.columnsOf', { section: s.label })" :title="t('layoutEditor.columnsTitle')" :value="s.columns ?? 3" @change="onSection(s.key, (_, own) => setColumns(own, Number(($event.target as HTMLSelectElement).value)))">
+                    <option v-for="n in MAX_COLUMNS" :key="n" :value="n">{{ t("layoutEditor.columns", { n }) }}</option>
                   </select>
-                  <select v-if="tabs.length > 1" :aria-label="`Tab of ${s.label}`" :value="activeTab?.key" @change="onSectionTab(s, ($event.target as HTMLSelectElement).value)">
+                  <select v-if="tabs.length > 1" :aria-label="t('layoutEditor.tabOf', { section: s.label })" :value="activeTab?.key" @change="onSectionTab(s, ($event.target as HTMLSelectElement).value)">
                     <option v-for="tb in tabs" :key="tb.key" :value="tb.key">{{ tb.label }}</option>
                   </select>
-                  <button type="button" class="btn btn-sm" :aria-label="`Remove section ${s.label}`" :disabled="!layout || !canRemoveSection(layout, s)" @click="confirmRemove = { section: s }">Remove</button>
+                  <button type="button" class="btn btn-sm" :aria-label="t('layoutEditor.removeSection', { section: s.label })" :disabled="!layout || !canRemoveSection(layout, s)" @click="confirmRemove = { section: s }">{{ t("layoutEditor.remove") }}</button>
                 </span>
               </div>
-              <ul v-if="errorsOf(s).length > 0" class="le-errors" role="alert" :aria-label="`Errors in ${s.label}`">
+              <ul v-if="errorsOf(s).length > 0" class="le-errors" role="alert" :aria-label="t('layoutEditor.errorsIn', { section: s.label })">
                 <li v-for="(e, k) in errorsOf(s)" :key="k"><code>{{ e.path }}</code> {{ e.message }}</li>
               </ul>
               <div v-if="kindOf(s) === 'note'" class="panel-body">
                 <div v-if="noteKey === s.key" class="le-note-edit">
-                  <label :for="`le-note-${s.key}`" class="sr-only">Text of {{ s.label }}</label>
+                  <label :for="`le-note-${s.key}`" class="sr-only">{{ t("layoutEditor.textOf", { section: s.label }) }}</label>
                   <textarea
                     :id="`le-note-${s.key}`"
                     v-model="noteDraft"
@@ -751,22 +751,22 @@ function onHiddenDrop(e: DragEvent) {
                     @keydown="onNoteKey"
                   />
                   <div :id="`le-note-help-${s.key}`" class="hint">
-                    <strong v-if="noteBlank" class="le-note-error">A note needs text.</strong>
-                    Plain text or limited Markdown: **bold**, *italic*, `code`, [link](https://…), lists with - or 1. HTML is shown as text.
-                    {{ noteDraft.length }} / {{ NOTE_MAX_CHARS }} characters. Ctrl+Enter applies, Escape cancels.
+                    <strong v-if="noteBlank" class="le-note-error">{{ t("layoutEditor.noteBlank") }}</strong>
+                    {{ t("layoutEditor.noteHelp") }}
+                    {{ t("layoutEditor.noteCount", { n: noteDraft.length, max: NOTE_MAX_CHARS }) }}
                   </div>
                   <span class="row-actions">
-                    <button type="button" class="btn btn-sm btn-primary" :disabled="noteBlank" @click="commitNote">Apply</button>
-                    <button type="button" class="btn btn-sm" @click="cancelNote">Cancel</button>
+                    <button type="button" class="btn btn-sm btn-primary" :disabled="noteBlank" @click="commitNote">{{ t("layoutEditor.apply") }}</button>
+                    <button type="button" class="btn btn-sm" @click="cancelNote">{{ t("common.cancel") }}</button>
                   </span>
                 </div>
-                <button v-else type="button" class="le-note" :aria-label="`Edit the text of ${s.label}`" title="Click to edit the text" @click="startNote(s)">
+                <button v-else type="button" class="le-note" :aria-label="t('layoutEditor.editTextOf', { section: s.label })" :title="t('layoutEditor.clickToEditText')" @click="startNote(s)">
                   <NoteText :text="s.text ?? ''" />
                 </button>
               </div>
               <div v-else-if="isPanelKind(kindOf(s))" class="panel-body flush" inert>
                 <slot name="panel" :kind="kindOf(s) as PanelKind">
-                  <p class="hint le-panel-hint">{{ PANELS.find((p) => p.kind === kindOf(s))?.hint }}. Shown on the detail page, not on the form.</p>
+                  <p class="hint le-panel-hint">{{ t("layoutEditor.panelHint", { hint: PANELS.find((p) => p.kind === kindOf(s))?.hint }) }}</p>
                 </slot>
               </div>
               <div v-else class="panel-body">
@@ -789,9 +789,9 @@ function onHiddenDrop(e: DragEvent) {
                         :id="sepId({ section: s.key, index: e.at })"
                         type="button"
                         class="le-grip"
-                        :aria-label="`${sepName(e.f)}, line across ${s.label}`"
+                        :aria-label="t('layoutEditor.separatorGrip', { separator: sepName(e.f), section: s.label })"
                         aria-describedby="le-keys"
-                        title="Drag to move"
+                        :title="t('layoutEditor.dragToMove')"
                         @keydown="onSeparatorKey({ section: s.key, index: e.at }, e.f, $event)"
                       >
                         <Icon name="grip-vertical" />
@@ -803,20 +803,20 @@ function onHiddenDrop(e: DragEvent) {
                         class="le-rename"
                         type="text"
                         :maxlength="SEPARATOR_MAX_CHARS"
-                        aria-label="Separator label (empty: a plain line)"
-                        placeholder="No label"
+                        :aria-label="t('layoutEditor.separatorLabel')"
+                        :placeholder="t('layoutEditor.noLabel')"
                         @keydown="onSeparatorLabelKey"
                         @blur="commitSeparatorLabel"
                       />
-                      <button v-else type="button" class="le-sep-label" title="Click to edit the label" @click="startSeparatorLabel({ section: s.key, index: e.at }, e.f.label ?? '')">
-                        <span v-if="e.f.label" dir="auto">{{ e.f.label }}</span><span v-else class="muted">Separator</span>
+                      <button v-else type="button" class="le-sep-label" :title="t('layoutEditor.clickToEditLabel')" @click="startSeparatorLabel({ section: s.key, index: e.at }, e.f.label ?? '')">
+                        <span v-if="e.f.label" dir="auto">{{ e.f.label }}</span><span v-else class="muted">{{ t("layoutEditor.separator") }}</span>
                       </button>
                       <span class="le-sep-line" aria-hidden="true" />
-                      <span class="le-toolbar" role="toolbar" :aria-label="`${sepName(e.f)}: layout`">
-                        <button type="button" class="btn btn-sm btn-icon" :aria-label="`Move ${sepName(e.f)} earlier`" title="Move earlier" @click="moveSeparator({ section: s.key, index: e.at }, -1)"><Icon name="arrow-up" /></button>
-                        <button type="button" class="btn btn-sm btn-icon" :aria-label="`Move ${sepName(e.f)} later`" title="Move later" @click="moveSeparator({ section: s.key, index: e.at }, 1)"><Icon name="arrow-down" /></button>
-                        <button type="button" class="btn btn-sm btn-icon" :aria-label="`Edit the label of ${sepName(e.f)}`" title="Edit label" @click="startSeparatorLabel({ section: s.key, index: e.at }, e.f.label ?? '')"><Icon name="pencil" /></button>
-                        <button type="button" class="btn btn-sm" :aria-label="`Remove ${sepName(e.f)}`" @click="dropSeparator({ section: s.key, index: e.at })">Remove</button>
+                      <span class="le-toolbar" role="toolbar" :aria-label="t('layoutEditor.separatorTools', { separator: sepName(e.f) })">
+                        <button type="button" class="btn btn-sm btn-icon" :aria-label="t('layoutEditor.moveSeparatorEarlier', { separator: sepName(e.f) })" :title="t('layoutEditor.moveEarlier')" @click="moveSeparator({ section: s.key, index: e.at }, -1)"><Icon name="arrow-up" /></button>
+                        <button type="button" class="btn btn-sm btn-icon" :aria-label="t('layoutEditor.moveSeparatorLater', { separator: sepName(e.f) })" :title="t('layoutEditor.moveLater')" @click="moveSeparator({ section: s.key, index: e.at }, 1)"><Icon name="arrow-down" /></button>
+                        <button type="button" class="btn btn-sm btn-icon" :aria-label="t('layoutEditor.editLabelOf', { separator: sepName(e.f) })" :title="t('layoutEditor.editLabel')" @click="startSeparatorLabel({ section: s.key, index: e.at }, e.f.label ?? '')"><Icon name="pencil" /></button>
+                        <button type="button" class="btn btn-sm" :aria-label="t('layoutEditor.removeSeparator', { separator: sepName(e.f) })" @click="dropSeparator({ section: s.key, index: e.at })">{{ t("layoutEditor.remove") }}</button>
                       </span>
                     </div>
                     <EditableField
@@ -846,7 +846,7 @@ function onHiddenDrop(e: DragEvent) {
                       <slot name="field" :field="e.f.field" />
                     </EditableField>
                   </template>
-                  <p v-if="!hasFields(s)" :class="['le-empty', 'lg-cell', `lg-w-${s.columns ?? 3}`]">Drop fields here</p>
+                  <p v-if="!hasFields(s)" :class="['le-empty', 'lg-cell', `lg-w-${s.columns ?? 3}`]">{{ t("layoutEditor.dropFields") }}</p>
                 </div>
               </div>
             </section>
@@ -855,13 +855,13 @@ function onHiddenDrop(e: DragEvent) {
           <!-- Below the lowest window. -->
           <div class="layout-panels le-tail">
             <div class="le-insert">
-              <button type="button" class="btn btn-sm le-add" :aria-label="`Add a section to ${activeTab?.label}`" @click="insertSection(activeTab?.sections?.length ?? 0)"><Icon name="plus" />{{ t("layoutEditor.addSection") }}</button>
-              <button type="button" class="btn btn-sm le-add" :aria-label="`Add a note to ${activeTab?.label}`" @click="insertNote(activeTab?.sections?.length ?? 0)"><Icon name="plus" />{{ t("layoutEditor.addNote") }}</button>
+              <button type="button" class="btn btn-sm le-add" :aria-label="t('layoutEditor.addSectionTo', { tab: activeTab?.label })" @click="insertSection(activeTab?.sections?.length ?? 0)"><Icon name="plus" />{{ t("layoutEditor.addSection") }}</button>
+              <button type="button" class="btn btn-sm le-add" :aria-label="t('layoutEditor.addNoteTo', { tab: activeTab?.label })" @click="insertNote(activeTab?.sections?.length ?? 0)"><Icon name="plus" />{{ t("layoutEditor.addNote") }}</button>
               <select
                 class="le-add-panel"
-                :aria-label="`Add a panel to ${activeTab?.label}`"
+                :aria-label="t('layoutEditor.addPanelTo', { tab: activeTab?.label })"
                 :disabled="freePanels.length === 0"
-                :title="freePanels.length === 0 ? 'Every panel is placed' : undefined"
+                :title="freePanels.length === 0 ? t('layoutEditor.allPanelsPlaced') : undefined"
                 @change="insertPanel(activeTab?.sections?.length ?? 0, $event)"
               >
                 <option value="">{{ t("layoutEditor.addPanel") }}</option>
@@ -870,11 +870,11 @@ function onHiddenDrop(e: DragEvent) {
             </div>
 
             <template v-if="onFirstTab">
-              <section v-for="a in autoSections" :key="a.key" class="panel layout-panel le-section auto" :aria-label="`Not placed: ${a.label}`">
+              <section v-for="a in autoSections" :key="a.key" class="panel layout-panel le-section auto" :aria-label="t('layoutEditor.notPlaced', { section: a.label })">
                 <div class="panel-header">
                   <h2>{{ a.label }}</h2>
-                  <span class="muted">Not placed by this layout: shown here automatically</span>
-                  <button type="button" class="btn btn-sm" @click="makeSection(a.label, a.fields.map((f) => f.field))">Make this a section</button>
+                  <span class="muted">{{ t("layoutEditor.notPlacedHint") }}</span>
+                  <button type="button" class="btn btn-sm" @click="makeSection(a.label, a.fields.map((f) => f.field))">{{ t("layoutEditor.makeSection") }}</button>
                 </div>
                 <div class="panel-body">
                   <div :class="[gridClass(a.columns), 'le-grid']">
@@ -918,8 +918,8 @@ function onHiddenDrop(e: DragEvent) {
     <div class="sr-only" aria-live="assertive">{{ editor.announcement }}</div>
   </div>
 
-  <ConfirmDialog :open="!!confirmRemove" :title="removeTitle" confirm-label="Remove" @confirm="doRemove" @cancel="confirmRemove = null">
-    {{ removeText }} Nothing is saved until you press Save.
+  <ConfirmDialog :open="!!confirmRemove" :title="removeTitle" :confirm-label="t('layoutEditor.remove')" @confirm="doRemove" @cancel="confirmRemove = null">
+    {{ removeText }} {{ t("layoutEditor.removeNotSaved") }}
   </ConfirmDialog>
 </template>
 
@@ -975,7 +975,7 @@ function onHiddenDrop(e: DragEvent) {
 .le-sep .le-grip {
   border: 0;
   background: none;
-  padding: 0 2px;
+  padding: 0 var(--space-0_5);
   color: var(--c-text-secondary);
   cursor: grab;
 }
@@ -990,8 +990,8 @@ function onHiddenDrop(e: DragEvent) {
   z-index: var(--z-handle);
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding: 2px;
+  gap: var(--space-0_5);
+  padding: var(--space-0_5);
   border: 1px solid var(--c-primary);
   border-radius: var(--radius-sm);
   background: var(--c-surface);
@@ -1080,7 +1080,7 @@ function onHiddenDrop(e: DragEvent) {
   display: inline-flex;
   align-items: center;
   gap: var(--space-0_5);
-  padding: 2px 2px 2px var(--space-1);
+  padding: var(--space-0_5) var(--space-0_5) var(--space-0_5) var(--space-1);
   border: 1px solid var(--c-border);
   border-radius: var(--radius-sm);
   background: var(--c-surface);
@@ -1097,7 +1097,7 @@ function onHiddenDrop(e: DragEvent) {
 .le-tab {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-0_5);
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
 }
@@ -1158,7 +1158,7 @@ function onHiddenDrop(e: DragEvent) {
 .le-section-tools {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-0_5);
 }
 .le-section .panel-header {
   gap: var(--space-2);
@@ -1176,7 +1176,7 @@ function onHiddenDrop(e: DragEvent) {
 }
 .le-section-tools select {
   font-size: var(--fs-sm);
-  padding: 1px 4px;
+  padding: var(--space-px) var(--space-1);
 }
 .le-section-tools [aria-pressed="true"] {
   border-color: var(--c-primary);
@@ -1202,7 +1202,7 @@ function onHiddenDrop(e: DragEvent) {
 }
 .le-grid {
   min-height: 56px;
-  padding: 2px;
+  padding: var(--space-0_5);
   row-gap: var(--space-4);
   padding-top: var(--space-3);
 }

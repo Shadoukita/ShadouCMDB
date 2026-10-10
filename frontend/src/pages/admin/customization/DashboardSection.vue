@@ -172,7 +172,7 @@ const staleSort = (w: UiWidget) => (classAttrs.value ? unavailableSortLabel(w.se
       <div class="panel-body">
         <form class="inline-control" @submit.prevent="addWidget">
           <label for="dash-add-type">{{ t("customization.dashboard.addWidget") }}</label>
-          <select id="dash-add-type" v-model="addType" style="max-width: 260px">
+          <select id="dash-add-type" v-model="addType" class="dash-add-type">
             <option v-for="wt in WIDGET_TYPES" :key="wt.type" :value="wt.type">{{ t("customization.dashboard.widgetOption", { label: widgetLabel(wt.type), hint: t(`customization.dashboard.hint.${wt.type}`) }) }}</option>
           </select>
           <button type="submit" class="btn" :disabled="widgets.length >= 50">{{ t("customization.add") }}</button>
@@ -181,13 +181,16 @@ const staleSort = (w: UiWidget) => (classAttrs.value ? unavailableSortLabel(w.se
     </template>
   </section>
 
-  <section v-if="widgets !== null && widgets.length > 0" class="preview-frame" style="margin-top: var(--space-3)" :aria-label="t('customization.dashboard.preview')">
+  <section v-if="widgets !== null && widgets.length > 0" class="preview-frame" :aria-label="t('customization.dashboard.preview')">
     <p class="preview-label">{{ t("customization.dashboard.previewLabel") }}</p>
     <DashboardWidgets :widgets="widgets" />
   </section>
 </template>
 
 <style scoped>
+.dash-add-type {
+  max-width: 260px;
+}
 .widget-options {
   display: flex;
   flex-direction: column;

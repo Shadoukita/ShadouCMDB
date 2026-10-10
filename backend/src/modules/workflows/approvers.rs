@@ -27,6 +27,7 @@ use crate::auth::permissions::{ClassOp, Permissions};
 use crate::data::auth as auth_data;
 use crate::data::crud::{self, AuditAction, AuditEntry};
 use crate::http::error::{AppError, FieldError, FieldLocation};
+use crate::modules::business_services::service::may_browse_directory;
 use crate::modules::classes::AttributeDataType;
 
 /// Users listed by a preview.
@@ -649,6 +650,16 @@ pub async fn replace(
         let by_id = validate::is_uuid(given).then(|| given.parse::<Uuid>().ok()).flatten();
         list.iter().find(|(id, name)| Some(*id) == by_id || name.to_lowercase() == given.to_lowercase()).cloned()
     };
+    // Users and groups by name only for who may look them up (GH#839).
+    let directory = may_browse_directory(&mut tx, ctx).await?;
+    let (mut kept_groups, mut kept_users) = (HashSet::new(), HashSet::new());
+    for a in load(&mut tx, id).await? {
+        match a.source {
+            Source::Group { name, .. } => kept_groups.insert(name.to_lowercase()),
+            Source::User { name, .. } => kept_users.insert(name.to_lowercase()),
+            _ => false,
+        };
+    }
 
     let mut errors = Vec::new();
     let mut rows: Vec<Assignment> = Vec::new();
@@ -672,15 +683,21 @@ pub async fn replace(
             }
             WorkflowApproverSource::Group => {
                 let given = a.group.as_deref().unwrap_or_default();
-                find(&groups, given)
-                    .map(|(id, name)| Source::Group { id, name })
-                    .ok_or_else(|| not_found(format!("{path}.group"), format!("No user group \"{given}\"")))
+                service::directory_ref(directory, &kept_groups, given, format!("{path}.group"), "user group").and_then(
+                    |()| {
+                        find(&groups, given)
+                            .map(|(id, name)| Source::Group { id, name })
+                            .ok_or_else(|| not_found(format!("{path}.group"), format!("No user group \"{given}\"")))
+                    },
+                )
             }
             WorkflowApproverSource::User => {
                 let given = a.user.as_deref().unwrap_or_default();
-                find(&users, given)
-                    .map(|(id, name)| Source::User { id, name })
-                    .ok_or_else(|| not_found(format!("{path}.user"), format!("No user \"{given}\"")))
+                service::directory_ref(directory, &kept_users, given, format!("{path}.user"), "user").and_then(|()| {
+                    find(&users, given)
+                        .map(|(id, name)| Source::User { id, name })
+                        .ok_or_else(|| not_found(format!("{path}.user"), format!("No user \"{given}\"")))
+                })
             }
             WorkflowApproverSource::CiAttribute => person
                 .resolve(&fields, a.attribute.as_deref().unwrap_or_default())
@@ -1391,6 +1408,11 @@ pub async fn preview(
     let eligible_count = users.iter().filter(|u| u.eligible).count() as i64;
     let truncated = users.len() > PREVIEW_USERS;
     users.truncate(PREVIEW_USERS);
+    // Counts only for a caller who may not look up users (GH#839).
+    let users_hidden = !may_browse_directory(&mut conn, ctx).await?;
+    if users_hidden {
+        users.clear();
+    }
     let sources = assignments
         .iter()
         .zip(resolved)
@@ -1415,6 +1437,7 @@ pub async fn preview(
         eligible_count,
         users,
         truncated,
+        users_hidden,
         sources,
     })
 }

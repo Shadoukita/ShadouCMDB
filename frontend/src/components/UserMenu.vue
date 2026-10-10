@@ -93,6 +93,7 @@ async function signOut() {
       <RouterLink class="menu-link" to="/account" :title="t('userMenu.accountTitle', { name: session.user.username })">
         <Icon name="user" />{{ t("account.title") }}
       </RouterLink>
+      <RouterLink class="menu-link" to="/account/delegations"><Icon name="users" />{{ t("delegations.title") }}</RouterLink>
       <div class="menu-field">
         <label for="user-theme">{{ t("userMenu.theme") }}</label>
         <select

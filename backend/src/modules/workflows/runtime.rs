@@ -31,6 +31,7 @@
 //! migration and a CI deletion close it. The lock order gains a third link:
 //! CI row → instance row → approval request row.
 
+pub mod actions;
 pub mod approval_lists;
 pub mod approvals;
 pub mod delegations;
@@ -145,6 +146,8 @@ pub(super) struct Pinned {
     fields: Vec<PinnedField>,
     /// Approval steps, in step order per transition.
     steps: Vec<PinnedStep>,
+    /// Attribute actions, in their order per transition.
+    set_attributes: Vec<graph::SetAttributeRow>,
 }
 
 impl Pinned {
@@ -229,7 +232,8 @@ pub(super) async fn pinned(conn: &mut PgConnection, version_id: Uuid) -> Result<
     .bind(version_id)
     .fetch_all(&mut *conn)
     .await?;
-    let p = Arc::new(Pinned { initial_state_id, states, transitions, fields, steps });
+    let set_attributes = graph::load_set_attributes(&mut *conn, version_id).await?;
+    let p = Arc::new(Pinned { initial_state_id, states, transitions, fields, steps, set_attributes });
     // A draft can still change: never cached (no instance runs on one).
     if status != "draft"
         && let Ok(mut c) = cache().lock()
@@ -727,6 +731,26 @@ pub(super) async fn insert_event(
     e: NewEvent<'_>,
 ) -> Result<(), AppError> {
     let actor = actor_of(ctx);
+    // The echo-loop breaker reads it on transitions only (SHAA-2725 §7.4). A claimed
+    // cause counts only when it names a webhook delivery of this instance that was
+    // sent within the delivery age limit; anything else is stored as no cause, so a
+    // made-up id cannot silence the instance's actions (GH#845).
+    let cause = match ctx.client.cause.filter(|_| e.kind == "transition") {
+        Some(c) => {
+            sqlx::query_scalar::<_, Uuid>(
+                "SELECT d.id FROM cmdb.workflow_action_deliveries d
+                   JOIN cmdb.workflow_action_runs r ON r.id = d.run_id
+                  WHERE d.id = $1 AND r.kind = 'webhook' AND r.instance_id = $2 AND d.attempts > 0
+                    AND d.created_at > now() - make_interval(hours => $3)",
+            )
+            .bind(c.delivery)
+            .bind(e.instance)
+            .bind(c.max_age_hours)
+            .fetch_optional(&mut *conn)
+            .await?
+        }
+        None => None,
+    };
     sqlx::query(
         "INSERT INTO cmdb.workflow_instance_events
            (instance_id, kind, transition_key, from_state_key, to_state_key, to_version_no,
@@ -749,8 +773,7 @@ pub(super) async fn insert_event(
     .bind(e.approval.map(|a| a.0))
     .bind(e.approval.and_then(|a| a.1))
     .bind(e.on_behalf_of)
-    // The echo-loop breaker reads it on transitions only (SHAA-2725 §7.4).
-    .bind(ctx.client.cause.filter(|_| e.kind == "transition"))
+    .bind(cause)
     .execute(conn)
     .await?;
     Ok(())
@@ -1414,6 +1437,8 @@ async fn transition_in(
     attributes.extend(state_value(&model, row.state_attribute_id, to));
     let changes =
         write_ci(&mut *tx, ctx, row.ci_id, row.class_id, attributes, None).await.map_err(as_transition_fields)?;
+    let run = actions::Run { row: &row, transition: t, actor: ctx.principal().map(|p| p.user_id), note: Map::new() };
+    let changes = actions::merge(changes, actions::apply(&mut *tx, ctx, &p, run).await?);
     move_to(&mut *tx, id, to).await?;
     insert_event(
         &mut *tx,

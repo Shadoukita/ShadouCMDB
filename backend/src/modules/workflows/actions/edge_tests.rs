@@ -395,7 +395,6 @@ async fn a_poison_run_gives_up_after_the_attempt_limit() {
 /// notifies at most: users who would be skipped (disabled, no view) should
 /// not use up the cap and leave the users who may be told without a word.
 #[tokio::test]
-#[ignore = "GH#848: the recipient cap is applied before the skips; un-ignore with the fix"]
 async fn the_recipient_cap_counts_only_users_who_are_told() {
     let Some(db) = scratch::database("actions_edge_recipient_cap").await else { return };
     let pool = &db.pool;

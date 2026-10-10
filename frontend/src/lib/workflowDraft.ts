@@ -10,7 +10,9 @@ import type {
   WorkflowTransition,
   WorkflowVersion,
 } from "../api/workflows";
+import { checkSetAttributes, setAttributeFromApi, setAttributeToApi, type DraftSetAttribute } from "./workflowActions";
 import { checkSteps, stepFromApi, stepToApi, type DraftApprovalStep } from "./workflowApprovals";
+import { t, type MessageKey } from "../i18n/index";
 
 export type ConditionOp = "eq" | "ne" | "in" | "notIn" | "isSet" | "isNotSet" | "gt" | "gte" | "lt" | "lte" | "contains";
 export type FieldDataType = "text" | "number" | "integer" | "boolean" | "enum" | "date" | "datetime" | "ip" | "cidr" | "reference" | "lookup";
@@ -29,13 +31,15 @@ export interface ConditionGroup {
 }
 export type ConditionNode = ConditionLeaf | ConditionGroup;
 
-export interface DraftTransition extends Omit<WorkflowTransition, "conditions" | "fields" | "requiresComment" | "approval"> {
+export interface DraftTransition extends Omit<WorkflowTransition, "conditions" | "fields" | "requiresComment" | "approval" | "setAttributes"> {
   requiresComment: boolean;
   fields: { attribute: string; required: boolean }[];
   /** The root group; no children means no condition. */
   conditions: ConditionGroup;
   /** The approval policy's steps, in order; none means the transition runs without approval. */
   approval: DraftApprovalStep[];
+  /** Attribute actions: fields the transition sets on the CI when it runs; none means it sets nothing. */
+  setAttributes: DraftSetAttribute[];
 }
 export interface DraftState extends Omit<WorkflowState, "terminal" | "stateValue"> {
   terminal: boolean;
@@ -57,12 +61,18 @@ export interface Draft {
 export const MAX_CONDITION_DEPTH = 4;
 export const MAX_CONDITION_LEAVES = 32;
 
-export const CATEGORIES: { value: StateCategory; label: string }[] = [
-  { value: "open", label: "Open" },
-  { value: "active", label: "In progress" },
-  { value: "done", label: "Done" },
-  { value: "cancelled", label: "Cancelled" },
+export const CATEGORIES: { value: StateCategory; label: MessageKey }[] = [
+  { value: "open", label: "wfRun.category.open" },
+  { value: "active", label: "wfRun.category.active" },
+  { value: "done", label: "wfRun.category.done" },
+  { value: "cancelled", label: "wfRun.category.cancelled" },
 ];
+
+/** A state category in the active locale; an unknown one as its key. */
+export const categoryLabel = (c: string) => {
+  const k = CATEGORIES.find((x) => x.value === c)?.label;
+  return k ? t(k) : c;
+};
 
 export const OP_LABELS: Record<ConditionOp, string> = {
   eq: "is",
@@ -182,6 +192,7 @@ export function draftFromVersion(v: Pick<WorkflowVersion, "initialState" | "stat
       fields: (t.fields ?? []).map((f) => ({ attribute: f.attribute, required: f.required ?? true })),
       conditions: parseConditions(t.conditions),
       approval: (t.approval?.steps ?? []).map(stepFromApi),
+      setAttributes: (t.setAttributes ?? []).map(setAttributeFromApi),
     })),
     positions: layoutPositions(v.layout),
   };
@@ -205,6 +216,7 @@ export function toDraftBody(d: Draft, expectedChecksum?: string | null): Workflo
       // Free-form objects in the spec generate as Record<string, never>.
       if (c) out.conditions = c as WorkflowTransition["conditions"];
       if (t.approval.length) out.approval = { steps: t.approval.map(stepToApi) };
+      if (t.setAttributes.length) out.setAttributes = t.setAttributes.map(setAttributeToApi);
       return out;
     }),
     layout: positions as unknown as WorkflowDraftBody["layout"],
@@ -350,8 +362,8 @@ export function grantRows(
   for (const g of grants) {
     if (!PSEUDO_GRANTS.includes(g.transitionKey) && !out.has(g.transitionKey)) out.set(g.transitionKey, { key: g.transitionKey, name: g.transitionKey, orphan: true });
   }
-  out.set(START_GRANT, { key: START_GRANT, name: "Start again after an instance ended", orphan: false });
-  out.set(CANCEL_GRANT, { key: CANCEL_GRANT, name: "Cancel an instance", orphan: false });
+  out.set(START_GRANT, { key: START_GRANT, name: t("wfAdmin.grants.startAgain"), orphan: false });
+  out.set(CANCEL_GRANT, { key: CANCEL_GRANT, name: t("wfAdmin.grants.cancelInstance"), orphan: false });
   return [...out.values()];
 }
 
@@ -413,6 +425,7 @@ export function checkDraft(d: Draft): PlacedProblem[] {
     };
     walk(t.conditions, `transitions[${i}].conditions`);
     for (const p of checkSteps(t.approval)) add(target, `transitions[${i}].${p.path}`, p.message, p.code);
+    for (const p of checkSetAttributes(t.setAttributes)) add(target, `transitions[${i}].${p.path}`, p.message, p.code);
   });
   return out;
 }

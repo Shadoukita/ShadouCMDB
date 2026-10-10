@@ -9,6 +9,8 @@
 //! routes are [`runtime_routes`].
 
 pub mod actions;
+#[cfg(test)]
+mod actions_tests;
 pub mod adopt;
 #[cfg(test)]
 mod adopt_tests;
@@ -24,6 +26,8 @@ mod approvals_tests;
 pub mod approvers;
 pub mod archive;
 pub mod condition;
+#[cfg(test)]
+mod directory_tests;
 pub mod eval;
 pub mod graph;
 pub mod migration;
@@ -35,7 +39,7 @@ pub mod refs;
 pub mod runtime;
 pub mod runtime_schemas;
 #[cfg(test)]
-mod runtime_tests;
+pub(crate) mod runtime_tests;
 #[cfg(test)]
 mod s6_tests;
 pub mod schemas;
@@ -120,6 +124,13 @@ const APPROVERS: &str = "/api/v1/admin/workflow-definitions/{id}/approvers";
 const APPROVER_PREVIEW: &str = "/api/v1/admin/workflow-definitions/{id}/approvers/preview";
 const ACTIONS: &str = "/api/v1/admin/workflow-definitions/{id}/actions";
 const ACTION_PREVIEW: &str = "/api/v1/admin/workflow-definitions/{id}/actions/{key}/preview";
+const ACTION_SUMMARY: &str = "/api/v1/admin/workflow-definitions/{id}/actions/summary";
+const DELIVERIES: &str = "/api/v1/admin/workflow-definitions/{id}/action-deliveries";
+const DELIVERY: &str = "/api/v1/admin/workflow-definitions/{id}/action-deliveries/{deliveryId}";
+const DELIVERY_RETRY: &str = "/api/v1/admin/workflow-definitions/{id}/action-deliveries/{deliveryId}/retry";
+const DELIVERY_DISCARD: &str = "/api/v1/admin/workflow-definitions/{id}/action-deliveries/{deliveryId}/discard";
+const DELIVERIES_RETRY: &str = "/api/v1/admin/workflow-definitions/{id}/action-deliveries/retry";
+const DELIVERIES_DISCARD: &str = "/api/v1/admin/workflow-definitions/{id}/action-deliveries/discard";
 const BOOTSTRAP: &str = "/api/v1/admin/workflow-definitions/{id}/bootstrap";
 const MIGRATIONS: &str = "/api/v1/admin/workflow-definitions/{id}/instance-migrations";
 
@@ -414,8 +425,11 @@ pub fn routes() -> Vec<Route> {
                  changed in between. Exactly the field `source` names is set (400 `required` or `source_mismatch`); \
                  profiles, groups and users are given by id or by name (a user by username), a field by id or by \
                  key. 400 VALIDATION_ERROR: `unknown_step` on `approvers[i].stepKey` for a step that no version and \
-                 not the draft has, `not_found` for an unknown profile, group or user, `unknown_attribute` or \
-                 `attribute_type` on `approvers[i].attribute` unless it is a reference field of the workflow's type \
+                 not the draft has, `not_found` for an unknown profile, group or user, \
+                 `directory_lookup_forbidden` for a group or user given by name by a caller who may not look up \
+                 users and groups (the edit permission on business services or `users.manage`, as for \
+                 `GET /principals`) unless the workflow already has it under that name, whether or not it exists, \
+                 `unknown_attribute` or `attribute_type` on `approvers[i].attribute` unless it is a reference field of the workflow's type \
                  (own or inherited) to the Person type, and `duplicate`. A change bumps the workflow's version and \
                  is audited as an `update` with the assignments before and after, by name. The response carries the \
                  lint's warnings (`problems`). Assignments of a step that only the draft had are dropped (audited \
@@ -448,6 +462,8 @@ pub fn routes() -> Vec<Route> {
                  `inactive` (the account is disabled), `no_view_right` (no profile of theirs lets them view the CI's \
                  type, so they would never see the request), `excluded` (the `requestedBy` user: four-eyes), or \
                  `escalation_only`. Each source tells how many users it resolved to, and why none when it is empty. \
+                 A caller who may not look up users (as for `GET /principals`) gets the counts with `users` empty \
+                 and `usersHidden: true`. \
                  With `ciId` and `requestedBy`, the sources and parts a request by that user would not use are \
                  marked: `dropped` on a field source (or on a service owner source none of whose owners is left), \
                  and `droppedParts` listing each service owner or membership left out, with who made the change. \
@@ -468,19 +484,22 @@ pub fn routes() -> Vec<Route> {
             .tag(TAG)
             .summary("The workflow's notification actions: who is told what, when")
             .description(
-                "An action has a kind (`inbox`: an entry in each recipient's notifications; `email` and `webhook` \
-                 come in a later release), a trigger (`transition`, `approval_requested`, `approval_step`, \
+                "An action has a kind (`inbox`: an entry in each recipient's notifications; `webhook`: a signed \
+                 request to a registered endpoint, carrying the CI fields listed in `settings.includeAttributes`; \
+                 `email` comes in a later release), a trigger (`transition`, `approval_requested`, `approval_step`, \
                  `approval_closed`, `approval_overdue` on the transition `transition`, or `instance_cancelled`, \
                  `instance_forced`) and recipient sources, resolved when the action runs. Actions are on the \
                  definition: a change applies at once to every version, without publishing. Nothing is sent from \
                  the request that runs the transition; the event's transaction queues a run, and the action \
                  workers deliver it after commit to each recipient who may then view the CI's type. `problems` \
-                 holds the lint's warnings.",
+                 holds the lint's warnings (also `endpoint_not_active` for a webhook action whose endpoint is paused \
+                 or suspended, and `webhooks_disabled` while the operator has webhooks off).",
             )
             .requires(manage)
             .errors(&[ErrorCode::NotFound])
             .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
-                Ok(Json(actions::get(&api.pool, &api.ctx, id, api.workflow_actions.max_recipients).await?))
+                Ok(Json(actions::get(&api.pool, &api.ctx, id, api.workflow_actions.max_recipients, api.webhooks.cfg.allowed)
+                    .await?))
             }),
         route(Method::PUT, ACTIONS, "replaceWorkflowActions")
             .tag(TAG)
@@ -491,18 +510,32 @@ pub fn routes() -> Vec<Route> {
                  the workflow's version and is audited as an `update` with the actions before and after, recipients \
                  by name. 400 VALIDATION_ERROR: `required` / `not_applicable` / `source_mismatch` for fields the kind, \
                  trigger or source needs or does not take; `unknown_transition` for a transition no version and not \
-                 the draft has; `not_found` for an unknown profile, group or user; `duplicate`; `too_many_actions` \
-                 beyond 10 per trigger and transition; `unknown_placeholder` in an e-mail text; `kind_unavailable` \
-                 for `email` and `webhook`, and `source_unavailable` for sources other than `profile`, `group` and \
-                 `user`, until the release that delivers them. Runs already queued for a removed or disabled action \
-                 are cancelled.",
+                 the draft has; `not_found` for an unknown profile, group or user; `directory_lookup_forbidden` for \
+                 a group or user given by name by a caller who may not look up users and groups (the edit \
+                 permission on business services or `users.manage`, as for `GET /principals`) unless the workflow \
+                 already has it under that name, whether or not it exists; `duplicate`; `too_many_actions` \
+                 beyond 10 per trigger and transition; `unknown_placeholder` in an e-mail text; for a webhook, \
+                 `not_found` for an unknown endpoint key, `endpoint_not_active` when a new or changed action names \
+                 a paused or suspended endpoint, and `unknown_attribute` for an `includeAttributes` key that is not \
+                 a field of the workflow's type (own or inherited); `kind_unavailable` for `email`, and \
+                 `source_unavailable` for sources other than `profile`, `group` and `user`, until the release that \
+                 delivers them. Choosing an endpoint needs no `webhooks.manage`. Runs already queued for a removed \
+                 or disabled action are cancelled.",
             )
             .requires(manage)
             .session_only()
             .errors(&[ErrorCode::NotFound, ErrorCode::VersionConflict])
             .handle(
                 |api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<actions::WorkflowActionsReplace>>| async move {
-                    Ok(Json(actions::replace(&api.pool, &api.ctx, id, &b, api.workflow_actions.max_recipients).await?))
+                    Ok(Json(actions::replace(
+                        &api.pool,
+                        &api.ctx,
+                        id,
+                        &b,
+                        api.workflow_actions.max_recipients,
+                        api.webhooks.cfg.allowed,
+                    )
+                    .await?))
                 },
             ),
         route(Method::GET, ACTION_PREVIEW, "previewWorkflowAction")
@@ -512,8 +545,9 @@ pub fn routes() -> Vec<Route> {
                 "Resolves the action's recipient sources to users as a run would now: `included`, or out with a \
                  reason (`inactive`, `no_view`: may not view the type of the CI `ciId`, or of the workflow without \
                  it, `truncated`: beyond `WORKFLOW_ACTIONS_MAX_RECIPIENTS`). Whoever runs the event is left out too \
-                 unless the action sets `excludeActor: false`. Nothing is sent. 404 for an unknown action, and for a \
-                 CI that does not exist or that the caller may not view.",
+                 unless the action sets `excludeActor: false`. Nothing is sent. A caller who may not look up users \
+                 (as for `GET /principals`) gets `included` with `users` empty and `usersHidden: true`. 404 for an \
+                 unknown action, and for a CI that does not exist or that the caller may not view.",
             )
             .requires(manage)
             .class_checked()
@@ -522,6 +556,146 @@ pub fn routes() -> Vec<Route> {
                 |api,
                  In(path, Query(q), NoBody): In<actions::ActionKeyPath, Query<actions::WorkflowActionPreviewQuery>, NoBody>| async move {
                     Ok(Json(actions::preview(&api.pool, &api.ctx, &path, &q, api.workflow_actions.max_recipients).await?))
+                },
+            ),
+        route(Method::GET, ACTION_SUMMARY, "getWorkflowActionsSummary")
+            .tag(TAG)
+            .summary("How the workflow's actions are being delivered: counts by status, oldest pending, the queue")
+            .description(
+                "Per action (in order, then deleted actions that still have deliveries): the deliveries queued in \
+                 the last 24 hours and 7 days by their status now (`discarded` is a dead delivery an administrator \
+                 gave up on), the runs suppressed in the last 24 hours (queue full or loop breaker: nothing was \
+                 delivered for them), and when the oldest pending delivery was queued or retried. `queue` is the \
+                 whole outbox, every workflow: `overloaded` while new runs are suppressed, the `backlog` the \
+                 workers last counted and when (`checkedAt` grows old when no process runs workers), and the \
+                 limits in force. Webhook actions are included only with `webhooks.manage`.",
+            )
+            .requires(manage)
+            .errors(&[ErrorCode::NotFound])
+            .handle(|api, In(IdPath(id), NoQuery, NoBody): In<IdPath, NoQuery, NoBody>| async move {
+                Ok(Json(actions::deliveries::summary(&api.pool, &api.ctx, id, &api.workflow_actions).await?))
+            }),
+        route(Method::GET, DELIVERIES, "listWorkflowActionDeliveries")
+            .tag(TAG)
+            .summary("The workflow's action deliveries, newest first (paginated; filter by action, status, kind, time, instance, event or CI)")
+            .description(
+                "One delivery per recipient of a run: its status (`pending`, `sending`, `held`, `delivered`, \
+                 `skipped`, `dead`, or `discarded` for a dead one an administrator gave up on) with the reason, \
+                 attempts since the last retry, when a pending one is due, and the last status code. `from` and \
+                 `to` bound when the run queued it. A fixed e-mail address is shown masked; a user's address is \
+                 never stored. `ciLabel` is null when the CI is gone or the caller may not view its type. Webhook \
+                 deliveries are listed only with `webhooks.manage`.",
+            )
+            .requires(manage)
+            .class_checked()
+            .errors(&[ErrorCode::NotFound])
+            .handle(
+                |api,
+                 In(IdPath(id), Query(q), NoBody): In<IdPath, Query<actions::deliveries::WorkflowActionDeliveryList>, NoBody>| async move {
+                    Ok(Json(actions::deliveries::list(&api.pool, &api.ctx, id, &q).await?))
+                },
+            ),
+        route(Method::GET, DELIVERY, "getWorkflowActionDelivery")
+            .tag(TAG)
+            .summary("One action delivery with its last error, its run and the event it tells of")
+            .description(
+                "`event` is null once the event went to the archive with its CI. 404 for a delivery of another \
+                 workflow, and for a webhook delivery without `webhooks.manage`.",
+            )
+            .requires(manage)
+            .class_checked()
+            .errors(&[ErrorCode::NotFound])
+            .handle(
+                |api, In(path, NoQuery, NoBody): In<actions::deliveries::DeliveryPath, NoQuery, NoBody>| async move {
+                    Ok(Json(actions::deliveries::get(&api.pool, &api.ctx, &path).await?))
+                },
+            ),
+        route(Method::POST, DELIVERY_RETRY, "retryWorkflowActionDelivery")
+            .tag(TAG)
+            .summary("Send a dead or held delivery again, with fresh attempts")
+            .description(
+                "The delivery becomes `pending`, due now, with `attempts` 0; its max age \
+                 (`WORKFLOW_ACTIONS_MAX_AGE_HOURS`) counts from the retry. The workers send it as any other, to the \
+                 recipient's current address. Audited as `workflow.action_retry` (status before and after). 409 \
+                 CONFLICT `not_retryable` unless it is `dead` or `held` and of an e-mail or webhook action (inbox \
+                 entries are written when the run fans out).",
+            )
+            .requires(manage)
+            .session_only()
+            .class_checked()
+            .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])
+            .handle(
+                |api, In(path, NoQuery, NoBody): In<actions::deliveries::DeliveryPath, NoQuery, NoBody>| async move {
+                    Ok(Json(
+                        actions::deliveries::change_one(&api.pool, &api.ctx, &path, actions::deliveries::Op::Retry)
+                            .await?,
+                    ))
+                },
+            ),
+        route(Method::POST, DELIVERY_DISCARD, "discardWorkflowActionDelivery")
+            .tag(TAG)
+            .summary("Give up on a pending, held or dead delivery")
+            .description(
+                "The delivery becomes `discarded` (stored as `dead` with reason `discarded`) and is never sent; \
+                 it is kept for `WORKFLOW_ACTIONS_DEAD_RETENTION_DAYS`. Audited as `workflow.action_discard` \
+                 (status before and after). 409 CONFLICT `not_discardable` for a delivery being sent, delivered, \
+                 skipped or already discarded.",
+            )
+            .requires(manage)
+            .session_only()
+            .class_checked()
+            .errors(&[ErrorCode::NotFound, ErrorCode::Conflict])
+            .handle(
+                |api, In(path, NoQuery, NoBody): In<actions::deliveries::DeliveryPath, NoQuery, NoBody>| async move {
+                    Ok(Json(
+                        actions::deliveries::change_one(&api.pool, &api.ctx, &path, actions::deliveries::Op::Discard)
+                            .await?,
+                    ))
+                },
+            ),
+        route(Method::POST, DELIVERIES_RETRY, "retryWorkflowActionDeliveries")
+            .tag(TAG)
+            .summary("Retry up to 1,000 deliveries, by id or by filter")
+            .description(
+                "With `ids`, each dead or held delivery of an e-mail or webhook action is retried as by \
+                 retryWorkflowActionDelivery; the others are listed in `refused` (`not_found`, `not_retryable`). \
+                 With `filter`, the first 1,000 deliveries it selects that can be retried, oldest first; `more` \
+                 tells that others remain. One transaction, one `workflow.action_retry` audit row per delivery \
+                 (`bulk: true`).",
+            )
+            .requires(manage)
+            .session_only()
+            .class_checked()
+            .errors(&[ErrorCode::NotFound])
+            .handle(
+                |api,
+                 In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<actions::deliveries::WorkflowActionDeliveryBulk>>| async move {
+                    Ok(Json(
+                        actions::deliveries::change_many(&api.pool, &api.ctx, id, &b, actions::deliveries::Op::Retry)
+                            .await?,
+                    ))
+                },
+            ),
+        route(Method::POST, DELIVERIES_DISCARD, "discardWorkflowActionDeliveries")
+            .tag(TAG)
+            .summary("Discard up to 1,000 deliveries, by id or by filter")
+            .description(
+                "With `ids`, each pending, held or dead delivery is discarded as by discardWorkflowActionDelivery; \
+                 the others are listed in `refused` (`not_found`, `not_discardable`). With `filter`, the first \
+                 1,000 deliveries it selects that can be discarded, oldest first; `more` tells that others remain. \
+                 One transaction, one `workflow.action_discard` audit row per delivery (`bulk: true`).",
+            )
+            .requires(manage)
+            .session_only()
+            .class_checked()
+            .errors(&[ErrorCode::NotFound])
+            .handle(
+                |api,
+                 In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<actions::deliveries::WorkflowActionDeliveryBulk>>| async move {
+                    Ok(Json(
+                        actions::deliveries::change_many(&api.pool, &api.ctx, id, &b, actions::deliveries::Op::Discard)
+                            .await?,
+                    ))
                 },
             ),
         route(Method::POST, MIGRATIONS, "migrateWorkflowInstances")

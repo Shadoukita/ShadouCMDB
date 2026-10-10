@@ -1,7 +1,8 @@
 //! What the data model may not take away from a workflow (design §3.3): a
 //! field a version depends on (`workflow_version_attribute_refs`, transition
-//! fields, the definition's state field, a reference field that names
-//! approvers, approvals design SHAA-1869 §3.1) and a lookup value a state maps to.
+//! fields, attribute actions (actions design SHAA-2725 §3.4), the definition's
+//! state field, a reference field that names approvers, approvals design
+//! SHAA-1869 §3.1) and a lookup value a state maps to.
 //! The schema-change paths ask here first and answer 409 IN_USE naming the
 //! workflows and versions the caller may read; the foreign keys (ON DELETE
 //! RESTRICT) are the backstop.
@@ -47,7 +48,10 @@ pub async fn attribute_users(conn: &mut PgConnection, id: Uuid, reach: Reach) ->
                           WHERE r.version_id = w.id AND r.attribute_id = $1)
                   OR EXISTS (SELECT 1 FROM cmdb.workflow_transition_fields f
                              JOIN cmdb.workflow_transitions t ON t.id = f.transition_id
-                             WHERE t.version_id = w.id AND f.attribute_id = $1))
+                             WHERE t.version_id = w.id AND f.attribute_id = $1)
+                  OR EXISTS (SELECT 1 FROM cmdb.workflow_transition_set_attributes a
+                             JOIN cmdb.workflow_transitions t ON t.id = a.transition_id
+                             WHERE t.version_id = w.id AND a.attribute_id = $1))
              AND ($2 OR w.status = 'published'
                   OR (w.status = 'retired' AND EXISTS (SELECT 1 FROM cmdb.workflow_instances i
                                                        WHERE i.version_id = w.id AND i.status = 'active')))
