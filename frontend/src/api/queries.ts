@@ -7,6 +7,7 @@ import { ApiError, api, unwrap, type Schemas } from "./client";
 import { saveDownload } from "./download";
 import type { paths } from "./schema";
 import type { BulkUpdateBody } from "../lib/bulkEdit";
+import { HISTORY_WALK_LIMIT, HISTORY_WALK_PAGE, type HistoryWalk } from "../lib/ciHistory";
 import type { InventoryExportQuery } from "../lib/inventoryExport";
 import { bySortOrder, flattenTree } from "../lib/tree";
 
@@ -351,6 +352,49 @@ export function useRecentChanges(entityId: MaybeRefOrGetter<string>, days: numbe
       enabled: toValue(enabled),
     };
   });
+}
+
+/**
+ * Every audit entry of a CI since `since` (ISO 8601), newest first, for the point-in-time view and compare
+ * (SHAA-3131): page after page of 200, at most HISTORY_WALK_LIMIT entries. When more would be needed, only
+ * the first page is read and the walk says how many there are. `to` pins the walk to the moment it started,
+ * so a change made meanwhile cannot shift the pages. Keyed under the CI's audit key: a change refreshes it.
+ */
+export function useCiHistoryWalk(ciId: MaybeRefOrGetter<string>, since: MaybeRefOrGetter<string | null>) {
+  return useQuery(() => {
+    const id = toValue(ciId);
+    const from = toValue(since) ?? "";
+    return {
+      queryKey: [...keys.audit(id), "walk", from] as const,
+      enabled: !!id && !!from,
+      queryFn: async ({ signal }: { signal: AbortSignal }): Promise<HistoryWalk> => {
+        const to = new Date(Date.now() + 1000).toISOString();
+        const page = (offset: number) =>
+          unwrap(api.GET("/api/v1/audit-log", { params: { query: { entityId: id, from, to, sort: "-occurredAt", limit: HISTORY_WALK_PAGE, offset } }, signal }));
+        const first = await page(0);
+        if (first.page.total > HISTORY_WALK_LIMIT) return { complete: false, since: from, total: first.page.total };
+        const entries = [...first.data];
+        while (entries.length < first.page.total) {
+          const next = await page(entries.length);
+          if (next.data.length === 0) break;
+          entries.push(...next.data);
+        }
+        return { complete: true, since: from, entries };
+      },
+      placeholderData: (prev: HistoryWalk | undefined, prevQuery?: { queryKey: readonly unknown[] }) => (prevQuery?.queryKey[1] === id ? prev : undefined),
+    };
+  });
+}
+
+/** The audit retention purges (`audit.purge` rows), newest first: where a CI's history may have been cut. */
+export function useAuditPurges(enabled: MaybeRefOrGetter<boolean> = true) {
+  return useQuery(() => ({
+    queryKey: ["audit", "purges"] as const,
+    enabled: toValue(enabled),
+    staleTime: 60_000,
+    queryFn: ({ signal }: { signal: AbortSignal }) =>
+      unwrap(api.GET("/api/v1/audit-log", { params: { query: { entityType: "audit_log", action: "audit.purge", sort: "-occurredAt", limit: 200 } }, signal })).then((r) => r.data),
+  }));
 }
 
 // ---------- Relationships ----------

@@ -912,7 +912,8 @@ ol.impact-path a {
   white-space: nowrap;
 }
 /* The diff: the key, the old value struck through on red, an arrow, the new one on green. */
-.event-timeline ul.diff {
+.event-timeline ul.diff,
+ul.history-pit-diff {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
@@ -922,7 +923,8 @@ ol.impact-path a {
   font-family: var(--font-mono);
   font-size: var(--fs-sm);
 }
-.event-timeline ul.diff > li {
+.event-timeline ul.diff > li,
+ul.history-pit-diff > li {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -935,12 +937,15 @@ ol.impact-path a {
 }
 .event-timeline ul.diff del,
 .event-timeline ul.diff ins,
+ul.history-pit-diff del,
+ul.history-pit-diff ins,
 .diff-none {
   padding: var(--space-px) var(--space-1_5);
   border-radius: var(--radius-sm);
   text-decoration-thickness: 1px;
 }
 .event-timeline ul.diff del,
+ul.history-pit-diff del,
 .diff-none {
   background: var(--badge-danger-bg);
   color: var(--badge-danger-fg);
@@ -948,7 +953,8 @@ ol.impact-path a {
 .diff-none {
   text-decoration: none;
 }
-.event-timeline ul.diff ins {
+.event-timeline ul.diff ins,
+ul.history-pit-diff ins {
   background: var(--badge-ok-bg);
   color: var(--badge-ok-fg);
   text-decoration: none;
@@ -960,4 +966,75 @@ ol.impact-path a {
 }
 .event-preview .panel-header h2 .count {
   margin-left: var(--space-1);
+}
+
+/* ---------- History: the CI as of a moment, and two moments compared (SHAA-3131) ---------- */
+.event-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+  font-size: var(--fs-xs);
+}
+.event-pick .check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--c-text-secondary);
+}
+.history-pit-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--panel-p);
+  font-size: var(--fs-sm);
+  border-bottom: 1px solid var(--c-divider);
+}
+.history-pit-controls .btn {
+  margin-left: auto;
+}
+.history-pit-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--panel-p);
+}
+/* Says plainly that what follows is the past, not the CI as it is now. */
+.history-pit-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semibold);
+  border-left: 3px solid var(--c-warning);
+  border-radius: var(--radius-sm);
+  background: var(--c-warning-subtle);
+}
+.history-pit-note {
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+.history-pit-fields {
+  margin: 0;
+}
+.history-pit-subhead {
+  margin: var(--space-2) 0 0;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+}
+.history-pit-field {
+  color: var(--c-text-secondary);
+  font-family: var(--font-sans);
+}
+.history-pit-events {
+  padding: var(--space-2) 0 0;
+}
+.history-pit-foot {
+  margin: 0;
+  padding: var(--space-2) var(--panel-p) var(--space-3);
+  font-size: var(--fs-xs);
 }

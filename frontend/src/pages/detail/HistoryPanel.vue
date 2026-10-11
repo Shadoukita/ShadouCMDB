@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { RouterLink } from "vue-router";
 import { useAuditLog, useClassAttributes, type AuditEntry, type Ci } from "../../api/queries";
 import EmptyState from "../../components/EmptyState.vue";
 import ErrorAlert from "../../components/ErrorAlert.vue";
@@ -12,6 +11,8 @@ import { actionLabel, actionTone, EVENT_SOURCES, eventSource, formatUtc, sourceL
 import { formatDateTime } from "../../lib/format";
 import AuditActor from "../admin/AuditActor.vue";
 import ChangeValue from "../imports/ChangeValue.vue";
+import HistoryPointInTime from "./HistoryPointInTime.vue";
+import HistoryWorkflowStep from "./HistoryWorkflowStep.vue";
 
 /**
  * The CI's history as a timeline (design §2.7 and §0 step 12d, audit R8): GET /audit-log?entityId=…, newest
@@ -19,7 +20,8 @@ import ChangeValue from "../imports/ChangeValue.vue";
  * the change came through, the field-level diff of an update as old → new chips, and the time in UTC.
  * Source chips narrow it on the server. `embedded`: placed in a layout section, which gives the frame and the
  * heading. `preview`: the newest `preview` entries only, under their own heading, with no source filter or
- * paging; "Full history" (`more`) opens the History tab.
+ * paging; "Full history" (`more`) opens the History tab. Outside the preview the timeline switches to the CI
+ * as of a past moment or to the difference between two moments (SHAA-3131), which a timeline entry can set.
  */
 const props = defineProps<{ ci: Ci; embedded?: boolean; preview?: number }>();
 const emit = defineEmits<{ more: [] }>();
@@ -76,21 +78,38 @@ function flatten(value: unknown, prefix = ""): Record<string, string> {
   return out;
 }
 
-/** Workflow steps on the CI (`workflow.*`): their details are in the values, not a field diff. */
-type WorkflowValue = { instanceId?: string; definitionKey?: string; transitionKey?: string; stateKey?: string; comment?: string | null; reason?: string; fields?: Record<string, { old?: unknown; new?: unknown }> };
-function workflowStep(entry: AuditEntry) {
-  const o = (entry.oldValue ?? {}) as WorkflowValue;
-  const n = (entry.newValue ?? {}) as WorkflowValue;
-  const show = (v: unknown) => (v === null || v === undefined ? undefined : typeof v === "object" ? JSON.stringify(v) : String(v));
-  return {
-    instanceId: n.instanceId ?? o.instanceId,
-    definitionKey: n.definitionKey ?? o.definitionKey ?? "",
-    transitionKey: n.transitionKey,
-    from: entry.action === "workflow.cancel" ? undefined : o.stateKey,
-    to: n.stateKey,
-    note: n.reason === "ci_deleted" ? t("history.wf.ciDeleted") : (n.comment ?? n.reason ?? undefined),
-    fields: Object.entries(n.fields ?? {}).map(([k, v]) => ({ key: k, def: fieldDef(k), old: show(v?.old), new: show(v?.new) })),
-  };
+/** Timeline, the CI as of a moment, or the difference between two moments; the moments are ISO 8601, in UTC. */
+type View = "timeline" | "asOf" | "compare";
+const VIEWS: readonly View[] = ["timeline", "asOf", "compare"];
+const viewLabel = (v: View) => t(`history.view.${v}`);
+const view = ref<View>("timeline");
+const startOfDayUtc = (daysAgo: number) => new Date(Math.floor(Date.now() / 86_400_000 - daysAgo) * 86_400_000).toISOString();
+const asOf = ref(startOfDayUtc(7));
+const compareFrom = ref(startOfDayUtc(7));
+const compareTo = ref(new Date().toISOString());
+/** Timeline entries picked for a comparison (at most two). */
+const picked = ref<AuditEntry[]>([]);
+watch(
+  () => props.ci.id,
+  () => {
+    view.value = "timeline";
+    picked.value = [];
+  },
+);
+function viewAsOf(e: AuditEntry) {
+  asOf.value = e.occurredAt;
+  view.value = "asOf";
+}
+const isPicked = (e: AuditEntry) => picked.value.some((p) => p.id === e.id);
+function togglePick(e: AuditEntry) {
+  picked.value = isPicked(e) ? picked.value.filter((p) => p.id !== e.id) : [...picked.value, e].slice(-2);
+}
+/** From just before the older entry, so its change is part of the difference, to just after the newer one. */
+function comparePicked() {
+  const [a, b] = [...picked.value].sort((x, y) => Date.parse(x.occurredAt) - Date.parse(y.occurredAt));
+  compareFrom.value = new Date(Date.parse(a.occurredAt) - 1).toISOString();
+  compareTo.value = b.occurredAt;
+  view.value = "compare";
 }
 
 /** The dot's colour: the event's tone, a workflow step purple, a plain update the primary colour. */
@@ -106,7 +125,26 @@ const dotTone = (e: AuditEntry) => actionTone(e.action) || "update";
       <h2 id="history-preview-title">{{ t("history.title") }} <span class="count mono">{{ total.toLocaleString() }}</span></h2>
       <button v-if="total > 0" type="button" class="btn btn-link btn-sm" @click="emit('more')">{{ t("history.full") }}</button>
     </div>
-    <div v-else class="event-stream-head">
+    <div v-if="!preview" class="event-stream-head history-views">
+      <div class="event-sources" role="group" :aria-label="t('history.view.label')">
+        <button v-for="v in VIEWS" :key="v" type="button" :class="['chip', 'event-source-filter', { selected: view === v }]" :aria-pressed="view === v" @click="view = v">
+          {{ viewLabel(v) }}
+        </button>
+      </div>
+      <button v-if="view === 'timeline' && picked.length > 0" type="button" class="btn btn-sm" :disabled="picked.length < 2" @click="comparePicked">
+        {{ t("history.pick.compare", { n: picked.length }) }}
+      </button>
+    </div>
+    <HistoryPointInTime
+      v-if="!preview && view !== 'timeline'"
+      v-model:at="asOf"
+      v-model:from="compareFrom"
+      v-model:to="compareTo"
+      :ci="ci"
+      :mode="view"
+      @back="view = 'timeline'"
+    />
+    <div v-else-if="!preview" class="event-stream-head">
       <div class="event-sources" role="group" :aria-label="t('history.sources')">
         <span class="muted">{{ t("history.col.source") }}</span>
         <button
@@ -123,62 +161,48 @@ const dotTone = (e: AuditEntry) => actionTone(e.action) || "update";
       </div>
       <span class="muted">{{ t("history.order") }}</span>
     </div>
-    <ErrorAlert v-if="log.isError.value" :error="log.error.value" :on-retry="() => log.refetch()" />
-    <p v-if="total === 0" class="event-stream-none muted" role="status">{{ preview ? t("history.empty.body") : t("history.sources.none") }}</p>
-    <ol v-else class="event-timeline" :aria-busy="log.isFetching.value || undefined">
-      <li v-for="e in entries" :key="e.id" class="event" :data-tone="dotTone(e)">
-        <span class="event-dot" aria-hidden="true" />
-        <div class="event-body">
-          <p class="event-head">
-            <AuditActor :entry="e" />
-            <span :class="['event-action', actionTone(e.action)]" :title="e.action">{{ actionLabel(e.action) }}</span>
-            <span class="chip event-source" :title="t('history.col.source')">{{ sourceLabel(eventSource(e)) }}</span>
-          </p>
-          <template v-if="e.action.startsWith('workflow.')">
-            <div v-for="w in [workflowStep(e)]" :key="e.id" class="event-change" data-testid="history-workflow">
-              <RouterLink v-if="w.instanceId" :to="`/workflows/${w.instanceId}`" class="mono">{{ w.definitionKey }}</RouterLink>
-              <span v-else class="mono">{{ w.definitionKey }}</span>
-              <template v-if="w.transitionKey">: <code>{{ w.transitionKey }}</code></template>
-              <span v-if="w.to">
-                ,
-                <template v-if="w.from">
-                  <span class="sr-only">{{ t("history.diff.from") }}</span><code>{{ w.from }}</code>
-                  <Icon name="arrow-right" :size="12" class="diff-arrow" />
-                </template>
-                <span class="sr-only">{{ t("history.diff.to") }}</span><code>{{ w.to }}</code>
+    <template v-if="preview || view === 'timeline'">
+      <ErrorAlert v-if="log.isError.value" :error="log.error.value" :on-retry="() => log.refetch()" />
+      <p v-if="total === 0" class="event-stream-none muted" role="status">{{ preview ? t("history.empty.body") : t("history.sources.none") }}</p>
+      <ol v-else class="event-timeline" :aria-busy="log.isFetching.value || undefined">
+        <li v-for="e in entries" :key="e.id" class="event" :data-tone="dotTone(e)">
+          <span class="event-dot" aria-hidden="true" />
+          <div class="event-body">
+            <p class="event-head">
+              <AuditActor :entry="e" />
+              <span :class="['event-action', actionTone(e.action)]" :title="e.action">{{ actionLabel(e.action) }}</span>
+              <span class="chip event-source" :title="t('history.col.source')">{{ sourceLabel(eventSource(e)) }}</span>
+              <span v-if="!preview" class="event-pick">
+                <button type="button" class="btn btn-link btn-sm" :aria-label="t('history.pick.asOfAria', { time: formatUtc(e.occurredAt) })" @click="viewAsOf(e)">
+                  {{ t("history.pick.asOf") }}
+                </button>
+                <label class="check">
+                  <input type="checkbox" :checked="isPicked(e)" :aria-label="t('history.pick.selectAria', { time: formatUtc(e.occurredAt) })" @change="togglePick(e)" />
+                  <span aria-hidden="true">{{ t("history.pick.select") }}</span>
+                </label>
               </span>
-              <div v-if="w.note" class="wf-comment muted" dir="auto">{{ w.note }}</div>
-              <ul v-if="w.fields.length > 0" class="diff">
-                <li v-for="c in w.fields" :key="c.key">
-                  <code>{{ c.key }}</code>
-                  <span class="sr-only">{{ t("history.diff.from") }}</span>
-                  <del v-if="c.old !== undefined" dir="auto"><ChangeValue :def="c.def" :value="c.old" /></del><span v-else class="diff-none" aria-hidden="true">—</span>
-                  <Icon name="arrow-right" :size="12" class="diff-arrow" />
-                  <span class="sr-only">{{ t("history.diff.to") }}</span>
-                  <ins v-if="c.new !== undefined" dir="auto"><ChangeValue :def="c.def" :value="c.new" /></ins><span v-else class="muted">{{ t("history.diff.cleared") }}</span>
-                </li>
-              </ul>
-            </div>
-          </template>
-          <!-- A creation is said by the event itself; there is no diff to show. -->
-          <template v-else-if="e.action === 'create'" />
-          <p v-else-if="e.action === 'delete'" class="event-change muted">{{ t("history.deleted") }}</p>
-          <p v-else-if="e.redacted" class="event-change muted">{{ t("history.redacted") }}</p>
-          <p v-else-if="changes(e).length === 0" class="event-change muted">{{ t("history.noChanges") }}</p>
-          <ul v-else class="diff event-change">
-            <li v-for="c in changes(e)" :key="c.key">
-              <code>{{ c.key }}</code>
-              <span class="sr-only">{{ t("history.diff.from") }}</span>
-              <del v-if="c.old !== undefined" dir="auto"><ChangeValue :def="c.def" :value="c.old" /></del><span v-else class="diff-none" aria-hidden="true">—</span>
-              <Icon name="arrow-right" :size="12" class="diff-arrow" />
-              <span class="sr-only">{{ t("history.diff.to") }}</span>
-              <ins v-if="c.new !== undefined" dir="auto"><ChangeValue :def="c.def" :value="c.new" /></ins><span v-else class="muted">{{ t("history.diff.cleared") }}</span>
-            </li>
-          </ul>
-        </div>
-        <time class="event-time mono" :datetime="e.occurredAt" :title="formatDateTime(e.occurredAt)">{{ formatUtc(e.occurredAt) }}</time>
-      </li>
-    </ol>
-    <PaginationBar v-if="!preview && total > paging.limit" :total="total" :limit="paging.limit" :offset="paging.offset" @change="(p) => (paging = p)" />
+            </p>
+            <HistoryWorkflowStep v-if="e.action.startsWith('workflow.')" :entry="e" :field-def="fieldDef" />
+            <!-- A creation is said by the event itself; there is no diff to show. -->
+            <template v-else-if="e.action === 'create'" />
+            <p v-else-if="e.action === 'delete'" class="event-change muted">{{ t("history.deleted") }}</p>
+            <p v-else-if="e.redacted" class="event-change muted">{{ t("history.redacted") }}</p>
+            <p v-else-if="changes(e).length === 0" class="event-change muted">{{ t("history.noChanges") }}</p>
+            <ul v-else class="diff event-change">
+              <li v-for="c in changes(e)" :key="c.key">
+                <code>{{ c.key }}</code>
+                <span class="sr-only">{{ t("history.diff.from") }}</span>
+                <del v-if="c.old !== undefined" dir="auto"><ChangeValue :def="c.def" :value="c.old" /></del><span v-else class="diff-none" aria-hidden="true">—</span>
+                <Icon name="arrow-right" :size="12" class="diff-arrow" />
+                <span class="sr-only">{{ t("history.diff.to") }}</span>
+                <ins v-if="c.new !== undefined" dir="auto"><ChangeValue :def="c.def" :value="c.new" /></ins><span v-else class="muted">{{ t("history.diff.cleared") }}</span>
+              </li>
+            </ul>
+          </div>
+          <time class="event-time mono" :datetime="e.occurredAt" :title="formatDateTime(e.occurredAt)">{{ formatUtc(e.occurredAt) }}</time>
+        </li>
+      </ol>
+      <PaginationBar v-if="!preview && total > paging.limit" :total="total" :limit="paging.limit" :offset="paging.offset" @change="(p) => (paging = p)" />
+    </template>
   </section>
 </template>
