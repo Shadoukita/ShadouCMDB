@@ -7,7 +7,7 @@ import { apiGet, apiSend, checkA11y, csrf, expect, test } from "./support";
 // reports only that the CAB has no approvers; once one is assigned on the Approvers tab it is ready to publish.
 // Published, it moves a CI through the whole change from the CI's Workflows tab, the CAB member approving in their
 // own session, and the Assessment state links to the CI's Impact tab. It goes through the configuration export and
-// import (format 8), a failed step deletes the half-built workflow again, and a manager scoped to one type is
+// import, a failed step deletes the half-built workflow again, and a manager scoped to one type is
 // offered only that type (GH#667).
 test.describe.configure({ mode: "serial" });
 
@@ -202,7 +202,7 @@ test("move a CI Requested → Assessment → (CAB approves) → Implementation �
   expect([inst.state.key, inst.status]).toEqual(["closed", "completed"]);
 });
 
-test("the change workflow goes through the configuration export and import (format 8)", async ({ request }) => {
+test("the change workflow goes through the configuration export and import", async ({ request }) => {
   const res = await request.get("/api/v1/admin/config/export", { headers: { "X-CSRF-Token": await csrf(request) } });
   expect(res.ok(), `export → ${res.status()}`).toBeTruthy();
   const file = (await res.json()) as { format: string; formatVersion: number; workflows?: { key: string; name: string }[] };
