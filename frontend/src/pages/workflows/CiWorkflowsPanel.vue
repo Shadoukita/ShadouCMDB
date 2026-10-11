@@ -11,6 +11,7 @@ import Icon from "../../components/Icon.vue";
 import SkeletonRows from "../../components/SkeletonRows.vue";
 import { t } from "../../i18n";
 import { formatDateTime, formatRelative } from "../../lib/format";
+import { CHANGE_ASSESSMENT_STATE } from "../../lib/workflowTemplates";
 import { useFlashStore } from "../../stores/flash";
 import FormField from "../form/FormField.vue";
 import PendingApprovalBanner from "./PendingApprovalBanner.vue";
@@ -31,6 +32,12 @@ const startable = computed(() => wf.data.value?.startable ?? []);
 const pending = computed(() =>
   rows.value.flatMap((v) => (v.instance.status === "active" && v.instance.pendingApproval ? [{ ...v.instance, pendingApproval: v.instance.pendingApproval }] : [])),
 );
+
+/**
+ * A change being assessed (the Change template's Assessment state, by key) links to the CI's Impact tab, so the
+ * assessor sees what depends on the CI. A deleted CI has no Impact tab.
+ */
+const assessing = (v: (typeof rows.value)[number]) => v.instance.status === "active" && v.instance.state.key === CHANGE_ASSESSMENT_STATE && !props.ci.deletedAt;
 
 const starting = ref(false);
 const startId = ref("");
@@ -97,7 +104,12 @@ const startCommentError = computed(() =>
               <RouterLink :to="`/workflows/${v.instance.id}`" dir="auto">{{ v.instance.definitionName }}</RouterLink>
               <span class="muted mono"> {{ t("wfRun.instance.versionChip", { n: v.instance.versionNo }) }}</span>
             </td>
-            <td><WorkflowStateBadge :state="v.instance.state" /></td>
+            <td>
+              <WorkflowStateBadge :state="v.instance.state" />
+              <RouterLink v-if="assessing(v)" class="wf-impact" :to="`/cis/${ci.id}/impact`" :title="t('wfRun.impactHint')" data-testid="wf-impact-link">{{
+                t("wfRun.impactLink")
+              }}</RouterLink>
+            </td>
             <td><WorkflowStatusBadge :status="v.instance.status" /></td>
             <td>
               <time :datetime="v.instance.startedAt" :title="formatDateTime(v.instance.startedAt)">{{
@@ -148,3 +160,10 @@ const startCommentError = computed(() =>
     </Teleport>
   </section>
 </template>
+
+<style scoped>
+.wf-impact {
+  margin-left: var(--space-2);
+  font-size: var(--fs-sm);
+}
+</style>

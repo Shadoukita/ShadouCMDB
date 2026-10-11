@@ -35,7 +35,7 @@ import { uninstancedText } from "./uninstanced";
 
 /**
  * A workflow's identity and flags: on create the key and CI type too (both never change), and what it
- * starts from (`?template=`: blank, or a ready-made graph such as the lifecycle). Turning
+ * starts from (`?template=`: blank, or a ready-made graph: the lifecycle or a change). Turning
  * on a workflow that drives a state field is confirmed first, because CIs without a running
  * instance cannot have that field edited until instances are started on them; the API's
  * `UNINSTANCED_CIS` warning then says how many. Saving goes through the shared save bar, with a toast.
@@ -228,7 +228,7 @@ async function save() {
       if (graph && !(await applyTemplate(created, graph))) return;
       // The activation warning (a new active workflow with a state field) must not get lost with the navigation.
       const w = created.warnings.find((x) => x.code === "UNINSTANCED_CIS");
-      const next = graph ? t("wfTemplate.createdNext") : t("wfAdmin.settings.createdNext");
+      const next = !graph ? t("wfAdmin.settings.createdNext") : template.value === "change" ? t("wfTemplate.createdNextChange") : t("wfTemplate.createdNext");
       flash.show(t("wfAdmin.settings.created", { name: created.name, next: w ? uninstancedText(w) : next }));
       await router.push({ path: `/admin/workflows/${created.id}`, query: { tab: "designer" } });
       return;

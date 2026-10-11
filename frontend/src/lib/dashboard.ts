@@ -48,10 +48,15 @@ export interface CountWindow {
   bucket: "day" | "week";
 }
 
-/** Bars of a count KPI: 14 UTC days for 24 h and 14 days, 13 ISO weeks for 90 days (the API rounds to Monday). */
+/**
+ * Bars of a count KPI: 14 UTC days for 24 h and 14 days, 13 ISO weeks and the current one for 90 days. The
+ * weeks start from this week's Monday, so a Sunday gets 14 bars too (today minus 90 days would be a Monday).
+ */
 export function countWindow(period: Period, now: number): CountWindow {
-  const today = Math.floor(now / DAY) * DAY;
-  return period === "90d" ? { from: iso(today - 90 * DAY), bucket: "week" } : { from: iso(today - 13 * DAY), bucket: "day" };
+  const day = Math.floor(now / DAY);
+  const today = day * DAY;
+  const monday = today - ((day + 3) % 7) * DAY; // 1970-01-01 was a Thursday
+  return period === "90d" ? { from: iso(monday - 13 * 7 * DAY), bucket: "week" } : { from: iso(today - 13 * DAY), bucket: "day" };
 }
 
 export interface CountHistoryLike {

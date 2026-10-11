@@ -45,7 +45,14 @@ describe("period", () => {
   test("countWindow: 14 days by day, 90 days by week", () => {
     assert.deepEqual(countWindow("24h", NOW), { from: "2026-09-24T00:00:00.000Z", bucket: "day" });
     assert.deepEqual(countWindow("14d", NOW), { from: "2026-09-24T00:00:00.000Z", bucket: "day" });
-    assert.deepEqual(countWindow("90d", NOW), { from: "2026-07-09T00:00:00.000Z", bucket: "week" });
+    assert.deepEqual(countWindow("90d", NOW), { from: "2026-07-06T00:00:00.000Z", bucket: "week" });
+  });
+
+  test("countWindow: 90 days is 13 weeks and the current one on every weekday", () => {
+    for (let d = 5; d <= 11; d++) {
+      const { from } = countWindow("90d", Date.parse(`2026-10-${String(d).padStart(2, "0")}T23:59:59Z`));
+      assert.equal(from, "2026-07-06T00:00:00.000Z", `October ${d}`); // Monday 5 to Sunday 11 share one week
+    }
   });
 });
 
