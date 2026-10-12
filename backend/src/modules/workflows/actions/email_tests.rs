@@ -302,6 +302,10 @@ async fn count(pool: &PgPool, sql: &str) -> i64 {
 
 /// Fans out every pending run, as one worker would.
 async fn drain(pool: &PgPool, m: &Mailer) -> usize {
+    drain_with(pool, m, &cfg()).await
+}
+
+async fn drain_with(pool: &PgPool, m: &Mailer, cfg: &WorkflowActionsConfig) -> usize {
     let mut n = 0;
     loop {
         let ids = outbox::claim_runs(pool, "test-worker", 100).await.unwrap();
@@ -309,7 +313,7 @@ async fn drain(pool: &PgPool, m: &Mailer) -> usize {
             return n;
         }
         for id in ids {
-            assert_ne!(outbox::fan_out(pool, &cfg(), &m.channels, id, "test-worker").await.unwrap(), FanOut::Lost);
+            assert_ne!(outbox::fan_out(pool, cfg, &m.channels, id, "test-worker").await.unwrap(), FanOut::Lost);
             n += 1;
         }
     }
@@ -319,6 +323,10 @@ async fn drain(pool: &PgPool, m: &Mailer) -> usize {
 /// for a bulk grace or the end of the hour), as one worker would; returns
 /// the attempts made.
 async fn send(pool: &PgPool, m: &Mailer, now: bool) -> usize {
+    send_with(pool, m, now, &cfg()).await
+}
+
+async fn send_with(pool: &PgPool, m: &Mailer, now: bool, cfg: &WorkflowActionsConfig) -> usize {
     if now {
         ok(pool, "UPDATE workflow_action_deliveries SET next_attempt_at = now() WHERE status = 'pending'").await;
     }
@@ -332,7 +340,7 @@ async fn send(pool: &PgPool, m: &Mailer, now: bool) -> usize {
         }
         for c in claimed {
             let outcome = (m.channel.send)(c.clone()).await;
-            assert!(outbox::record(pool, &cfg(), &c, outcome).await.unwrap());
+            assert!(outbox::record(pool, cfg, &c, outcome).await.unwrap());
             n += 1;
         }
     }
@@ -933,5 +941,92 @@ async fn an_email_test_send_reports_an_unreachable_relay() {
         .unwrap();
     assert_eq!((row["ok"].as_bool(), row["reason"].as_str()), (Some(false), Some("smtp_deferred")), "{row}");
     assert_eq!(count(&w.pool, "SELECT count(*) FROM workflow_action_runs").await, 0, "nothing queued");
+    db.drop().await;
+}
+
+/// AUDIT_WORKFLOW_DELIVERIES (N-Q10, GH#882): off, a delivered or skipped
+/// e-mail writes no audit row; on, each writes exactly one
+/// `workflow.action_delivery` in the transaction that ended it, with the
+/// recipient (a user's id, a fixed address masked), status and reason, and no
+/// address in full. A dead one keeps its single `workflow.action_dead`.
+#[tokio::test]
+async fn audit_workflow_deliveries_writes_one_row_per_ended_delivery_only_when_on() {
+    let Some(db) = scratch::database("workflow_email_audit_deliveries").await else { return };
+    let mut w = world(&db).await;
+    let m = mailer(&w.pool, mail_cfg("en")).await;
+    w.app = crate::modules::api_tokens::tests::app_with_mail(w.pool.clone(), m.mail.clone());
+    let servers = w.profile("Servers", &[(w.server, false)]).await;
+    let networks = w.profile("Networks only", &[(w.network, false)]).await;
+    let (approver, _) = w.user("approver", &[w.approvers]).await;
+    let (_, fine) = w.user("fine", &[servers]).await;
+    let (_, blind) = w.user("blind", &[networks]).await;
+    w.user("gone", &[servers]).await;
+    m.sink.reply("gone@example.test", &[550, 550]);
+    put_actions(
+        &w,
+        json!([{ "key": "tell", "name": "Tell", "kind": "email", "trigger": "transition", "transition": "approve",
+            "recipients": [{ "source": "user", "user": "fine" }, { "source": "user", "user": "blind" },
+                { "source": "user", "user": "gone" }, { "source": "address", "address": "carol@corp.example" }]}]),
+    )
+    .await;
+    let rows = |sql: &'static str| {
+        let pool = w.pool.clone();
+        async move { sqlx::query_scalar::<_, Value>(sql).fetch_all(&pool).await.unwrap() }
+    };
+    let delivery_rows = "SELECT new_value FROM audit_log WHERE action = 'workflow.action_delivery' ORDER BY id";
+
+    // Off (the default): one delivered, one skipped, one dead; only the dead one is audited.
+    let off = cfg();
+    assert!(!off.audit_deliveries, "off by default");
+    let ci = w.ci(w.server).await;
+    w.ok("PATCH", &format!("/api/v1/configuration-items/{ci}"), json!({ "attributes": { "environment": "prod" } }))
+        .await;
+    approve(&w, &approver, ci).await;
+    drain_with(&w.pool, &m, &off).await;
+    assert_eq!(send_with(&w.pool, &m, false, &off).await, 3, "fine, gone and carol");
+    assert!(rows(delivery_rows).await.is_empty(), "no per-send audit with the option off");
+    assert_eq!(count(&w.pool, "SELECT count(*) FROM audit_log WHERE action = 'workflow.action_dead'").await, 1);
+
+    // On: the same again on a second CI.
+    let on = WorkflowActionsConfig { audit_deliveries: true, ..cfg() };
+    let ci2 = w.ci(w.server).await;
+    w.ok("PATCH", &format!("/api/v1/configuration-items/{ci2}"), json!({ "attributes": { "environment": "prod" } }))
+        .await;
+    approve(&w, &approver, ci2).await;
+    drain_with(&w.pool, &m, &on).await;
+    let skipped = rows(delivery_rows).await;
+    assert_eq!(skipped.len(), 1, "the fan-out audits the skipped delivery it wrote: {skipped:?}");
+    assert_eq!(skipped[0]["status"], "skipped");
+    assert_eq!(skipped[0]["reason"], "no_view");
+    assert_eq!(skipped[0]["recipient"], json!({ "userId": blind }));
+    assert_eq!(send_with(&w.pool, &m, false, &on).await, 3);
+
+    let audited = rows(delivery_rows).await;
+    assert_eq!(audited.len(), 3, "blind (skipped), fine and carol (delivered): {audited:?}");
+    let of_fine: Vec<&Value> = audited.iter().filter(|a| a["recipient"] == json!({ "userId": fine })).collect();
+    assert_eq!(of_fine.len(), 1, "exactly one row for the delivered e-mail: {audited:?}");
+    let run2: i64 = sqlx::query_scalar("SELECT r.id FROM workflow_action_runs r WHERE r.ci_id = $1")
+        .bind(ci2)
+        .fetch_one(&w.pool)
+        .await
+        .unwrap();
+    assert_eq!(of_fine[0]["status"], "delivered");
+    assert_eq!(of_fine[0]["runId"], run2);
+    assert_eq!(of_fine[0]["actionKey"], "tell");
+    assert_eq!(of_fine[0]["kind"], "email");
+    assert_eq!(of_fine[0]["ciId"], json!(ci2));
+    assert!(audited.iter().any(|a| a["recipient"] == json!({ "address": "c***@corp.example" })), "{audited:?}");
+    let dead = rows("SELECT new_value FROM audit_log WHERE action = 'workflow.action_dead' ORDER BY id").await;
+    assert_eq!(dead.len(), 2, "a dead delivery keeps its one workflow.action_dead");
+    for a in audited.iter().chain(&dead) {
+        let text = a.to_string();
+        assert!(!text.contains("carol@") && !text.contains("@example.test"), "no address in full: {a}");
+    }
+    let actors: Vec<(String, String)> =
+        sqlx::query_as("SELECT actor_type, entity_type FROM audit_log WHERE action = 'workflow.action_delivery'")
+            .fetch_all(&w.pool)
+            .await
+            .unwrap();
+    assert!(actors.iter().all(|(t, e)| t == "system" && e == "workflow_action_deliveries"), "{actors:?}");
     db.drop().await;
 }

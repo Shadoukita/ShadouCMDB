@@ -302,13 +302,16 @@ impl Env {
 
 /// Sends every due webhook delivery once, as a worker would; returns how many.
 async fn send_all(pool: &PgPool, hooks: &Arc<Webhooks>) -> usize {
+    send_all_with(pool, hooks, &WorkflowActionsConfig::default()).await
+}
+
+async fn send_all_with(pool: &PgPool, hooks: &Arc<Webhooks>, cfg: &WorkflowActionsConfig) -> usize {
     let channel = channel::channel(pool.clone(), hooks.clone());
-    let cfg = WorkflowActionsConfig::default();
     let claimed =
         outbox::claim_deliveries(pool, "test", WorkflowActionKind::Webhook, channel.timeout, 100).await.unwrap();
     for c in &claimed {
         let outcome = (channel.send)(c.clone()).await;
-        assert!(outbox::record(pool, &cfg, c, outcome).await.unwrap());
+        assert!(outbox::record(pool, cfg, c, outcome).await.unwrap());
     }
     claimed.len()
 }
@@ -614,6 +617,47 @@ async fn deliveries_are_signed_and_both_secrets_verify_during_the_grace_period()
     )
     .await;
     assert_eq!(audited, 2);
+    e.db.drop().await;
+}
+
+/// AUDIT_WORKFLOW_DELIVERIES (N-Q10, GH#882) on the webhook channel: off, a
+/// delivered webhook writes no audit row; on, exactly one
+/// `workflow.action_delivery` naming the endpoint by id, never the URL.
+#[tokio::test]
+async fn audit_workflow_deliveries_covers_webhooks() {
+    let (ca, tls) = tls_server("hook.example.test");
+    let Some(e) = env("webhooks_audit_deliveries", on(&["127.0.0.0/8"]), Some(&ca)).await else { return };
+    let receiver = Receiver::start(Some(tls)).await;
+    e.allow("hook.example.test", Some(receiver.port), false).await;
+    let url = format!("https://hook.example.test:{}/hooks/cmdb", receiver.port);
+    let (endpoint, _) = e.endpoint("itsm", &url, json!({})).await;
+    e.action("itsm", json!(["owner_team"])).await;
+    let (approver, _) = e.w.user("approver", &[e.w.approvers]).await;
+    let audited = "SELECT count(*) FROM audit_log WHERE action = 'workflow.action_delivery'";
+
+    e.approve(&approver).await;
+    assert_eq!(send_all(&e.w.pool, &e.hooks).await, 1);
+    assert_eq!(count(&e.w.pool, audited).await, 0, "no per-send audit with the option off");
+
+    let on = WorkflowActionsConfig { audit_deliveries: true, ..WorkflowActionsConfig::default() };
+    let d = e.approve(&approver).await;
+    assert_eq!(send_all_with(&e.w.pool, &e.hooks, &on).await, 1);
+    assert_eq!(delivery(&e.w.pool, d).await.0, "delivered");
+    let rows: Vec<(String, Uuid, Value)> = sqlx::query_as(
+        "SELECT actor_type, entity_id, new_value FROM audit_log WHERE action = 'workflow.action_delivery'",
+    )
+    .fetch_all(&e.w.pool)
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    let (actor, entity, v) = &rows[0];
+    assert_eq!((actor.as_str(), *entity), ("system", d));
+    assert_eq!(
+        (v["kind"].as_str(), v["status"].as_str(), v["actionKey"].as_str()),
+        (Some("webhook"), Some("delivered"), Some("sync"))
+    );
+    assert_eq!(v["recipient"], json!({ "endpointId": endpoint }));
+    assert!(!v.to_string().contains("hook.example.test"), "no URL: {v}");
     e.db.drop().await;
 }
 

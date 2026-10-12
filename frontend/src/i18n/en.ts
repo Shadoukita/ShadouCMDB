@@ -2287,6 +2287,7 @@ export const en = {
   "event.action.workflow.action_suppressed": "Workflow actions suppressed",
   "event.action.mail.test": "Test e-mail sent",
   "event.action.workflow.action_test": "Workflow action tested",
+  "event.action.workflow.action_delivery": "Workflow action delivery",
   // ---- 9a/A begin: A classes ----
   "dm.classes.title": "CI classes",
   "dm.classes.create": "New class",

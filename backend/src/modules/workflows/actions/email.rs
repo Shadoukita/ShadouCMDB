@@ -373,7 +373,10 @@ pub(super) async fn fan_out(
             }
         }
     }
-    write(&mut *tx, &rows).await?;
+    let skipped = write(&mut *tx, &rows).await?;
+    if cfg.audit_deliveries {
+        super::outbox::audit_deliveries(&mut *tx, &skipped).await?;
+    }
     if !existing.is_empty() {
         // Later runs of the request keep the lead waiting a little longer.
         sqlx::query(
@@ -439,9 +442,10 @@ async fn digest_leads(tx: &mut PgConnection, keys: &HashSet<String>) -> sqlx::Re
     Ok(rows.into_iter().filter_map(|(k, id)| by_digest.get(&k).map(|key| (key.clone(), id))).collect())
 }
 
-async fn write(tx: &mut PgConnection, rows: &[Row]) -> sqlx::Result<()> {
+/// Writes `rows`; returns the `skipped` ones written (a row already there is not).
+async fn write(tx: &mut PgConnection, rows: &[Row]) -> sqlx::Result<Vec<Uuid>> {
     if rows.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let ids: Vec<Uuid> = rows.iter().map(|r| r.id).collect();
     let runs: Vec<i64> = rows.iter().map(|r| r.run).collect();
@@ -461,7 +465,7 @@ async fn write(tx: &mut PgConnection, rows: &[Row]) -> sqlx::Result<()> {
             }
         })
         .collect();
-    sqlx::query(
+    let written: Vec<(Uuid, bool)> = sqlx::query_as(
         "INSERT INTO cmdb.workflow_action_deliveries
            (id, run_id, recipient_key, user_id, status, status_reason, digest_id, next_attempt_at, completed_at)
          SELECT u.id, u.run, u.key, u.user_id, u.status, u.reason, u.digest,
@@ -471,7 +475,8 @@ async fn write(tx: &mut PgConnection, rows: &[Row]) -> sqlx::Result<()> {
                 CASE WHEN u.status = 'skipped' THEN now() END
          FROM unnest($1::uuid[], $2::bigint[], $3::text[], $4::uuid[], $5::text[], $6::text[], $7::uuid[], $8::bigint[])
            AS u(id, run, key, user_id, status, reason, digest, delay)
-         ON CONFLICT (run_id, recipient_key) DO NOTHING",
+         ON CONFLICT (run_id, recipient_key) DO NOTHING
+         RETURNING id, status = 'skipped'",
     )
     .bind(&ids)
     .bind(&runs)
@@ -481,9 +486,9 @@ async fn write(tx: &mut PgConnection, rows: &[Row]) -> sqlx::Result<()> {
     .bind(&reasons)
     .bind(&digests)
     .bind(&delays)
-    .execute(&mut *tx)
+    .fetch_all(&mut *tx)
     .await?;
-    Ok(())
+    Ok(written.into_iter().filter_map(|(id, skipped)| skipped.then_some(id)).collect())
 }
 
 // ---------------------------------------------------------------------------

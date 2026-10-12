@@ -26556,7 +26556,8 @@
                 "workflow.action_discard",
                 "workflow.action_suppressed",
                 "mail.test",
-                "workflow.action_test"
+                "workflow.action_test",
+                "workflow.action_delivery"
               ]
             }
           },
@@ -43191,7 +43192,8 @@
               "workflow.action_discard",
               "workflow.action_suppressed",
               "mail.test",
-              "workflow.action_test"
+              "workflow.action_test",
+              "workflow.action_delivery"
             ]
           },
           "entityType": {

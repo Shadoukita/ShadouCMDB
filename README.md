@@ -245,6 +245,14 @@ one on. The queue is bounded: past `WORKFLOW_ACTIONS_QUEUE_MAX` pending items, a
 `suppressed` and audited as `workflow.action_suppressed` rather than queued. The other limits and the
 retention periods are listed in `.env.example`.
 
+Deliveries that give up are always audited (`workflow.action_dead`, with the recipient: a user's id, an
+endpoint's id or a masked address), as are an administrator's retries and discards. Where your audit
+duties require proof of each notification sent, set `AUDIT_WORKFLOW_DELIVERIES=true`: every e-mail and
+webhook delivery that ends `delivered` or `skipped` then writes one `workflow.action_delivery` entry,
+in the transaction that records the outcome, with the run, action, recipient, status and reason. The
+message itself and full addresses are never audited. Expect one audit row per recipient per event; the
+entries belong to the `changes` scope of `shadoucmdb prune-audit`.
+
 ### Outbound webhooks
 
 Webhook actions post a signed JSON envelope to an endpoint registered under Administration › Webhooks
