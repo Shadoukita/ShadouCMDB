@@ -3,7 +3,8 @@
 //! `authHeaderSet` only; an imported new one gets a signing secret nobody has
 //! seen and stays suspended (`secret_required`) until an administrator rotates
 //! it, shares it with the receiver and resumes it. An existing endpoint keeps
-//! its secrets; only its other fields change.
+//! its secrets; only its other fields change, except that a URL moving to
+//! another origin drops the auth header and suspends it (GH#902).
 
 use std::collections::HashSet;
 
@@ -16,7 +17,7 @@ use super::{ChangeAction, FieldChange, ImportWarning, Importer, not_in_file};
 use crate::data::crud::{self, AuditAction, AuditEntry};
 use crate::http::error::AppError;
 use crate::modules::webhooks::Webhooks;
-use crate::modules::webhooks::hosts::{HostMatch, HostPattern, check_url, parse_url};
+use crate::modules::webhooks::hosts::{HostMatch, HostPattern, check_url, origin_changes, parse_url};
 use crate::modules::webhooks::service::{self, EndpointRow, WebhookEndpointStatus};
 use crate::secrets::sealed::{self, EndpointSecret};
 
@@ -280,12 +281,20 @@ impl Importer<'_> {
             match existing {
                 Some(before) => {
                     let was = spec(&before);
+                    // The auth header was set for the receiver at the old
+                    // origin: it does not follow the URL to another (GH#902).
+                    let drop_header = was.auth_header_set && origin_changes(&was.url, &url);
                     let fields: Vec<FieldChange> = [
                         change("name", json!(was.name), json!(e.name.trim())),
                         change("url", json!(was.url), json!(url.as_str())),
                         change("timeoutMs", json!(was.timeout_ms), json!(e.timeout_ms)),
                         change("maxPerMinute", json!(was.max_per_minute), json!(e.max_per_minute)),
                         change("maxInFlight", json!(was.max_in_flight), json!(e.max_in_flight)),
+                        drop_header.then(|| FieldChange {
+                            field: "authHeaderSet".into(),
+                            from: json!(true),
+                            to: json!(false),
+                        }),
                     ]
                     .into_iter()
                     .flatten()
@@ -306,7 +315,11 @@ impl Importer<'_> {
                     }
                     sqlx::query(
                         "UPDATE cmdb.webhook_endpoints SET name = $2, url = $3, timeout_ms = $4, max_per_minute = $5,
-                           max_in_flight = $6, version = version + 1 WHERE id = $1",
+                           max_in_flight = $6,
+                           auth_header_name = CASE WHEN $7 THEN NULL ELSE auth_header_name END,
+                           auth_header_ciphertext = CASE WHEN $7 THEN NULL ELSE auth_header_ciphertext END,
+                           auth_header_key_id = CASE WHEN $7 THEN NULL ELSE auth_header_key_id END,
+                           version = version + 1 WHERE id = $1",
                     )
                     .bind(before.id)
                     .bind(e.name.trim())
@@ -314,6 +327,7 @@ impl Importer<'_> {
                     .bind(e.timeout_ms)
                     .bind(e.max_per_minute)
                     .bind(e.max_in_flight)
+                    .bind(drop_header)
                     .execute(&mut *self.conn)
                     .await?;
                     let after = service::row(self.conn, before.id, false).await?;
@@ -329,8 +343,24 @@ impl Importer<'_> {
                         )],
                     )
                     .await?;
+                    let mut suspended = after.status == WebhookEndpointStatus::Suspended;
+                    if drop_header {
+                        if !suspended {
+                            service::suspend(self.conn, self.ctx, before.id, "secret_required").await?;
+                            suspended = true;
+                        }
+                        warnings.push(ImportWarning {
+                            path: format!("{path}.url"),
+                            message: format!(
+                                "Endpoint {} moves to another scheme, host or port, so its auth header was removed \
+                                 and it is suspended: rotate the signing secret and set the auth header for the new \
+                                 receiver under Administration > Webhooks, then resume it",
+                                e.key
+                            ),
+                        });
+                    }
                     if let Err(refused) = &allowed
-                        && after.status != WebhookEndpointStatus::Suspended
+                        && !suspended
                     {
                         service::suspend(self.conn, self.ctx, before.id, "host_not_allowed").await?;
                         warnings.push(ImportWarning {

@@ -8357,8 +8357,8 @@ export interface components {
             status: components["schemas"]["WebhookEndpointStatus"];
             /**
              * @description Why the server suspended it: `breaker` (too many failures in a row), `host_not_allowed` (its host left the
-             *     allowlist), `restored` (restored from a backup), `secret_required` (created by a configuration import, or its
-             *     secret could not be decrypted)
+             *     allowlist), `restored` (restored from a backup), `secret_required` (created by a configuration import, moved by
+             *     one to another origin, or its secret could not be decrypted)
              */
             suspendedReason?: string | null;
             /** @description The fields below are null to a caller without `webhooks.manage` */
@@ -37643,7 +37643,7 @@ export interface operations {
                     maxPerMinute?: number | null;
                     /** Format: int32 */
                     maxInFlight?: number | null;
-                    /** @description An object replaces the header, null removes it, left out keeps it */
+                    /** @description An object replaces the header, null removes it, left out keeps it (refused when `url` moves to another scheme, host or port while a header is set) */
                     authHeader?: components["schemas"]["WebhookAuthHeaderInput"] | null;
                 };
             };

@@ -41623,7 +41623,7 @@
                         "type": "null"
                       }
                     ],
-                    "description": "An object replaces the header, null removes it, left out keeps it"
+                    "description": "An object replaces the header, null removes it, left out keeps it (refused when `url` moves to another scheme, host or port while a header is set)"
                   }
                 },
                 "additionalProperties": false
@@ -54558,7 +54558,7 @@
               "string",
               "null"
             ],
-            "description": "Why the server suspended it: `breaker` (too many failures in a row), `host_not_allowed` (its host left the\nallowlist), `restored` (restored from a backup), `secret_required` (created by a configuration import, or its\nsecret could not be decrypted)"
+            "description": "Why the server suspended it: `breaker` (too many failures in a row), `host_not_allowed` (its host left the\nallowlist), `restored` (restored from a backup), `secret_required` (created by a configuration import, moved by\none to another origin, or its secret could not be decrypted)"
           },
           "url": {
             "type": [

@@ -1231,6 +1231,87 @@ async fn an_import_creates_new_endpoints_suspended_until_their_secret_is_rotated
     e.db.drop().await;
 }
 
+/// GH#902: the auth header does not follow the URL to another origin. PATCH
+/// refuses the move unless the request says what becomes of the header; an
+/// import drops the header and suspends the endpoint. A new path on the same
+/// origin keeps it.
+#[tokio::test]
+async fn the_auth_header_does_not_follow_the_url_to_another_origin() {
+    let (ca, tls) = tls_server("hook.example.test");
+    let Some(e) = env("webhooks_origin_move", on(&["127.0.0.0/8"]), Some(&ca)).await else { return };
+    let w = &e.w;
+    let (good, evil) = (Receiver::start(Some(tls.clone())).await, Receiver::start(Some(tls)).await);
+    e.allow("hook.example.test", Some(good.port), false).await;
+    e.allow("hook.example.test", Some(evil.port), false).await;
+    let good_url = format!("https://hook.example.test:{}/hooks", good.port);
+    let evil_url = format!("https://hook.example.test:{}/collect", evil.port);
+    let (id, _) = e
+        .endpoint("itsm", &good_url, json!({ "authHeader": { "name": "Authorization", "value": HEADER_VALUE } }))
+        .await;
+    let path = format!("{ENDPOINTS}/{id}");
+    let header_set = || async {
+        sqlx::query_scalar::<_, bool>("SELECT auth_header_ciphertext IS NOT NULL FROM webhook_endpoints WHERE id = $1")
+            .bind(id)
+            .fetch_one(&w.pool)
+            .await
+            .unwrap()
+    };
+
+    // Another port without authHeader: refused, nothing changes.
+    let (status, v) = e.call("PATCH", &path, Some(json!({ "version": 1, "url": evil_url }))).await;
+    assert_eq!((status, details(&v)), (400, vec![("authHeader".into(), "required_on_origin_change".into())]), "{v}");
+    let v = w.ok("GET", &path, json!(null)).await;
+    assert_eq!((v["url"].as_str(), v["version"].as_i64()), (Some(good_url.as_str()), Some(1)), "{v}");
+
+    // Another path on the same origin keeps the header.
+    let moved = format!("https://hook.example.test:{}/hooks/v2", good.port);
+    let v = w.ok("PATCH", &path, json!({ "version": 1, "url": moved })).await;
+    assert_eq!(v["authHeaderSet"], true, "{v}");
+    assert_eq!(e.ping(id).await["ok"], true);
+    assert_eq!(good.hits().pop().unwrap().header("authorization"), HEADER_VALUE);
+
+    // Saying null moves it without the header: the new host never sees it.
+    let v = w.ok("PATCH", &path, json!({ "version": 2, "url": evil_url, "authHeader": null })).await;
+    assert_eq!(v["authHeaderSet"], false, "{v}");
+    assert_eq!(e.ping(id).await["ok"], true);
+    let hit = evil.hits().pop().unwrap();
+    assert_eq!(hit.header("authorization"), "", "{hit:?}");
+    // A new header with the move is taken as given.
+    let v = w
+        .ok(
+            "PATCH",
+            &path,
+            json!({ "version": 3, "url": good_url, "authHeader": { "name": "Authorization", "value": "Bearer new" } }),
+        )
+        .await;
+    assert_eq!(v["authHeaderSet"], true, "{v}");
+    assert_eq!(e.ping(id).await["ok"], true);
+    assert_eq!(good.hits().pop().unwrap().header("authorization"), "Bearer new");
+
+    // Import: a new path on the same origin keeps the header and the status.
+    let (_, file, _) = call(&w.app, "GET", "/api/v1/admin/config/export", &w.admin, None).await;
+    let mut same = file.clone();
+    same["webhookEndpoints"][0]["url"] = json!(format!("https://hook.example.test:{}/hooks/v3", good.port));
+    let (status, v, _) = call(&w.app, "POST", "/api/v1/admin/config/import?mode=apply", &w.admin, Some(same)).await;
+    assert_eq!(status, 200, "{v}");
+    assert!(header_set().await);
+    // Another origin: the header is dropped and the endpoint suspended.
+    let mut moved = file;
+    moved["webhookEndpoints"][0]["url"] = json!(evil_url);
+    let (status, v, _) = call(&w.app, "POST", "/api/v1/admin/config/import?mode=apply", &w.admin, Some(moved)).await;
+    assert_eq!(status, 200, "{v}");
+    assert!(v["warnings"].to_string().contains("its auth header was removed"), "{v}");
+    assert!(!header_set().await);
+    let v = w.ok("GET", &path, json!(null)).await;
+    assert_eq!((v["status"].as_str(), v["suspendedReason"].as_str()), (Some("suspended"), Some("secret_required")));
+    // A ping still reaches a suspended endpoint, and carries no header.
+    e.ping(id).await;
+    let hits = evil.hits();
+    assert_eq!(hits.len(), 2);
+    assert!(hits.iter().all(|h| h.header("authorization").is_empty()), "{hits:?}");
+    e.db.drop().await;
+}
+
 /// Removing an allowlist entry suspends the endpoints it alone allowed, and
 /// an endpoint used by an action cannot be deleted.
 #[tokio::test]
