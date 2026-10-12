@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use super::Webhooks;
 use super::client::RESERVED_HEADERS;
-use super::hosts::{AllowedHost, Ceiling, HostMatch, HostPattern, UrlRefusal, check_url};
+use super::hosts::{AllowedHost, Ceiling, HostMatch, HostPattern, UrlRefusal, check_url, origin_changes};
 use crate::api::context::RequestContext;
 use crate::api::route::Check;
 use crate::api::schemas::{self, Page, Paged};
@@ -59,8 +59,8 @@ pub struct WebhookEndpoint {
     pub name: String,
     pub status: WebhookEndpointStatus,
     /// Why the server suspended it: `breaker` (too many failures in a row), `host_not_allowed` (its host left the
-    /// allowlist), `restored` (restored from a backup), `secret_required` (created by a configuration import, or its
-    /// secret could not be decrypted)
+    /// allowlist), `restored` (restored from a backup), `secret_required` (created by a configuration import, moved by
+    /// one to another origin, or its secret could not be decrypted)
     pub suspended_reason: Option<String>,
     /// The fields below are null to a caller without `webhooks.manage`
     pub url: Option<String>,
@@ -143,7 +143,10 @@ fn nullable_auth_header_schema() -> Schema {
     AnyOfBuilder::new()
         .item(utoipa::openapi::Ref::from_schema_name("WebhookAuthHeaderInput"))
         .item(ObjectBuilder::new().schema_type(Type::Null))
-        .description(Some("An object replaces the header, null removes it, left out keeps it"))
+        .description(Some(
+            "An object replaces the header, null removes it, left out keeps it (refused when `url` moves to another \
+             scheme, host or port while a header is set)",
+        ))
         .into()
 }
 
@@ -719,9 +722,23 @@ pub async fn update(
     let before = row(&mut tx, id, true).await?;
     check_version(b.version, before.version)?;
     let url = match &b.url {
-        Some(u) => Some(check_url(u, w.ceiling(), &allowlist(&mut tx).await?).map_err(url_error)?.to_string()),
+        Some(u) => Some(check_url(u, w.ceiling(), &allowlist(&mut tx).await?).map_err(url_error)?),
         None => None,
     };
+    // The auth header is a credential for one receiver: moving the URL to
+    // another origin must say what happens to it (GH#902).
+    if b.auth_header.is_none()
+        && before.auth_header_ciphertext.is_some()
+        && url.as_ref().is_some_and(|u| origin_changes(&before.url, u))
+    {
+        return Err(AppError::validation(vec![body_error(
+            "authHeader",
+            "required_on_origin_change",
+            "The URL moves to another scheme, host or port: set the auth header for the new receiver, or send null \
+             to remove it",
+        )]));
+    }
+    let url = url.map(|u| u.to_string());
     let (header_change, name, bytes, key_id) = match &b.auth_header {
         None => (false, None, None, None),
         Some(None) => (true, None, None, None),

@@ -280,6 +280,13 @@ pub fn parse_url(raw: &str) -> Result<url::Url, UrlRefusal> {
     Ok(url)
 }
 
+/// Whether `to` leaves the origin (scheme, host, port) of the stored URL
+/// `from`. A credential set for one receiver must not follow the URL to
+/// another (GH#902); a stored URL that no longer parses counts as a move.
+pub fn origin_changes(from: &str, to: &url::Url) -> bool {
+    url::Url::parse(from).map_or(true, |f| f.origin() != to.origin())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -289,6 +296,24 @@ mod tests {
     }
 
     const OPEN: Ceiling<'static> = Ceiling { hosts: None, allow_http: false };
+
+    #[test]
+    fn an_origin_is_scheme_host_and_port() {
+        let to = |u: &str| url::Url::parse(u).unwrap();
+        let from = "https://hook.example.test/hooks";
+        for same in ["https://hook.example.test/other?x=1", "https://HOOK.example.test:443/hooks"] {
+            assert!(!origin_changes(from, &to(same)), "{same}");
+        }
+        for other in [
+            "http://hook.example.test/hooks",
+            "https://hook.example.test:8443/hooks",
+            "https://evil.example.test/hooks",
+            "https://hook.example.test.evil.example/hooks",
+        ] {
+            assert!(origin_changes(from, &to(other)), "{other}");
+        }
+        assert!(origin_changes("not a url", &to(from)));
+    }
 
     #[test]
     fn patterns_parse_and_print_as_stored() {
