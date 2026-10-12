@@ -1685,8 +1685,8 @@ async fn moving_an_endpoint_needs_a_confirmed_session_and_the_audit_hides_its_ur
     .unwrap();
     assert_eq!(rows.len(), 5, "{rows:?}");
     let text = format!("{rows:?}");
-    for secret in ["pathtok3n", "querys1g", "newtok3n", "/services/"] {
-        assert!(!text.contains(secret), "{secret} in {text}");
+    for fragment in ["pathtok3n", "querys1g", "newtok3n", "/services/"] {
+        assert!(!text.contains(fragment), "{fragment} in {text}");
     }
     let created = rows[0].1.as_ref().unwrap();
     assert_eq!(created.get("url"), None, "{created}");
