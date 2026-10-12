@@ -839,6 +839,36 @@ async fn mail_off_skips_and_sends_nothing() {
     db.drop().await;
 }
 
+/// GH#910: a database error while composing is retried, and `last_error`
+/// (read by `workflows.manage` holders) holds a reference, not the
+/// database's text with its SQL and schema names.
+#[tokio::test]
+async fn a_database_error_while_composing_stores_a_reference_not_the_database_text() {
+    let Some(db) = scratch::database("workflow_email_db_error").await else { return };
+    let pool = &db.pool;
+    let m = mailer(pool, mail_cfg("en")).await;
+    let (_, instances) = mass(pool, 1, None).await;
+    transitions(pool, &instances, None).await;
+    drain(pool, &m).await;
+    // A column only the message's query reads: composing fails with a real PostgreSQL error.
+    ok(pool, "ALTER TABLE workflow_transition_approval_steps RENAME COLUMN name TO name_gone").await;
+    assert_eq!(send(pool, &m, true).await, 1);
+    let (status, error): (String, Option<String>) =
+        sqlx::query_as("SELECT status, last_error FROM workflow_action_deliveries").fetch_one(pool).await.unwrap();
+    assert_eq!(status, "pending", "retried");
+    let error = error.expect("last_error is set");
+    let reference = error
+        .strip_prefix("Cannot read the message's data (ref ")
+        .and_then(|e| e.strip_suffix("); see the server log"))
+        .unwrap_or_else(|| panic!("unexpected last_error: {error}"));
+    assert!(reference.parse::<Uuid>().is_ok(), "{error}");
+    for leak in ["error returned from database", "name_gone", "workflow_transition_approval_steps", "column"] {
+        assert!(!error.contains(leak), "{leak} in {error}");
+    }
+    assert!(m.sink.received().is_empty());
+    db.drop().await;
+}
+
 /// SHAA-3042: the designer's test send of an e-mail action goes to the caller
 /// only, in their language, marked as a test, about the CI given; nothing is
 /// queued and the audit entry names the user, not the address. The relay's
