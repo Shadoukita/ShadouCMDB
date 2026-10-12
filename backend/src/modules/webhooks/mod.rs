@@ -29,8 +29,11 @@ use std::sync::Arc;
 
 use axum::http::{Method, StatusCode};
 
-use crate::api::route::{Body, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, Query, Route, route};
+use crate::api::route::{
+    Body, IdPath, In, Json, NoBody, NoContent, NoPath, NoQuery, Query, Route, reauthentication_gate, route,
+};
 use crate::auth::permissions::GlobalPermission;
+use crate::auth::token::Use;
 use crate::config::WebhooksConfig;
 use crate::http::error::ErrorCode;
 use crate::secrets::Keyring;
@@ -174,12 +177,27 @@ pub fn routes() -> Vec<Route> {
             .summary("Change a webhook endpoint (partial)")
             .description(format!(
                 "A new `url` meets the rules of createWebhookEndpoint. `authHeader`: an object replaces the header, \
-                 null removes it, left out keeps it. The status changes only through pause and resume. {DISABLED}"
+                 null removes it, left out keeps it. The status changes only through pause and resume. A body with \
+                 `url` or `authHeader` changes where requests go and what they carry, as createWebhookEndpoint \
+                 does: it needs a signed-in session whose owner signed in or confirmed their credentials \
+                 (POST /api/v1/auth/reauthenticate) in the last 10 minutes, 403 REAUTHENTICATION_REQUIRED \
+                 otherwise (also for an API token), audited as `session.reauthentication_required`. {DISABLED}"
             ))
             .requires(manage)
-            .errors(&[ErrorCode::NotFound, ErrorCode::VersionConflict, ErrorCode::WebhooksDisabled])
+            .errors(&[
+                ErrorCode::ReauthenticationRequired,
+                ErrorCode::NotFound,
+                ErrorCode::VersionConflict,
+                ErrorCode::WebhooksDisabled,
+            ])
             .handle(
                 |api, In(IdPath(id), NoQuery, Body(b)): In<IdPath, NoQuery, Body<WebhookEndpointUpdate>>| async move {
+                    // GH#906: the rest of the endpoint stays editable with a token or an older session.
+                    if b.url.is_some() || b.auth_header.is_some() {
+                        let path = format!("/api/v1/admin/webhook-endpoints/{id}");
+                        let used = Use { method: &Method::PATCH, path: &path, operation_id: "updateWebhookEndpoint" };
+                        reauthentication_gate(&api.pool, &api.ctx, &used).await?;
+                    }
                     Ok(Json(service::update(&api.pool, &api.ctx, &api.webhooks, id, &b).await?))
                 },
             ),
