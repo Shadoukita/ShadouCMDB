@@ -1030,3 +1030,93 @@ async fn audit_workflow_deliveries_writes_one_row_per_ended_delivery_only_when_o
     assert!(actors.iter().all(|(t, e)| t == "system" && e == "workflow_action_deliveries"), "{actors:?}");
     db.drop().await;
 }
+
+/// GH#899: concurrent test sends by one user take their slots one by one, so
+/// no more than `MAX_PER_MINUTE` go out; the rest are 429 RATE_LIMITED with
+/// `Retry-After`, and are neither sent nor audited.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_test_sends_stay_within_the_limit() {
+    use crate::modules::api_tokens::tests::{app_with_mail, call, code};
+    use crate::modules::test_send_slots::MAX_PER_MINUTE;
+
+    let Some(db) = scratch::database("workflow_test_send_race").await else { return };
+    let mut w = world(&db).await;
+    let m = mailer(&w.pool, mail_cfg("en")).await;
+    w.app = app_with_mail(w.pool.clone(), m.mail.clone());
+    ok(&w.pool, "UPDATE users SET email = 'admin@corp.example' WHERE username = 'admin'").await;
+    put_actions(
+        &w,
+        json!([{ "key": "tell", "name": "Tell", "kind": "email", "trigger": "transition", "transition": "approve",
+            "recipients": [{ "source": "participant", "participant": "actor" }] }]),
+    )
+    .await;
+    let test = format!("{}/tell/test", actions(&w));
+
+    let mut calls = tokio::task::JoinSet::new();
+    for _ in 0..25 {
+        let (app, admin, test) = (w.app.clone(), w.admin.clone(), test.clone());
+        calls.spawn(async move { call(&app, "POST", &test, &admin, None).await });
+    }
+    let (mut sent, mut refused) = (0, 0);
+    while let Some(done) = calls.join_next().await {
+        let (status, v, headers) = done.unwrap();
+        match status {
+            200 => sent += 1,
+            429 => {
+                assert_eq!(code(&v), "RATE_LIMITED", "{v}");
+                let wait: u64 = headers["retry-after"].to_str().unwrap().parse().unwrap();
+                assert!((1..=60).contains(&wait), "Retry-After {wait}");
+                refused += 1;
+            }
+            other => panic!("{other} {v}"),
+        }
+    }
+    assert_eq!((sent, refused), (MAX_PER_MINUTE, 25 - MAX_PER_MINUTE));
+    assert_eq!(i64::try_from(m.sink.received().len()).unwrap(), MAX_PER_MINUTE, "only the allowed ones went out");
+    assert_eq!(
+        count(&w.pool, "SELECT count(*) FROM audit_log WHERE action = 'workflow.action_test'").await,
+        MAX_PER_MINUTE
+    );
+
+    // A minute later the slots are free again, and the expired ones are cleared.
+    ok(&w.pool, "UPDATE test_send_slots SET taken_at = taken_at - interval '61 seconds'").await;
+    w.ok("POST", &test, json!(null)).await;
+    assert_eq!(count(&w.pool, "SELECT count(*) FROM test_send_slots").await, 1);
+    db.drop().await;
+}
+
+/// GH#904: `POST /admin/mail/test` allows `MAX_PER_MINUTE` a minute per user,
+/// apart from the action test send; the next one is 429 RATE_LIMITED with
+/// `Retry-After` and is neither sent nor audited.
+#[tokio::test]
+async fn the_mail_test_is_rate_limited() {
+    use crate::modules::api_tokens::tests::{app_with_mail, call, code};
+    use crate::modules::test_send_slots::MAX_PER_MINUTE;
+
+    let Some(db) = scratch::database("mail_test_rate").await else { return };
+    let mut w = world(&db).await;
+    let m = mailer(&w.pool, mail_cfg("en")).await;
+    w.app = app_with_mail(w.pool.clone(), m.mail.clone());
+    ok(&w.pool, "UPDATE users SET email = 'admin@corp.example' WHERE username = 'admin'").await;
+    // A full minute of action test sends does not use up the mail test's.
+    ok(
+        &w.pool,
+        &format!(
+            "INSERT INTO test_send_slots (user_id, kind) SELECT id, 'workflow_action' FROM users, \
+             generate_series(1, {MAX_PER_MINUTE}) WHERE username = 'admin'"
+        ),
+    )
+    .await;
+
+    for _ in 0..MAX_PER_MINUTE {
+        let v = w.ok("POST", "/api/v1/admin/mail/test", json!(null)).await;
+        assert_eq!(v["sent"].as_bool(), Some(true), "{v}");
+    }
+    let (status, v, headers) = call(&w.app, "POST", "/api/v1/admin/mail/test", &w.admin, None).await;
+    assert_eq!((status, code(&v)), (429, "RATE_LIMITED"), "{v}");
+    let wait: u64 = headers["retry-after"].to_str().unwrap().parse().unwrap();
+    assert!((1..=60).contains(&wait), "Retry-After {wait}");
+    assert_eq!(i64::try_from(m.sink.received().len()).unwrap(), MAX_PER_MINUTE);
+    assert_eq!(count(&w.pool, "SELECT count(*) FROM audit_log WHERE action = 'mail.test'").await, MAX_PER_MINUTE);
+    db.drop().await;
+}

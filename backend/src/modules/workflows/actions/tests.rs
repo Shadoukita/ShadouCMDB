@@ -405,14 +405,14 @@ async fn an_inbox_test_send_notifies_the_caller_only() {
     assert_eq!((status, code(&v)), (403, "FORBIDDEN"), "{v}");
 
     // 10 a minute.
-    for _ in 1..super::test_send::MAX_PER_MINUTE {
+    for _ in 1..crate::modules::test_send_slots::MAX_PER_MINUTE {
         w.ok("POST", &test("tell_ops", ""), json!(null)).await;
     }
     let (status, v) = w.call(&w.admin, "POST", &test("tell_ops", ""), None).await;
     assert_eq!((status, code(&v)), (429, "RATE_LIMITED"), "{v}");
     assert_eq!(
         count(&w.pool, "SELECT count(*) FROM notifications WHERE kind = 'workflow_action'").await,
-        super::test_send::MAX_PER_MINUTE
+        crate::modules::test_send_slots::MAX_PER_MINUTE
     );
     db.drop().await;
 }

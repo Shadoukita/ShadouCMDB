@@ -38,6 +38,7 @@ use crate::auth::permissions::GlobalPermission;
 use crate::config::{MailConfig, SmtpSecurity};
 use crate::data::crud::{self, AuditAction, AuditEntry};
 use crate::http::error::{AppError, ErrorCode};
+use crate::modules::test_send_slots::{self, TestSend};
 
 pub const TAG: &str = "Mail";
 
@@ -430,6 +431,9 @@ async fn test(api: &crate::api::route::Api) -> Result<MailTestResult, AppError> 
         tracing::error!(error = %e, "cannot build the mail test message");
         AppError::internal()
     })?;
+    test_send_slots::take(&mut conn, principal.user_id, TestSend::Mail).await?;
+    // No connection held while the relay answers.
+    drop(conn);
     let outcome = mail.send(message).await;
     let entry = AuditEntry {
         action: AuditAction::MailTest,
@@ -439,6 +443,7 @@ async fn test(api: &crate::api::route::Api) -> Result<MailTestResult, AppError> 
         new_value: Some(json!({ "to": principal.username, "sent": outcome.is_ok(),
             "smtpCode": outcome.as_ref().err().and_then(SendError::code) })),
     };
+    let mut conn = api.pool.acquire().await?;
     crud::write_audit(&mut conn, ctx, vec![entry]).await?;
     Ok(MailTestResult {
         to: email,
@@ -471,10 +476,10 @@ pub fn routes() -> Vec<Route> {
                  workflow outbox, to the caller's own e-mail address only, in the caller's language. Audited as \
                  `mail.test` on the caller. A refusal by the relay is reported in the result (`sent` false, \
                  `smtpCode`, `error`), not as an error status. 409 MAIL_NOT_CONFIGURED with `MAIL=off`; 409 \
-                 CONFLICT when the caller has no address.",
+                 CONFLICT when the caller has no address; 429 RATE_LIMITED beyond 10 tests a minute.",
             )
             .session_only()
-            .errors(&[ErrorCode::MailNotConfigured, ErrorCode::Conflict])
+            .errors(&[ErrorCode::MailNotConfigured, ErrorCode::Conflict, ErrorCode::RateLimited])
             .handle(|api, In(NoPath, NoQuery, NoBody): In<NoPath, NoQuery, NoBody>| async move {
                 Ok(Json(test(&api).await?))
             }),

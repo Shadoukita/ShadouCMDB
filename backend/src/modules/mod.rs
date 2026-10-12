@@ -28,6 +28,7 @@ pub mod schema_changes;
 pub mod simple_resource;
 pub mod sso;
 pub mod templates;
+pub mod test_send_slots;
 pub mod ui_settings;
 pub mod users;
 pub mod webhooks;

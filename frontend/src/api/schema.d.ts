@@ -3702,7 +3702,7 @@ export interface paths {
         put?: never;
         /**
          * Send a test message to your own address
-         * @description Needs `workflows.manage` or `webhooks.manage`, and a session. Sends at once, not through the workflow outbox, to the caller's own e-mail address only, in the caller's language. Audited as `mail.test` on the caller. A refusal by the relay is reported in the result (`sent` false, `smtpCode`, `error`), not as an error status. 409 MAIL_NOT_CONFIGURED with `MAIL=off`; 409 CONFLICT when the caller has no address. Needs a signed-in session: API tokens get 403 FORBIDDEN.
+         * @description Needs `workflows.manage` or `webhooks.manage`, and a session. Sends at once, not through the workflow outbox, to the caller's own e-mail address only, in the caller's language. Audited as `mail.test` on the caller. A refusal by the relay is reported in the result (`sent` false, `smtpCode`, `error`), not as an error status. 409 MAIL_NOT_CONFIGURED with `MAIL=off`; 409 CONFLICT when the caller has no address; 429 RATE_LIMITED beyond 10 tests a minute. Needs a signed-in session: API tokens get 403 FORBIDDEN.
          */
         post: operations["sendMailTest"];
         delete?: never;
@@ -34640,6 +34640,15 @@ export interface operations {
             };
             /** @description Conflict: CONFLICT (not allowed in this state) or MAIL_NOT_CONFIGURED (outbound e-mail is off: MAIL=off). Nothing was sent */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Too many requests (code RATE_LIMITED): failed password attempts, or the limit named in details[0].code; see the Retry-After header */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
