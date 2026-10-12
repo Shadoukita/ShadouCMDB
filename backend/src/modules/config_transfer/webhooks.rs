@@ -81,7 +81,10 @@ fn audit(
 impl Importer<'_> {
     /// The allowlist first (merged by host and port, never deleted), then the
     /// endpoints (by key, never deleted), so a URL is judged against the list
-    /// the file brings.
+    /// the file brings. Both are skipped, with a warning, while the operator
+    /// has webhooks switched off: the admin routes answer 409 WEBHOOKS_DISABLED
+    /// then, and an import must not stage endpoints that go live the moment
+    /// WEBHOOKS_ALLOWED is set (GH#911).
     pub(super) async fn webhooks(
         &mut self,
         w: &Webhooks,
@@ -90,6 +93,23 @@ impl Importer<'_> {
         current_hosts: &[WebhookAllowedHostSpec],
         warnings: &mut Vec<ImportWarning>,
     ) -> Result<(), AppError> {
+        if w.require_enabled().is_err() {
+            for (section, len) in [
+                ("webhookAllowedHosts", file.webhook_allowed_hosts.as_ref().map_or(0, Vec::len)),
+                ("webhookEndpoints", file.webhook_endpoints.as_ref().map_or(0, Vec::len)),
+            ] {
+                if len > 0 {
+                    warnings.push(ImportWarning {
+                        path: section.into(),
+                        message: format!(
+                            "{section} was not imported: webhooks are switched off on this server (the operator \
+                             must set WEBHOOKS_ALLOWED=true first)"
+                        ),
+                    });
+                }
+            }
+            return Ok(());
+        }
         if let Some(list) = &file.webhook_allowed_hosts {
             self.allowed_hosts(w, list, current_hosts, warnings).await?;
         }
