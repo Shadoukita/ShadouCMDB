@@ -187,6 +187,16 @@ fn jitter() -> f64 {
     0.8 + f64::from(u16::from_le_bytes(b)) / f64::from(u16::MAX) * 0.4
 }
 
+/// A database failure while preparing delivery `delivery`, as stored: `what`
+/// and a reference only. The database's own text (SQL, constraint and schema
+/// names, pool details) goes to the server log under that reference, never to
+/// `last_error`, which `workflows.manage` holders read (GH#910).
+pub fn database_error(delivery: Uuid, what: &str, err: &dyn std::fmt::Display) -> String {
+    let reference = Uuid::new_v4();
+    tracing::warn!(%delivery, %reference, error = %err, "{what}");
+    format!("{what} (ref {reference}); see the server log")
+}
+
 /// The error as stored: e-mail addresses masked (a relay's `550 <carol@…>`
 /// would otherwise show a fixed address the API masks everywhere else, N-Q3),
 /// then cut to `MAX_ERROR` bytes.

@@ -515,11 +515,8 @@ async fn send(pool: &PgPool, mail: &Mail, c: Claimed) -> Outcome {
     let composed = match compose(pool, mail, &c).await {
         Ok(m) => m,
         Err(e) => {
-            return Outcome::Transient {
-                status_code: None,
-                error: format!("Cannot read the message's data: {e}"),
-                retry_after: None,
-            };
+            let error = super::outbox::database_error(c.id, "Cannot read the message's data", &e);
+            return Outcome::Transient { status_code: None, error, retry_after: None };
         }
     };
     let (to, rendered) = match composed {

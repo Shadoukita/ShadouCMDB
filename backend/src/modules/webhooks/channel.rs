@@ -16,7 +16,7 @@ use super::hosts::check_url;
 use super::service::{self, EndpointRow, WebhookEndpointStatus, WebhookPingResult};
 use super::signing;
 use crate::api::context::RequestContext;
-use crate::modules::workflows::actions::outbox::{Channel, Claimed, Outcome};
+use crate::modules::workflows::actions::outbox::{self, Channel, Claimed, Outcome};
 
 /// Failures in a row, with no success for [`BREAKER_QUIET`], that suspend an endpoint.
 pub const BREAKER_FAILURES: i32 = 20;
@@ -82,7 +82,10 @@ async fn deliver(pool: &PgPool, w: &Webhooks, c: &Claimed) -> Outcome {
     };
     let mut conn = match pool.acquire().await {
         Ok(c) => c,
-        Err(e) => return Outcome::Transient { status_code: None, error: format!("database: {e}"), retry_after: None },
+        Err(e) => {
+            let error = outbox::database_error(c.id, "The database is unreachable", &e);
+            return Outcome::Transient { status_code: None, error, retry_after: None };
+        }
     };
     let e = match service::row(&mut conn, endpoint_id, false).await {
         Ok(e) => e,
