@@ -277,6 +277,11 @@ After 20 failures in a row with no success for 15 minutes an endpoint is suspend
 held, an audit entry is written, and the holders of `webhooks.manage` get an in-app notice. `resume`
 releases the held deliveries.
 
+Changing an endpoint's URL or auth header needs a recently confirmed session, as creating one does (API
+tokens are refused). Audit entries record an endpoint's URL only as its origin (`urlOrigin`) and a SHA-256
+of the full URL (`urlSha256`), never its path or query. While `WEBHOOKS_ALLOWED` is off, a configuration
+import skips the webhook sections with a warning.
+
 **Verifying a delivery.** The signing secret (`whsec_…`) is shown once, when the endpoint is created or
 its secret is rotated. Each request carries `X-ShadouCMDB-Event`, `X-ShadouCMDB-Delivery` (stable across
 retries; use it to drop duplicates), `X-ShadouCMDB-Webhook-Id` and

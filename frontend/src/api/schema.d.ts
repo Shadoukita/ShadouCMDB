@@ -4207,7 +4207,7 @@ export interface paths {
         head?: never;
         /**
          * Change a webhook endpoint (partial)
-         * @description Requires `webhooks.manage`. A new `url` meets the rules of createWebhookEndpoint. `authHeader`: an object replaces the header, null removes it, left out keeps it. The status changes only through pause and resume. 409 WEBHOOKS_DISABLED while the operator has not set WEBHOOKS_ALLOWED=true.
+         * @description Requires `webhooks.manage`. A new `url` meets the rules of createWebhookEndpoint. `authHeader`: an object replaces the header, null removes it, left out keeps it. The status changes only through pause and resume. A body with `url` or `authHeader` changes where requests go and what they carry, as createWebhookEndpoint does: it needs a signed-in session whose owner signed in or confirmed their credentials (POST /api/v1/auth/reauthenticate) in the last 10 minutes, 403 REAUTHENTICATION_REQUIRED otherwise (also for an API token), audited as `session.reauthentication_required`. 409 WEBHOOKS_DISABLED while the operator has not set WEBHOOKS_ALLOWED=true.
          */
         patch: operations["updateWebhookEndpoint"];
         trace?: never;
@@ -37689,7 +37689,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the account must enter its e-mail first (code EMAIL_REQUIRED) */
+            /** @description Missing permission (code FORBIDDEN) or X-CSRF-Token (code CSRF_TOKEN_INVALID), MFA must be set up first (code MFA_ENROLMENT_REQUIRED), or the session's owner has not confirmed their credentials in the last 10 minutes (code REAUTHENTICATION_REQUIRED; POST /api/v1/auth/reauthenticate, then send the request again) */
             403: {
                 headers: {
                     [name: string]: unknown;

@@ -1608,3 +1608,138 @@ async fn a_webhook_action_test_does_not_show_the_url_to_a_designer() {
     assert!(message.to_lowercase().contains("connect"), "{v}");
     e.db.drop().await;
 }
+
+/// GH#906: a PATCH that moves the URL or changes the auth header needs a
+/// recently confirmed session, as creating the endpoint does; an API token or
+/// a stale session may still rename it. GH#905: the audit rows of an endpoint
+/// hold its URL's origin and a SHA-256, never the path or query (where an
+/// incoming-webhook receiver keeps its token).
+#[tokio::test]
+async fn moving_an_endpoint_needs_a_confirmed_session_and_the_audit_hides_its_url() {
+    use sha2::{Digest, Sha256};
+    let Some(e) = env("webhooks_patch_reauth", on(&["127.0.0.0/8"]), None).await else { return };
+    let w = &e.w;
+    e.allow("hook.example.test", None, false).await;
+    let url = "https://hook.example.test/services/T0/B0/pathtok3n?sig=querys1g";
+    let (id, _) = e.endpoint("itsm", url, json!({})).await;
+    let path = format!("{ENDPOINTS}/{id}");
+
+    let managers = w.profile("Webhook managers", &[]).await;
+    sqlx::query(
+        "INSERT INTO permission_profile_global_permissions (profile_id, permission) VALUES ($1, 'webhooks.manage')",
+    )
+    .bind(managers)
+    .execute(&w.pool)
+    .await
+    .unwrap();
+    let (_, manager) = w.user("hookman", &[managers]).await;
+    let token = w.token(manager, managers).await;
+
+    // The token may rename it, but not move it or touch its header.
+    let (status, v) = w.call(&token, "PATCH", &path, Some(json!({ "version": 1, "name": "ITSM" }))).await;
+    assert_eq!(status, 200, "{v}");
+    for body in [
+        json!({ "version": 2, "url": "https://hook.example.test/x" }),
+        json!({ "version": 2, "authHeader": { "name": "Authorization", "value": HEADER_VALUE } }),
+        json!({ "version": 2, "authHeader": null }),
+    ] {
+        let (status, v) = w.call(&token, "PATCH", &path, Some(body.clone())).await;
+        assert_eq!((status, code(&v)), (403, "REAUTHENTICATION_REQUIRED"), "{body}: {v}");
+    }
+    // A session past its window likewise, audited; once confirmed, it goes through.
+    sqlx::query("UPDATE sessions SET credentials_confirmed_at = now() - interval '11 minutes'")
+        .execute(&w.pool)
+        .await
+        .unwrap();
+    let moved = json!({ "version": 2, "url": "https://hook.example.test/services/T0/B0/newtok3n" });
+    let (status, v) = e.call("PATCH", &path, Some(moved.clone())).await;
+    assert_eq!((status, code(&v)), (403, "REAUTHENTICATION_REQUIRED"), "{v}");
+    let refused: Vec<Value> = sqlx::query_scalar(
+        "SELECT new_value FROM audit_log WHERE action = 'session.reauthentication_required' ORDER BY id",
+    )
+    .fetch_all(&w.pool)
+    .await
+    .unwrap();
+    assert_eq!(refused.len(), 1, "{refused:?}");
+    assert_eq!((&refused[0]["operationId"], &refused[0]["path"]), (&json!("updateWebhookEndpoint"), &json!(path)));
+    let v = w.ok("GET", &path, json!(null)).await;
+    assert_eq!((v["url"].as_str(), v["version"].as_i64()), (Some(url), Some(2)), "nothing changed: {v}");
+    let (status, v) = e.call("PATCH", &path, Some(json!({ "version": 2, "timeoutMs": 5000 }))).await;
+    assert_eq!(status, 200, "{v}");
+    let (status, v, _) =
+        call(&w.app, "POST", "/api/v1/auth/reauthenticate", &w.admin, Some(json!({ "currentPassword": w.password })))
+            .await;
+    assert_eq!(status, 204, "{v}");
+    let mut moved = moved;
+    moved["version"] = json!(3);
+    let v = w.ok("PATCH", &path, moved).await;
+    assert_eq!(v["version"], 4, "{v}");
+    assert_eq!(e.call("DELETE", &path, None).await.0, 204);
+
+    // Create, the four updates and the delete: origin and digest only.
+    let rows: Vec<(Option<Value>, Option<Value>)> = sqlx::query_as(
+        "SELECT old_value, new_value FROM audit_log WHERE entity_type = 'webhook_endpoints' ORDER BY id",
+    )
+    .fetch_all(&w.pool)
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 5, "{rows:?}");
+    let text = format!("{rows:?}");
+    for fragment in ["pathtok3n", "querys1g", "newtok3n", "/services/"] {
+        assert!(!text.contains(fragment), "{fragment} in {text}");
+    }
+    let created = rows[0].1.as_ref().unwrap();
+    assert_eq!(created.get("url"), None, "{created}");
+    assert_eq!(created["urlOrigin"], "https://hook.example.test", "{created}");
+    assert_eq!(created["urlSha256"], hex::encode(Sha256::digest(url.as_bytes())), "{created}");
+    let (before, after) = (rows[3].0.as_ref().unwrap(), rows[3].1.as_ref().unwrap());
+    assert_ne!(before["urlSha256"], after["urlSha256"], "a move on the same origin still shows: {rows:?}");
+    e.db.drop().await;
+}
+
+/// GH#911: with WEBHOOKS_ALLOWED off, a configuration import leaves the
+/// allowlist and the endpoints as they are and says why, as the admin routes
+/// answer 409 WEBHOOKS_DISABLED; the rest of the file is imported.
+#[tokio::test]
+async fn an_import_changes_no_webhooks_while_they_are_switched_off() {
+    let Some(e) = env("webhooks_import_off", WebhooksConfig::default(), None).await else { return };
+    let w = &e.w;
+    let id = Uuid::new_v4();
+    insert_endpoint(&w.pool, id, "itsm", "https://hook.example.test/a").await;
+    let (status, mut file, _) = call(&w.app, "GET", "/api/v1/admin/config/export", &w.admin, None).await;
+    assert_eq!(status, 200, "{file}");
+    file["webhookEndpoints"][0]["url"] = json!("https://elsewhere.example.test/collect");
+    file["webhookEndpoints"][0]["name"] = json!("Renamed");
+    file["webhookAllowedHosts"] = json!([{ "hostPattern": "elsewhere.example.test" }]);
+
+    for mode in ["dry_run", "apply"] {
+        let (status, v, _) =
+            call(&w.app, "POST", &format!("/api/v1/admin/config/import?mode={mode}"), &w.admin, Some(file.clone()))
+                .await;
+        assert_eq!(status, 200, "{v}");
+        let warnings: Vec<(&str, &str)> = v["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| (w["path"].as_str().unwrap(), w["message"].as_str().unwrap()))
+            .filter(|(_, m)| m.contains("WEBHOOKS_ALLOWED"))
+            .collect();
+        assert_eq!(
+            warnings.iter().map(|w| w.0).collect::<Vec<_>>(),
+            ["webhookAllowedHosts", "webhookEndpoints"],
+            "{v}"
+        );
+        assert!(!v["changes"].to_string().contains("elsewhere"), "{v}");
+    }
+    let row: (String, String) = sqlx::query_as("SELECT name, url FROM webhook_endpoints WHERE id = $1")
+        .bind(id)
+        .fetch_one(&w.pool)
+        .await
+        .unwrap();
+    assert_eq!(row, ("itsm".to_owned(), "https://hook.example.test/a".to_owned()));
+    assert_eq!(count(&w.pool, "SELECT count(*) FROM webhook_allowed_hosts").await, 0);
+    // The same through the admin route.
+    let (status, v) = e.call("POST", HOSTS, Some(json!({ "hostPattern": "elsewhere.example.test" }))).await;
+    assert_eq!((status, code(&v)), (409, "WEBHOOKS_DISABLED"), "{v}");
+    e.db.drop().await;
+}

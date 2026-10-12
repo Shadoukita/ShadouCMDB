@@ -399,7 +399,8 @@ pub fn document(routes: &[Route]) -> OpenApi {
 
         let mut codes = Vec::new();
         // First, so its description (which names every 403 code) is the one kept.
-        if r.reauthentication {
+        // A handler that asks for it only for some bodies lists it in its errors.
+        if r.reauthentication || r.errors.contains(&ErrorCode::ReauthenticationRequired) {
             codes.push(ErrorCode::ReauthenticationRequired);
         }
         if !r.path_params.is_empty() || !r.query_params.is_empty() || r.body.is_some() {

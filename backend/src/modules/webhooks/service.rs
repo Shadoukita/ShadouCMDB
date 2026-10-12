@@ -8,6 +8,7 @@
 use chrono::{DateTime, Duration as TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use sqlx::{PgConnection, PgPool};
 use utoipa::openapi::schema::{AnyOfBuilder, ObjectBuilder, Schema, Type};
 use utoipa::{IntoParams, ToSchema};
@@ -437,6 +438,11 @@ pub(crate) struct EndpointRow {
     pub version: i32,
 }
 
+/// `scheme://host[:port]` of a stored URL, for the audit log.
+fn audited_origin(url: &str) -> Option<String> {
+    url::Url::parse(url).ok().map(|u| u.origin().ascii_serialization())
+}
+
 impl EndpointRow {
     pub fn dto(&self) -> WebhookEndpoint {
         WebhookEndpoint {
@@ -463,10 +469,14 @@ impl EndpointRow {
         }
     }
 
-    /// What the audit log records: the configuration, never a secret or header value.
+    /// What the audit log records: the configuration, never a secret or header
+    /// value. The URL only as its origin and a SHA-256 of the whole: `audit.view`
+    /// does not imply `webhooks.manage`, and the path or query of an incoming
+    /// webhook URL is often its credential (GH#905).
     pub fn audited(&self) -> Value {
         json!({
-            "key": self.key, "name": self.name, "url": self.url, "status": self.status,
+            "key": self.key, "name": self.name, "urlOrigin": audited_origin(&self.url),
+            "urlSha256": hex::encode(Sha256::digest(self.url.as_bytes())), "status": self.status,
             "suspendedReason": self.suspended_reason, "timeoutMs": self.timeout_ms,
             "maxPerMinute": self.max_per_minute, "maxInFlight": self.max_in_flight,
             "authHeaderName": self.auth_header_name, "authHeaderSet": self.auth_header_ciphertext.is_some(),
