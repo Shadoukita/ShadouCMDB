@@ -11,8 +11,9 @@
 //!   workflow (`entity_type` `workflow_definitions`, `data.test` true).
 //!
 //! Every send is audited as `workflow.action_test` on the workflow, and a
-//! caller may send [`MAX_PER_MINUTE`] a minute (counted in the audit log, so
-//! across every server process).
+//! caller may send [`test_send_slots::MAX_PER_MINUTE`] a minute: each takes a
+//! slot before it goes out, so the limit holds for concurrent requests and
+//! across server processes.
 
 use std::time::Instant;
 
@@ -33,12 +34,10 @@ use crate::data::crud::{self, AuditAction, AuditEntry};
 use crate::http::error::{AppError, ErrorCode};
 use crate::modules::mail::render::{self, Locale};
 use crate::modules::mail::{Mail, SendError};
+use crate::modules::test_send_slots::{self, TestSend};
 use crate::modules::webhooks::service::{self as webhook_service, WebhookEndpointStatus};
 use crate::modules::webhooks::{Webhooks, channel};
 use crate::modules::workflows::service;
-
-/// Test sends per caller and minute.
-pub const MAX_PER_MINUTE: i64 = 10;
 
 /// What a test send came to
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -133,22 +132,6 @@ pub async fn test(
         WorkflowActionKind::Webhook => webhooks.require_enabled()?,
         _ => {}
     }
-    let recent: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM cmdb.audit_log
-         WHERE actor_id = $1 AND occurred_at > now() - interval '1 minute' AND action = 'workflow.action_test'",
-    )
-    .bind(user.to_string())
-    .fetch_one(&mut *conn)
-    .await?;
-    if recent >= MAX_PER_MINUTE {
-        let mut err = AppError::new(
-            ErrorCode::RateLimited,
-            format!("You sent {MAX_PER_MINUTE} tests in the last minute; wait a moment before the next one"),
-        );
-        err.retry_after = Some(60);
-        return Err(err);
-    }
-
     let started = Instant::now();
     let result = match action.kind {
         WorkflowActionKind::Email => {
@@ -181,6 +164,7 @@ pub async fn test(
                 tracing::error!(error = %e, "cannot build the workflow action test message");
                 AppError::internal()
             })?;
+            test_send_slots::take(&mut conn, user, TestSend::WorkflowAction).await?;
             drop(conn);
             let outcome = mail.send(message).await;
             WorkflowActionTestResult {
@@ -219,6 +203,7 @@ pub async fn test(
                     ));
                 }
             }
+            test_send_slots::take(&mut conn, user, TestSend::WorkflowAction).await?;
             drop(conn);
             let pong = channel::ping(pool, webhooks, e.id).await?;
             // The receiver's own words may quote the URL, its host or address, or a redirect target: only for
@@ -253,6 +238,7 @@ pub async fn test(
                 }
                 None => None,
             };
+            test_send_slots::take(&mut conn, user, TestSend::WorkflowAction).await?;
             let data = json!({
                 "test": true, "definitionId": d.id, "definitionName": d.name,
                 "actionKey": action.key, "actionName": action.name, "event": event_of(action.trigger),
