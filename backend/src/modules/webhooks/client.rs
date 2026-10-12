@@ -44,8 +44,12 @@ pub struct Request<'a> {
     pub timeout: Duration,
 }
 
-fn describe(e: &reqwest::Error) -> String {
+/// The error and its causes, without the request URL: an endpoint's path and
+/// query often hold the receiver's credential (GH#898), and this text is
+/// stored as a delivery's `last_error`.
+fn describe(e: reqwest::Error) -> String {
     use std::error::Error;
+    let e = e.without_url();
     let mut text = e.to_string();
     let mut source = e.source();
     while let Some(s) = source {
@@ -147,7 +151,7 @@ impl Webhooks {
         }
         let client = match builder.build() {
             Ok(c) => c,
-            Err(e) => return Attempt::Failed { message: format!("HTTP client: {}", describe(&e)) },
+            Err(e) => return Attempt::Failed { message: format!("HTTP client: {}", describe(e)) },
         };
         let res = client.post(req.url.clone()).headers(req.headers).body(req.body).send().await;
         let mut res = match res {
@@ -155,7 +159,7 @@ impl Webhooks {
             Err(e) if e.is_timeout() => {
                 return Attempt::Failed { message: format!("No answer within {} ms", req.timeout.as_millis()) };
             }
-            Err(e) => return Attempt::Failed { message: describe(&e) },
+            Err(e) => return Attempt::Failed { message: describe(e) },
         };
         let status = res.status().as_u16();
         let location = res.headers().get(reqwest::header::LOCATION).and_then(|v| v.to_str().ok()).map(str::to_owned);
