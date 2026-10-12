@@ -27,6 +27,7 @@ use super::{
     ActionKeyPath, WorkflowActionKind, WorkflowActionPreviewQuery, WorkflowActionTrigger, email, load, sample_ci,
 };
 use crate::api::context::RequestContext;
+use crate::auth::permissions::GlobalPermission;
 use crate::data::auth as auth_data;
 use crate::data::crud::{self, AuditAction, AuditEntry};
 use crate::http::error::{AppError, ErrorCode};
@@ -56,8 +57,31 @@ pub struct WorkflowActionTestResult {
     /// a delivery would record it (`host_not_allowed`, `address_blocked:<ip>`, `redirect_not_followed`,
     /// `http_status`, `unreachable`, ...)
     pub reason: Option<String>,
+    /// What happened. For a failed webhook test, the receiver's error in detail only for a caller with
+    /// `webhooks.manage`; others get a fixed text per `reason`, as the endpoint's URL is hidden from them
     pub message: String,
     pub duration_ms: i64,
+}
+
+/// A failed webhook test send as told to a designer without `webhooks.manage`: a fixed text per reason, with no
+/// URL, host, address or receiver body in it.
+fn webhook_summary(reason: Option<&str>, status: Option<u16>) -> String {
+    let status = status.map_or_else(String::new, |s| format!(" HTTP {s}"));
+    let what = match reason.unwrap_or_default() {
+        "unreachable" => "The receiver could not be reached (DNS, connection, TLS or no answer in time)".to_owned(),
+        "http_status" => format!("The receiver answered{status}"),
+        "redirect_not_followed" => {
+            format!("The receiver answered{status} with a redirect, which webhooks do not follow")
+        }
+        "host_not_allowed" | "url_userinfo" | "url_fragment" => {
+            "The endpoint's URL is not allowed by the webhook rules of this server".to_owned()
+        }
+        r if r.starts_with("address_blocked") => {
+            "The endpoint's host resolves to an address webhooks may not reach".to_owned()
+        }
+        r => format!("The test request failed ({r})"),
+    };
+    format!("{what}; an administrator with webhooks.manage sees the details when testing the endpoint")
 }
 
 fn elapsed(started: Instant) -> i64 {
@@ -197,6 +221,13 @@ pub async fn test(
             }
             drop(conn);
             let pong = channel::ping(pool, webhooks, e.id).await?;
+            // The receiver's own words may quote the URL, its host or address, or a redirect target: only for
+            // those who may see the endpoint (GH#898).
+            let message = if pong.ok || ctx.require(GlobalPermission::WebhooksManage).is_ok() {
+                pong.message
+            } else {
+                webhook_summary(pong.reason.as_deref(), pong.status_code)
+            };
             WorkflowActionTestResult {
                 key: action.key.clone(),
                 kind: action.kind,
@@ -204,7 +235,7 @@ pub async fn test(
                 to: e.key,
                 status_code: pong.status_code,
                 reason: pong.reason,
-                message: pong.message,
+                message,
                 duration_ms: pong.duration_ms,
             }
         }

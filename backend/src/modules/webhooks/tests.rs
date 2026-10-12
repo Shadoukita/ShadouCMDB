@@ -1586,8 +1586,8 @@ async fn a_webhook_action_test_to_an_unreachable_or_suspended_endpoint() {
 /// GH#898: a designer without `webhooks.manage` never sees the endpoint's URL
 /// (the endpoint list shows it as null), so the test send's message must not
 /// show it either: its path and query often hold the receiver's credential.
+/// An administrator's message keeps the cause, but not the URL.
 #[tokio::test]
-#[ignore = "GH#898: the test send returns the receiver error, URL included"]
 async fn a_webhook_action_test_does_not_show_the_url_to_a_designer() {
     let Some(e) = env("webhooks_action_test_url", on(&["127.0.0.0/8"]), None).await else { return };
     let (designer, test, _) = unreachable_for_a_designer(&e).await;
@@ -1599,5 +1599,12 @@ async fn a_webhook_action_test_does_not_show_the_url_to_a_designer() {
     for part in ["T0SECRET", "qs-secret-123", "hook.example.test"] {
         assert!(!text.contains(part), "a part of the URL leaks to a designer: {v}");
     }
+    // The transport error drops the URL for everyone, so a delivery's `last_error` does not store it either; an
+    // administrator still gets the cause.
+    let (status, v) = e.w.call(&e.w.admin, "POST", &test, None).await;
+    assert_eq!((status, v["reason"].as_str()), (200, Some("unreachable")), "{v}");
+    let message = v["message"].as_str().unwrap();
+    assert!(!message.contains("T0SECRET") && !message.contains("qs-secret-123"), "{v}");
+    assert!(message.to_lowercase().contains("connect"), "{v}");
     e.db.drop().await;
 }

@@ -55989,7 +55989,8 @@
             "description": "Why it failed: `smtp_rejected` (5xx) or `smtp_deferred` (no connection, 4xx) for e-mail; for a webhook as\na delivery would record it (`host_not_allowed`, `address_blocked:<ip>`, `redirect_not_followed`,\n`http_status`, `unreachable`, ...)"
           },
           "message": {
-            "type": "string"
+            "type": "string",
+            "description": "What happened. For a failed webhook test, the receiver's error in detail only for a caller with\n`webhooks.manage`; others get a fixed text per `reason`, as the endpoint's URL is hidden from them"
           },
           "durationMs": {
             "type": "integer",

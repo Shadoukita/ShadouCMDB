@@ -8862,6 +8862,10 @@ export interface components {
              *     `http_status`, `unreachable`, ...)
              */
             reason?: string | null;
+            /**
+             * @description What happened. For a failed webhook test, the receiver's error in detail only for a caller with
+             *     `webhooks.manage`; others get a fixed text per `reason`, as the endpoint's URL is hidden from them
+             */
             message: string;
             /** Format: int64 */
             durationMs: number;
