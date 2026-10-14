@@ -26,7 +26,7 @@ COPY frontend frontend
 RUN npm run build --workspace frontend --if-present && mkdir -p frontend/dist
 
 # --- Rust binary, cross-compiled for $TARGETARCH --------------------------------
-FROM --platform=$BUILDPLATFORM rust:1.99-bookworm@sha256:59037199c44290f2befcdd58dcc540164763fc296950255aaefeef096a1866b0 AS build
+FROM --platform=$BUILDPLATFORM rust:1.99-bookworm@sha256:114c7a4425406451c2866b6aafe69fe29b1b298832db1277d411ac73c82d04d6 AS build
 ARG TARGETARCH
 ARG BUILDARCH
 RUN set -eu; \
